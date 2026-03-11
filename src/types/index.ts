@@ -17,6 +17,12 @@ export interface SourceUrl {
   uri: string;
 }
 
+export interface ImageUrl {
+  imageUrl: string;
+  pageUrl: string;
+  title: string;
+}
+
 export interface ColumnMapping {
   original: string[];
   enriched: EnrichmentColumn[];
@@ -26,9 +32,11 @@ export interface EnrichmentColumn {
   id: string;
   label: string;
   description: string; // This will serve as the AI Prompt instruction
-  type: "text" | "list"; // The expected output type from AI
+  type: "text" | "list" | "imageUrls"; // The expected output type from AI
   enabled: boolean;
   isCustom?: boolean;
+  imageCount?: number; // Number of images to fetch (1-10), only for imageUrls type
+  customInstruction?: string; // Custom search instruction for image search
 }
 
 export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
@@ -47,11 +55,13 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     enabled: true,
   },
   {
-    id: "keyFeatures",
-    label: "Key Features",
-    description: "Extract the most important key features as a short bullet-point list.",
-    type: "list",
+    id: "imageUrls",
+    label: "Image URLs",
+    description: "Find product images from the web using Google Image Search.",
+    type: "imageUrls",
     enabled: true,
+    imageCount: 3,
+    customInstruction: "Find high-quality product images, preferably on white background",
   },
   {
     id: "sourceUrls",

@@ -252,6 +252,102 @@ function SourceUrlsCell({ sources }: { sources: { title: string; uri: string }[]
   );
 }
 
+// --- Image URLs Cell ---
+function ImageUrlsCell({ images }: { images: { imageUrl: string; pageUrl: string; title: string }[] }) {
+  const [open, setOpen] = useState(false);
+
+  if (!images || images.length === 0) {
+    return <span className="text-muted-foreground/30 text-xs">—</span>;
+  }
+
+  return (
+    <>
+      <div className="flex gap-1.5 flex-wrap">
+        {images.slice(0, 3).map((img, i) => (
+          <a
+            key={i}
+            href={img.imageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block shrink-0 group/img"
+            onClick={(e) => e.stopPropagation()}
+            title={img.title || "Product image"}
+          >
+            <img
+              src={img.imageUrl}
+              alt={img.title || "Product"}
+              className="h-10 w-10 object-cover rounded border border-border/40 bg-white group-hover/img:ring-2 group-hover/img:ring-primary/40 transition-all"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
+            />
+          </a>
+        ))}
+        {images.length > 3 && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+            className="h-10 w-10 rounded border border-dashed border-border/40 flex items-center justify-center text-[10px] text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors"
+          >
+            +{images.length - 3}
+          </button>
+        )}
+      </div>
+
+      {images.length <= 3 && (
+        <div className="mt-1 flex flex-col gap-0.5">
+          {images.map((img, i) => (
+            <a
+              key={i}
+              href={img.imageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[9px] text-blue-500/70 hover:text-blue-500 hover:underline truncate block"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {img.title || img.imageUrl.split("/").pop()?.slice(0, 40) || "Image"}
+            </a>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              All Images ({images.length})
+            </DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 mt-2">
+            {images.map((img, i) => (
+              <a
+                key={i}
+                href={img.imageUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block rounded-lg border overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all group/card"
+              >
+                <img
+                  src={img.imageUrl}
+                  alt={img.title || "Product"}
+                  className="w-full h-40 object-contain bg-white p-2"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = "";
+                    (e.target as HTMLImageElement).alt = "Failed to load";
+                  }}
+                />
+                <div className="p-2 bg-muted/30 border-t">
+                  <p className="text-[11px] font-medium truncate">{img.title || "Product image"}</p>
+                  <p className="text-[9px] text-blue-500/70 truncate mt-0.5">{img.imageUrl}</p>
+                </div>
+              </a>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 // --- Editable Enriched Cell ---
 function EditableEnrichedCell({
   value,
@@ -326,6 +422,12 @@ function EditableEnrichedCell({
           {isEditable ? "Double-click to add" : "—"}
         </div>
       );
+    }
+
+    // Image URLs - show as thumbnails with links
+    if (value[0] && typeof value[0] === "object" && "imageUrl" in value[0]) {
+      const images = value as { imageUrl: string; pageUrl: string; title: string }[];
+      return <ImageUrlsCell images={images} />;
     }
 
     // Source URLs - show as links with dialog for all sources

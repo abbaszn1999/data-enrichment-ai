@@ -4,6 +4,7 @@ A smart spreadsheet web application (SaaS MVP) that automatically enriches e-com
 
 Like Clay.com, but specialized for e-commerce catalog teams.
 
+
 ## 🚀 Features
 
 - **Excel/CSV Upload**: Drag and drop your raw product data.

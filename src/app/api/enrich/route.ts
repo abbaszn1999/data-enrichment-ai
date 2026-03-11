@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
   }: {
     rows: { id: string; rowIndex: number; originalData: Record<string, string> }[];
     enabledColumns: string[];
-    enrichmentColumns?: { id: string; label: string; description: string; type: string; enabled: boolean }[];
+    enrichmentColumns?: { id: string; label: string; description: string; type: string; enabled: boolean; imageCount?: number; customInstruction?: string }[];
     settings?: GeminiSettings;
   } = body;
 

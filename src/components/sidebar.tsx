@@ -56,6 +56,7 @@ export function Sidebar() {
     setAllEnrichmentColumns,
     addCustomEnrichmentColumn,
     removeCustomEnrichmentColumn,
+    updateEnrichmentColumnConfig,
     toggleSourceColumn,
     setAllSourceColumns,
     isEnriching,
@@ -419,51 +420,107 @@ export function Sidebar() {
                 {enrichmentColumns.map((col) => (
                   <div
                     key={col.id}
-                    className={`w-full text-left p-2.5 rounded-lg border transition-all duration-200 flex items-start gap-3 group relative overflow-hidden ${
+                    className={`w-full text-left p-2.5 rounded-lg border transition-all duration-200 group relative overflow-hidden ${
                       col.enabled
                         ? "bg-primary/5 border-primary/20 shadow-sm"
                         : "bg-muted/50 border-transparent hover:border-border/40 hover:bg-muted"
                     }`}
                   >
-                    <div
-                      className="mt-0.5 cursor-pointer shrink-0"
-                      onClick={() => toggleEnrichmentColumn(col.id)}
-                    >
-                      {col.enabled ? (
-                        <CheckCircle2 className="h-4 w-4 text-primary" />
-                      ) : (
-                        <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/40 group-hover:border-muted-foreground/60" />
+                    <div className="flex items-start gap-3">
+                      <div
+                        className="mt-0.5 cursor-pointer shrink-0"
+                        onClick={() => toggleEnrichmentColumn(col.id)}
+                      >
+                        {col.enabled ? (
+                          <CheckCircle2 className="h-4 w-4 text-primary" />
+                        ) : (
+                          <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/40 group-hover:border-muted-foreground/60" />
+                        )}
+                      </div>
+                      <div
+                        className="flex flex-col gap-1 min-w-0 flex-1 cursor-pointer"
+                        onClick={() => toggleEnrichmentColumn(col.id)}
+                      >
+                        <span
+                          className={`text-sm font-semibold tracking-tight leading-none ${
+                            col.enabled ? "text-primary" : "text-muted-foreground"
+                          }`}
+                        >
+                          {col.label}
+                        </span>
+                        <span className="text-[10px] leading-snug text-muted-foreground/70 line-clamp-2">
+                          {col.description}
+                        </span>
+                      </div>
+                      {col.isCustom && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[8px] font-medium text-secondary-foreground">
+                            Custom
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeCustomEnrichmentColumn(col.id);
+                            }}
+                            className="text-muted-foreground/40 hover:text-destructive transition-colors"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       )}
                     </div>
-                    <div
-                      className="flex flex-col gap-1 min-w-0 flex-1 cursor-pointer"
-                      onClick={() => toggleEnrichmentColumn(col.id)}
-                    >
-                      <span
-                        className={`text-sm font-semibold tracking-tight leading-none ${
-                          col.enabled ? "text-primary" : "text-muted-foreground"
-                        }`}
+
+                    {/* Image URLs column config */}
+                    {col.id === "imageUrls" && col.enabled && (
+                      <div
+                        className="mt-2.5 pt-2.5 border-t border-primary/10 space-y-2.5"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        {col.label}
-                      </span>
-                      <span className="text-[10px] leading-snug text-muted-foreground/70 line-clamp-2">
-                        {col.description}
-                      </span>
-                    </div>
-                    {col.isCustom && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[8px] font-medium text-secondary-foreground">
-                          Custom
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeCustomEnrichmentColumn(col.id);
-                          }}
-                          className="text-muted-foreground/40 hover:text-destructive transition-colors"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-medium text-muted-foreground">
+                              Number of images
+                            </label>
+                            <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
+                              {col.imageCount ?? 3}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={1}
+                            max={10}
+                            value={col.imageCount ?? 3}
+                            onChange={(e) =>
+                              updateEnrichmentColumnConfig(col.id, {
+                                imageCount: parseInt(e.target.value),
+                              })
+                            }
+                            disabled={isEnriching}
+                            className="w-full h-1.5 accent-primary disabled:opacity-50"
+                          />
+                          <div className="flex justify-between text-[8px] text-muted-foreground/50">
+                            <span>1</span>
+                            <span>5</span>
+                            <span>10</span>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-medium text-muted-foreground">
+                            Custom instruction
+                          </label>
+                          <input
+                            type="text"
+                            value={col.customInstruction ?? ""}
+                            onChange={(e) =>
+                              updateEnrichmentColumnConfig(col.id, {
+                                customInstruction: e.target.value,
+                              })
+                            }
+                            disabled={isEnriching}
+                            placeholder="e.g. Find HD images on white background"
+                            className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50"
+                          />
+                        </div>
                       </div>
                     )}
                   </div>

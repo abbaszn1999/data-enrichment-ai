@@ -25,6 +25,7 @@ interface SheetActions {
   setAllEnrichmentColumns: (enabled: boolean) => void;
   addCustomEnrichmentColumn: (col: Omit<EnrichmentColumn, "id" | "enabled" | "isCustom">) => void;
   removeCustomEnrichmentColumn: (id: string) => void;
+  updateEnrichmentColumnConfig: (id: string, config: Partial<EnrichmentColumn>) => void;
   // Source columns (which original columns to send to AI)
   toggleSourceColumn: (col: string) => void;
   setAllSourceColumns: (enabled: boolean) => void;
@@ -157,6 +158,13 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   removeCustomEnrichmentColumn: (id) =>
     set((state) => ({
       enrichmentColumns: state.enrichmentColumns.filter((col) => col.id !== id),
+    })),
+
+  updateEnrichmentColumnConfig: (id, config) =>
+    set((state) => ({
+      enrichmentColumns: state.enrichmentColumns.map((col) =>
+        col.id === id ? { ...col, ...config } : col
+      ),
     })),
 
   // Source columns
