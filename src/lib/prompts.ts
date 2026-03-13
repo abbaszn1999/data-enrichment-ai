@@ -69,6 +69,7 @@ export interface PromptSettings {
   writingTone: string;
   customTone: string;
   contentLength: "short" | "medium" | "long";
+  columnSettings?: Record<string, { writingTone?: string; contentLength?: string }>;
 }
 
 const TONE_INSTRUCTIONS: Record<string, string> = {
@@ -110,9 +111,15 @@ export function buildEnrichmentPrompt(
 
   const columnInstructions = enabledColumns
     .map((colId) => {
-      // Check if it's a known builtin
-      if (builtinInstructions[colId]) {
-        return builtinInstructions[colId];
+      // Check per-column settings for tone/length overrides
+      const colSettings = settings?.columnSettings?.[colId];
+      const colLength = colSettings?.contentLength || contentLength;
+      const colLengthConfig = LENGTH_INSTRUCTIONS[colLength] || lengthConfig;
+
+      // Check if it's a known builtin — use per-column length if available
+      const perColBuiltins = getBuiltinColumnInstructions(colLengthConfig);
+      if (perColBuiltins[colId]) {
+        return perColBuiltins[colId];
       }
       // Look up in enrichmentColumns for custom prompt
       const colDef = enrichmentColumns?.find((c) => c.id === colId);
@@ -129,11 +136,21 @@ export function buildEnrichmentPrompt(
   const language = settings?.outputLanguage || "English";
   const languageInstruction = `- Write ALL content in ${language}. Every single field value MUST be in ${language}.`;
 
-  // Build tone instruction
-  const toneKey = settings?.writingTone || "professional";
-  const toneInstruction = toneKey === "custom" && settings?.customTone
-    ? `- Writing style: ${settings.customTone}`
-    : `- ${TONE_INSTRUCTIONS[toneKey] || TONE_INSTRUCTIONS.professional}`;
+  // Build tone instructions — collect unique tones from column settings
+  const toneKeys = new Set<string>();
+  if (settings?.columnSettings) {
+    for (const cs of Object.values(settings.columnSettings)) {
+      if (cs.writingTone) toneKeys.add(cs.writingTone);
+    }
+  }
+  if (toneKeys.size === 0) toneKeys.add(settings?.writingTone || "professional");
+  
+  const toneInstruction = [...toneKeys]
+    .map((toneKey) => {
+      if (toneKey === "custom" && settings?.customTone) return `- Writing style: ${settings.customTone}`;
+      return `- ${TONE_INSTRUCTIONS[toneKey] || TONE_INSTRUCTIONS.professional}`;
+    })
+    .join("\n");
 
   const text = `You are an expert e-commerce copywriter and product data specialist. Based on the original product data and research findings below, generate enriched product content.
 ${images.length > 0 ? "\nIMPORTANT: Product image(s) are attached. Use them to identify the product accurately.\n" : ""}

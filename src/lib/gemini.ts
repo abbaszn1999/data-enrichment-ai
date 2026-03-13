@@ -6,8 +6,7 @@ import type { EnrichedData, SourceUrl, ImageUrl, ThinkingLevelOption, Enrichment
 export interface GeminiSettings {
   enrichmentModel: EnrichmentModel;
   thinkingLevel: ThinkingLevelOption;
-  maxRetries: number;
-  promptSettings: PromptSettings;
+  outputLanguage: string;
 }
 
 const THINKING_LEVEL_MAP: Record<ThinkingLevelOption, ThinkingLevel | undefined> = {
@@ -128,11 +127,6 @@ Search for this product and find ${imageCount} actual product image URLs. For ea
 2. The source webpage URL where you found the image.
 3. A short title/description.
 
-Look for image URLs from sources like:
-- Amazon product images (e.g., https://m.media-amazon.com/images/I/...)
-- eBay images (e.g., https://i.ebayimg.com/images/g/...)
-- Manufacturer/brand CDN image URLs
-- Any direct image hosting URLs
 
 Return your response as a valid JSON array with exactly this format:
 [{"imageUrl": "https://direct-link-to-image-file.jpg", "pageUrl": "https://source-page.com/product", "title": "description"}]
@@ -228,22 +222,84 @@ function extractImagesFromData(productData: Record<string, string>): {
   return { textEntries: lines.join("\n"), images };
 }
 
+function repairTruncatedJson(text: string): string | null {
+  // Attempt to fix truncated JSON by closing open strings, arrays, and objects
+  let repaired = text.trim();
+
+  // If it ends mid-string, close the string
+  const quoteCount = (repaired.match(/(?<!\\)"/g) || []).length;
+  if (quoteCount % 2 !== 0) {
+    // Truncate to last complete key-value and close
+    const lastCompleteComma = repaired.lastIndexOf('",');
+    if (lastCompleteComma > 0) {
+      repaired = repaired.slice(0, lastCompleteComma + 1);
+    } else {
+      repaired += '"';
+    }
+  }
+
+  // Remove trailing comma if present
+  repaired = repaired.replace(/,\s*$/, "");
+
+  // Count open/close braces and brackets
+  let openBraces = 0;
+  let openBrackets = 0;
+  let inString = false;
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i];
+    if (ch === '"' && (i === 0 || repaired[i - 1] !== "\\")) {
+      inString = !inString;
+    }
+    if (!inString) {
+      if (ch === "{") openBraces++;
+      else if (ch === "}") openBraces--;
+      else if (ch === "[") openBrackets++;
+      else if (ch === "]") openBrackets--;
+    }
+  }
+
+  // Close any open brackets and braces
+  for (let i = 0; i < openBrackets; i++) repaired += "]";
+  for (let i = 0; i < openBraces; i++) repaired += "}";
+
+  try {
+    JSON.parse(repaired);
+    return repaired;
+  } catch {
+    return null;
+  }
+}
+
 export async function enrichProduct(
   productData: Record<string, string>,
   searchResults: string,
   enabledColumns: string[],
-  enrichmentColumns?: { id: string; label: string; description: string; type: string }[],
+  enrichmentColumns?: { id: string; label: string; description: string; type: string; writingTone?: string; contentLength?: string }[],
   settings?: GeminiSettings
 ): Promise<EnrichedData> {
-  const maxRetries = settings?.maxRetries ?? 2;
   return withRetry(async () => {
     const ai = getClient();
+
+    // Build per-column prompt settings from column configs
+    const promptSettings: PromptSettings = {
+      outputLanguage: settings?.outputLanguage || "English",
+      writingTone: "professional",
+      customTone: "",
+      contentLength: "medium",
+      columnSettings: enrichmentColumns?.reduce((acc, col) => {
+        if (col.writingTone || col.contentLength) {
+          acc[col.id] = { writingTone: col.writingTone, contentLength: col.contentLength };
+        }
+        return acc;
+      }, {} as Record<string, { writingTone?: string; contentLength?: string }>) || {},
+    };
+
     const { text: promptText, images } = buildEnrichmentPrompt(
       productData,
       searchResults,
       enabledColumns,
       enrichmentColumns,
-      settings?.promptSettings
+      promptSettings
     );
 
     // Build multimodal content: text + images
@@ -252,7 +308,7 @@ export async function enrichProduct(
       parts.push(img);
     }
 
-    const model = settings?.enrichmentModel || "gemini-3-flash-preview";
+    const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
     const thinkingLevel = THINKING_LEVEL_MAP[settings?.thinkingLevel || "low"];
 
     const response = await ai.models.generateContent({
@@ -260,6 +316,7 @@ export async function enrichProduct(
       contents: createUserContent(parts),
       config: {
         responseMimeType: "application/json",
+        maxOutputTokens: 65536,
         ...(thinkingLevel != null ? { thinkingConfig: { thinkingLevel } } : {}),
       },
     });
@@ -274,18 +331,28 @@ export async function enrichProduct(
         try {
           return JSON.parse(jsonMatch[0]) as EnrichedData;
         } catch {
+          // Try to repair truncated JSON
+          const repaired = repairTruncatedJson(jsonMatch[0]);
+          if (repaired) {
+            try {
+              console.warn("[Gemini] Repaired truncated JSON response");
+              return JSON.parse(repaired) as EnrichedData;
+            } catch {
+              // Fall through to error
+            }
+          }
           throw new Error(`Failed to parse AI response as JSON: ${text.slice(0, 200)}`);
         }
       }
       throw new Error(`Failed to parse AI response as JSON: ${text.slice(0, 200)}`);
     }
-  }, maxRetries, 3000);
+  }, 2, 3000);
 }
 
 export async function enrichProductRow(
   productData: Record<string, string>,
   enabledColumns: string[],
-  enrichmentColumns?: { id: string; label: string; description: string; type: string; enabled: boolean; imageCount?: number; customInstruction?: string }[],
+  enrichmentColumns?: { id: string; label: string; description: string; type: string; enabled: boolean; imageCount?: number; sourceCount?: number; customInstruction?: string; writingTone?: string; contentLength?: string }[],
   settings?: GeminiSettings
 ): Promise<EnrichedData> {
   // Step 1: Search with Gemini 3.1 Pro + Google Search
@@ -302,9 +369,11 @@ export async function enrichProductRow(
     settings
   );
 
-  // Step 3: Attach sources if requested
+  // Step 3: Attach sources if requested (limit to sourceCount)
   if (enabledColumns.includes("sourceUrls")) {
-    enrichedData.sourceUrls = sources;
+    const sourceCol = enrichmentColumns?.find((c) => c.id === "sourceUrls");
+    const sourceCount = sourceCol?.sourceCount ?? 3;
+    enrichedData.sourceUrls = sources.slice(0, sourceCount);
   }
 
   // Step 4: Search for product images if imageUrls column is enabled

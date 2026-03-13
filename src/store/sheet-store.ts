@@ -70,6 +70,11 @@ interface SheetActions {
   setPaused: (paused: boolean) => void;
   // Persistence
   restoreSession: () => Promise<boolean>;
+  // Supabase project
+  loadProject: (projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>) => void;
+  setProjectId: (id: string | null) => void;
+  setSaveStatus: (status: SheetState["saveStatus"]) => void;
+  markUnsaved: () => void;
   // UI
   setSidebarOpen: (open: boolean) => void;
 }
@@ -77,6 +82,7 @@ interface SheetActions {
 type SheetStore = SheetState & SheetActions;
 
 const initialState: SheetState = {
+  projectId: null,
   fileName: null,
   rows: [],
   originalColumns: [],
@@ -93,6 +99,8 @@ const initialState: SheetState = {
   errorCount: 0,
   sidebarOpen: true,
   undoVersion: 0,
+  saveStatus: "saved",
+  lastSavedAt: null,
 };
 
 // Undo/Redo stacks (kept outside store to avoid triggering re-renders)
@@ -179,9 +187,20 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     }),
 
   setAllSourceColumns: (enabled) =>
-    set((state) => ({
-      sourceColumns: enabled ? [...state.originalColumns] : [],
-    })),
+    set((state) => {
+      if (!enabled) return { sourceColumns: [] };
+      // Include original columns + any enriched columns that have data
+      const enrichedColIds = state.enrichmentColumns
+        .filter((col) => col.type === "text" || col.type === "list")
+        .map((col) => col.id);
+      const enrichedWithData = enrichedColIds.filter((colId) =>
+        state.rows.some((r) => {
+          const val = r.enrichedData?.[colId];
+          return val !== undefined && val !== null && val !== "";
+        })
+      );
+      return { sourceColumns: [...state.originalColumns, ...enrichedWithData] };
+    }),
 
   // Row selection
   toggleRowSelection: (rowId) =>
@@ -568,28 +587,115 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     }
   },
 
+  // Supabase project
+  loadProject: (projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility) => {
+    set({
+      projectId,
+      fileName,
+      originalColumns: columns,
+      rows,
+      sourceColumns,
+      enrichmentColumns,
+      enrichmentSettings,
+      columnVisibility,
+      selectedRowIds: new Set(rows.map((r) => r.id)),
+      isEnriching: false,
+      isPaused: false,
+      enrichProgress: 0,
+      totalToEnrich: 0,
+      completedEnrich: 0,
+      errorCount: 0,
+      saveStatus: "saved",
+      lastSavedAt: Date.now(),
+    });
+  },
+
+  setProjectId: (id) => set({ projectId: id }),
+
+  setSaveStatus: (status) => set({ saveStatus: status, ...(status === "saved" ? { lastSavedAt: Date.now() } : {}) }),
+
+  markUnsaved: () => {
+    const { saveStatus } = get();
+    if (saveStatus !== "saving") {
+      set({ saveStatus: "unsaved" });
+    }
+  },
+
   // UI
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 }));
 
-// Auto-save to IndexedDB on relevant state changes (debounced)
+// Auto-save to Supabase on relevant state changes (debounced)
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+let lastSavedSnapshot = "";
+
 useSheetStore.subscribe((state) => {
-  if (!state.fileName) return;
+  if (!state.projectId || !state.fileName) return;
+
+  // Create a snapshot of saveable state
+  const snapshot = JSON.stringify({
+    sc: state.sourceColumns,
+    ec: state.enrichmentColumns,
+    es: state.enrichmentSettings,
+    cv: state.columnVisibility,
+    rows: state.rows.map((r) => ({ id: r.id, s: r.status, e: r.enrichedData, o: r.originalData, em: r.errorMessage })),
+  });
+
+  if (snapshot === lastSavedSnapshot) return;
+
+  // Mark as unsaved
+  if (state.saveStatus === "saved") {
+    useSheetStore.setState({ saveStatus: "unsaved" });
+  }
+
   if (saveTimeout) clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(() => {
+  saveTimeout = setTimeout(async () => {
     const s = useSheetStore.getState();
-    if (!s.fileName) return;
-    const session: PersistedSession = {
-      fileName: s.fileName,
-      rows: s.rows,
-      originalColumns: s.originalColumns,
-      sourceColumns: s.sourceColumns,
-      enrichmentColumns: s.enrichmentColumns,
-      enrichmentSettings: s.enrichmentSettings,
-      columnVisibility: s.columnVisibility,
-      savedAt: Date.now(),
-    };
-    saveSession(session).catch(() => {});
-  }, 2000);
+    if (!s.projectId || !s.fileName) return;
+
+    useSheetStore.setState({ saveStatus: "saving" });
+
+    try {
+      const { saveProjectState, updateRow } = await import("@/lib/supabase");
+
+      // Save project-level settings
+      const enrichedCount = s.rows.filter((r) => r.status === "done").length;
+      await saveProjectState(s.projectId, {
+        source_columns: s.sourceColumns,
+        enrichment_columns: s.enrichmentColumns as any,
+        enrichment_settings: s.enrichmentSettings as any,
+        column_visibility: s.columnVisibility,
+        enriched_count: enrichedCount,
+      });
+
+      // Save changed rows (batch — only rows with dbId)
+      const rowUpdates = s.rows
+        .filter((r) => r.dbId || r.id)
+        .map((r) => ({
+          id: r.dbId || r.id,
+          changes: {
+            status: r.status === "processing" ? "pending" : r.status,
+            error_message: r.errorMessage || null,
+            enriched_data: r.enrichedData,
+            original_data: r.originalData,
+          },
+        }));
+
+      // Update rows in batches of 50
+      for (let i = 0; i < rowUpdates.length; i += 50) {
+        const batch = rowUpdates.slice(i, i + 50);
+        await Promise.all(
+          batch.map(({ id, changes }) =>
+            updateRow(id, changes)
+          )
+        );
+      }
+
+      lastSavedSnapshot = snapshot;
+      useSheetStore.setState({ saveStatus: "saved", lastSavedAt: Date.now() });
+    } catch (err) {
+      console.error("Auto-save failed:", err);
+      useSheetStore.setState({ saveStatus: "error" });
+    }
+  }, 3000);
 });

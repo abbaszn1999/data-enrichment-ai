@@ -1,14 +1,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { FileSpreadsheet, Sun, Moon, Monitor, Undo2, Redo2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { FileSpreadsheet, Sun, Moon, Monitor, Undo2, Redo2, ArrowLeft, Cloud, CloudOff, Loader2 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSheetStore } from "@/store/sheet-store";
 
 export function Header() {
-  const { fileName, rows, undo, redo, canUndo, canRedo, undoVersion } = useSheetStore();
+  const router = useRouter();
+  const { fileName, rows, undo, redo, canUndo, canRedo, undoVersion, saveStatus, projectId } = useSheetStore();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
@@ -36,6 +38,19 @@ export function Header() {
     <header className="border-b bg-background/95 backdrop-blur-sm sticky top-0 z-20 shrink-0">
       <div className="flex items-center justify-between h-12 px-4">
         <div className="flex items-center gap-3">
+          {/* Back to projects */}
+          {projectId && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 -ml-1"
+              onClick={() => router.push("/projects")}
+              title="Back to Projects"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          )}
+
           <div className="flex items-center gap-2">
             <div className="p-1 rounded-md bg-primary">
               <FileSpreadsheet className="h-4 w-4 text-primary-foreground" />
@@ -50,6 +65,36 @@ export function Header() {
                 {fileName}
               </span>
             </>
+          )}
+
+          {/* Save status */}
+          {projectId && mounted && (
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground ml-1">
+              {saveStatus === "saving" && (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span>Saving...</span>
+                </>
+              )}
+              {saveStatus === "saved" && (
+                <>
+                  <Cloud className="h-3 w-3 text-green-500" />
+                  <span className="text-green-600 dark:text-green-400">Saved</span>
+                </>
+              )}
+              {saveStatus === "unsaved" && (
+                <>
+                  <CloudOff className="h-3 w-3 text-amber-500" />
+                  <span className="text-amber-600 dark:text-amber-400">Unsaved</span>
+                </>
+              )}
+              {saveStatus === "error" && (
+                <>
+                  <CloudOff className="h-3 w-3 text-red-500" />
+                  <span className="text-red-600 dark:text-red-400">Save failed</span>
+                </>
+              )}
+            </div>
           )}
         </div>
 

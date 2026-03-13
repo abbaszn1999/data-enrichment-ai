@@ -1,5 +1,6 @@
 export interface ProductRow {
   id: string;
+  dbId?: string; // Supabase row id (UUID)
   rowIndex: number;
   selected: boolean;
   status: "pending" | "processing" | "done" | "error";
@@ -32,11 +33,14 @@ export interface EnrichmentColumn {
   id: string;
   label: string;
   description: string; // This will serve as the AI Prompt instruction
-  type: "text" | "list" | "imageUrls"; // The expected output type from AI
+  type: "text" | "list" | "imageUrls" | "sourceUrls"; // The expected output type from AI
   enabled: boolean;
   isCustom?: boolean;
   imageCount?: number; // Number of images to fetch (1-10), only for imageUrls type
-  customInstruction?: string; // Custom search instruction for image search
+  sourceCount?: number; // Number of sources to fetch (1-10), only for sourceUrls type
+  customInstruction?: string; // Custom instruction for this column
+  writingTone?: WritingTone; // Per-column writing tone (for text columns like Enhanced Title, Marketing Description)
+  contentLength?: ContentLength; // Per-column content length (for text columns like Enhanced Title, Marketing Description)
 }
 
 export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
@@ -46,6 +50,8 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     description: "Write an SEO-optimized and compelling product title.",
     type: "text",
     enabled: true,
+    writingTone: "professional",
+    contentLength: "short",
   },
   {
     id: "marketingDescription",
@@ -53,6 +59,8 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     description: "Write a full, engaging marketing description for this product.",
     type: "text",
     enabled: true,
+    writingTone: "persuasive",
+    contentLength: "medium",
   },
   {
     id: "imageUrls",
@@ -67,8 +75,10 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     id: "sourceUrls",
     label: "Source URLs",
     description: "Web sources used to research this product.",
-    type: "list",
+    type: "sourceUrls",
     enabled: true,
+    sourceCount: 3,
+    customInstruction: "Find authoritative product pages and reviews",
   },
 ];
 
@@ -84,7 +94,7 @@ export interface EnrichmentEvent {
 
 export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turkish" | "German" | "Chinese" | "Japanese" | "custom";
 
-export type EnrichmentModel = "gemini-3-flash-preview" | "gemini-3.1-pro-preview" | "gemini-3.1-flash-lite-preview";
+export type EnrichmentModel = "gemini-3.1-pro-preview" | "gemini-3.1-flash-lite-preview";
 
 export type ThinkingLevelOption = "none" | "low" | "medium" | "high";
 
@@ -97,21 +107,13 @@ export interface EnrichmentSettings {
   customLanguage: string;
   enrichmentModel: EnrichmentModel;
   thinkingLevel: ThinkingLevelOption;
-  writingTone: WritingTone;
-  customTone: string;
-  contentLength: ContentLength;
-  maxRetries: number;
 }
 
 export const DEFAULT_ENRICHMENT_SETTINGS: EnrichmentSettings = {
   outputLanguage: "English",
   customLanguage: "",
-  enrichmentModel: "gemini-3-flash-preview",
+  enrichmentModel: "gemini-3.1-pro-preview",
   thinkingLevel: "low",
-  writingTone: "professional",
-  customTone: "",
-  contentLength: "medium",
-  maxRetries: 2,
 };
 
 export const LANGUAGE_OPTIONS: { value: OutputLanguage; label: string; flag: string }[] = [
@@ -127,9 +129,8 @@ export const LANGUAGE_OPTIONS: { value: OutputLanguage; label: string; flag: str
 ];
 
 export const MODEL_OPTIONS: { value: EnrichmentModel; label: string; description: string; icon: string }[] = [
-  { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", description: "Highest quality, slower", icon: "✨" },
-  { value: "gemini-3-flash-preview", label: "Gemini 3 Flash", description: "Balanced speed & quality", icon: "⚡" },
-  { value: "gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash-Lite", description: "Fastest, lower cost", icon: "💨" },
+  { value: "gemini-3.1-pro-preview", label: "Pro", description: "Highest quality, slower", icon: "✨" },
+  { value: "gemini-3.1-flash-lite-preview", label: "Fast", description: "Fastest, lower cost", icon: "⚡" },
 ];
 
 export const TONE_OPTIONS: { value: WritingTone; label: string; description: string }[] = [
@@ -141,6 +142,7 @@ export const TONE_OPTIONS: { value: WritingTone; label: string; description: str
 ];
 
 export interface SheetState {
+  projectId: string | null;
   fileName: string | null;
   rows: ProductRow[];
   originalColumns: string[];
@@ -157,4 +159,6 @@ export interface SheetState {
   errorCount: number;
   sidebarOpen: boolean;
   undoVersion: number;
+  saveStatus: "saved" | "saving" | "unsaved" | "error";
+  lastSavedAt: number | null;
 }

@@ -152,9 +152,9 @@ function EditableCell({
     return (
       <span
         className={`text-muted-foreground/30 text-xs block w-full min-h-[20px] ${isEditable ? "cursor-text" : "cursor-default"}`}
-        onDoubleClick={handleDoubleClick}
+        onClick={handleDoubleClick}
       >
-        —
+        {isEditable ? "Click to add" : "—"}
       </span>
     );
   }
@@ -184,7 +184,7 @@ function EditableCell({
   const str = String(value);
   return (
     <div
-      onDoubleClick={handleDoubleClick}
+      onClick={handleDoubleClick}
       className={`text-xs leading-relaxed break-words whitespace-pre-wrap w-full ${isEditable ? "cursor-text" : "cursor-default"}`}
     >
       {str}
@@ -193,14 +193,30 @@ function EditableCell({
 }
 
 // --- Source URLs Cell ---
-function SourceUrlsCell({ sources }: { sources: { title: string; uri: string }[] }) {
+function SourceUrlsCell({ sources, isEditable, rowId, enrichKey }: { sources: { title: string; uri: string }[]; isEditable: boolean; rowId: string; enrichKey: string }) {
+  const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [draft, setDraft] = useState<{ title: string; uri: string }[]>([]);
   const preview = sources.slice(0, 3);
   const remaining = sources.length - 3;
 
+  const startEdit = () => {
+    setDraft(sources.map((s) => ({ ...s })));
+    setEditMode(true);
+    setOpen(true);
+  };
+
+  const saveEdit = () => {
+    const cleaned = draft.filter((s) => s.uri.trim() !== "");
+    updateEnrichedCellValue(rowId, enrichKey, cleaned);
+    setEditMode(false);
+    setOpen(false);
+  };
+
   return (
     <>
-      <div className="flex flex-col gap-0.5">
+      <div className="flex flex-col gap-0.5 group">
         {preview.map((source, i) => (
           <a
             key={i}
@@ -222,30 +238,91 @@ function SourceUrlsCell({ sources }: { sources: { title: string; uri: string }[]
             +{remaining} more
           </button>
         )}
+        {isEditable && (
+          <button
+            onClick={(e) => { e.stopPropagation(); startEdit(); }}
+            className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors mt-0.5 text-left"
+          >
+            Click to edit
+          </button>
+        )}
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditMode(false); }}>
         <DialogContent className="max-w-lg max-h-[70vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-sm">
-              <ExternalLink className="h-4 w-4" />
-              All Sources ({sources.length})
+            <DialogTitle className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-2">
+                <ExternalLink className="h-4 w-4" />
+                {editMode ? "Edit Sources" : `All Sources (${sources.length})`}
+              </span>
+              {isEditable && !editMode && (
+                <button
+                  onClick={startEdit}
+                  className="text-[11px] text-primary hover:underline font-normal"
+                >
+                  Edit
+                </button>
+              )}
             </DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col gap-2 mt-2">
-            {sources.map((source, i) => (
-              <a
-                key={i}
-                href={source.uri}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-start gap-2 text-sm text-blue-500 hover:underline p-2 rounded-md hover:bg-muted/50 transition-colors"
+          {editMode ? (
+            <div className="flex flex-col gap-2 mt-2">
+              {draft.map((source, i) => (
+                <div key={i} className="flex items-start gap-2 p-2 rounded-md border bg-muted/20">
+                  <div className="flex-1 space-y-1 min-w-0">
+                    <input
+                      value={source.title}
+                      onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], title: e.target.value }; setDraft(n); }}
+                      placeholder="Title"
+                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    />
+                    <input
+                      value={source.uri}
+                      onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], uri: e.target.value }; setDraft(n); }}
+                      placeholder="URL"
+                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
+                    />
+                  </div>
+                  <button
+                    onClick={() => setDraft(draft.filter((_, idx) => idx !== i))}
+                    className="text-muted-foreground/40 hover:text-destructive shrink-0 mt-1"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() => setDraft([...draft, { title: "", uri: "" }])}
+                className="text-[11px] text-primary/70 hover:text-primary transition-colors text-left"
               >
-                <ExternalLink className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span className="break-all leading-snug">{source.title || source.uri}</span>
-              </a>
-            ))}
-          </div>
+                + Add source
+              </button>
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <button onClick={() => { setEditMode(false); setOpen(false); }} className="text-xs text-muted-foreground hover:text-foreground px-3 py-1.5 rounded">
+                  Cancel
+                </button>
+                <button onClick={saveEdit} className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 font-medium">
+                  Save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 mt-2">
+              {sources.map((source, i) => (
+                <a
+                  key={i}
+                  href={source.uri}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-start gap-2 text-sm text-blue-500 hover:underline p-2 rounded-md hover:bg-muted/50 transition-colors"
+                >
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  <span className="break-all leading-snug">{source.title || source.uri}</span>
+                </a>
+              ))}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </>
@@ -253,16 +330,39 @@ function SourceUrlsCell({ sources }: { sources: { title: string; uri: string }[]
 }
 
 // --- Image URLs Cell ---
-function ImageUrlsCell({ images }: { images: { imageUrl: string; pageUrl: string; title: string }[] }) {
+function ImageUrlsCell({ images, isEditable, rowId, enrichKey }: { images: { imageUrl: string; pageUrl: string; title: string }[]; isEditable: boolean; rowId: string; enrichKey: string }) {
+  const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [draft, setDraft] = useState<{ imageUrl: string; pageUrl: string; title: string }[]>([]);
+
+  const startEdit = () => {
+    setDraft(images.map((img) => ({ ...img })));
+    setEditMode(true);
+    setOpen(true);
+  };
+
+  const saveEdit = () => {
+    const cleaned = draft.filter((img) => img.imageUrl.trim() !== "");
+    updateEnrichedCellValue(rowId, enrichKey, cleaned);
+    setEditMode(false);
+    setOpen(false);
+  };
 
   if (!images || images.length === 0) {
-    return <span className="text-muted-foreground/30 text-xs">—</span>;
+    return (
+      <div
+        onClick={isEditable ? startEdit : undefined}
+        className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-text hover:text-muted-foreground/50 transition-colors" : ""}`}
+      >
+        {isEditable ? "Click to add" : "—"}
+      </div>
+    );
   }
 
   return (
     <>
-      <div className="flex gap-1.5 flex-wrap">
+      <div className="flex gap-1.5 flex-wrap group">
         {images.slice(0, 3).map((img, i) => (
           <a
             key={i}
@@ -291,6 +391,14 @@ function ImageUrlsCell({ images }: { images: { imageUrl: string; pageUrl: string
             +{images.length - 3}
           </button>
         )}
+        {isEditable && (
+          <button
+            onClick={(e) => { e.stopPropagation(); startEdit(); }}
+            className="h-10 w-10 rounded border border-dashed border-border/40 flex items-center justify-center text-[10px] text-primary/0 group-hover:text-primary/50 group-hover:border-primary/30 transition-all"
+          >
+            Edit
+          </button>
+        )}
       </div>
 
       {images.length <= 3 && (
@@ -310,38 +418,103 @@ function ImageUrlsCell({ images }: { images: { imageUrl: string; pageUrl: string
         </div>
       )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditMode(false); }}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-sm">
-              All Images ({images.length})
+            <DialogTitle className="flex items-center justify-between text-sm">
+              <span>{editMode ? "Edit Images" : `All Images (${images.length})`}</span>
+              {isEditable && !editMode && (
+                <button
+                  onClick={startEdit}
+                  className="text-[11px] text-primary hover:underline font-normal"
+                >
+                  Edit
+                </button>
+              )}
             </DialogTitle>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-3 mt-2">
-            {images.map((img, i) => (
-              <a
-                key={i}
-                href={img.imageUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block rounded-lg border overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all group/card"
-              >
-                <img
-                  src={img.imageUrl}
-                  alt={img.title || "Product"}
-                  className="w-full h-40 object-contain bg-white p-2"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = "";
-                    (e.target as HTMLImageElement).alt = "Failed to load";
-                  }}
-                />
-                <div className="p-2 bg-muted/30 border-t">
-                  <p className="text-[11px] font-medium truncate">{img.title || "Product image"}</p>
-                  <p className="text-[9px] text-blue-500/70 truncate mt-0.5">{img.imageUrl}</p>
+          {editMode ? (
+            <div className="flex flex-col gap-2 mt-2">
+              {draft.map((img, i) => (
+                <div key={i} className="flex items-start gap-2 p-2 rounded-md border bg-muted/20">
+                  {img.imageUrl && (
+                    <img
+                      src={img.imageUrl}
+                      alt={img.title || "Preview"}
+                      className="h-14 w-14 object-contain rounded border bg-white shrink-0"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                  )}
+                  <div className="flex-1 space-y-1 min-w-0">
+                    <input
+                      value={img.imageUrl}
+                      onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], imageUrl: e.target.value }; setDraft(n); }}
+                      placeholder="Image URL"
+                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
+                    />
+                    <input
+                      value={img.pageUrl}
+                      onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], pageUrl: e.target.value }; setDraft(n); }}
+                      placeholder="Source page URL"
+                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
+                    />
+                    <input
+                      value={img.title}
+                      onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], title: e.target.value }; setDraft(n); }}
+                      placeholder="Title / Description"
+                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    />
+                  </div>
+                  <button
+                    onClick={() => setDraft(draft.filter((_, idx) => idx !== i))}
+                    className="text-muted-foreground/40 hover:text-destructive shrink-0 mt-1"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
-              </a>
-            ))}
-          </div>
+              ))}
+              <button
+                onClick={() => setDraft([...draft, { imageUrl: "", pageUrl: "", title: "" }])}
+                className="text-[11px] text-primary/70 hover:text-primary transition-colors text-left"
+              >
+                + Add image
+              </button>
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <button onClick={() => { setEditMode(false); setOpen(false); }} className="text-xs text-muted-foreground hover:text-foreground px-3 py-1.5 rounded">
+                  Cancel
+                </button>
+                <button onClick={saveEdit} className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 font-medium">
+                  Save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              {images.map((img, i) => (
+                <a
+                  key={i}
+                  href={img.imageUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block rounded-lg border overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all group/card"
+                >
+                  <img
+                    src={img.imageUrl}
+                    alt={img.title || "Product"}
+                    className="w-full h-40 object-contain bg-white p-2"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = "";
+                      (e.target as HTMLImageElement).alt = "Failed to load";
+                    }}
+                  />
+                  <div className="p-2 bg-muted/30 border-t">
+                    <p className="text-[11px] font-medium truncate">{img.title || "Product image"}</p>
+                    <p className="text-[9px] text-blue-500/70 truncate mt-0.5">{img.imageUrl}</p>
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </>
@@ -399,14 +572,43 @@ function EditableEnrichedCell({
     []
   );
 
+  // Show editing UI first — must come before empty checks
+  if (editing && !Array.isArray(value)) {
+    return (
+      <div className="w-full" onKeyDown={handleKeyDown}>
+        <textarea
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={Math.min(6, Math.max(2, Math.ceil(draft.length / 40)))}
+          className="w-full bg-background border border-primary/30 rounded px-1.5 py-1 text-[11px] leading-snug outline-none focus:ring-1 focus:ring-primary/50 resize-y min-h-[2rem]"
+        />
+        <div className="flex justify-end gap-1 mt-1">
+          <button
+            onClick={() => setEditing(false)}
+            className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={commitString}
+            className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded hover:bg-primary/90 transition-colors font-medium"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Empty
   if (value === undefined || value === null || value === "") {
     return (
       <div
-        onDoubleClick={startEditString}
+        onClick={startEditString}
         className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-text hover:text-muted-foreground/50 transition-colors" : ""}`}
       >
-        {isEditable ? "Double-click to add" : "—"}
+        {isEditable ? "Click to add" : "—"}
       </div>
     );
   }
@@ -416,10 +618,10 @@ function EditableEnrichedCell({
     if (value.length === 0) {
       return (
         <div
-          onDoubleClick={startEditArray}
+          onClick={startEditArray}
           className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-text hover:text-muted-foreground/50" : ""}`}
         >
-          {isEditable ? "Double-click to add" : "—"}
+          {isEditable ? "Click to add" : "—"}
         </div>
       );
     }
@@ -427,13 +629,13 @@ function EditableEnrichedCell({
     // Image URLs - show as thumbnails with links
     if (value[0] && typeof value[0] === "object" && "imageUrl" in value[0]) {
       const images = value as { imageUrl: string; pageUrl: string; title: string }[];
-      return <ImageUrlsCell images={images} />;
+      return <ImageUrlsCell images={images} isEditable={isEditable} rowId={rowId} enrichKey={enrichKey} />;
     }
 
     // Source URLs - show as links with dialog for all sources
     if (value[0] && typeof value[0] === "object" && "uri" in value[0]) {
       const sources = value as { title: string; uri: string }[];
-      return <SourceUrlsCell sources={sources} />;
+      return <SourceUrlsCell sources={sources} isEditable={isEditable} rowId={rowId} enrichKey={enrichKey} />;
     }
 
     // Editable string array (features, keywords, bullets)
@@ -505,7 +707,7 @@ function EditableEnrichedCell({
 
     return (
       <div
-        onDoubleClick={startEditArray}
+        onClick={startEditArray}
         className={`flex flex-col gap-0.5 group ${isEditable ? "cursor-text" : ""}`}
       >
         {(value as string[]).slice(0, 4).map((item, i) => (
@@ -519,7 +721,7 @@ function EditableEnrichedCell({
         )}
         {isEditable && (
           <span className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors mt-0.5">
-            Double-click to edit
+            Click to edit
           </span>
         )}
       </div>
@@ -562,13 +764,13 @@ function EditableEnrichedCell({
       <Tooltip>
         <TooltipTrigger asChild>
           <div
-            onDoubleClick={startEditString}
+            onClick={startEditString}
             className={`text-[11px] leading-snug break-words whitespace-pre-wrap w-full group ${isEditable ? "cursor-text" : "cursor-default"}`}
           >
             {str}
             {isEditable && (
               <span className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors block mt-0.5">
-                Double-click to edit
+                Click to edit
               </span>
             )}
           </div>
@@ -582,13 +784,13 @@ function EditableEnrichedCell({
 
   return (
     <div
-      onDoubleClick={startEditString}
+      onClick={startEditString}
       className={`text-[11px] leading-snug break-words whitespace-pre-wrap w-full group ${isEditable ? "cursor-text" : ""}`}
     >
       {str}
       {isEditable && (
         <span className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors block mt-0.5">
-          Double-click to edit
+          Click to edit
         </span>
       )}
     </div>
@@ -647,7 +849,7 @@ function RowPreviewPanel({
               <Sparkles className="h-3 w-3" /> Enriched Data
             </h3>
             <div className="space-y-2">
-              {enrichmentColumns.filter((c) => c.enabled).map((col) => {
+              {enrichmentColumns.filter((c) => c.enabled || (row.enrichedData?.[c.id] !== undefined && row.enrichedData?.[c.id] !== null && row.enrichedData?.[c.id] !== "")).map((col) => {
                 const val = row.enrichedData[col.id];
                 if (val === undefined || val === null) return null;
                 let display: React.ReactNode;
@@ -1048,8 +1250,13 @@ export function DataTable() {
       });
     }
 
-    // Enriched columns - sortable, resizable
-    const enabledEnrichment = enrichmentColumns.filter((col) => col.enabled);
+    // Enriched columns - show if enabled OR has data in any row
+    const enabledEnrichment = enrichmentColumns.filter(
+      (col) => col.enabled || rows.some((r) => {
+        const val = r.enrichedData?.[col.id];
+        return val !== undefined && val !== null && val !== "";
+      })
+    );
     for (const enrichCol of enabledEnrichment) {
       cols.push({
         id: `enrich_${enrichCol.id}`,
@@ -1076,7 +1283,7 @@ export function DataTable() {
           </div>
         ),
         cell: ({ row }) => {
-          if (row.original.status === "processing") {
+          if (row.original.status === "processing" && enrichCol.enabled) {
             return (
               <div className="py-1 space-y-1.5 w-full">
                 <div className="h-1.5 w-3/4 bg-primary/10 animate-pulse rounded-full" />
@@ -1085,7 +1292,7 @@ export function DataTable() {
               </div>
             );
           }
-          const canEditEnriched = !isEnriching || row.original.status === "done";
+          const canEditEnriched = row.original.status !== "processing";
           return (
             <EditableEnrichedCell
               value={row.original.enrichedData[enrichCol.id]}
@@ -1111,6 +1318,7 @@ export function DataTable() {
   }, [
     visibleOriginalColumns,
     enrichmentColumns,
+    rows,
     isEnriching,
     selectedRowIds,
     allSelected,
