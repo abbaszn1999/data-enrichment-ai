@@ -6,6 +6,7 @@ import {
   getCoreRowModel,
   getFilteredRowModel,
   getSortedRowModel,
+  getPaginationRowModel,
   flexRender,
   type ColumnDef,
   type SortingState,
@@ -51,6 +52,10 @@ import {
   Columns3,
   RotateCcw,
   GripVertical,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -1032,6 +1037,7 @@ export function DataTable() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [showColumnVisibility, setShowColumnVisibility] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const columnResizeMode: ColumnResizeMode = "onChange";
@@ -1335,18 +1341,26 @@ export function DataTable() {
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     globalFilterFn,
     columnResizeMode,
     state: {
       globalFilter,
       sorting,
+      pagination,
     },
     onGlobalFilterChange: setGlobalFilter,
     onSortingChange: setSorting,
+    onPaginationChange: setPagination,
     enableColumnResizing: true,
   });
 
-  // Virtual scrolling with dynamic row heights
+  // Reset to first page when filters change
+  useEffect(() => {
+    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, [globalFilter, statusFilter]);
+
+  // Virtual scrolling with dynamic row heights (within current page)
   const { rows: tableRows } = table.getRowModel();
   const columnSizingState = table.getState().columnSizing;
   const rowVirtualizer = useVirtualizer({
@@ -1598,17 +1612,129 @@ export function DataTable() {
           </div>
         </div>
 
-        {/* Status bar */}
-        <div className="flex items-center justify-between px-3 py-1 border-t bg-muted/20 shrink-0">
+        {/* Pagination Footer */}
+        <div className="flex items-center justify-between px-3 py-1.5 border-t bg-muted/20 shrink-0">
+          {/* Left: Row info + status counts */}
           <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-            <span>{rows.length.toLocaleString()} total rows</span>
+            <span>
+              Showing{" "}
+              <span className="font-semibold text-foreground">
+                {table.getRowModel().rows.length === 0
+                  ? 0
+                  : pagination.pageIndex * pagination.pageSize + 1}
+                –
+                {Math.min(
+                  (pagination.pageIndex + 1) * pagination.pageSize,
+                  table.getFilteredRowModel().rows.length
+                )}
+              </span>
+              {" "}of{" "}
+              <span className="font-semibold text-foreground">
+                {table.getFilteredRowModel().rows.length.toLocaleString()}
+              </span>
+              {" "}rows
+            </span>
             {statusCounts.done > 0 && <span className="text-green-600">{statusCounts.done} enriched</span>}
             {statusCounts.error > 0 && <span className="text-red-600">{statusCounts.error} errors</span>}
             {statusCounts.processing > 0 && <span className="text-amber-600">{statusCounts.processing} processing</span>}
           </div>
+
+          {/* Center: Page navigation */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => { table.setPageIndex(0); tableContainerRef.current?.scrollTo({ top: 0 }); }}
+              disabled={!table.getCanPreviousPage()}
+              className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="First page"
+            >
+              <ChevronsLeft className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { table.previousPage(); tableContainerRef.current?.scrollTo({ top: 0 }); }}
+              disabled={!table.getCanPreviousPage()}
+              className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Previous page"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+
+            {/* Page number buttons */}
+            {(() => {
+              const currentPage = table.getState().pagination.pageIndex;
+              const totalPages = table.getPageCount();
+              if (totalPages <= 1) return null;
+
+              const pages: (number | "...")[] = [];
+              if (totalPages <= 7) {
+                for (let i = 0; i < totalPages; i++) pages.push(i);
+              } else {
+                pages.push(0);
+                if (currentPage > 2) pages.push("...");
+                for (let i = Math.max(1, currentPage - 1); i <= Math.min(totalPages - 2, currentPage + 1); i++) {
+                  pages.push(i);
+                }
+                if (currentPage < totalPages - 3) pages.push("...");
+                pages.push(totalPages - 1);
+              }
+
+              return pages.map((p, idx) =>
+                p === "..." ? (
+                  <span key={`ellipsis-${idx}`} className="text-[10px] text-muted-foreground/50 px-0.5">…</span>
+                ) : (
+                  <button
+                    key={p}
+                    onClick={() => { table.setPageIndex(p); tableContainerRef.current?.scrollTo({ top: 0 }); }}
+                    className={`h-6 min-w-[24px] px-1 flex items-center justify-center rounded text-[10px] font-medium transition-colors ${
+                      currentPage === p
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                  >
+                    {(p as number) + 1}
+                  </button>
+                )
+              );
+            })()}
+
+            <button
+              onClick={() => { table.nextPage(); tableContainerRef.current?.scrollTo({ top: 0 }); }}
+              disabled={!table.getCanNextPage()}
+              className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Next page"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { table.setPageIndex(table.getPageCount() - 1); tableContainerRef.current?.scrollTo({ top: 0 }); }}
+              disabled={!table.getCanNextPage()}
+              className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Last page"
+            >
+              <ChevronsRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {/* Right: Page size selector + column info */}
           <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-            <span>{visibleOriginalColumns.length}/{originalColumns.length} columns visible</span>
-            <span className="opacity-50">Double-click to edit · Click # to preview · Right-click for options</span>
+            <div className="flex items-center gap-1.5">
+              <span>Rows per page</span>
+              <select
+                value={pagination.pageSize}
+                onChange={(e) => {
+                  setPagination({ pageIndex: 0, pageSize: Number(e.target.value) });
+                  tableContainerRef.current?.scrollTo({ top: 0 });
+                }}
+                className="h-6 rounded border bg-background text-[10px] font-medium px-1 pr-5 outline-none focus:ring-1 focus:ring-primary/50 cursor-pointer appearance-none"
+                style={{ backgroundImage: "url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\")", backgroundPosition: "right 2px center", backgroundRepeat: "no-repeat", backgroundSize: "16px" }}
+              >
+                {[25, 50, 100, 250, 500].map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <span className="opacity-60">{visibleOriginalColumns.length}/{originalColumns.length} cols</span>
           </div>
         </div>
       </div>

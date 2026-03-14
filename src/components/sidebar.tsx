@@ -100,12 +100,12 @@ export function Sidebar() {
     (r) => r.status === "pending" || r.status === "error" || r.status === "done"
   );
 
-  // Enriched columns that have data in at least one row (text/list only, not imageUrls/sourceUrls)
+  // Enriched columns that have data in at least one row (all types including imageUrls/sourceUrls)
   const enrichedColumnsWithData = enrichmentColumns.filter(
     (col) =>
-      (col.type === "text" || col.type === "list") &&
       rows.some((r) => {
         const val = r.enrichedData?.[col.id];
+        if (Array.isArray(val)) return val.length > 0;
         return val !== undefined && val !== null && val !== "";
       })
   );
@@ -167,7 +167,18 @@ export function Sidebar() {
                 // This is an AI-generated column — pull value from enrichedData
                 const val = r.enrichedData?.[col];
                 if (val !== undefined && val !== null && val !== "") {
-                  filteredData[col] = Array.isArray(val) ? val.join(", ") : String(val);
+                  if (Array.isArray(val)) {
+                    // Handle arrays of objects (sourceUrls, imageUrls) vs simple string arrays
+                    filteredData[col] = val
+                      .map((item) =>
+                        typeof item === "object" && item !== null
+                          ? (item.uri || item.imageUrl || item.pageUrl || item.title || JSON.stringify(item))
+                          : String(item)
+                      )
+                      .join(", ");
+                  } else {
+                    filteredData[col] = String(val);
+                  }
                 }
               } else if (r.originalData[col] !== undefined) {
                 filteredData[col] = r.originalData[col];

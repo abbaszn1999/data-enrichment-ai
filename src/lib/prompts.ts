@@ -34,17 +34,21 @@ export function extractImages(productData: Record<string, string>): {
   return { textEntries: lines.join("\n"), images };
 }
 
-export function buildSearchPrompt(productData: Record<string, string>): {
+export function buildSearchPrompt(productData: Record<string, string>, customInstruction?: string): {
   text: string;
   images: ImagePart[];
 } {
   const { textEntries, images } = extractImages(productData);
 
+  const additionalInstruction = customInstruction
+    ? `\nAdditional search instruction: ${customInstruction}\n`
+    : "";
+
   const text = `You are a product research assistant. Search the web to find detailed information about this product.
 ${images.length > 0 ? "\nIMPORTANT: I have attached product image(s). Please analyze the image(s) carefully to identify the product, brand, model, and any visible text or features before searching.\n" : ""}
 Product Data:
 ${textEntries}
-
+${additionalInstruction}
 Search for this exact product and find:
 1. The full official product name and model
 2. Detailed technical specifications
@@ -62,6 +66,7 @@ type ColumnDef = {
   label: string;
   description: string;
   type: string;
+  customInstruction?: string;
 };
 
 export interface PromptSettings {
@@ -116,16 +121,19 @@ export function buildEnrichmentPrompt(
       const colLength = colSettings?.contentLength || contentLength;
       const colLengthConfig = LENGTH_INSTRUCTIONS[colLength] || lengthConfig;
 
+      // Look up column definition for customInstruction
+      const colDef = enrichmentColumns?.find((c) => c.id === colId);
+      const customInstr = colDef?.customInstruction ? ` Additional instruction: ${colDef.customInstruction}` : "";
+
       // Check if it's a known builtin — use per-column length if available
       const perColBuiltins = getBuiltinColumnInstructions(colLengthConfig);
       if (perColBuiltins[colId]) {
-        return perColBuiltins[colId];
+        return perColBuiltins[colId] + customInstr;
       }
       // Look up in enrichmentColumns for custom prompt
-      const colDef = enrichmentColumns?.find((c) => c.id === colId);
       if (colDef) {
         const typeHint = colDef.type === "list" ? "(array of strings)" : "(string)";
-        return `"${colId}": ${typeHint} ${colDef.description}`;
+        return `"${colId}": ${typeHint} ${colDef.description}${customInstr}`;
       }
       return "";
     })

@@ -55,11 +55,12 @@ async function withRetry<T>(
 }
 
 export async function searchProduct(
-  productData: Record<string, string>
+  productData: Record<string, string>,
+  customInstruction?: string
 ): Promise<{ text: string; sources: SourceUrl[] }> {
   return withRetry(async () => {
     const ai = getClient();
-    const { text: promptText, images } = buildSearchPrompt(productData);
+    const { text: promptText, images } = buildSearchPrompt(productData, customInstruction);
 
     // Build multimodal content: text + images
     const parts: any[] = [{ text: promptText }];
@@ -274,7 +275,7 @@ export async function enrichProduct(
   productData: Record<string, string>,
   searchResults: string,
   enabledColumns: string[],
-  enrichmentColumns?: { id: string; label: string; description: string; type: string; writingTone?: string; contentLength?: string }[],
+  enrichmentColumns?: { id: string; label: string; description: string; type: string; customInstruction?: string; writingTone?: string; contentLength?: string }[],
   settings?: GeminiSettings
 ): Promise<EnrichedData> {
   return withRetry(async () => {
@@ -356,7 +357,9 @@ export async function enrichProductRow(
   settings?: GeminiSettings
 ): Promise<EnrichedData> {
   // Step 1: Search with Gemini 3.1 Pro + Google Search
-  const { text: searchResults, sources } = await searchProduct(productData);
+  const sourceCol = enrichmentColumns?.find((c) => c.id === "sourceUrls");
+  const searchInstruction = sourceCol?.customInstruction;
+  const { text: searchResults, sources } = await searchProduct(productData, searchInstruction);
 
   // Step 2: Enrich with selected model (exclude special columns)
   const specialColumns = ["sourceUrls", "imageUrls"];
@@ -371,7 +374,6 @@ export async function enrichProductRow(
 
   // Step 3: Attach sources if requested (limit to sourceCount)
   if (enabledColumns.includes("sourceUrls")) {
-    const sourceCol = enrichmentColumns?.find((c) => c.id === "sourceUrls");
     const sourceCount = sourceCol?.sourceCount ?? 3;
     enrichedData.sourceUrls = sources.slice(0, sourceCount);
   }
