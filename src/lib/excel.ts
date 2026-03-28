@@ -234,7 +234,10 @@ export async function exportToExcel(
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Enriched Data");
 
-  const enabledEnrichment = enrichmentColumns.filter((col) => col.enabled);
+  const enabledEnrichment = enrichmentColumns.filter((col) => {
+    if (col.id === "sourceUrls") return false;
+    return col.enabled;
+  });
 
   // Identify image columns
   const imageColNames = new Set<string>();
@@ -291,12 +294,12 @@ export async function exportToExcel(
       if (value === undefined || value === null) {
         strValue = "";
       } else if (Array.isArray(value)) {
-        if (col.id === "sourceUrls") {
-          strValue = (value as { title: string; uri: string }[])
-            .map((s) => `${s.title}: ${s.uri}`)
-            .join("\n");
+        if (col.id === "imageUrls") {
+          // Export only the first image URL string
+          const first = value[0];
+          strValue = typeof first === "object" && first !== null ? (first.imageUrl || "") : String(first || "");
         } else {
-          strValue = (value as string[]).join("\n");
+          strValue = (value as any[]).map((i: any) => typeof i === "object" ? (i.imageUrl || i.uri || i.title || JSON.stringify(i)) : String(i)).join("\n");
         }
       } else {
         strValue = String(value);
@@ -349,6 +352,130 @@ export async function exportToExcel(
       bottom: { style: "thin", color: { argb: "FF1E40AF" } },
     };
   });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+function addSheetRows(
+  workbook: any,
+  worksheet: any,
+  rows: ProductRow[],
+  originalColumns: string[],
+  enrichmentColumns: EnrichmentColumn[],
+) {
+  const enabledEnrichment = enrichmentColumns.filter((col) => {
+    // Exclude sourceUrls from export
+    if (col.id === "sourceUrls") return false;
+    return col.enabled || rows.some((r) => {
+      const val = r.enrichedData?.[col.id];
+      if (Array.isArray(val)) return val.length > 0;
+      return val !== undefined && val !== null && val !== "";
+    });
+  });
+
+  const imageColNames = new Set<string>();
+  for (const col of originalColumns) {
+    const upper = col.toUpperCase();
+    if (upper === "PICTURE" || upper === "IMAGE" || upper === "PHOTO") {
+      imageColNames.add(col);
+    }
+  }
+
+  const allHeaders = [...originalColumns, ...enabledEnrichment.map((col) => col.label)];
+  const headerRow = worksheet.addRow(allHeaders);
+  headerRow.font = { bold: true, size: 11 };
+  headerRow.alignment = { vertical: "middle", horizontal: "center" };
+  headerRow.height = 22;
+
+  worksheet.columns = allHeaders.map((header: string, idx: number) => {
+    const colName = idx < originalColumns.length ? originalColumns[idx] : "";
+    if (imageColNames.has(colName)) return { width: 15 };
+    return { width: header.length < 12 ? 14 : Math.min(header.length + 4, 50) };
+  });
+
+  for (const row of rows) {
+    const values: (string | null)[] = [];
+    const imageEntries: { colIdx: number; base64: string }[] = [];
+
+    for (let i = 0; i < originalColumns.length; i++) {
+      const col = originalColumns[i];
+      const val = row.originalData[col] || "";
+      if (imageColNames.has(col) && typeof val === "string" && val.startsWith("data:image/")) {
+        values.push(null);
+        imageEntries.push({ colIdx: i, base64: val });
+      } else {
+        values.push(typeof val === "string" && val.length > 32700 ? val.substring(0, 32700) + "..." : val);
+      }
+    }
+
+    for (const col of enabledEnrichment) {
+      const value = row.enrichedData[col.id];
+      let strValue = "";
+      if (value === undefined || value === null) strValue = "";
+      else if (Array.isArray(value)) {
+        if (col.id === "imageUrls") {
+          // Export only the first image URL string
+          const first = value[0];
+          strValue = typeof first === "object" && first !== null ? (first.imageUrl || "") : String(first || "");
+        } else {
+          strValue = (value as any[]).map((i: any) => typeof i === "object" ? (i.imageUrl || i.uri || i.title || JSON.stringify(i)) : String(i)).join("\n");
+        }
+      } else strValue = String(value);
+      values.push(strValue.length > 32700 ? strValue.substring(0, 32700) + "..." : strValue);
+    }
+
+    const dataRow = worksheet.addRow(values);
+    dataRow.alignment = { vertical: "middle", wrapText: true };
+
+    if (imageEntries.length > 0) {
+      dataRow.height = 60;
+      for (const img of imageEntries) {
+        try {
+          const match = img.base64.match(/^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/);
+          if (match) {
+            const ext = match[1] === "jpg" ? "jpeg" : match[1];
+            const imageId = workbook.addImage({ base64: match[2], extension: ext as "png" | "jpeg" | "gif" });
+            worksheet.addImage(imageId, { tl: { col: img.colIdx, row: dataRow.number - 1 }, ext: { width: 80, height: 55 } });
+          }
+        } catch {
+          dataRow.getCell(img.colIdx + 1).value = "[Image]";
+        }
+      }
+    }
+  }
+
+  headerRow.eachCell((cell: any) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+    cell.border = { bottom: { style: "thin", color: { argb: "FF1E40AF" } } };
+  });
+}
+
+export async function exportToExcelTwoSheets(
+  existingRows: ProductRow[],
+  newRows: ProductRow[],
+  originalColumns: string[],
+  enrichmentColumns: EnrichmentColumn[],
+): Promise<Blob> {
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+
+  if (existingRows.length > 0) {
+    const ws1 = workbook.addWorksheet("Existing");
+    addSheetRows(workbook, ws1, existingRows, originalColumns, enrichmentColumns);
+  }
+
+  if (newRows.length > 0) {
+    const ws2 = workbook.addWorksheet("New");
+    addSheetRows(workbook, ws2, newRows, originalColumns, enrichmentColumns);
+  }
+
+  if (existingRows.length === 0 && newRows.length === 0) {
+    workbook.addWorksheet("Empty");
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
   return new Blob([buffer], {

@@ -2,6 +2,8 @@
 
 Detailed implementation tasks for products, categories, and file storage.
 
+> **⚠️ UPDATED** — Products Upload Wizard enhanced to 4-step wizard with AI column mapping, confidence scores, quality checks, transforms, duplicate detection, and live progress. Categories page enhanced with search, bulk actions, import/export, breadcrumbs, and stats bar.
+
 ---
 
 ## Phase 2A: Master Data (Products & Categories)
@@ -20,10 +22,41 @@ User uploads their store's existing products and categories as reference data fo
 
 #### Category Tree Page
 **File**: `src/app/(dashboard)/w/[workspaceSlug]/categories/page.tsx`
-- Interactive tree view of all categories
-- Expand/collapse nodes
-- Click to select -> show details panel
-- Actions: Add Root, Add Child, Edit, Delete
+
+Enhanced categories page with:
+
+**Header:**
+- Title + description
+- Action buttons: "Import from CSV" + "Export" + "Add Category" (primary)
+- Search bar to filter categories by name (highlights matches)
+
+**Stats Bar** (4 cards):
+- Total Categories
+- Root Categories (no parent)
+- With Products (categories that have products assigned)
+- Max Depth (deepest nesting level in the tree)
+
+**Breadcrumb Navigation:**
+- Shows current path when a category is selected
+- Clickable breadcrumb segments to navigate up
+
+**Interactive Tree:**
+- Recursive tree rendering with indentation and connector lines
+- Each node shows: expand arrow + folder icon + name + product count badge
+- Expand/collapse with chevron icons
+- Click node -> select it (highlight with primary color)
+- Selected category shows detail panel below the tree
+- Root level has no indentation, children are indented
+
+**Detail Panel** (for selected category):
+- Name, Description, Product count, Subcategory count
+- Edit / Delete buttons
+
+**Bulk Actions Bar** (when any category is selected):
+- Move to... (change parent)
+- Delete Selected
+- Export Selected
+
 - Only Admin+ can modify (Editor/Viewer = read-only)
 
 #### Category Tree Component
@@ -31,9 +64,8 @@ User uploads their store's existing products and categories as reference data fo
 - Recursive tree rendering with indentation
 - Each node shows: name, product count, expand arrow
 - Click node -> select it (highlight)
-- Double-click -> edit inline
-- Drag-and-drop to reorder or move under different parent
-- Right-click context menu: Add child, Edit, Delete
+- Search filtering with match highlighting
+- Expand/collapse all functionality
 
 #### Category Form
 **File**: `src/components/categories/category-form.tsx`
@@ -48,17 +80,10 @@ User uploads their store's existing products and categories as reference data fo
     - Example: Laptops category has attributes: RAM, CPU, Screen Size
 - Auto-generate slug from name
 
-#### Category Upload
-**File**: `src/app/(dashboard)/w/[workspaceSlug]/categories/upload/page.tsx`
-**File**: `src/components/categories/category-upload-wizard.tsx`
-- Step 1: Upload CSV/Excel file
-- Step 2: Preview first 5 rows
-- Step 3: Map columns:
-  - Required: Name column
-  - Optional: Parent Name, Description
-  - System detects hierarchy from Parent Name (e.g., "Electronics > Laptops" or separate parent column)
-- Step 4: Review tree preview
-- Step 5: Import with progress
+#### Category Stats Component
+**File**: `src/components/categories/category-stats.tsx`
+- 4 stat cards: Total, Root, With Products, Max Depth
+- Compact design with icons and muted text
 
 #### CRUD Functions
 **File**: `src/lib/supabase.ts` (EXPAND)
@@ -105,44 +130,59 @@ getCategoryPath(id) -> "Electronics > Computers > Laptops"
 #### Product Upload Wizard
 **File**: `src/app/(dashboard)/w/[workspaceSlug]/products/upload/page.tsx`
 **File**: `src/components/products/product-upload-wizard.tsx`
-- Multi-step wizard:
+
+Enhanced 4-step wizard (consolidated from original 6 steps):
 
   **Step 1: Upload File**
-  - Drag-drop zone for Excel/CSV
-  - Show file name + size after upload
+  - Drag-drop zone for Excel/CSV with visual hover state
+  - After upload: file info card (name, size, format icon)
+  - Sheet selector (if Excel with multiple sheets): shows sheet name, row count, column count per sheet
+  - Recent uploads section: last 3 uploaded files with name, date, row count — click to re-use
   - Save original file to Supabase Storage
   
-  **Step 2: Preview**
-  - Show first 5 rows in a table
-  - Show detected columns
-  - Show total row count
+  **Step 2: Preview & Quality Check**
+  - Data preview table: first N rows (configurable: 5/10/20/50)
+  - Search within preview rows
+  - Quality analysis cards:
+    - Total Rows, Total Columns, Encoding detection
+    - Empty Required Fields count (red badge if > 0)
+    - Invalid Data count
+    - Duplicate SKUs count
+    - Empty Optional Fields count
+  - Column type indicators: each column header shows detected type icon (Hash for numbers, Type for text, FileText for long text)
+  - Row selection (expand/collapse preview size)
   
-  **Step 3: Column Mapping**
-  - Left: file columns (with sample values)
-  - Right: system fields dropdown per column
-  - Required mapping: SKU (highlighted in red if not mapped)
-  - System fields: SKU, Name, Description, Price, Stock, Brand, Category, Weight, Dimensions, Color, Size, + "Custom Field" option
-  - AI auto-suggest: if column name looks like a system field, pre-select it
-    - "Part Number" / "Item Code" / "SKU" -> SKU
-    - "Product Name" / "Title" / "Item Name" -> Name
-    - "Unit Price" / "Cost" / "Price" -> Price
-    - etc.
+  **Step 3: Column Mapping (AI-Assisted)**
+  - Each file column displayed as a card with:
+    - Column name (bold)
+    - Detected type + icon
+    - AI confidence score (99% green, 72% amber, etc.)
+    - System field dropdown (pre-filled by AI)
+    - Transform option dropdown (none, lowercase, uppercase, trim, etc.)
+    - Expandable sample values section (first 3 values from file)
+  - AI confidence badges: green (90%+), amber (70-89%), red (<70%)
+  - Required fields indicator: SKU must be mapped (warning if missing)
+  - System fields: SKU (Required), Name (Required), Price (Required), Description, Stock, Brand, Category, Weight, Dimensions, Color, Image URL, Barcode/EAN, Tags, Body HTML (Shopify), Vendor (Shopify), Product Type (Shopify), Skip
   - Unmapped columns: still imported into data JSONB with original column name
+  - "Auto-map All" button to apply AI suggestions
+  - "Reset Mappings" button
   
-  **Step 4: Category Assignment (optional)**
-  - Dropdown: assign all products to a category
-  - Or: map a column to category names (auto-create categories if needed)
-  
-  **Step 5: Review & Confirm**
-  - Summary: X products to import, Y columns mapped
-  - Warning if duplicate SKUs detected in file
-  - "Import" button
-  
-  **Step 6: Processing**
-  - Progress bar: "Importing... 450/1000 products"
-  - Batch insert (500 at a time) via Supabase
-  - On duplicate SKU: option to skip or overwrite
-  - Final summary: X imported, Y skipped (duplicates), Z errors
+  **Step 4: Import (Duplicate Handling + Progress)**
+  - Duplicate handling mode selector:
+    - Skip Duplicates (default): if SKU exists, don't import
+    - Update Existing: if SKU exists, overwrite data
+    - Import as New: import even if SKU exists (creates duplicates)
+  - Match by field selector: SKU, Barcode, Product Name
+  - "Start Import" button
+  - During import:
+    - Animated progress bar with percentage
+    - Live counter: "Importing... X / Y products"
+    - Currently importing product name shown
+    - Elapsed time counter
+    - Estimated time remaining
+  - After import:
+    - Success summary: imported count, skipped count, errors count
+    - "View Products" and "Upload Another" buttons
 
 #### Product Detail Panel
 **File**: `src/components/products/product-detail-panel.tsx`

@@ -8,7 +8,7 @@ import {
   Package,
   FolderTree,
   Upload,
-  Download,
+  CreditCard,
   Users,
   Settings,
   ChevronDown,
@@ -38,7 +38,7 @@ const sidebarLinks = [
   { href: "/demo/products", label: "Products", icon: Package },
   { href: "/demo/categories", label: "Categories", icon: FolderTree },
   { href: "/demo/import", label: "Import", icon: Upload },
-  { href: "/demo/export", label: "Export", icon: Download },
+  { href: "/demo/usage", label: "Usage", icon: CreditCard },
   { href: "/demo/team", label: "Team", icon: Users },
   { href: "/demo/settings", label: "Settings", icon: Settings },
 ];

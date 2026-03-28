@@ -2,6 +2,8 @@
 
 Storage bucket setup, folder structure, and all Row Level Security policies for the platform.
 
+> **⚠️ UPDATED** — No major structural changes to storage. RLS policies updated to include 3 new tables: `subscription_plans`, `workspace_subscriptions`, `credit_transactions`. Export templates table is still used (exports triggered from Products/Review pages, not sidebar).
+
 ---
 
 ## Supabase Storage
@@ -102,6 +104,9 @@ ALTER TABLE import_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE import_rows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE export_templates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscription_plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE workspace_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE credit_transactions ENABLE ROW LEVEL SECURITY;
 ```
 
 ### Helper Function
@@ -385,4 +390,50 @@ CREATE POLICY "activity_select" ON activity_log
 -- Any member can create log entries (system creates them)
 CREATE POLICY "activity_insert" ON activity_log
   FOR INSERT WITH CHECK (is_workspace_member(workspace_id));
+```
+
+### subscription_plans
+
+```sql
+-- All authenticated users can view plans (for pricing page, plan selection)
+CREATE POLICY "plans_select" ON subscription_plans
+  FOR SELECT USING (TRUE);
+
+-- Only system/admin can manage plans (no user-facing insert/update/delete)
+-- Plans are managed via Supabase Dashboard or service role key
+```
+
+### workspace_subscriptions
+
+```sql
+-- Members can view their workspace subscription
+CREATE POLICY "subscriptions_select" ON workspace_subscriptions
+  FOR SELECT USING (is_workspace_member(workspace_id));
+
+-- Only owner can update subscription (upgrade/downgrade/cancel)
+CREATE POLICY "subscriptions_update" ON workspace_subscriptions
+  FOR UPDATE USING (
+    EXISTS (
+      SELECT 1 FROM workspaces w
+      WHERE w.id = workspace_subscriptions.workspace_id
+      AND w.owner_id = auth.uid()
+    )
+  );
+
+-- Subscription creation handled by system (on workspace creation or plan change)
+CREATE POLICY "subscriptions_insert" ON workspace_subscriptions
+  FOR INSERT WITH CHECK (is_workspace_member(workspace_id, 'owner'));
+```
+
+### credit_transactions
+
+```sql
+-- Members can view credit transactions for their workspace
+CREATE POLICY "credits_select" ON credit_transactions
+  FOR SELECT USING (is_workspace_member(workspace_id));
+
+-- System creates credit transactions (via API routes with service role)
+-- Editor+ can trigger AI operations which create credit entries
+CREATE POLICY "credits_insert" ON credit_transactions
+  FOR INSERT WITH CHECK (is_workspace_member(workspace_id, 'editor'));
 ```

@@ -1,6 +1,8 @@
 # Part 2: Database Schema (Full SQL)
 
-All 12 tables, triggers, indexes, and helper functions for the DataSheet AI Platform.
+All 15 tables, triggers, indexes, and helper functions for the DataSheet AI Platform.
+
+> **⚠️ UPDATED** — Added `cms_type` field to workspaces table. Added `notes` and `tags` fields to import_sessions. Removed `mapping` from import_sessions status (now starts at `matching`). **Old `projects` and `rows` tables will be DELETED** — not migrated. The enrichment tool reads/writes `import_sessions` + `import_rows` directly. **Added 3 new tables**: `subscription_plans`, `workspace_subscriptions`, `credit_transactions` for subscription tiers and AI credits system.
 
 Run all SQL in Supabase SQL Editor in order.
 
@@ -43,6 +45,9 @@ CREATE TABLE workspaces (
   slug TEXT NOT NULL UNIQUE,
   description TEXT DEFAULT '',
   logo_url TEXT,
+  cms_type TEXT DEFAULT '',
+  -- CMS/Platform type: 'shopify', 'woocommerce', 'salla', 'zid', 'magento', 'custom', etc.
+  -- Used to pre-configure export templates and field mappings
   owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   settings JSONB NOT NULL DEFAULT '{
     "default_language": "English",
@@ -231,27 +236,33 @@ CREATE TABLE import_sessions (
   supplier_id UUID REFERENCES supplier_profiles(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
   -- e.g. "Samsung Shipment - June 2025"
+  notes TEXT DEFAULT '',
+  -- Optional notes about this import session
+  tags TEXT[] DEFAULT '{}',
+  -- Tags for organizing/filtering sessions: e.g. {'monthly', 'priority'}
 
-  -- Workflow status
-  status TEXT NOT NULL DEFAULT 'mapping'
+  -- Workflow status (Column Mapping removed — handled in New Import page via AI auto-preview)
+  status TEXT NOT NULL DEFAULT 'matching'
     CHECK (status IN (
-      'mapping',     -- Step 1: column mapping
-      'matching',    -- Step 2: running matching rules
-      'review',      -- Step 3: user reviewing existing vs new
-      'enriching',   -- Step 4: AI enrichment running
+      'matching',    -- Step 1: configuring matching rules
+      'review',      -- Step 2: user reviewing/approving results
+      'enriching',   -- Step 3: AI enrichment in enrichment tool
       'completed',   -- Done
       'cancelled'    -- Cancelled by user
     )),
 
-  -- Column Mapping config
+  -- Column Mapping config (auto-detected via AI in New Import page)
   column_mapping JSONB NOT NULL DEFAULT '{}'::jsonb,
   -- {"Part Number": "sku", "Product Name": "name", "Unit Price": "price"}
 
   -- Matching config
-  match_column TEXT,
-  -- Which system column to match on (usually "sku")
-  target_category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
-  -- Optional: limit matching to a specific category
+  supplier_match_column TEXT,
+  -- Which column from the supplier file to use for matching (e.g. "Part Number", "Item Code")
+  -- Values come from the uploaded file's column headers (stored in column_mapping keys)
+  master_match_column TEXT DEFAULT 'sku',
+  -- Which system column from master_products to match against (e.g. "sku", "barcode", "name")
+  target_category_ids UUID[] DEFAULT '{}',
+  -- Optional: limit matching to specific categories (multi-select, empty = all categories)
 
   -- Matching Rules
   matching_rules JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -398,14 +409,139 @@ CREATE INDEX idx_activity_created ON activity_log(workspace_id, created_at DESC)
 
 ---
 
-## Migration: Link existing projects table to workspaces
+## Table 13: subscription_plans
 
 ```sql
--- After workspace system is live, migrate existing data:
-ALTER TABLE projects ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES workspaces(id);
-ALTER TABLE projects ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES auth.users(id);
--- Then migrate existing projects to the first user's workspace
+CREATE TABLE subscription_plans (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL UNIQUE,
+  -- 'starter', 'pro', 'enterprise'
+  display_name TEXT NOT NULL,
+  -- 'Starter', 'Pro', 'Enterprise'
+  description TEXT DEFAULT '',
+  
+  -- Feature limits (TBD — exact values will be set later)
+  max_workspaces INT,            -- NULL = unlimited
+  max_members_per_workspace INT, -- NULL = unlimited
+  max_products_per_workspace INT,-- NULL = unlimited
+  max_imports_per_month INT,     -- NULL = unlimited
+  max_storage_bytes BIGINT,      -- NULL = unlimited
+  
+  -- AI Credits
+  monthly_ai_credits INT NOT NULL DEFAULT 0,
+  -- Credits reset monthly. Credits are consumed ONLY by AI operations:
+  -- AI Enrichment (per row), AI Image Search (per query),
+  -- AI Column Mapping (per import), AI Category Suggestion (per product)
+  
+  -- Pricing (stored for reference, actual billing handled externally)
+  price_monthly NUMERIC(10,2) DEFAULT 0,
+  price_yearly NUMERIC(10,2) DEFAULT 0,
+  currency TEXT DEFAULT 'USD',
+  
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ```
+
+---
+
+## Table 14: workspace_subscriptions
+
+```sql
+CREATE TABLE workspace_subscriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  plan_id UUID NOT NULL REFERENCES subscription_plans(id),
+  
+  -- Billing
+  billing_cycle TEXT NOT NULL DEFAULT 'monthly'
+    CHECK (billing_cycle IN ('monthly', 'yearly', 'lifetime')),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'trialing', 'past_due', 'cancelled', 'expired')),
+  
+  -- Dates
+  current_period_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  current_period_end TIMESTAMPTZ,
+  trial_end TIMESTAMPTZ,
+  cancelled_at TIMESTAMPTZ,
+  
+  -- Credit tracking (resets each billing period)
+  credits_used INT NOT NULL DEFAULT 0,
+  credits_reset_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  -- External billing reference (Stripe, etc.)
+  external_subscription_id TEXT,
+  external_customer_id TEXT,
+  
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(workspace_id)
+);
+
+CREATE INDEX idx_subscriptions_workspace ON workspace_subscriptions(workspace_id);
+CREATE INDEX idx_subscriptions_plan ON workspace_subscriptions(plan_id);
+CREATE INDEX idx_subscriptions_status ON workspace_subscriptions(status);
+```
+
+---
+
+## Table 15: credit_transactions
+
+```sql
+CREATE TABLE credit_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id),
+  
+  -- Transaction details
+  operation TEXT NOT NULL CHECK (operation IN (
+    'ai_enrichment',       -- AI enriched a product row
+    'ai_image_search',     -- AI searched for product images
+    'ai_column_mapping',   -- AI auto-detected column mapping
+    'ai_category_suggest', -- AI suggested a category (future)
+    'credit_topup',        -- Manual credit addition (admin/billing)
+    'monthly_reset'        -- Monthly credit reset from plan
+  )),
+  
+  credits_used INT NOT NULL DEFAULT 0,
+  -- Positive = credits consumed, Negative = credits added (topup/reset)
+  
+  -- Context
+  entity_type TEXT,
+  -- 'import_session', 'import_row', 'master_product'
+  entity_id UUID,
+  details JSONB DEFAULT '{}'::jsonb,
+  -- e.g. {"session_name": "Samsung Q3", "rows_enriched": 50, "model": "gemini-pro"}
+  
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_credits_workspace ON credit_transactions(workspace_id);
+CREATE INDEX idx_credits_operation ON credit_transactions(workspace_id, operation);
+CREATE INDEX idx_credits_created ON credit_transactions(workspace_id, created_at DESC);
+```
+
+> **IMPORTANT**: Credits are consumed **EXCLUSIVELY by AI operations**. Non-AI operations (file upload, SKU matching, exporting, team management, etc.) do NOT consume credits.
+
+---
+
+## Cleanup: Delete old tables
+
+```sql
+-- The old projects/rows tables are no longer needed.
+-- The enrichment tool now reads/writes from import_sessions + import_rows directly.
+-- Run this AFTER the enrichment tool has been refactored:
+DROP TABLE IF EXISTS rows CASCADE;
+DROP TABLE IF EXISTS projects CASCADE;
+```
+
+> **IMPORTANT**: Also delete the following files after refactoring:
+> - `src/app/projects/page.tsx` — old project list (replaced by `/w/[slug]/import`)
+> - `src/app/project/[id]/page.tsx` — old project view (enrichment tool now at `/w/[slug]/import/[id]/enrich`)
+> - Remove all `createProject`, `deleteProject`, `duplicateProject`, `getProject`, `getProjects`, `getProjectRows`, `insertRows`, `updateRow`, `updateRowsBatch`, `deleteRows`, `saveProjectState` functions from `src/lib/supabase.ts`
+> - Refactor `src/store/sheet-store.ts` to load from `import_rows` instead of `rows`
+> - Refactor `src/app/api/enrich/route.ts` to read/write `import_rows` instead of `rows`
 
 ---
 

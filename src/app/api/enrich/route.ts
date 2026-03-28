@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { enrichProductRow } from "@/lib/gemini";
 import type { GeminiSettings } from "@/lib/gemini";
-import type { EnrichmentEvent } from "@/types";
+import type { EnrichmentEvent, CategoryItem } from "@/types";
 
 export const maxDuration = 300;
 
@@ -12,11 +12,15 @@ export async function POST(request: NextRequest) {
     enabledColumns,
     enrichmentColumns,
     settings,
+    cmsType,
+    workspaceCategories,
   }: {
     rows: { id: string; rowIndex: number; originalData: Record<string, string> }[];
     enabledColumns: string[];
-    enrichmentColumns?: { id: string; label: string; description: string; type: string; enabled: boolean; imageCount?: number; sourceCount?: number; customInstruction?: string; writingTone?: string; contentLength?: string }[];
+    enrichmentColumns?: { id: string; label: string; description: string; type: string; enabled: boolean; imageCount?: number; sourceCount?: number; maxCategories?: number; customInstruction?: string; writingTone?: string; contentLength?: string }[];
     settings?: GeminiSettings;
+    cmsType?: string;
+    workspaceCategories?: CategoryItem[];
   } = body;
 
   if (!rows || rows.length === 0) {
@@ -66,7 +70,9 @@ export async function POST(request: NextRequest) {
             row.originalData,
             enabledColumns,
             enrichmentColumns,
-            settings
+            settings,
+            cmsType,
+            workspaceCategories
           );
 
           console.log(`[API] Success for row ${row.rowIndex}`);

@@ -71,17 +71,20 @@ interface SheetActions {
   // Persistence
   restoreSession: () => Promise<boolean>;
   // Supabase project
-  loadProject: (projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>) => void;
+  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>) => void;
   setProjectId: (id: string | null) => void;
   setSaveStatus: (status: SheetState["saveStatus"]) => void;
   markUnsaved: () => void;
   // UI
   setSidebarOpen: (open: boolean) => void;
+  // Sheet toggle
+  setActiveSheet: (sheet: "existing" | "new") => void;
 }
 
 type SheetStore = SheetState & SheetActions;
 
 const initialState: SheetState = {
+  workspaceId: null,
   projectId: null,
   fileName: null,
   rows: [],
@@ -98,6 +101,7 @@ const initialState: SheetState = {
   completedEnrich: 0,
   errorCount: 0,
   sidebarOpen: true,
+  activeSheet: "new" as "existing" | "new",
   undoVersion: 0,
   saveStatus: "saved",
   lastSavedAt: null,
@@ -221,18 +225,39 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   selectAllRows: () =>
     set((state) => {
-      const allIds = new Set(state.rows.map((r) => r.id));
+      // Only select rows in the active sheet
+      const sheetRows = state.rows.filter((r) =>
+        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
+      );
+      const sheetIds = new Set(sheetRows.map((r) => r.id));
+      const newSelected = new Set(state.selectedRowIds);
+      sheetIds.forEach((id) => newSelected.add(id));
       return {
-        selectedRowIds: allIds,
-        rows: state.rows.map((r) => ({ ...r, selected: true })),
+        selectedRowIds: newSelected,
+        rows: state.rows.map((r) => ({
+          ...r,
+          selected: sheetIds.has(r.id) ? true : r.selected,
+        })),
       };
     }),
 
   deselectAllRows: () =>
-    set((state) => ({
-      selectedRowIds: new Set<string>(),
-      rows: state.rows.map((r) => ({ ...r, selected: false })),
-    })),
+    set((state) => {
+      // Only deselect rows in the active sheet
+      const sheetRows = state.rows.filter((r) =>
+        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
+      );
+      const sheetIds = new Set(sheetRows.map((r) => r.id));
+      const newSelected = new Set(state.selectedRowIds);
+      sheetIds.forEach((id) => newSelected.delete(id));
+      return {
+        selectedRowIds: newSelected,
+        rows: state.rows.map((r) => ({
+          ...r,
+          selected: sheetIds.has(r.id) ? false : r.selected,
+        })),
+      };
+    }),
 
   selectRowRange: (startIdx, endIdx) =>
     set((state) => {
@@ -442,13 +467,24 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   deleteSelectedRows: () => {
     const state = get();
-    const deletedRows = state.rows.filter((r) => state.selectedRowIds.has(r.id));
-    const deletedIds = [...state.selectedRowIds];
+    // Only delete rows that are in the active sheet AND selected
+    const sheetIds = new Set(
+      state.rows
+        .filter((r) => state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing")
+        .map((r) => r.id)
+    );
+    const toDelete = new Set(
+      [...state.selectedRowIds].filter((id) => sheetIds.has(id))
+    );
+    const deletedRows = state.rows.filter((r) => toDelete.has(r.id));
+    const deletedIds = [...toDelete];
     undoStack.push({ type: "deleteRows", deletedRows, deletedIds });
     redoStack.length = 0;
+    const newSelected = new Set(state.selectedRowIds);
+    toDelete.forEach((id) => newSelected.delete(id));
     set({
-      rows: state.rows.filter((r) => !state.selectedRowIds.has(r.id)),
-      selectedRowIds: new Set<string>(),
+      rows: state.rows.filter((r) => !toDelete.has(r.id)),
+      selectedRowIds: newSelected,
       undoVersion: state.undoVersion + 1,
     });
   },
@@ -491,19 +527,33 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   selectByStatus: (status) =>
     set((state) => {
-      const matching = new Set(state.rows.filter((r) => r.status === status).map((r) => r.id));
+      // Only select rows in active sheet with the given status
+      const sheetRows = state.rows.filter((r) =>
+        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
+      );
+      const matching = new Set(sheetRows.filter((r) => r.status === status).map((r) => r.id));
+      // Keep selections from other sheet
+      const otherSheetSelected = [...state.selectedRowIds].filter((id) => !sheetRows.some((r) => r.id === id));
+      const newSelected = new Set([...otherSheetSelected, ...matching]);
       return {
-        selectedRowIds: matching,
-        rows: state.rows.map((r) => ({ ...r, selected: matching.has(r.id) })),
+        selectedRowIds: newSelected,
+        rows: state.rows.map((r) => ({ ...r, selected: newSelected.has(r.id) })),
       };
     }),
 
   invertSelection: () =>
     set((state) => {
-      const inverted = new Set(state.rows.filter((r) => !state.selectedRowIds.has(r.id)).map((r) => r.id));
+      // Only invert selection within active sheet
+      const sheetRows = state.rows.filter((r) =>
+        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
+      );
+      const sheetIds = new Set(sheetRows.map((r) => r.id));
+      const otherSheetSelected = [...state.selectedRowIds].filter((id) => !sheetIds.has(id));
+      const invertedSheet = sheetRows.filter((r) => !state.selectedRowIds.has(r.id)).map((r) => r.id);
+      const newSelected = new Set([...otherSheetSelected, ...invertedSheet]);
       return {
-        selectedRowIds: inverted,
-        rows: state.rows.map((r) => ({ ...r, selected: inverted.has(r.id) })),
+        selectedRowIds: newSelected,
+        rows: state.rows.map((r) => ({ ...r, selected: newSelected.has(r.id) })),
       };
     }),
 
@@ -588,8 +638,9 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   },
 
   // Supabase project
-  loadProject: (projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility) => {
+  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility) => {
     set({
+      workspaceId,
       projectId,
       fileName,
       originalColumns: columns,
@@ -623,14 +674,15 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   // UI
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  setActiveSheet: (sheet) => set({ activeSheet: sheet }),
 }));
 
-// Auto-save to Supabase on relevant state changes (debounced)
+// Auto-save to Supabase Storage on relevant state changes (debounced)
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 let lastSavedSnapshot = "";
 
 useSheetStore.subscribe((state) => {
-  if (!state.projectId || !state.fileName) return;
+  if (!state.workspaceId || !state.projectId || !state.fileName) return;
 
   // Create a snapshot of saveable state
   const snapshot = JSON.stringify({
@@ -638,7 +690,7 @@ useSheetStore.subscribe((state) => {
     ec: state.enrichmentColumns,
     es: state.enrichmentSettings,
     cv: state.columnVisibility,
-    rows: state.rows.map((r) => ({ id: r.id, s: r.status, e: r.enrichedData, o: r.originalData, em: r.errorMessage })),
+    rows: state.rows.map((r) => ({ id: r.id, s: r.status, e: r.enrichedData, o: r.originalData, em: r.errorMessage, mt: r.matchType })),
   });
 
   if (snapshot === lastSavedSnapshot) return;
@@ -651,45 +703,39 @@ useSheetStore.subscribe((state) => {
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(async () => {
     const s = useSheetStore.getState();
-    if (!s.projectId || !s.fileName) return;
+    if (!s.workspaceId || !s.projectId || !s.fileName) return;
 
     useSheetStore.setState({ saveStatus: "saving" });
 
     try {
-      const { saveProjectState, updateRow } = await import("@/lib/supabase");
+      const { saveProjectJson } = await import("@/lib/storage-helpers");
+      const { updateImportSession } = await import("@/lib/supabase");
 
-      // Save project-level settings
+      // Build full project JSON and write to Storage
+      const projectJson = {
+        columns: s.originalColumns,
+        rows: s.rows.map((r) => ({
+          id: r.id,
+          rowIndex: r.rowIndex,
+          status: r.status === "processing" ? "pending" : r.status,
+          errorMessage: r.errorMessage,
+          originalData: r.originalData,
+          enrichedData: r.enrichedData,
+          matchType: r.matchType,
+        })),
+        sourceColumns: s.sourceColumns,
+        enrichmentColumns: s.enrichmentColumns,
+        enrichmentSettings: s.enrichmentSettings,
+        columnVisibility: s.columnVisibility,
+      };
+
+      await saveProjectJson(s.workspaceId, s.projectId, projectJson);
+
+      // Update session metadata in DB (enriched count only)
       const enrichedCount = s.rows.filter((r) => r.status === "done").length;
-      await saveProjectState(s.projectId, {
-        source_columns: s.sourceColumns,
-        enrichment_columns: s.enrichmentColumns as any,
-        enrichment_settings: s.enrichmentSettings as any,
-        column_visibility: s.columnVisibility,
+      await updateImportSession(s.projectId, {
         enriched_count: enrichedCount,
-      });
-
-      // Save changed rows (batch — only rows with dbId)
-      const rowUpdates = s.rows
-        .filter((r) => r.dbId || r.id)
-        .map((r) => ({
-          id: r.dbId || r.id,
-          changes: {
-            status: r.status === "processing" ? "pending" : r.status,
-            error_message: r.errorMessage || null,
-            enriched_data: r.enrichedData,
-            original_data: r.originalData,
-          },
-        }));
-
-      // Update rows in batches of 50
-      for (let i = 0; i < rowUpdates.length; i += 50) {
-        const batch = rowUpdates.slice(i, i + 50);
-        await Promise.all(
-          batch.map(({ id, changes }) =>
-            updateRow(id, changes)
-          )
-        );
-      }
+      } as any);
 
       lastSavedSnapshot = snapshot;
       useSheetStore.setState({ saveStatus: "saved", lastSavedAt: Date.now() });

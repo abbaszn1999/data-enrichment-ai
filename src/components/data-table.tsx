@@ -71,6 +71,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useSheetStore } from "@/store/sheet-store";
 import type { ProductRow } from "@/types";
+import { FileSpreadsheet, Package, Cloud, CloudOff } from "lucide-react";
 
 // --- Status Icon ---
 function StatusCell({ status, errorMessage }: { status: ProductRow["status"]; errorMessage?: string }) {
@@ -335,6 +336,20 @@ function SourceUrlsCell({ sources, isEditable, rowId, enrichKey }: { sources: { 
 }
 
 // --- Image URLs Cell ---
+function proxyImgSrc(url: string): string {
+  return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+}
+
+function handleImgError(e: React.SyntheticEvent<HTMLImageElement>) {
+  const img = e.target as HTMLImageElement;
+  const originalUrl = img.dataset.originalUrl;
+  if (originalUrl && !img.src.includes("/api/image-proxy")) {
+    img.src = proxyImgSrc(originalUrl);
+  } else {
+    img.style.display = "none";
+  }
+}
+
 function ImageUrlsCell({ images, isEditable, rowId, enrichKey }: { images: { imageUrl: string; pageUrl: string; title: string }[]; isEditable: boolean; rowId: string; enrichKey: string }) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
@@ -380,11 +395,10 @@ function ImageUrlsCell({ images, isEditable, rowId, enrichKey }: { images: { ima
           >
             <img
               src={img.imageUrl}
+              data-original-url={img.imageUrl}
               alt={img.title || "Product"}
               className="h-10 w-10 object-cover rounded border border-border/40 bg-white group-hover/img:ring-2 group-hover/img:ring-primary/40 transition-all"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-              }}
+              onError={handleImgError}
             />
           </a>
         ))}
@@ -505,12 +519,10 @@ function ImageUrlsCell({ images, isEditable, rowId, enrichKey }: { images: { ima
                 >
                   <img
                     src={img.imageUrl}
+                    data-original-url={img.imageUrl}
                     alt={img.title || "Product"}
                     className="w-full h-40 object-contain bg-white p-2"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = "";
-                      (e.target as HTMLImageElement).alt = "Failed to load";
-                    }}
+                    onError={handleImgError}
                   />
                   <div className="p-2 bg-muted/30 border-t">
                     <p className="text-[11px] font-medium truncate">{img.title || "Product image"}</p>
@@ -1028,6 +1040,9 @@ export function DataTable() {
     redo,
     canUndo,
     canRedo,
+    activeSheet,
+    setActiveSheet,
+    saveStatus,
   } = useSheetStore();
 
   const [globalFilter, setGlobalFilter] = useState("");
@@ -1042,24 +1057,44 @@ export function DataTable() {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const columnResizeMode: ColumnResizeMode = "onChange";
 
-  const allSelected = rows.length > 0 && selectedRowIds.size === rows.length;
-  const someSelected = selectedRowIds.size > 0 && selectedRowIds.size < rows.length;
-  const anySelected = selectedRowIds.size > 0;
+  // Pre-filter rows by active sheet (existing/new)
+  const sheetFilteredRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (activeSheet === "existing") return r.matchType === "existing";
+      return r.matchType !== "existing"; // "new" sheet shows new + unmatched
+    });
+  }, [rows, activeSheet]);
+
+  // Selection state scoped to current sheet only
+  const sheetSelectedCount = useMemo(() => {
+    return sheetFilteredRows.filter((r) => selectedRowIds.has(r.id)).length;
+  }, [sheetFilteredRows, selectedRowIds]);
+
+  const allSelected = sheetFilteredRows.length > 0 && sheetSelectedCount === sheetFilteredRows.length;
+  const someSelected = sheetSelectedCount > 0 && sheetSelectedCount < sheetFilteredRows.length;
+  const anySelected = sheetSelectedCount > 0;
+
+  // Count rows per sheet
+  const sheetCounts = useMemo(() => {
+    const existing = rows.filter((r) => r.matchType === "existing").length;
+    const newCount = rows.filter((r) => r.matchType !== "existing").length;
+    return { existing, new: newCount };
+  }, [rows]);
 
   // Pre-filter rows by status
   const statusFilteredRows = useMemo(() => {
-    if (statusFilter === "all") return rows;
-    return rows.filter((r) => r.status === statusFilter);
-  }, [rows, statusFilter]);
+    if (statusFilter === "all") return sheetFilteredRows;
+    return sheetFilteredRows.filter((r) => r.status === statusFilter);
+  }, [sheetFilteredRows, statusFilter]);
 
-  // Status counts
+  // Status counts (based on sheet-filtered rows)
   const statusCounts = useMemo(() => {
-    const counts = { all: rows.length, pending: 0, processing: 0, done: 0, error: 0 };
-    for (const r of rows) {
+    const counts = { all: sheetFilteredRows.length, pending: 0, processing: 0, done: 0, error: 0 };
+    for (const r of sheetFilteredRows) {
       counts[r.status]++;
     }
     return counts;
-  }, [rows]);
+  }, [sheetFilteredRows]);
 
   const handleDeleteRows = () => {
     if (allSelected) {
@@ -1416,6 +1451,39 @@ export function DataTable() {
               })}
             </div>
 
+            {/* Sheet toggle tabs */}
+            <div className="flex items-center border rounded-lg overflow-hidden mx-2">
+              <button
+                onClick={() => setActiveSheet("existing")}
+                disabled={sheetCounts.existing === 0}
+                className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-medium transition-colors ${
+                  activeSheet === "existing"
+                    ? "bg-primary text-primary-foreground"
+                    : sheetCounts.existing === 0
+                    ? "bg-background text-muted-foreground/40 cursor-not-allowed"
+                    : "bg-background text-muted-foreground hover:bg-muted/50"
+                }`}
+              >
+                <Package className="h-3 w-3" />
+                Existing ({sheetCounts.existing})
+              </button>
+              <div className="w-px h-5 bg-border" />
+              <button
+                onClick={() => setActiveSheet("new")}
+                disabled={sheetCounts.new === 0}
+                className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-medium transition-colors ${
+                  activeSheet === "new"
+                    ? "bg-primary text-primary-foreground"
+                    : sheetCounts.new === 0
+                    ? "bg-background text-muted-foreground/40 cursor-not-allowed"
+                    : "bg-background text-muted-foreground hover:bg-muted/50"
+                }`}
+              >
+                <FileSpreadsheet className="h-3 w-3" />
+                New ({sheetCounts.new})
+              </button>
+            </div>
+
             {/* Row count */}
             <span className="text-[10px] text-muted-foreground font-mono">
               {globalFilter ? `${filteredCount}/` : ""}{statusFilteredRows.length} rows
@@ -1425,7 +1493,7 @@ export function DataTable() {
             {anySelected && (
               <>
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
-                  {selectedRowIds.size} selected
+                  {sheetSelectedCount} selected
                 </Badge>
                 {!isEnriching && (
                   <button
@@ -1441,6 +1509,36 @@ export function DataTable() {
           </div>
 
           <div className="flex items-center gap-1.5">
+            {/* Save Status */}
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground mr-1">
+              {saveStatus === "saving" && (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span>Saving...</span>
+                </>
+              )}
+              {saveStatus === "saved" && (
+                <>
+                  <Cloud className="h-3 w-3 text-green-500" />
+                  <span className="text-green-600 dark:text-green-400">Saved</span>
+                </>
+              )}
+              {saveStatus === "unsaved" && (
+                <>
+                  <CloudOff className="h-3 w-3 text-amber-500" />
+                  <span className="text-amber-600 dark:text-amber-400">Unsaved</span>
+                </>
+              )}
+              {saveStatus === "error" && (
+                <>
+                  <CloudOff className="h-3 w-3 text-red-500" />
+                  <span className="text-red-600 dark:text-red-400">Save failed</span>
+                </>
+              )}
+            </div>
+
+            <div className="w-px h-4 bg-border" />
+
             {/* Add Row */}
             <Button
               variant="ghost"
@@ -1755,12 +1853,12 @@ export function DataTable() {
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <Trash2 className="h-4 w-4 text-destructive" />
-              Delete {allSelected ? "All" : selectedRowIds.size} Rows?
+              Delete {allSelected ? "All" : sheetSelectedCount} Rows?
             </AlertDialogTitle>
             <AlertDialogDescription>
               {allSelected
-                ? <>You are about to delete all <strong>{rows.length} rows</strong>. This action can be undone with Ctrl+Z.</>
-                : <>You are about to delete <strong>{selectedRowIds.size} selected rows</strong>. This action can be undone with Ctrl+Z.</>
+                ? <>You are about to delete all <strong>{sheetFilteredRows.length} rows</strong> in this tab. This action can be undone with Ctrl+Z.</>
+                : <>You are about to delete <strong>{sheetSelectedCount} selected rows</strong>. This action can be undone with Ctrl+Z.</>
               }
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1770,7 +1868,7 @@ export function DataTable() {
               className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
               onClick={() => { deleteSelectedRows(); setShowDeleteConfirm(false); }}
             >
-              Delete {allSelected ? "All" : selectedRowIds.size}
+              Delete {allSelected ? "All" : sheetSelectedCount}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1927,7 +2025,7 @@ export function DataTable() {
                         }}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                        Delete Selected ({selectedRowIds.size})
+                        Delete Selected ({sheetSelectedCount})
                       </button>
                     </>
                   )}

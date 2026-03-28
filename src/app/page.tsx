@@ -1,18 +1,13 @@
-"use client";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase-server";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+export default async function Home() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-export default function Home() {
-  const router = useRouter();
-
-  useEffect(() => {
-    router.replace("/projects");
-  }, [router]);
-
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
-  );
+  if (user) {
+    redirect("/workspaces");
+  } else {
+    redirect("/login");
+  }
 }

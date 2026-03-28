@@ -1,0 +1,21 @@
+ITEM CODE,MODEL,DESCRIPTION,CATEGORY,RETAIL PRICE HT,RETAIL PRICE TTC,BRAND,EAN CODE,WEIGHT,PICTURE
+SAM-TV55-Q80B,QE55Q80B,Samsung 55" QLED 4K Smart TV Q80B Series,TVs & Displays,899.99,1079.99,Samsung,8806094244151,18.5,https://images.samsung.com/q80b-55.jpg
+SAM-TV65-Q80B,QE65Q80B,Samsung 65" QLED 4K Smart TV Q80B Series,TVs & Displays,1299.99,1559.99,Samsung,8806094244168,24.3,https://images.samsung.com/q80b-65.jpg
+SAM-TV75-QN85B,QE75QN85B,Samsung 75" Neo QLED 4K Smart TV QN85B,TVs & Displays,1899.99,2279.99,Samsung,8806094579123,32.1,https://images.samsung.com/qn85b-75.jpg
+LG-TV55-C3,OLED55C3,LG 55" OLED evo C3 4K Smart TV,TVs & Displays,1199.99,1439.99,LG,8806091857422,14.9,https://images.lg.com/c3-55.jpg
+LG-TV65-C3,OLED65C3,LG 65" OLED evo C3 4K Smart TV,TVs & Displays,1799.99,2159.99,LG,8806091857439,18.2,https://images.lg.com/c3-65.jpg
+SONY-TV55-A80L,XR55A80L,Sony 55" BRAVIA XR A80L OLED 4K TV,TVs & Displays,1399.99,1679.99,Sony,4548736150201,16.8,https://images.sony.com/a80l-55.jpg
+SAM-WM-12KG,WW12T504DAW,Samsung 12kg EcoBubble Front Load Washer,Home Appliances,649.99,779.99,Samsung,8806092076389,72.0,https://images.samsung.com/ww12t504.jpg
+SAM-WM-9KG,WW90T554DAW,Samsung 9kg EcoBubble Front Load Washer,Home Appliances,499.99,599.99,Samsung,8806092076372,65.5,https://images.samsung.com/ww90t554.jpg
+LG-WM-10KG,F4V710STSE,LG 10.5kg AI DD Steam Front Load Washer,Home Appliances,579.99,695.99,LG,8806091461230,75.0,https://images.lg.com/f4v710.jpg
+BSH-WM-9KG,WAX32M40,Bosch 9kg Series 8 i-DOS Front Load Washer,Home Appliances,699.99,839.99,Bosch,4242005282159,76.0,https://images.bosch.com/wax32m40.jpg
+SAM-FR-680L,RF65A967ESR,Samsung 680L Family Hub French Door Fridge,Home Appliances,2499.99,2999.99,Samsung,8806092254312,120.0,https://images.samsung.com/rf65a967.jpg
+LG-FR-635L,GFV708MBSL,LG 635L InstaView French Door Fridge,Home Appliances,1899.99,2279.99,LG,8806091499783,110.5,https://images.lg.com/gfv708.jpg
+SAM-AC-18K,AR18TXHQASINEU,Samsung 18000 BTU WindFree Split AC,Air Conditioning,799.99,959.99,Samsung,8806092295421,42.0,https://images.samsung.com/ar18tx.jpg
+SAM-AC-24K,AR24TXHQASINEU,Samsung 24000 BTU WindFree Split AC,Air Conditioning,1049.99,1259.99,Samsung,8806092295438,52.0,https://images.samsung.com/ar24tx.jpg
+DAI-AC-12K,FTXM35R,Daikin 12000 BTU Emura Split AC,Air Conditioning,899.99,1079.99,Daikin,4548848674510,35.0,https://images.daikin.com/ftxm35r.jpg
+SAM-PHONE-S24U,SM-S928B,Samsung Galaxy S24 Ultra 256GB Titanium,Smartphones,1299.99,1559.99,Samsung,8806095352817,0.232,https://images.samsung.com/s24ultra.jpg
+APP-PHONE-IP15PM,A3104,Apple iPhone 15 Pro Max 256GB Natural Titanium,Smartphones,1199.99,1439.99,Apple,0194253396048,0.221,https://images.apple.com/ip15pm.jpg
+SAM-TAB-S9U,SM-X910,Samsung Galaxy Tab S9 Ultra WiFi 256GB,Tablets,1099.99,1319.99,Samsung,8806095144634,0.732,https://images.samsung.com/tabs9u.jpg
+APP-TAB-IPADPRO,MTXT3,Apple iPad Pro 12.9" M2 256GB WiFi Space Gray,Tablets,1099.99,1319.99,Apple,0194253377023,0.682,https://images.apple.com/ipadpro.jpg
+SAM-SB-Q990C,HW-Q990C,Samsung Q990C 11.1.4ch Soundbar with Dolby Atmos,Audio,1399.99,1679.99,Samsung,8806094907612,16.5,https://images.samsung.com/q990c.jpg

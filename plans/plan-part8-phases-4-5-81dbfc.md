@@ -1,19 +1,69 @@
-# Part 8: Phase 4A (Export), Phase 5 (Advanced), Migration & Dependencies
+# Part 8: Phase 4A (Usage & Analytics), Phase 5 (Advanced), Migration & Dependencies
 
-Detailed implementation for multi-platform export, advanced features, migration strategy, and full dependency list.
+Detailed implementation for usage tracking, multi-platform export (via action buttons), advanced features, migration strategy, and full dependency list.
+
+> **⚠️ UPDATED** — Export has been replaced by Usage/Analytics in the sidebar navigation. Export functionality is still available but accessed from Products page and Import Review page via action buttons, not as a dedicated sidebar page. Workspace settings no longer has an API Config section. **Old `projects` and `rows` tables will be DELETED** — no migration. Enrichment tool reads/writes `import_sessions` + `import_rows` directly. Old `/projects` and `/project/[id]` pages deleted.
 
 ---
 
-## Phase 4A: Multi-Platform Export
+## Phase 4A: Usage & Analytics + Export Actions
 
 ### Goal
-Export products in the exact format required by each e-commerce platform. Users select platform, map fields, preview, and download.
+Track API usage, enrichment statistics, and usage limits. Export is triggered from context (Products page, Review page) not as a standalone page.
 
 ### Prerequisites
 - Phase 2A complete (master products exist)
 - Run export_templates SQL (Part 2, Table 11) + seed data
 
 ### Tasks
+
+#### 4A.0 — Usage & Analytics Page
+**File**: `src/app/(dashboard)/w/[workspaceSlug]/usage/page.tsx`
+
+This page replaces Export in the sidebar navigation. It provides:
+
+**AI Credits Section (top):**
+- **Credits Remaining**: large number + progress bar (credits_used / plan.monthly_ai_credits)
+- **Credits Used This Month**: count + breakdown by operation type
+- **Plan Name**: current subscription tier badge (Starter / Pro / Enterprise)
+- **Resets On**: date of next billing period start
+- Warning banner when < 20% credits remaining: "Running low on AI credits. Upgrade or purchase more."
+- "Upgrade Plan" button (if not on highest tier)
+
+> **Credits are consumed EXCLUSIVELY by AI operations**: AI Enrichment (per row), AI Image Search (per query), AI Column Mapping (per import), AI Category Suggestion (future). Non-AI operations cost zero credits.
+
+**Stats Cards:**
+- Total AI Credits Used (this month / all time)
+- Products Enriched (this month / all time)
+- Average Credits per Enrichment
+- Average Enrichment Time per Product
+
+**Charts (optional, future):**
+- Credit usage per day (line chart)
+- Enrichment volume per month (bar chart)
+- Match rate trend over imports
+
+**Credit Transaction Log:**
+- Table from `credit_transactions`: operation, credits used, entity, user, date
+- Filter by operation type (enrichment, image search, column mapping)
+- Sortable by date, credits used
+
+**Usage Breakdown by Session:**
+- By import session: name, date, credits consumed, products enriched
+- Sortable by date, credits
+
+**Subscription Plan Details:**
+- Current plan name + tier
+- Feature limits with progress bars (workspaces, members, products, imports, storage)
+- "Manage Subscription" button -> links to billing portal or settings
+- Plan comparison table (Starter vs Pro vs Enterprise)
+
+**Export is NOT in the sidebar** — it is accessed via:
+- "Export" button in Products page header
+- "Export Report" button in Review Results page
+- Quick export from Import Session cards
+
+---
 
 #### 4A.1 — Export Format Definitions
 **File**: `src/lib/export-formats.ts`
@@ -220,10 +270,11 @@ Display in:
 
 #### 5.3 — Workspace Settings Page
 **File**: `src/app/(dashboard)/w/[workspaceSlug]/settings/page.tsx`
-- **General**: Workspace name, description, logo upload
+- **General**: Workspace name, CMS type, description, logo upload
 - **Defaults**: Default language, enrichment model, thinking level
-- **API Keys**: Gemini API key per workspace (override global)
 - **Danger Zone**: Delete workspace (owner only, with confirmation)
+
+> **NOTE**: API Keys / API Config section has been removed from workspace settings. API configuration is managed globally, not per-workspace.
 
 #### 5.4 — User Profile Page
 **File**: `src/app/(dashboard)/profile/page.tsx`
@@ -259,49 +310,39 @@ Display in:
 
 ## Migration Strategy
 
-### Migrating Existing Data
+### Old Tables: DELETE (No Migration)
 
-The existing app has `projects` and `rows` tables with data. Strategy:
+The existing app has `projects` and `rows` tables. **These will be DELETED entirely — no data migration.**
 
-1. **Don't break existing functionality during development**
-   - Keep existing routes working (`/projects`, `/project/[id]`)
-   - New workspace routes are additive (`/w/[slug]/...`)
-   
-2. **After Phase 1A (Auth) is ready:**
-   - First registered user becomes the default owner
-   - Create a "Default Workspace" for them automatically
-   
-3. **After Phase 1B (Workspaces) is ready:**
-   - Add `workspace_id` column to existing `projects` table
-   - Link existing projects to the default workspace
-   - Existing project workflow continues to work inside workspace context
+The enrichment tool (`data-table.tsx` + `sidebar.tsx`) will be refactored to read/write from `import_sessions` + `import_rows` directly.
 
-4. **After Phase 2A (Master Data) is ready:**
-   - Optionally import existing project data as master products
-   - This is manual: user chooses which project to convert
+**Cleanup steps (after refactoring):**
+1. Drop old tables: `DROP TABLE IF EXISTS rows CASCADE; DROP TABLE IF EXISTS projects CASCADE;`
+2. Delete old pages: `src/app/projects/page.tsx`, `src/app/project/[id]/page.tsx`
+3. Rewrite `src/lib/supabase.ts`: remove all old CRUD (`createProject`, `getProject`, `getProjects`, `deleteProject`, `duplicateProject`, `getProjectRows`, `insertRows`, `updateRow`, `updateRowsBatch`, `deleteRows`, `saveProjectState`), replace with workspace/import CRUD
+4. Refactor `src/store/sheet-store.ts`: load from `import_rows` instead of `rows`
+5. Refactor `src/app/api/enrich/route.ts`: read/write `import_rows` instead of `rows`
 
-5. **After Phase 3 (Import) is ready:**
-   - Old project workflow (upload -> enrich) is still available as a "Quick Enrichment" mode
-   - New workflow (upload -> match -> review -> enrich) is the full mode
-
-### Route Transition Plan
+### Route Plan (Clean — No Old Routes)
 ```
-Current:
-  / -> /projects
-  /projects -> project list
-  /project/[id] -> project view
-
-After migration:
-  / -> /login (if not auth) or /workspaces (if auth)
-  /workspaces -> workspace list
-  /w/[slug] -> workspace dashboard
-  /w/[slug]/products -> master products
-  /w/[slug]/import -> import sessions
-  /w/[slug]/import/[id]/enrich -> enrichment (reuses existing components)
-  
-  /projects -> DEPRECATED (redirect to /workspaces)
-  /project/[id] -> DEPRECATED (redirect to workspace context)
+/ -> /login (if not auth) or /workspaces (if auth)
+/workspaces -> workspace list
+/w/[slug] -> workspace dashboard
+/w/[slug]/products -> master products (+ upload wizard)
+/w/[slug]/categories -> category tree
+/w/[slug]/import -> import sessions list
+/w/[slug]/import/new -> new import (with AI column preview)
+/w/[slug]/import/[id]/rules -> matching rules (step 1)
+/w/[slug]/import/[id]/review -> review results (step 2)
+/w/[slug]/import/[id]/enrich -> enrichment tool (step 3, reads import_rows)
+/w/[slug]/usage -> usage & analytics
+/w/[slug]/team -> team management
+/w/[slug]/settings -> workspace settings (with CMS type)
 ```
+
+> **DELETED**: `/projects` and `/project/[id]` — no longer exist, no redirects needed.
+> **NO**: `/w/[slug]/import/[id]/mapping` — column mapping handled in New Import page via AI auto-detection.
+> **NO**: `/w/[slug]/export` — export accessed via action buttons in Products and Review pages.
 
 ---
 
@@ -371,24 +412,45 @@ SUPABASE_SERVICE_ROLE_KEY=...
 ```
 Phase 1A: Auth                    ← START HERE
   ↓
-Phase 1B: Workspaces
+Phase 1B: Workspaces (+ CMS type + auto-assign Starter plan)
   ↓
 Phase 1C: Team & Roles
   ↓
-Phase 2A: Master Data (Products + Categories)
+Phase 2A: Master Data (Products 4-step wizard + Categories tree)
   ↓ (can parallelize with 2B)
 Phase 2B: Supabase Storage
   ↓
-Phase 3A: Supplier Import + Column Mapping
+Phase 3A: Supplier Import (upload + AI column preview + quality checks + credit deduction)
   ↓
-Phase 3B: Matching Engine
+Phase 3B: Matching Engine (rules + presets + test SKU + live preview) [no credits]
   ↓
-Phase 3C: Review + AI Enrichment
+Phase 3C: Review & Enrich (approve/reject + diff viz + enrichment tool + credit deduction)
   ↓
-Phase 4A: Multi-Platform Export
+Phase 4A: Usage & Analytics + Export Actions + Subscription Management + Credit Dashboard
   ↓
 Phase 5: Advanced (Dashboard, Activity, Settings)
 ```
 
 Each phase builds on the previous. No phase can be skipped.
-Estimated total: ~65 new files, ~7 modified files, 12 new database tables.
+Estimated total: ~69 new files, ~10 modified/refactored files, 2 deleted files, 15 new database tables (12 core + 3 subscription/credits), 2 old tables deleted.
+
+### Key Changes from Original Plan
+1. **Column Mapping removed** as separate import step → now AI auto-preview in New Import page
+2. **Import flow simplified** to 3 steps: Rules → Review → Enrichment Tool
+3. **Export replaced by Usage** in sidebar navigation
+4. **CMS Type** added to workspace creation and settings
+5. **Workspace Settings** no longer has API Config section
+6. **Enrichment tool** enhanced with Existing/New sheet toggle + Functions tab
+7. **Review page** now has approve/reject per row, diff visualization, impact summary, bulk actions
+8. **Matching Rules** now has presets, drag reorder, test-a-SKU, AI suggestions
+9. **Import Sessions list** enhanced with stats bar, search, sort, tags, actions menu
+10. **Products Upload wizard** enhanced with AI confidence, quality checks, transforms
+11. **Old `projects` and `rows` tables DELETED** — no migration, enrichment tool reads `import_rows` directly
+12. **Old `/projects` and `/project/[id]` pages DELETED** — enrichment tool at `/w/[slug]/import/[id]/enrich`
+13. **`supabase.ts` REWRITTEN** — all old CRUD removed, replaced with workspace/import CRUD
+14. **`sheet-store.ts` REFACTORED** — loads from `import_rows` instead of old `rows`
+15. **`api/enrich/route.ts` REFACTORED** — reads/writes `import_rows` instead of old `rows`
+16. **3 Subscription tiers** added (Starter / Pro / Enterprise) — limits TBD
+17. **AI Credits system** added — credits consumed EXCLUSIVELY by AI operations (enrichment, image search, column mapping)
+18. **3 new database tables** — `subscription_plans`, `workspace_subscriptions`, `credit_transactions`
+19. **Usage page enhanced** — now shows AI credits remaining, transaction log, plan details, upgrade prompts

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, Loader2, ArrowRight } from "lucide-react";
+import { Building2, Loader2, ArrowRight, Store } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ export default function DemoNewWorkspacePage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [slug, setSlug] = useState("");
+  const [cmsType, setCmsType] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleNameChange = (val: string) => {
@@ -64,6 +65,43 @@ export default function DemoNewWorkspacePage() {
         </div>
 
         <div className="space-y-2">
+          <Label className="text-xs">Store Platform (CMS)</Label>
+          <select
+            value={cmsType}
+            onChange={(e) => setCmsType(e.target.value)}
+            className="w-full h-10 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+          >
+            <option value="">Select your platform...</option>
+            <optgroup label="International">
+              <option value="shopify">Shopify</option>
+              <option value="woocommerce">WooCommerce</option>
+              <option value="magento">Magento / Adobe Commerce</option>
+              <option value="bigcommerce">BigCommerce</option>
+              <option value="prestashop">PrestaShop</option>
+              <option value="opencart">OpenCart</option>
+            </optgroup>
+            <optgroup label="Middle East">
+              <option value="salla">Salla (سلة)</option>
+              <option value="zid">Zid (زد)</option>
+            </optgroup>
+            <optgroup label="Marketplaces">
+              <option value="amazon">Amazon</option>
+              <option value="noon">Noon</option>
+              <option value="ebay">eBay</option>
+            </optgroup>
+            <optgroup label="Other">
+              <option value="custom_csv">Custom CSV</option>
+              <option value="custom_api">Custom API</option>
+            </optgroup>
+          </select>
+          {cmsType && (
+            <p className="text-[10px] text-muted-foreground">
+              Export format will be optimized for <span className="font-semibold capitalize">{cmsType.replace('_', ' ')}</span>
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-2">
           <Label className="text-xs">URL Slug</Label>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground shrink-0">/w/</span>
@@ -81,7 +119,7 @@ export default function DemoNewWorkspacePage() {
           )}
         </div>
 
-        <Button onClick={handleCreate} disabled={!name.trim() || loading} className="w-full h-10 gap-2">
+        <Button onClick={handleCreate} disabled={!name.trim() || !cmsType || loading} className="w-full h-10 gap-2">
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
           {loading ? "Creating workspace..." : "Create Workspace"}
         </Button>

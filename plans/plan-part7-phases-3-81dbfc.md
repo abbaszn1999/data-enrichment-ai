@@ -2,12 +2,14 @@
 
 Detailed implementation tasks for the core supplier import workflow.
 
+> **⚠️ UPDATED** — Column Mapping has been removed as a separate step. It is now handled as an AI auto-preview in the New Import page. The import flow is now 3 steps: Matching Rules → Review Results → Enrichment Tool. The Review page now supports approve/reject per row, diff visualization with trend arrows, bulk actions, impact summary, and big change alerts. The Matching Rules page now has presets, drag reorder, test-a-SKU, and AI suggestions. **Old `projects`/`rows` tables DELETED** — enrichment tool reads `import_rows` directly at `/w/[slug]/import/[id]/enrich`. No more `createProject` or `/project/[id]`.
+
 ---
 
-## Phase 3A: Supplier Import & Column Mapping
+## Phase 3A: Supplier Import (No Separate Column Mapping Step)
 
 ### Goal
-Upload supplier sheet, map its columns to system fields, save mapping for reuse.
+Upload supplier sheet with AI auto-detection of column mapping, quality checks, duplicate detection, and notes. Column mapping is shown as a preview — not a separate step.
 
 ### Prerequisites
 - Phase 2A complete (master products + categories exist)
@@ -31,91 +33,87 @@ incrementSupplierImportCount(id)
 #### 3A.2 — Import Sessions CRUD
 **File**: `src/lib/supabase.ts` (EXPAND)
 ```
-getImportSessions(workspaceId, { status? })
+getImportSessions(workspaceId, { status?, search?, sortBy? })
 getImportSession(id)
-createImportSession(workspaceId, { fileId, supplierId?, name, totalRows })
+createImportSession(workspaceId, { fileId, supplierId?, name, notes?, tags?, totalRows })
 updateImportSession(id, updates)
 deleteImportSession(id)
+duplicateImportSession(id)
+archiveImportSession(id)
 ```
 
 #### 3A.3 — Import Sessions List Page
 **File**: `src/app/(dashboard)/w/[workspaceSlug]/import/page.tsx`
-- Grid/list of import sessions
-- Each card shows:
-  - Session name
-  - Supplier name (if linked)
-  - Status badge (mapping/matching/review/enriching/completed)
-  - Row counts: total, existing, new, enriched
-  - Created date, created by
-  - Click -> navigate to session
-- "New Import" button -> `/import/new`
-- Filter by status
-- Sort by date
 
-#### 3A.4 — New Import Page
+Enhanced session list with:
+- **Stats Bar**: 4 cards (Total Sessions, In Progress, Completed, Total Products)
+- **Search**: by session name, supplier name, or tags
+- **Sort**: Newest First, Oldest First, Most Products
+- **Filter Tabs**: All | In Progress | Completed — with counts per tab
+- **Session Cards**:
+  - Session name + status badge with icon (color-coded per status)
+  - Tags as colored badges (monthly, priority, urgent, quarterly)
+  - Supplier name + row counts (total, existing, new, enriched)
+  - Progress bar with percentage and stage description
+  - Duration (for completed sessions)
+  - Created time (relative) + created by
+  - Completed summary: imported count, price changes, stock updates
+- **Actions Menu** (on hover): Duplicate, Archive, Delete
+- **Empty State**: when no sessions match search
+- "New Import" button -> `/import/new`
+
+#### 3A.4 — New Import Page (with AI Column Preview)
 **File**: `src/app/(dashboard)/w/[workspaceSlug]/import/new/page.tsx`
 **File**: `src/components/import/file-upload-step.tsx`
-- Form fields:
-  - Session Name (required, e.g. "Samsung Shipment - June 2025")
-  - Supplier (dropdown of existing suppliers + "New Supplier" option)
-  - Upload File (drag-drop, Excel/CSV)
-- On submit:
-  1. Upload file to Storage `{ws_id}/supplier/{name}_{date}.xlsx`
-  2. Create uploaded_files record
-  3. Parse file to get columns + row count
-  4. Create import_session with status='mapping'
-  5. If existing supplier selected: pre-load saved column mapping
-  6. Navigate to `/import/{sessionId}/mapping`
+**File**: `src/components/import/ai-column-preview.tsx`
+
+**3-column layout** (main form: 2 cols, sidebar: 1 col):
+
+**Main Form:**
+- Session Name (required, auto-filled from file name)
+- Supplier (dropdown of existing + "New Supplier" option)
+- Notes field (optional textarea)
+- File Upload (drag-drop with visual states)
+
+**After file upload, show:**
+- **File Quality Stats**: 3 cards (Rows, Columns, Encoding)
+- **Quality Checks**: green ✅ / amber ⚠️ for empty rows, empty cells, duplicates
+- **Duplicate Detection Warning**: if similar file was recently imported, show amber alert
+- **AI Column Mapping Preview** (collapsible):
+  - Auto-detect column types (text, number, id)
+  - Show each file column → suggested system field with confidence badge (95%+ green, 85%+ amber, <85% red)
+  - User can view but not edit here (editing is done if needed in matching rules)
+- **Preview Table**: first 3 rows of the file
+- **Import Settings** (collapsible): Skip empty rows, Trim whitespace, Auto-detect encoding
+
+**Right Sidebar:**
+- **Recent Suppliers**: clickable cards with last used date and import count
+- **Quick Tips**: numbered tips for best results
+- **Your Import Stats**: total imports, products matched, avg match rate, last import
+
+**On submit:**
+1. Upload file to Storage `{ws_id}/supplier/{name}_{date}.xlsx`
+2. Create uploaded_files record
+3. Parse file to get columns + row count
+4. Auto-detect column mapping via AI/smart rules → **deducts AI credits** (operation='ai_column_mapping', logged to `credit_transactions`)
+5. Create import_session with status='matching' (skips 'mapping')
+6. Save detected column_mapping to import_session
+7. If existing supplier: pre-load saved matching rules
+8. Navigate to `/import/{sessionId}/rules`
+
+> **AI Credits**: Only step 4 (AI column mapping) consumes credits. All other steps (upload, parse, matching, review) are free.
 
 #### 3A.5 — Import Stepper Component
 **File**: `src/components/import/import-stepper.tsx`
 - Horizontal step indicator showing workflow progress
-- Steps: 1.Mapping -> 2.Rules -> 3.Review -> 4.Enrich
-- Current step highlighted
-- Completed steps have checkmark
+- **3 Steps**: 1.Matching Rules -> 2.Review Results -> 3.Enrichment Tool
+- Current step highlighted with primary color
+- Completed steps have green checkmark
+- Connector lines between steps (green for completed)
 - Click completed step to go back
 
-#### 3A.6 — Column Mapping Page
-**File**: `src/app/(dashboard)/w/[workspaceSlug]/import/[sessionId]/mapping/page.tsx`
-**File**: `src/components/import/column-mapping.tsx`
-
-**Layout:**
-- Stepper at top (step 1 active)
-- Two-column layout:
-  - Left: Supplier columns (from file)
-  - Right: System field selector per column
-
-**Supplier Column Card (left side):**
-- Column name (bold)
-- Sample values (first 3 rows, small text)
-- Dropdown or drag target for system field
-
-**System Fields (right side dropdown):**
-- SKU (required, highlighted)
-- Name
-- Description
-- Price
-- Stock / Quantity
-- Brand
-- Category
-- Weight
-- Dimensions
-- Color / Variant
-- Image URL
-- Barcode / EAN / UPC
-- Custom Field (user types name)
-- "-- Skip (don't import) --"
-
-**AI Auto-Suggest:**
-- On page load, call Gemini to analyze column names + sample data
-- Suggest mappings:
-  - "Part Number" -> SKU (confidence: 95%)
-  - "Item Description" -> Name (confidence: 85%)
-  - "Unit Cost" -> Price (confidence: 90%)
-- User can accept or override suggestions
-- Show confidence badge next to auto-suggested mappings
-
-**Smart Detection Rules (fallback if AI not needed):**
+**AI Auto-Detect Column Mapping (built into New Import page):**
+Uses smart detection rules + optional Gemini fallback:
 ```
 Column name contains "sku" or "part" or "item code" or "model" -> SKU
 Column name contains "name" or "title" or "description" -> Name
@@ -123,14 +121,10 @@ Column name contains "price" or "cost" or "msrp" -> Price
 Column name contains "stock" or "qty" or "quantity" or "inventory" -> Stock
 Column name contains "brand" or "manufacturer" or "vendor" -> Brand
 Column name contains "category" or "type" or "class" -> Category
+Column name contains "weight" -> Weight
 ```
-
-**Save & Continue:**
-- Validate: SKU must be mapped
-- Save column_mapping to import_session
-- If supplier profile exists: update default_column_mapping
-- If new supplier: create supplier_profile with this mapping
-- Navigate to `/import/{sessionId}/rules`
+Confidence is calculated based on name match + sample data type validation.
+Results displayed as a preview — user can override if needed.
 
 ---
 
@@ -209,9 +203,9 @@ function generateDiff(
 - POST: `{ sessionId }`
 - Server-side execution (can be slow for large datasets)
 - Steps:
-  1. Load import_session (get column_mapping, matching_rules, target_category_id)
-  2. Load uploaded file data (from parsed upload or re-parse from Storage)
-  3. Load all master product SKUs for this workspace (optionally filtered by category)
+  1. Load import_session (get column_mapping, matching_rules, supplier_match_column, master_match_column, target_category_ids)
+  2. Load uploaded file data (from parsed upload or re-parse from Storage), extract values from `supplier_match_column`
+  3. Load master products for this workspace using `master_match_column` (optionally filtered by `target_category_ids` — supports multiple categories)
   4. Run matching algorithm
   5. Create import_rows records with match_type set
   6. For "existing" rows: generate diff_data
@@ -219,15 +213,38 @@ function generateDiff(
   8. Update session status to 'review'
 - Returns: `{ existing: number, new: number, ambiguous: number }`
 
-#### 3B.3 — Matching Rules Page
+#### 3B.3 — Matching Rules Page (Step 1 of import flow)
 **File**: `src/app/(dashboard)/w/[workspaceSlug]/import/[sessionId]/rules/page.tsx`
 **File**: `src/components/import/matching-rules-editor.tsx`
+**File**: `src/components/import/rule-presets.tsx`
+**File**: `src/components/import/match-preview.tsx`
 
-**Layout:**
-- Stepper at top (step 2 active)
-- Match column selector (usually SKU, but could be another mapped column)
-- Optional: target category filter (only match against products in category X)
-- Rules list (toggleable):
+**2-column layout** (rules config: 2 cols, preview results: 1 col):
+
+**Left Side — Rules Configuration:**
+
+**Match Configuration Card:**
+- **Supplier Match Column** dropdown: lists all columns from the uploaded supplier file (from `import_sessions.column_mapping` keys, e.g. "Part Number", "Item Code", "Model Number"). Auto-selects the column mapped to SKU if available.
+- **Master Match Column** dropdown: lists system columns from master_products (SKU, Barcode, Name). Default: SKU.
+- **Category Filter** (optional, multi-select): dropdown with checkboxes to select one or more categories. Empty = match against all products. Selecting categories narrows the matching scope to products in those categories only. Shows selected count badge (e.g. "3 selected").
+
+**Rule Presets Card:**
+- 3 presets displayed as clickable cards:
+  - **Samsung Format**: Prefix 00 + case insensitive
+  - **Dell Format**: Trim + case insensitive + strip dashes
+  - **Generic / Safe**: Trim whitespace + case insensitive
+- Clicking a preset auto-configures the rules below
+- Active preset is highlighted with primary border
+
+**Rules List Card:**
+- Active rules count badge in header
+- Description: "Rules are applied in order to normalize SKU values. Drag to reorder."
+- Each rule row has:
+  - **Drag handle** (GripVertical icon) for reordering
+  - **Checkbox toggle** (custom styled, primary color when active)
+  - **Label + description** text
+  - **Config input** (for ignore_prefix/suffix: text input, for regex: pattern input)
+  - Active rules have primary background tint
 
 | Rule | Toggle | Config | Description |
 |------|--------|--------|-------------|
@@ -242,20 +259,29 @@ function generateDiff(
 - Default: Trim Whitespace ON, Case Insensitive ON, rest OFF
 - If supplier profile has saved rules: pre-load them
 
-**Preview Button:**
-- "Preview Match Results" button
-- Calls matching API in preview mode
-- Shows summary: X matched, Y new, Z ambiguous
-- Shows sample table (first 10 of each category)
+**Multi-Example Live Preview Table:**
+- Shows 5 sample SKUs being transformed in real-time
+- Columns: Supplier SKU | After Rules | Master SKU | Result (Match/New badge)
+- Updates instantly as rules are toggled
 
-**File**: `src/components/import/match-preview.tsx`
-- Summary cards: Existing (green), New (blue), Ambiguous (yellow)
-- Preview table:
-  - Supplier SKU | Normalized SKU | Match Type | Matched Master SKU | Confidence
-- For ambiguous: show "Resolve" button to manually pick correct match
+**Test-a-SKU Card:**
+- Text input + "Test" button (Enter key supported)
+- Shows result: Input → Normalized → Matched/Not Found
+- Match result with badge (green for match, amber for no match)
+
+**Right Side — Preview Results:**
+
+**"Preview Match Results" button** (full width, triggers simulated match)
+
+After preview:
+- **Match Quality Score**: large percentage with progress bar
+- **Result Cards**: Existing (green), New (blue), Ambiguous (yellow) — with icons
+- **Before/After Rule Impact Card**: "Without rules: 0 matches" → "With rules: X matches" + improvement count
+- **Sample Matches Card**: list of supplier SKU → master SKU pairs
+- **AI Suggestion Card**: primary-tinted card suggesting additional rules to improve match rate (e.g., "Enabling Strip Non-Alphanumeric could improve matches by 15%") with "Apply suggestion" link
 
 **Confirm Button:**
-- "Confirm & Continue" button
+- "Confirm & Review Results" button (disabled until preview is run)
 - Save matching_rules to import_session
 - Update supplier_profile default_matching_rules
 - Run full matching (create import_rows)
@@ -266,117 +292,143 @@ function generateDiff(
 ## Phase 3C: Review & AI Enrichment
 
 ### Goal
-Review matching results. Update existing products with supplier data. Enrich new products with AI.
+Review matching results with approve/reject workflow. View diff visualization with impact analysis. Continue to enrichment tool for AI processing.
 
 ### Prerequisites
 - Phase 3B complete (matching done, import_rows created)
 
 ### Tasks
 
-#### 3C.1 — Review Page
+#### 3C.1 — Review Page (Step 2 of import flow)
 **File**: `src/app/(dashboard)/w/[workspaceSlug]/import/[sessionId]/review/page.tsx`
-- Stepper at top (step 3 active)
-- Two tabs: "Existing Products" | "New Products"
-- Summary bar: X existing (ready to update), Y new (need enrichment)
+**File**: `src/components/import/review-summary.tsx`
+**File**: `src/components/import/review-table.tsx`
 
-#### 3C.2 — Existing Products Sheet (Diff View)
-**File**: `src/components/import/existing-products-sheet.tsx`
-**File**: `src/components/import/diff-cell.tsx`
+- Stepper at top (step 2 active)
+- Header: session name + "Export Report" button
+- Two tabs: "Existing" | "New" — as pill buttons with counts
+
+**Summary Section:**
+
+**6 Summary Cards** (grid, compact):
+- Matched (green) — count of existing product matches
+- New Products (blue) — count of new products
+- Price Changes (amber) — count of products with price diffs
+- Stock Changes (purple) — count of products with stock diffs
+- Approved (green) — live count based on user selections
+- Rejected (red) — live count based on user selections
+
+**2 Impact Summary Cards** (larger):
+- **Total Price Impact**: dollar amount with +/- and product count, colored (red for decrease, green for increase), DollarSign icon
+- **Total Stock Change**: unit count with +/- and product count, colored, Package icon
+
+**Big Change Alert** (conditional):
+- Amber warning banner when products have >10% price changes
+- Shows count of affected products
+- "Review carefully before approving" message
+
+#### 3C.2 — Existing Products Table (Diff View with Approve/Reject)
+
+**Toolbar**: Search input + filter dropdown (All/Price/Stock) + Bulk Actions (Approve All, Reject All)
 
 **Table columns:**
-- Checkbox (select row)
-- SKU
-- Status (pending/update/skip/applied)
-- Dynamic columns: each field that differs between supplier and master
-  - Cell shows diff: old value (red strikethrough) -> new value (green)
-  - Only fields with differences are shown as columns
+- Checkbox (approve/reject toggle per row)
+- Matched SKU (with supplier SKU below in muted text)
+- Field (capitalized field name: price, stock)
+- Current Value (muted, right-aligned, monospace)
+- Arrow icon (→)
+- New Value (bold, monospace)
+- Change (trend arrow + percentage, color-coded):
+  - TrendingUp (green) for increases
+  - TrendingDown (red) for decreases
+  - AlertTriangle (amber) for big changes >10%
+- Status badge: Approved (green with CheckCircle2) or Rejected (red with Ban)
 
-**Diff Cell component:**
-```
-┌─────────────────────────┐
-│ $100.00  →  $95.00      │
-│ (old)       (new)       │
-└─────────────────────────┘
-```
-- Old value: gray/red with strikethrough
-- New value: green/bold
-- If values are same: just show value (no diff styling)
+**Row behavior:**
+- Clicking checkbox toggles between approved/rejected
+- Rejected rows get red background tint + reduced opacity
+- Rows span multiple fields (using rowSpan for SKU and checkbox)
 
-**Actions per row:**
-- "Update" button -> mark action='update'
-- "Skip" button -> mark action='skip'
+**Search**: filters by matched SKU or supplier SKU
+**Filter**: All Changes | Price Only | Stock Only
 
-**Bulk actions:**
-- "Update All" -> mark all as update
-- "Skip All" -> mark all as skip
-- "Update Selected" -> mark checked rows as update
+#### 3C.3 — New Products Table (with Approve/Reject)
 
-**Column filter:**
-- "Fields to update" checkboxes
-- e.g., only update Price and Stock, not Name
-- This determines which fields from diff_data get applied
+**Table columns:**
+- Checkbox (approve/reject toggle)
+- Supplier SKU (monospace, bold)
+- Description
+- Brand
+- Price (right-aligned, monospace)
+- Stock (right-aligned, monospace)
+- Status badge (Approved/Rejected)
 
-**Apply Updates button:**
-- "Apply X Updates to Master" button
-- Calls `/api/import/apply` endpoint
-- Server-side: for each row with action='update':
-  - Get master_product by matched_product_id
-  - Apply selected diff fields to master_product.data
-  - Mark import_row action='applied'
-- Progress indicator during application
-- After done: update session updated_count, show success
+Same approve/reject behavior as existing products table.
 
-#### 3C.3 — Apply Updates API
+#### 3C.4 — Bulk Actions
+- **Approve All**: sets all rows (both tabs) to approved
+- **Reject All**: sets all rows to rejected
+- Footer shows live count: "X approved, Y rejected"
+
+#### 3C.5 — Continue to Enrichment Tool
+- "Continue to Enrichment Tool" button with Sparkles icon
+- Only approved rows proceed to enrichment
+- Loading state: "Opening Enrichment Tool..."
+- Navigates to `/w/[slug]/import/[sessionId]/enrich` (NOT the old `/project/[id]`)
+- The enrichment page reads directly from `import_rows` table (old `projects`/`rows` tables are DELETED)
+- Features:
+  - **Existing/New sheet toggle** in header
+  - Existing sheet shows approved updates (read-only confirmation)
+  - New sheet shows products for AI enrichment
+
+#### 3C.6 — Apply Updates API
 **File**: `src/app/api/import/apply/route.ts`
-- POST: `{ sessionId, fieldsToUpdate: string[] }`
+- POST: `{ sessionId, approvedRows: string[] }`
 - Steps:
-  1. Load all import_rows where action='update' for this session
+  1. Load approved import_rows for this session
   2. For each row:
      a. Load master_product by matched_product_id
-     b. For each field in fieldsToUpdate:
-        - Get new value from mapped_data or diff_data.new
-        - Update master_product.data[field]
+     b. Apply diff fields to master_product.data
      c. Update master_product.updated_at
      d. Mark import_row action='applied'
   3. Update session updated_count
   4. Log activity
 - Returns: `{ updated: number, errors: number }`
 
-#### 3C.4 — New Products Sheet (Enrichment)
-**File**: `src/components/import/new-products-sheet.tsx`
+#### 3C.7 — Enrichment Tool Page (Step 3)
+**File**: `src/app/(dashboard)/w/[workspaceSlug]/import/[sessionId]/enrich/page.tsx`
 
-**This reuses the existing enrichment system with adaptation:**
+**The old `/project/[id]` page and `projects`/`rows` tables are DELETED.** This new page replaces them entirely.
 
-- Table showing new products (match_type='new')
-- Columns: from mapped_data (after column mapping applied)
-- Status: pending/processing/done/error
-- Select rows for enrichment
+**The enrichment tool has Existing/New sheet toggle and Functions tab:**
 
-**Integration with existing enrichment:**
-- "Configure Enrichment" -> opens existing sidebar.tsx
-  - Source columns = mapped columns from supplier data
-  - Enrichment columns = same as existing (Enhanced Title, Marketing Description, etc.)
-  - Settings = same as existing (language, model, thinking level)
-- "Start Enrichment" button -> calls existing `/api/enrich` endpoint
-  - Pass mapped_data as originalData
-  - Receive enriched results via SSE
-  - Store in import_rows.enriched_data
-- After enrichment complete:
-  - "Add to Master" button for each row or bulk
-  - Creates master_product from mapped_data + enriched_data
-  - Assigns to selected category
-  - Marks import_row action='applied'
+- **Existing sheet**: shows products that were updated via the review step (read-only confirmation view)
+- **New sheet**: shows products for AI enrichment (full editing + enrichment)
+
+**Data source (NO old tables):**
+- Loads `import_session` by sessionId to get session config (enrichment_columns, enrichment_settings)
+- Loads `import_rows` where session_id = current session
+  - Existing tab: import_rows where match_type='existing' AND action='approved'
+  - New tab: import_rows where match_type='new' AND action='approved'
+- Enrichment results are saved to `import_rows.enriched_data` (NOT old `rows` table)
+
+**AI Credits Integration:**
+- Before starting enrichment, check workspace credit balance via `use-credits.ts` hook
+- If insufficient credits: show warning with remaining balance + "Upgrade Plan" button, block enrichment
+- Each AI enrichment call (per row) deducts credits via `api/credits/deduct/route.ts`
+- Each AI image search deducts credits
+- Credit transaction logged to `credit_transactions` table with operation='ai_enrichment' and entity_id=import_row.id
+- Credits consumed **EXCLUSIVELY by AI operations** — non-AI operations (matching, reviewing, exporting) cost zero credits
 
 **Reuse strategy:**
-- The existing `data-table.tsx` component can be reused for displaying new products
-- The existing `sidebar.tsx` component can be reused for enrichment configuration
-- The existing `api/enrich/route.ts` is used as-is
-- We just need to adapt the data flow:
-  - Instead of loading from `projects` table, load from `import_rows` where match_type='new'
-  - Instead of saving to `rows` table, save to `import_rows.enriched_data`
-  - Add "Add to Master" action that creates master_products
+- The existing `data-table.tsx` is modified to add Existing/New sheet toggle in header
+- The existing `sidebar.tsx` is modified to add Functions tab
+- The existing `api/enrich/route.ts` is **REFACTORED** to read/write `import_rows` instead of old `rows` **+ check/deduct AI credits per row**
+- The existing `sheet-store.ts` is **REFACTORED** to load from `import_rows` instead of old `rows`
+- `src/lib/supabase.ts` is **REWRITTEN**: all old `createProject`, `getProject`, `getProjects`, `getProjectRows`, `insertRows`, `updateRow`, `updateRowsBatch`, `deleteRows`, `saveProjectState` functions are removed and replaced with import_session/import_rows CRUD
+- Add "Add to Master" action that creates master_products from enriched import_rows
 
-#### 3C.5 — Add to Master Logic
+#### 3C.8 — Add to Master Logic
 After enrichment, for each new product row:
 1. Get mapped_data (supplier data with column mapping applied)
 2. Get enriched_data (AI-generated fields)
@@ -392,21 +444,14 @@ After enrichment, for each new product row:
 Handle SKU conflicts:
 - If SKU already exists in master (edge case): prompt user to skip or overwrite
 
-#### 3C.6 — Session Completion
+#### 3C.9 — Session Completion
 - When all rows are applied/skipped:
   - Update session status='completed'
   - Log activity
   - Show completion summary:
     - X products updated
     - Y new products added
-    - Z rows skipped
+    - Z rows rejected/skipped
     - Duration
+    - Total price impact + stock change
   - "Back to Imports" button
-
-#### 3C.7 — Enrich Page (Step 4)
-**File**: `src/app/(dashboard)/w/[workspaceSlug]/import/[sessionId]/enrich/page.tsx`
-- Full-screen enrichment view for new products
-- Reuses data-table.tsx + sidebar.tsx pattern
-- Stepper at top (step 4 active)
-- Data source: import_rows where match_type='new' and session_id=current
-- After enrichment: "Add All to Master" bulk action

@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Clock,
   Download,
-  MapPin,
   Settings2,
   Eye,
   Sparkles,
@@ -62,14 +61,6 @@ export default function DemoImportSessionPage() {
           {[
             {
               step: 1,
-              label: "Column Mapping",
-              desc: "6 of 6 supplier columns mapped to system fields",
-              status: "completed",
-              icon: MapPin,
-              href: "/demo/import/session/mapping",
-            },
-            {
-              step: 2,
               label: "Matching Rules",
               desc: "3 rules enabled: Trim, Case-insensitive, Ignore prefix '00'",
               status: "completed",
@@ -77,20 +68,20 @@ export default function DemoImportSessionPage() {
               href: "/demo/import/session/rules",
             },
             {
-              step: 3,
+              step: 2,
               label: "Review Results",
-              desc: "4 existing products updated, 4 new products identified",
+              desc: "4 existing products matched, 4 new products identified",
               status: "completed",
               icon: Eye,
               href: "/demo/import/session/review",
             },
             {
-              step: 4,
-              label: "AI Enrichment",
-              desc: "4 new products enriched with AI-generated content",
+              step: 3,
+              label: "Enrichment Tool",
+              desc: "Opened in the main enrichment tool for AI processing",
               status: "completed",
               icon: Sparkles,
-              href: "/demo/import/session/enrich",
+              href: "/",
             },
           ].map((item) => (
             <Link key={item.step} href={item.href}>

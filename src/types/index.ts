@@ -7,6 +7,7 @@ export interface ProductRow {
   errorMessage?: string;
   originalData: Record<string, string>;
   enrichedData: Record<string, any>;
+  matchType?: "existing" | "new" | null; // from import_rows.match_type
 }
 
 export interface EnrichedData {
@@ -33,11 +34,12 @@ export interface EnrichmentColumn {
   id: string;
   label: string;
   description: string; // This will serve as the AI Prompt instruction
-  type: "text" | "list" | "imageUrls" | "sourceUrls"; // The expected output type from AI
+  type: "text" | "list" | "imageUrls" | "sourceUrls" | "categories"; // The expected output type from AI
   enabled: boolean;
   isCustom?: boolean;
   imageCount?: number; // Number of images to fetch (1-10), only for imageUrls type
   sourceCount?: number; // Number of sources to fetch (1-10), only for sourceUrls type
+  maxCategories?: number; // Max number of categories to assign (1-5), only for categories type
   customInstruction?: string; // Custom instruction for this column
   writingTone?: WritingTone; // Per-column writing tone (for text columns like Enhanced Title, Marketing Description)
   contentLength?: ContentLength; // Per-column content length (for text columns like Enhanced Title, Marketing Description)
@@ -61,6 +63,15 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     enabled: true,
     writingTone: "persuasive",
     contentLength: "medium",
+  },
+  {
+    id: "categories",
+    label: "Categories",
+    description: "Assign product categories based on available store categories or AI suggestion.",
+    type: "categories",
+    enabled: true,
+    maxCategories: 3,
+    customInstruction: "Pick the most relevant product categories",
   },
   {
     id: "imageUrls",
@@ -141,7 +152,121 @@ export const TONE_OPTIONS: { value: WritingTone; label: string; description: str
   { value: "custom", label: "Custom...", description: "Your own instructions" },
 ];
 
+export interface CategoryItem {
+  id: string;
+  name: string;
+  slug: string;
+  parentId: string | null;
+  parentName?: string;
+  fullPath: string; // e.g. "Electronics > Smartphones"
+  children?: CategoryItem[];
+}
+
+// CMS-specific category formatting rules
+export interface CmsCategoryConfig {
+  columnName: string; // What the column is called in this CMS
+  hierarchySeparator: string; // Separator between parent > child
+  multiCategorySeparator: string; // Separator between multiple categories
+  supportsMultiple: boolean; // Can assign multiple categories?
+  supportsHierarchy: boolean; // Supports parent/child paths?
+  notes: string; // Extra formatting notes for AI
+}
+
+export const CMS_CATEGORY_CONFIG: Record<string, CmsCategoryConfig> = {
+  shopify: {
+    columnName: "Collection",
+    hierarchySeparator: " > ",
+    multiCategorySeparator: ", ",
+    supportsMultiple: false, // Shopify CSV supports only 1 collection per row
+    supportsHierarchy: true, // Product Category uses hierarchy
+    notes: "Shopify uses 'Collection' for grouping products. Only ONE collection per product row in CSV. Product Category uses Shopify Standard Taxonomy with ' > ' separator (e.g. 'Home & Garden > Kitchen').",
+  },
+  woocommerce: {
+    columnName: "Categories",
+    hierarchySeparator: " > ",
+    multiCategorySeparator: ", ",
+    supportsMultiple: true,
+    supportsHierarchy: true,
+    notes: "WooCommerce uses comma to separate multiple categories and ' > ' for hierarchy. Example: 'Electronics, Electronics > Smartphones, Sale'.",
+  },
+  magento: {
+    columnName: "categories",
+    hierarchySeparator: "/",
+    multiCategorySeparator: ",",
+    supportsMultiple: true,
+    supportsHierarchy: true,
+    notes: "Magento uses '/' for hierarchy path and comma for multiple categories. Always start with 'Default Category/'. Example: 'Default Category/Electronics/Phones, Default Category/Sale'.",
+  },
+  bigcommerce: {
+    columnName: "Category",
+    hierarchySeparator: "/",
+    multiCategorySeparator: "; ",
+    supportsMultiple: true,
+    supportsHierarchy: true,
+    notes: "BigCommerce uses '/' for hierarchy and ';' to separate multiple categories. Example: 'Electronics/Phones; Sale Items'.",
+  },
+  prestashop: {
+    columnName: "Categories (x,y,z...)",
+    hierarchySeparator: " > ",
+    multiCategorySeparator: ", ",
+    supportsMultiple: true,
+    supportsHierarchy: false, // PrestaShop CSV uses category names/IDs, not paths
+    notes: "PrestaShop uses comma-separated category names. Example: 'Home, Electronics, Phones'.",
+  },
+  opencart: {
+    columnName: "Categories",
+    hierarchySeparator: " > ",
+    multiCategorySeparator: ", ",
+    supportsMultiple: true,
+    supportsHierarchy: true,
+    notes: "OpenCart uses ' > ' for hierarchy and comma for multiple categories. Example: 'Electronics > Phones, Sale'.",
+  },
+  salla: {
+    columnName: "التصنيفات",
+    hierarchySeparator: " > ",
+    multiCategorySeparator: ", ",
+    supportsMultiple: true,
+    supportsHierarchy: true,
+    notes: "Salla uses ' > ' for hierarchy and comma for multiple. Categories can be in Arabic. Example: 'إلكترونيات > هواتف ذكية, تخفيضات'.",
+  },
+  zid: {
+    columnName: "التصنيف",
+    hierarchySeparator: " > ",
+    multiCategorySeparator: ", ",
+    supportsMultiple: true,
+    supportsHierarchy: true,
+    notes: "Zid uses ' > ' for hierarchy and comma for multiple. Example: 'أجهزة > هواتف ذكية'.",
+  },
+  amazon: {
+    columnName: "browse_nodes",
+    hierarchySeparator: " > ",
+    multiCategorySeparator: ", ",
+    supportsMultiple: true,
+    supportsHierarchy: true,
+    notes: "Amazon uses browse node paths. Example: 'Electronics > Cell Phones & Accessories > Cell Phones'.",
+  },
+  noon: {
+    columnName: "categories",
+    hierarchySeparator: " > ",
+    multiCategorySeparator: ", ",
+    supportsMultiple: false,
+    supportsHierarchy: true,
+    notes: "Noon uses ' > ' for hierarchy path. Example: 'Electronics > Mobile Phones'.",
+  },
+};
+
+// Default config for unknown/custom CMS
+export const DEFAULT_CMS_CATEGORY_CONFIG: CmsCategoryConfig = {
+  columnName: "Categories",
+  hierarchySeparator: " > ",
+  multiCategorySeparator: ", ",
+  supportsMultiple: true,
+  supportsHierarchy: true,
+  notes: "Use ' > ' for parent/child hierarchy and comma for multiple categories. Example: 'Electronics > Phones, Sale'.",
+};
+
 export interface SheetState {
+  workspaceId: string | null;
   projectId: string | null;
   fileName: string | null;
   rows: ProductRow[];
@@ -158,6 +283,7 @@ export interface SheetState {
   completedEnrich: number;
   errorCount: number;
   sidebarOpen: boolean;
+  activeSheet: "existing" | "new";
   undoVersion: number;
   saveStatus: "saved" | "saving" | "unsaved" | "error";
   lastSavedAt: number | null;

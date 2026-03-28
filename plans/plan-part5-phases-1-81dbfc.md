@@ -2,6 +2,8 @@
 
 Detailed implementation tasks for the authentication and workspace foundation.
 
+> **⚠️ UPDATED** — Workspaces now include CMS Type field. Sidebar navigation has "Usage" instead of "Export". Create Workspace form includes CMS type dropdown.
+
 ---
 
 ## Phase 1A: Authentication
@@ -169,8 +171,8 @@ Multi-tenant workspaces with slug-based routing. Users can create and switch bet
 - Add functions:
   - `getWorkspaces(userId)` — all workspaces where user is member
   - `getWorkspaceBySlug(slug)` — single workspace + user's role
-  - `createWorkspace(name, description?)` — create + auto-slug + auto-add owner as member (trigger)
-  - `updateWorkspace(id, updates)` — name, description, logo, settings
+  - `createWorkspace(name, cmsType, description?)` — create + auto-slug + auto-add owner as member (trigger)
+  - `updateWorkspace(id, updates)` — name, cmsType, description, logo, settings
   - `deleteWorkspace(id)` — only owner
 
 #### 1B.4 — Slug Generation
@@ -208,10 +210,11 @@ In `src/lib/utils.ts` (EXPAND):
 
 #### 1B.8 — Create Workspace
 **File**: `src/app/(dashboard)/workspaces/new/page.tsx`
-- Form: Name (required), Description (optional)
+- Form: Name (required), CMS Type (dropdown: Shopify, WooCommerce, Salla, Zid, Magento, Custom), Description (optional)
 - Auto-generate slug from name (editable)
 - Preview URL: `/w/my-store`
-- On submit: create workspace, navigate to `/w/{slug}`
+- CMS Type determines default export template and field suggestions
+- On submit: create workspace, **auto-assign default subscription plan (Starter/free tier)**, create `workspace_subscriptions` record with monthly_ai_credits from plan, navigate to `/w/{slug}`
 
 #### 1B.9 — Workspace Switcher
 **File**: `src/components/workspace/workspace-switcher.tsx`
@@ -235,12 +238,14 @@ In `src/lib/utils.ts` (EXPAND):
   - Products (package icon)
   - Categories (folder-tree icon)
   - Import (upload icon)
-  - Export (download icon)
+  - Usage (credit-card icon) — replaces Export
   - Team (users icon) — only if Admin+
   - Settings (settings icon) — only if Admin+
 - Active state highlighting
 - Collapsible (icon-only mode)
 - Show workspace name + logo at top
+
+> **NOTE**: Export has been replaced by Usage/Analytics in the sidebar. Export functionality is accessed from Products page and Import Review page via action buttons.
 
 #### 1B.12 — Workspace Dashboard
 **File**: `src/app/(dashboard)/w/[workspaceSlug]/page.tsx`

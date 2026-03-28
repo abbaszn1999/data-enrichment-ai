@@ -11,6 +11,7 @@ import {
   Sparkles,
   Brain,
   Building2,
+  Store,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -21,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 export default function DemoSettingsPage() {
   const [wsName, setWsName] = useState("TechStore Electronics");
   const [wsDescription, setWsDescription] = useState("Main electronics store product management");
+  const [cmsType, setCmsType] = useState("shopify");
   const [language, setLanguage] = useState("English");
   const [model, setModel] = useState("gemini-3.1-pro-preview");
   const [thinking, setThinking] = useState("low");
@@ -71,6 +73,43 @@ export default function DemoSettingsPage() {
               <Upload className="h-3.5 w-3.5" /> Upload Logo
             </Button>
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs flex items-center gap-1.5">
+            <Store className="h-3 w-3" /> Store Platform (CMS)
+          </Label>
+          <select
+            value={cmsType}
+            onChange={(e) => setCmsType(e.target.value)}
+            className="w-full h-9 px-3 text-xs rounded-lg border bg-background"
+          >
+            <option value="">Select your platform...</option>
+            <optgroup label="International">
+              <option value="shopify">Shopify</option>
+              <option value="woocommerce">WooCommerce</option>
+              <option value="magento">Magento / Adobe Commerce</option>
+              <option value="bigcommerce">BigCommerce</option>
+              <option value="prestashop">PrestaShop</option>
+              <option value="opencart">OpenCart</option>
+            </optgroup>
+            <optgroup label="Middle East">
+              <option value="salla">Salla (سلة)</option>
+              <option value="zid">Zid (زد)</option>
+            </optgroup>
+            <optgroup label="Marketplaces">
+              <option value="amazon">Amazon</option>
+              <option value="noon">Noon</option>
+              <option value="ebay">eBay</option>
+            </optgroup>
+            <optgroup label="Other">
+              <option value="custom_csv">Custom CSV</option>
+              <option value="custom_api">Custom API</option>
+            </optgroup>
+          </select>
+          <p className="text-[10px] text-muted-foreground">
+            This determines the export format and required fields for your products.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -137,16 +176,6 @@ export default function DemoSettingsPage() {
               <option value="high">High</option>
             </select>
           </div>
-        </div>
-      </Card>
-
-      {/* API Keys */}
-      <Card className="p-5 space-y-4">
-        <h2 className="text-sm font-semibold">API Configuration</h2>
-        <div className="space-y-2">
-          <Label className="text-xs">Gemini API Key (workspace override)</Label>
-          <Input type="password" value="••••••••••••••••" readOnly className="h-9 font-mono text-xs" />
-          <p className="text-[10px] text-muted-foreground">Leave empty to use the system default key</p>
         </div>
       </Card>
 

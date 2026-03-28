@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   Sparkles,
@@ -15,20 +16,21 @@ import {
   ChevronRight,
   Settings2,
   Zap,
-  Download,
-  Trash2,
   PanelLeftClose,
   PanelLeft,
   Plus,
   X,
+  ArrowLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { useSheetStore } from "@/store/sheet-store";
-import { ExportButton } from "@/components/export-button";
-import type { EnrichmentEvent, OutputLanguage, EnrichmentModel, ThinkingLevelOption, WritingTone, ContentLength } from "@/types";
+import { useWorkspaceStore } from "@/store/workspace-store";
+import { ExportDialog } from "@/components/export-dialog";
+import { FunctionsPanel } from "@/components/functions-panel";
+import type { EnrichmentEvent, OutputLanguage, EnrichmentModel, ThinkingLevelOption, WritingTone, ContentLength, CategoryItem } from "@/types";
 import { LANGUAGE_OPTIONS, MODEL_OPTIONS, TONE_OPTIONS } from "@/types";
 import type { EnrichmentColumn } from "@/types";
 import type { GeminiSettings } from "@/lib/gemini";
@@ -45,6 +47,8 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 export function Sidebar() {
+  const router = useRouter();
+  const { workspace } = useWorkspaceStore();
   const {
     rows,
     fileName,
@@ -53,6 +57,7 @@ export function Sidebar() {
     enrichmentColumns,
     enrichmentSettings,
     selectedRowIds,
+    activeSheet,
     toggleEnrichmentColumn,
     setAllEnrichmentColumns,
     addCustomEnrichmentColumn,
@@ -73,7 +78,6 @@ export function Sidebar() {
     setEnrichProgress,
     incrementError,
     resetEnrichState,
-    clearFile,
     sidebarOpen,
     setSidebarOpen,
     updateSettings,
@@ -81,6 +85,7 @@ export function Sidebar() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
   const [lastError, setLastError] = useState<string | null>(null);
   const [enrichSectionOpen, setEnrichSectionOpen] = useState(true);
   const [sourceSectionOpen, setSourceSectionOpen] = useState(true);
@@ -95,7 +100,11 @@ export function Sidebar() {
     .filter((col) => col.enabled)
     .map((col) => col.id);
 
-  const selectedRows = rows.filter((r) => selectedRowIds.has(r.id));
+  // Scope selection to active sheet
+  const sheetRows = rows.filter((r) =>
+    activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
+  );
+  const selectedRows = sheetRows.filter((r) => selectedRowIds.has(r.id));
   const enrichableRows = selectedRows.filter(
     (r) => r.status === "pending" || r.status === "error" || r.status === "done"
   );
@@ -155,6 +164,31 @@ export function Sidebar() {
       // Determine which source columns are enriched (AI-generated) vs original
       const enrichedColIds = new Set(enrichmentColumns.map((c) => c.id));
 
+      // Fetch workspace categories if categories column is enabled
+      let workspaceCategories: CategoryItem[] | undefined;
+      const categoriesEnabled = enabledColumns.includes("categories");
+      console.log(`[Sidebar] Categories debug: enabled=${categoriesEnabled}, workspace.id=${workspace?.id}, cms_type=${workspace?.cms_type}`);
+      if (categoriesEnabled && workspace?.id) {
+        try {
+          const catUrl = `/api/categories?workspaceId=${workspace.id}`;
+          console.log(`[Sidebar] Fetching categories from: ${catUrl}`);
+          const catRes = await fetch(catUrl);
+          console.log(`[Sidebar] Categories response status: ${catRes.status}`);
+          if (catRes.ok) {
+            const catData = await catRes.json();
+            workspaceCategories = catData.categories;
+            console.log(`[Sidebar] Fetched ${workspaceCategories?.length || 0} workspace categories`, workspaceCategories?.slice(0, 3));
+          } else {
+            const errText = await catRes.text();
+            console.warn(`[Sidebar] Categories fetch failed: ${catRes.status} - ${errText}`);
+          }
+        } catch (err: any) {
+          console.warn("[Sidebar] Failed to fetch categories:", err?.message);
+        }
+      } else if (categoriesEnabled && !workspace?.id) {
+        console.warn("[Sidebar] Categories enabled but workspace.id is missing!");
+      }
+
       const response = await fetch("/api/enrich", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -193,6 +227,8 @@ export function Sidebar() {
           enabledColumns,
           enrichmentColumns: enrichmentColumns.filter((c) => c.enabled),
           settings: geminiSettings,
+          cmsType: workspace?.cms_type || undefined,
+          workspaceCategories,
         }),
       });
 
@@ -273,6 +309,7 @@ export function Sidebar() {
     enrichmentColumns,
     enrichmentSettings,
     sourceColumns,
+    workspace,
     setIsEnriching,
     setPaused,
     setEnrichProgress,
@@ -303,60 +340,6 @@ export function Sidebar() {
     setShowAddColumn(false);
   }, [newColLabel, newColPrompt, newColType, addCustomEnrichmentColumn]);
 
-  const handleExportCSV = useCallback(() => {
-    // Include columns that are enabled OR have data in any row
-    const visibleEnrichment = enrichmentColumns.filter((c) =>
-      c.enabled || rows.some((r) => {
-        const val = r.enrichedData?.[c.id];
-        return val !== undefined && val !== null && val !== "";
-      })
-    );
-    const headers = [...originalColumns, ...visibleEnrichment.map((c) => c.label)];
-    const csvRows = [headers.join(",")];
-    for (const row of rows) {
-      const vals = [
-        ...originalColumns.map((col) => {
-          const v = row.originalData[col] || "";
-          return v.startsWith("data:image/") ? "[image]" : `"${v.replace(/"/g, '""')}"`;
-        }),
-        ...visibleEnrichment.map((col) => {
-          const v = row.enrichedData[col.id];
-          if (!v) return '""';
-          if (Array.isArray(v)) return `"${(v as any[]).map((i: any) => typeof i === "object" ? i.title : i).join("; ").replace(/"/g, '""')}"`;
-          return `"${String(v).replace(/"/g, '""')}"`;
-        }),
-      ];
-      csvRows.push(vals.join(","));
-    }
-    const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
-    downloadBlob(blob, (fileName || "export").replace(/\.[^/.]+$/, "") + ".csv");
-    toast.success("CSV exported", { description: `${rows.length} rows exported` });
-  }, [rows, originalColumns, enrichmentColumns, fileName]);
-
-  const handleExportJSON = useCallback(() => {
-    // Include columns that are enabled OR have data in any row
-    const visibleEnrichment = enrichmentColumns.filter((c) =>
-      c.enabled || rows.some((r) => {
-        const val = r.enrichedData?.[c.id];
-        return val !== undefined && val !== null && val !== "";
-      })
-    );
-    const data = rows.map((row) => {
-      const obj: Record<string, any> = {};
-      for (const col of originalColumns) {
-        const v = row.originalData[col] || "";
-        obj[col] = v.startsWith("data:image/") ? "[image]" : v;
-      }
-      for (const col of visibleEnrichment) {
-        obj[col.label] = row.enrichedData[col.id] ?? "";
-      }
-      return obj;
-    });
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    downloadBlob(blob, (fileName || "export").replace(/\.[^/.]+$/, "") + ".json");
-    toast.success("JSON exported", { description: `${rows.length} rows exported` });
-  }, [rows, originalColumns, enrichmentColumns, fileName]);
-
   if (!sidebarOpen) {
     return (
       <div className="w-12 border-r bg-muted/30 flex flex-col items-center py-3 gap-3 shrink-0">
@@ -380,22 +363,58 @@ export function Sidebar() {
 
   return (
     <div className="w-[320px] border-r bg-card flex flex-col shrink-0 h-full">
-      {/* Header */}
-      <div className="p-4 border-b flex items-center justify-between bg-muted/30">
-        <div className="flex items-center gap-2">
-          <Settings2 className="h-4 w-4 text-primary" />
-          <span className="font-semibold text-sm">Configuration</span>
+      {/* Header with Tab Toggle */}
+      <div className="border-b bg-muted/30">
+        <div className="p-3 flex items-center justify-between">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 mr-1"
+            onClick={() => router.back()}
+            title="Back"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="flex items-center bg-muted rounded-lg p-0.5 flex-1 mr-2">
+            <button
+              onClick={() => setSidebarTab("ai")}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-semibold transition-all ${
+                sidebarTab === "ai"
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              AI
+            </button>
+            <button
+              onClick={() => setSidebarTab("functions")}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-semibold transition-all ${
+                sidebarTab === "functions"
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Zap className="h-3.5 w-3.5" />
+              Functions
+            </button>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            onClick={() => setSidebarOpen(false)}
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => setSidebarOpen(false)}
-        >
-          <PanelLeftClose className="h-4 w-4" />
-        </Button>
       </div>
 
+      {/* Functions Tab */}
+      {sidebarTab === "functions" && <FunctionsPanel />}
+
+      {/* AI Tab */}
+      {sidebarTab === "ai" && (
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="p-4 space-y-5">
           {/* Selection Info */}
@@ -403,7 +422,7 @@ export function Sidebar() {
             <div className="flex items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
               <span className="text-xs font-medium text-muted-foreground">
-                {selectedRowIds.size} of {rows.length} rows selected
+                {selectedRows.length} of {sheetRows.length} rows selected
               </span>
             </div>
             <Badge
@@ -464,7 +483,7 @@ export function Sidebar() {
                       return next;
                     });
                   };
-                  const hasSettings = col.type === "imageUrls" || col.type === "sourceUrls" || col.id === "enhancedTitle" || col.id === "marketingDescription" || col.isCustom;
+                  const hasSettings = col.type === "imageUrls" || col.type === "sourceUrls" || col.type === "categories" || col.id === "enhancedTitle" || col.id === "marketingDescription" || col.isCustom;
 
                   return (
                     <div
@@ -661,6 +680,38 @@ export function Sidebar() {
                                 <span>1</span>
                                 <span>5</span>
                                 <span>10</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Max Categories — only for categories */}
+                          {col.type === "categories" && (
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-medium text-muted-foreground">
+                                  Max categories
+                                </label>
+                                <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
+                                  {col.maxCategories ?? 3}
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min={1}
+                                max={5}
+                                value={col.maxCategories ?? 3}
+                                onChange={(e) =>
+                                  updateEnrichmentColumnConfig(col.id, {
+                                    maxCategories: parseInt(e.target.value),
+                                  })
+                                }
+                                disabled={isEnriching}
+                                className="w-full h-1.5 accent-primary disabled:opacity-50"
+                              />
+                              <div className="flex justify-between text-[8px] text-muted-foreground/50">
+                                <span>1</span>
+                                <span>3</span>
+                                <span>5</span>
                               </div>
                             </div>
                           )}
@@ -1081,8 +1132,10 @@ export function Sidebar() {
           )}
         </div>
       </div>
+      )}
 
-      {/* Action Buttons - Fixed at bottom */}
+      {/* Action Buttons - Fixed at bottom (AI tab only) */}
+      {sidebarTab === "ai" && (
       <div className="p-4 border-t bg-muted/20 space-y-2">
         {!isEnriching && (
           <Button
@@ -1114,44 +1167,10 @@ export function Sidebar() {
           </Button>
         )}
 
-        {/* Export buttons */}
-        <div className="flex gap-1.5">
-          <ExportButton />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportCSV}
-            disabled={isEnriching || doneCount === 0}
-            className="gap-1 text-xs flex-1"
-            title="Export as CSV"
-          >
-            <Download className="h-3.5 w-3.5" />
-            CSV
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportJSON}
-            disabled={isEnriching || doneCount === 0}
-            className="gap-1 text-xs flex-1"
-            title="Export as JSON"
-          >
-            <Download className="h-3.5 w-3.5" />
-            JSON
-          </Button>
-        </div>
-
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={clearFile}
-          disabled={isEnriching}
-          className="w-full text-muted-foreground hover:text-destructive gap-1 text-xs"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          Clear All
-        </Button>
+        {/* Export button */}
+        <ExportDialog />
       </div>
+      )}
     </div>
   );
 }
