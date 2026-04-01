@@ -14,6 +14,7 @@ export async function POST(request: NextRequest) {
     settings,
     cmsType,
     workspaceCategories,
+    categoriesRawRows,
   }: {
     rows: { id: string; rowIndex: number; originalData: Record<string, string> }[];
     enabledColumns: string[];
@@ -21,6 +22,7 @@ export async function POST(request: NextRequest) {
     settings?: GeminiSettings;
     cmsType?: string;
     workspaceCategories?: CategoryItem[];
+    categoriesRawRows?: Record<string, string>[];
   } = body;
 
   if (!rows || rows.length === 0) {
@@ -72,7 +74,8 @@ export async function POST(request: NextRequest) {
             enrichmentColumns,
             settings,
             cmsType,
-            workspaceCategories
+            workspaceCategories,
+            categoriesRawRows
           );
 
           console.log(`[API] Success for row ${row.rowIndex}`);

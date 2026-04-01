@@ -677,71 +677,130 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   setActiveSheet: (sheet) => set({ activeSheet: sheet }),
 }));
 
-// Auto-save to Supabase Storage on relevant state changes (debounced)
+// ─── Optimized Auto-save ─────────────────────────────────────────────────────
+// Instead of JSON.stringify-ing ALL rows on every state change, we use a
+// lightweight version counter that only increments on data-changing actions.
+// During enrichment we batch saves (every 5 completed rows) to avoid excessive
+// uploads. The debounce is 8 s for normal edits and enrichment-aware.
+
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
-let lastSavedSnapshot = "";
+let lastSavedVersion = -1;
+let lastSavedConfigHash = "";
 
-useSheetStore.subscribe((state) => {
-  if (!state.workspaceId || !state.projectId || !state.fileName) return;
-
-  // Create a snapshot of saveable state
-  const snapshot = JSON.stringify({
+// Lightweight config hash (settings/columns — small objects, safe to stringify)
+function configHash(state: SheetState): string {
+  return JSON.stringify({
     sc: state.sourceColumns,
     ec: state.enrichmentColumns,
     es: state.enrichmentSettings,
     cv: state.columnVisibility,
-    rows: state.rows.map((r) => ({ id: r.id, s: r.status, e: r.enrichedData, o: r.originalData, em: r.errorMessage, mt: r.matchType })),
+    cols: state.originalColumns,
+  });
+}
+
+// The actual persist function (extracted so it can be called from multiple places)
+async function persistProject() {
+  const s = useSheetStore.getState();
+  if (!s.workspaceId || !s.projectId || !s.fileName) return;
+
+  useSheetStore.setState({ saveStatus: "saving" });
+
+  try {
+    const { saveProjectJson } = await import("@/lib/storage-helpers");
+    const { updateImportSession } = await import("@/lib/supabase");
+
+    const projectJson = {
+      columns: s.originalColumns,
+      rows: s.rows.map((r) => ({
+        id: r.id,
+        rowIndex: r.rowIndex,
+        status: r.status === "processing" ? "pending" : r.status,
+        errorMessage: r.errorMessage,
+        originalData: r.originalData,
+        enrichedData: r.enrichedData,
+        matchType: r.matchType,
+      })),
+      sourceColumns: s.sourceColumns,
+      enrichmentColumns: s.enrichmentColumns,
+      enrichmentSettings: s.enrichmentSettings,
+      columnVisibility: s.columnVisibility,
+    };
+
+    await saveProjectJson(s.workspaceId, s.projectId, projectJson);
+
+    // Update session metadata in DB (enriched count only)
+    const enrichedCount = s.rows.filter((r) => r.status === "done").length;
+    await updateImportSession(s.projectId, {
+      enriched_count: enrichedCount,
+    } as any);
+
+    lastSavedVersion = s.undoVersion;
+    lastSavedConfigHash = configHash(s);
+    useSheetStore.setState({ saveStatus: "saved", lastSavedAt: Date.now() });
+  } catch (err) {
+    console.error("Auto-save failed:", err);
+    useSheetStore.setState({ saveStatus: "error" });
+  }
+}
+
+// Track enrichment completions for batching
+let enrichedSinceLastSave = 0;
+const ENRICHMENT_BATCH_SIZE = 5; // save every N enriched rows
+const NORMAL_DEBOUNCE_MS = 8000;
+const ENRICHMENT_DEBOUNCE_MS = 3000; // faster during enrichment for safety
+
+useSheetStore.subscribe((state, prevState) => {
+  if (!state.workspaceId || !state.projectId || !state.fileName) return;
+
+  // ── Quick change detection (no JSON.stringify of rows) ──
+  const versionChanged = state.undoVersion !== prevState.undoVersion;
+  const configChanged = configHash(state) !== lastSavedConfigHash;
+  const rowCountChanged = state.rows.length !== prevState.rows.length;
+
+  // Detect enrichment progress (rows transitioning to done)
+  const prevDone = prevState.rows.filter((r) => r.status === "done").length;
+  const currDone = state.rows.filter((r) => r.status === "done").length;
+  const newlyEnriched = currDone - prevDone;
+  if (newlyEnriched > 0) enrichedSinceLastSave += newlyEnriched;
+
+  // Detect row data changes not covered by undoVersion (enrichedData, status)
+  const enrichDataChanged = newlyEnriched > 0 || state.rows.some((r, i) => {
+    const prev = prevState.rows[i];
+    if (!prev || prev.id !== r.id) return true;
+    return r.status !== prev.status || r.enrichedData !== prev.enrichedData;
   });
 
-  if (snapshot === lastSavedSnapshot) return;
+  const hasChanges = versionChanged || configChanged || rowCountChanged || enrichDataChanged;
+  if (!hasChanges) return;
 
   // Mark as unsaved
   if (state.saveStatus === "saved") {
     useSheetStore.setState({ saveStatus: "unsaved" });
   }
 
+  // ── Determine debounce timing ──
+  const isEnriching = state.isEnriching;
+  const debounceMs = isEnriching ? ENRICHMENT_DEBOUNCE_MS : NORMAL_DEBOUNCE_MS;
+
+  // During enrichment: batch saves to every N rows
+  if (isEnriching && enrichedSinceLastSave < ENRICHMENT_BATCH_SIZE && !configChanged && !versionChanged) {
+    // Not enough enriched rows yet — skip scheduling a save
+    return;
+  }
+
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(async () => {
-    const s = useSheetStore.getState();
-    if (!s.workspaceId || !s.projectId || !s.fileName) return;
+    enrichedSinceLastSave = 0;
+    await persistProject();
+  }, debounceMs);
+});
 
-    useSheetStore.setState({ saveStatus: "saving" });
-
-    try {
-      const { saveProjectJson } = await import("@/lib/storage-helpers");
-      const { updateImportSession } = await import("@/lib/supabase");
-
-      // Build full project JSON and write to Storage
-      const projectJson = {
-        columns: s.originalColumns,
-        rows: s.rows.map((r) => ({
-          id: r.id,
-          rowIndex: r.rowIndex,
-          status: r.status === "processing" ? "pending" : r.status,
-          errorMessage: r.errorMessage,
-          originalData: r.originalData,
-          enrichedData: r.enrichedData,
-          matchType: r.matchType,
-        })),
-        sourceColumns: s.sourceColumns,
-        enrichmentColumns: s.enrichmentColumns,
-        enrichmentSettings: s.enrichmentSettings,
-        columnVisibility: s.columnVisibility,
-      };
-
-      await saveProjectJson(s.workspaceId, s.projectId, projectJson);
-
-      // Update session metadata in DB (enriched count only)
-      const enrichedCount = s.rows.filter((r) => r.status === "done").length;
-      await updateImportSession(s.projectId, {
-        enriched_count: enrichedCount,
-      } as any);
-
-      lastSavedSnapshot = snapshot;
-      useSheetStore.setState({ saveStatus: "saved", lastSavedAt: Date.now() });
-    } catch (err) {
-      console.error("Auto-save failed:", err);
-      useSheetStore.setState({ saveStatus: "error" });
-    }
-  }, 3000);
+// Force save when enrichment finishes (to catch any remaining unsaved rows)
+useSheetStore.subscribe((state, prevState) => {
+  if (prevState.isEnriching && !state.isEnriching && state.workspaceId && state.projectId) {
+    // Enrichment just stopped — force save immediately
+    if (saveTimeout) clearTimeout(saveTimeout);
+    enrichedSinceLastSave = 0;
+    persistProject();
+  }
 });

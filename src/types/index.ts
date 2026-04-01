@@ -157,6 +157,7 @@ export interface CategoryItem {
   name: string;
   slug: string;
   parentId: string | null;
+  originalId?: string | null; // Original CMS category_id (e.g. BigCommerce numeric id)
   parentName?: string;
   fullPath: string; // e.g. "Electronics > Smartphones"
   children?: CategoryItem[];

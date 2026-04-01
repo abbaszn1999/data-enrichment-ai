@@ -4,7 +4,7 @@
  */
 import { createClient } from "@/lib/supabase-server";
 import type { ProjectJson, MasterProductJson, CategoryJson } from "@/lib/storage-helpers";
-import { getCategoriesStoragePath } from "@/lib/storage-helpers";
+import { getCategoriesStoragePath, getCategoriesRawStoragePath } from "@/lib/storage-helpers";
 
 const BUCKET = "workspace-files";
 
@@ -58,5 +58,11 @@ export async function saveProductsJsonServer(workspaceId: string, products: Mast
 export async function loadCategoriesJsonServer(workspaceId: string): Promise<CategoryJson[]> {
   const path = getCategoriesStoragePath(workspaceId);
   const data = await loadJsonFromStorageServer<CategoryJson[]>(path);
+  return data ?? [];
+}
+
+export async function loadCategoriesRawJsonServer(workspaceId: string): Promise<Record<string, string>[]> {
+  const path = getCategoriesRawStoragePath(workspaceId);
+  const data = await loadJsonFromStorageServer<Record<string, string>[]>(path);
   return data ?? [];
 }

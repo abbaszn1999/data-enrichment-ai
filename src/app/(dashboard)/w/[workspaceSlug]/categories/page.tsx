@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import {
   FolderTree,
   Plus,
@@ -18,6 +18,8 @@ import {
   Download,
   BarChart3,
   AlertCircle,
+  AlertTriangle,
+  Save,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -26,14 +28,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
-import { loadCategoriesJson, saveCategoriesJson, type CategoryJson } from "@/lib/storage-helpers";
+import { loadCategoriesJson, saveCategoriesJson, saveCategoriesRawJson, type CategoryJson } from "@/lib/storage-helpers";
 
 import { parseExcelFile } from "@/lib/excel";
 import { CMS_CATEGORY_COLUMNS } from "@/types";
 
 // Alias for compatibility with existing tree builder
 type Category = CategoryJson & { parent_id?: string | null; description?: string; sort_order?: number; attributes?: any[] };
-import { FileSpreadsheet, CheckCircle2, ArrowRight } from "lucide-react";
+import { FileSpreadsheet, CheckCircle2, ArrowRight, GripVertical } from "lucide-react";
 
 interface TreeNode extends Category {
   children: TreeNode[];
@@ -90,9 +92,23 @@ export default function CategoriesPage() {
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState("");
 
+  // Delete All state
+  const [showDeleteAll, setShowDeleteAll] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deletingAll, setDeletingAll] = useState(false);
+
+  // Dirty / Save state
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Drag & Drop state
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null); // null = root zone
+
   // Upload sheet state
   const [showUpload, setShowUpload] = useState(false);
   const [uploadStep, setUploadStep] = useState<1 | 2 | 3 | 4>(1);
+  const [uploadMode, setUploadMode] = useState<"replace" | "merge">("merge");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [parsedSheet, setParsedSheet] = useState<{ columns: string[]; rows: any[] } | null>(null);
@@ -114,20 +130,56 @@ export default function CategoriesPage() {
       .finally(() => setLoading(false));
   }, [workspace]);
 
-  // Save all categories back to Storage
-  const saveAll = async (cats: Category[]) => {
-    if (!workspace) return;
-    const jsons: CategoryJson[] = cats.map((c) => ({
-      id: c.id,
-      name: c.name,
-      slug: c.slug,
-      description: c.description,
-      parentId: c.parent_id || null,
-      sortOrder: c.sort_order,
-      attributes: c.attributes,
-    }));
-    await saveCategoriesJson(workspace.id, jsons);
+  // Update local categories state (marks dirty, does NOT persist to storage)
+  const updateCategories = (cats: Category[]) => {
     setCategories(cats);
+    setHasUnsavedChanges(true);
+  };
+
+  // Build raw rows from current categories (for categories-raw.json / AI reference)
+  const buildRawRows = (cats: Category[]): Record<string, string>[] => {
+    return cats.map((c) => {
+      const row: Record<string, string> = {};
+      row["category_id"] = c.originalId || c.id;
+      row["category_name"] = c.name;
+      row["parent_id"] = c.parent_id
+        ? (cats.find((p) => p.id === c.parent_id)?.originalId || c.parent_id)
+        : "0";
+      if (c.description) row["description"] = c.description;
+      return row;
+    });
+  };
+
+  // Persist to Supabase Storage (both categories.json + categories-raw.json)
+  const persistToStorage = async (cats?: Category[]) => {
+    if (!workspace) return;
+    setSaving(true);
+    try {
+      const toSave = cats ?? categories;
+      const jsons: CategoryJson[] = toSave.map((c) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        description: c.description,
+        parentId: c.parent_id || null,
+        originalId: (c as any).originalId || null,
+        sortOrder: c.sort_order,
+        attributes: c.attributes,
+      }));
+      await saveCategoriesJson(workspace.id, jsons);
+      await saveCategoriesRawJson(workspace.id, buildRawRows(toSave));
+      setHasUnsavedChanges(false);
+    } catch (err: any) {
+      alert(err?.message || "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Legacy saveAll — used by import which persists immediately
+  const saveAll = async (cats: Category[]) => {
+    setCategories(cats);
+    await persistToStorage(cats);
   };
 
   const tree = useMemo(() => buildTree(categories), [categories]);
@@ -199,7 +251,7 @@ export default function CategoriesPage() {
         };
         updated = [...categories, newCat];
       }
-      await saveAll(updated);
+      updateCategories(updated);
       setShowForm(false);
     } catch (err: any) {
       setFormError(err?.message || "Failed to save");
@@ -210,50 +262,152 @@ export default function CategoriesPage() {
 
   const handleDelete = async (id: string) => {
     if (!workspace || !confirm("Delete this category? Products in it will become uncategorized.")) return;
-    try {
-      const updated = categories.filter((c) => c.id !== id);
-      await saveAll(updated);
-      if (selected === id) setSelected(null);
-    } catch (err: any) {
-      alert(err?.message || "Failed to delete");
-    }
+    // Also delete children recursively
+    const toDelete = new Set<string>();
+    const collectChildren = (parentId: string) => {
+      toDelete.add(parentId);
+      categories.filter((c) => c.parent_id === parentId).forEach((c) => collectChildren(c.id));
+    };
+    collectChildren(id);
+    const updated = categories.filter((c) => !toDelete.has(c.id));
+    updateCategories(updated);
+    if (selected && toDelete.has(selected)) setSelected(null);
   };
+
+  // ── Drag & Drop helpers ──
+  // Check if `targetId` is a descendant of `parentId` (prevents circular refs)
+  const isDescendant = useCallback((parentId: string, targetId: string): boolean => {
+    const children = categories.filter((c) => c.parent_id === parentId);
+    for (const child of children) {
+      if (child.id === targetId) return true;
+      if (isDescendant(child.id, targetId)) return true;
+    }
+    return false;
+  }, [categories]);
+
+  const handleDragStart = useCallback((e: React.DragEvent, nodeId: string) => {
+    setDragId(nodeId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", nodeId);
+    // Make drag image slightly transparent
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = "0.5";
+    }
+  }, []);
+
+  const handleDragEnd = useCallback((e: React.DragEvent) => {
+    setDragId(null);
+    setDropTargetId(null);
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = "1";
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, targetId: string | null) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragId || dragId === targetId) return;
+    // Prevent dropping onto itself or its descendants
+    if (targetId && (dragId === targetId || isDescendant(dragId, targetId))) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    e.dataTransfer.dropEffect = "move";
+    setDropTargetId(targetId);
+  }, [dragId, isDescendant]);
+
+  const handleDrop = useCallback((e: React.DragEvent, newParentId: string | null) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragId) return;
+
+    // Prevent dropping onto itself or its descendants
+    if (newParentId && (dragId === newParentId || isDescendant(dragId, newParentId))) return;
+
+    // Find current category
+    const cat = categories.find((c) => c.id === dragId);
+    if (!cat) return;
+
+    // Skip if parent didn't change
+    if ((cat.parent_id || null) === newParentId) {
+      setDragId(null);
+      setDropTargetId(null);
+      return;
+    }
+
+    // Move: only change parent_id — ID stays the same, children follow automatically
+    const updated = categories.map((c) =>
+      c.id === dragId
+        ? { ...c, parent_id: newParentId, parentId: newParentId }
+        : c
+    );
+    updateCategories(updated);
+
+    // Auto-expand the new parent so user sees the result
+    if (newParentId) {
+      setExpanded((prev) => new Set([...prev, newParentId]));
+    }
+
+    setDragId(null);
+    setDropTargetId(null);
+  }, [dragId, categories, isDescendant, updateCategories]);
 
   function renderNode(node: TreeNode, depth = 0) {
     const isExpanded = expanded.has(node.id);
     const isSelected = selected === node.id;
     const hasChildren = node.children.length > 0;
     const highlight = search && node.name.toLowerCase().includes(search.toLowerCase());
+    const isDragged = dragId === node.id;
+    const isDropTarget = dropTargetId === node.id;
+    const canDrop = dragId && dragId !== node.id && !isDescendant(dragId, node.id);
 
     return (
       <div key={node.id}>
-        <button
-          onClick={() => {
-            setSelected(node.id);
-            if (hasChildren) toggleExpand(node.id);
-          }}
-          className={`w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-colors ${
-            isSelected ? "bg-primary/10 text-primary" : "hover:bg-muted"
-          }`}
-          style={{ paddingLeft: `${12 + depth * 20}px` }}
+        <div
+          draggable={permissions.canAdmin}
+          onDragStart={(e) => handleDragStart(e, node.id)}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => handleDragOver(e, node.id)}
+          onDragLeave={() => { if (dropTargetId === node.id) setDropTargetId(null); }}
+          onDrop={(e) => handleDrop(e, node.id)}
+          className={`flex items-center gap-0.5 rounded-lg transition-all ${
+            isDragged ? "opacity-40" : ""
+          } ${isDropTarget && canDrop ? "ring-2 ring-primary bg-primary/5" : ""}`}
         >
-          {hasChildren ? (
-            isExpanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />
-          ) : (
-            <span className="w-3" />
+          {/* Drag handle */}
+          {permissions.canAdmin && (
+            <div className="shrink-0 cursor-grab active:cursor-grabbing px-0.5 text-muted-foreground/30 hover:text-muted-foreground/60">
+              <GripVertical className="h-3 w-3" />
+            </div>
           )}
-          {isExpanded ? (
-            <FolderOpen className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-          ) : (
-            <Folder className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-          )}
-          <span className={`flex-1 text-left truncate ${highlight ? "bg-yellow-100 dark:bg-yellow-900/30 px-1 rounded" : ""}`}>
-            {node.name}
-          </span>
-          <Badge variant="secondary" className="text-[8px] px-1 py-0">
-            {node.productCount}
-          </Badge>
-        </button>
+          <button
+            onClick={() => {
+              setSelected(node.id);
+              if (hasChildren) toggleExpand(node.id);
+            }}
+            className={`flex-1 flex items-center gap-2 px-2 py-2 text-xs rounded-lg transition-colors ${
+              isSelected ? "bg-primary/10 text-primary" : "hover:bg-muted"
+            }`}
+            style={{ paddingLeft: `${4 + depth * 20}px` }}
+          >
+            {hasChildren ? (
+              isExpanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />
+            ) : (
+              <span className="w-3" />
+            )}
+            {isExpanded ? (
+              <FolderOpen className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+            ) : (
+              <Folder className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+            )}
+            <span className={`flex-1 text-left truncate ${highlight ? "bg-yellow-100 dark:bg-yellow-900/30 px-1 rounded" : ""}`}>
+              {node.name}
+            </span>
+            <Badge variant="secondary" className="text-[8px] px-1 py-0">
+              {node.productCount}
+            </Badge>
+          </button>
+        </div>
         {isExpanded && hasChildren && (
           <div>
             {node.children.map((child) => renderNode(child, depth + 1))}
@@ -305,34 +459,142 @@ export default function CategoriesPage() {
     setUploading(true);
     setUploadProgress(0);
     try {
-      // Build categories from rows
-      const newCats: Category[] = [];
+      const cmsKey = workspace?.cms_type || "custom";
+      const cmsConfig = CMS_CATEGORY_COLUMNS[cmsKey] ?? CMS_CATEGORY_COLUMNS["custom"];
+      const idColumn = cmsConfig.idColumns.find((c) => parsedSheet.columns.includes(c)) ?? "";
+
+      // Build incoming categories from sheet rows
+      const incomingCats: Category[] = [];
       let skipped = 0;
-      const existingNames = new Set(categories.map((c) => c.name.toLowerCase()));
+      const rowIdToNewId = new Map<string, string>(); // originalId → newUUID
+      const seenNames = new Set<string>();
 
       for (const row of parsedSheet.rows) {
         const name = (row[nameColumn] || "").trim();
         if (!name) { skipped++; continue; }
-        if (existingNames.has(name.toLowerCase())) { skipped++; continue; }
-        existingNames.add(name.toLowerCase());
+        if (seenNames.has(name.toLowerCase())) { skipped++; continue; }
+        seenNames.add(name.toLowerCase());
+
+        const newId = crypto.randomUUID();
+        const rawOriginalId = idColumn && row[idColumn] ? row[idColumn].trim() : null;
+        if (rawOriginalId) rowIdToNewId.set(rawOriginalId, newId);
 
         const slug = name.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 48);
         const desc = descColumn ? (row[descColumn] || "").trim() : "";
-        newCats.push({ id: crypto.randomUUID(), name, slug, description: desc || undefined, parentId: null, parent_id: null });
+        incomingCats.push({ id: newId, name, slug, description: desc || undefined, parentId: null, parent_id: null, originalId: rawOriginalId, _rawParent: parentColumn ? (row[parentColumn] || "").trim() : "" } as any);
       }
-      setUploadProgress(60);
 
-      // Save merged categories to Storage
-      const merged = [...categories, ...newCats];
-      await saveAll(merged);
+      // Resolve parent_id references within incoming
+      for (const cat of incomingCats) {
+        const rawParent = (cat as any)._rawParent as string;
+        delete (cat as any)._rawParent;
+        if (!rawParent || rawParent === "0" || rawParent === "") continue;
+        const resolvedId = rowIdToNewId.get(rawParent)
+          ?? incomingCats.find((c) => c.name.toLowerCase() === rawParent.toLowerCase())?.id
+          ?? null;
+        if (resolvedId) { cat.parent_id = resolvedId; (cat as any).parentId = resolvedId; }
+      }
+      setUploadProgress(40);
+
+      let finalCats: Category[];
+      let importedCount: number;
+
+      if (uploadMode === "replace") {
+        // Replace: discard all existing, use only incoming
+        finalCats = incomingCats;
+        importedCount = incomingCats.length;
+      } else {
+        // Merge: match by name (case-insensitive)
+        // - Existing categories matched by name → keep existing ID, update fields from new sheet
+        // - New categories not in existing → add them
+        // - Existing categories not in sheet → keep them untouched
+        const existingByName = new Map<string, Category>();
+        for (const c of categories) existingByName.set(c.name.toLowerCase(), c);
+
+        const merged: Category[] = [];
+        const usedExistingIds = new Set<string>();
+        let updatedCount = 0;
+
+        for (const incoming of incomingCats) {
+          const existing = existingByName.get(incoming.name.toLowerCase());
+          if (existing) {
+            // Match found — keep existing ID, update description & originalId from sheet
+            usedExistingIds.add(existing.id);
+            // Re-map parent from incoming's new ID → existing parent ID
+            let parentId = existing.parent_id;
+            if (incoming.parent_id) {
+              // Find the parent in incoming, see if it matched an existing
+              const parentIncoming = incomingCats.find((c) => c.id === incoming.parent_id);
+              if (parentIncoming) {
+                const parentExisting = existingByName.get(parentIncoming.name.toLowerCase());
+                parentId = parentExisting?.id || incoming.parent_id;
+              }
+            }
+            merged.push({
+              ...existing,
+              description: incoming.description || existing.description,
+              originalId: incoming.originalId || (existing as any).originalId,
+              parent_id: parentId,
+              parentId: parentId,
+            } as Category);
+            updatedCount++;
+          } else {
+            // New category — resolve parent against existing
+            let parentId = incoming.parent_id;
+            if (parentId) {
+              const parentIncoming = incomingCats.find((c) => c.id === parentId);
+              if (parentIncoming) {
+                const parentExisting = existingByName.get(parentIncoming.name.toLowerCase());
+                if (parentExisting) parentId = parentExisting.id;
+              }
+            }
+            merged.push({ ...incoming, parent_id: parentId, parentId: parentId } as Category);
+          }
+        }
+
+        // Add existing categories that were NOT in the sheet (untouched)
+        for (const c of categories) {
+          if (!usedExistingIds.has(c.id) && !merged.some((m) => m.id === c.id)) {
+            merged.push(c);
+          }
+        }
+
+        finalCats = merged;
+        importedCount = incomingCats.length - updatedCount;
+        skipped += updatedCount; // updated ones count as "updated" not "new"
+      }
+      setUploadProgress(70);
+
+      // Persist everything
+      await saveCategoriesRawJson(workspace.id, parsedSheet.rows);
+      await saveAll(finalCats);
       setUploadProgress(100);
 
-      setUploadResult({ imported: newCats.length, skipped });
+      setUploadResult({ imported: importedCount, skipped });
       setUploadStep(4);
     } catch (err: any) {
       alert(err?.message || "Import failed");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (!workspace || deleteConfirmText !== "delete") return;
+    setDeletingAll(true);
+    try {
+      await saveCategoriesJson(workspace.id, []);
+      await saveCategoriesRawJson(workspace.id, []);
+      setCategories([]);
+      setSelected(null);
+      setExpanded(new Set());
+      setShowDeleteAll(false);
+      setDeleteConfirmText("");
+      setHasUnsavedChanges(false);
+    } catch (err: any) {
+      alert(err?.message || "Failed to delete all categories");
+    } finally {
+      setDeletingAll(false);
     }
   };
 
@@ -347,6 +609,7 @@ export default function CategoriesPage() {
     setParentColumn("");
     setUploadResult(null);
     setUploadProgress(0);
+    setUploadMode("merge");
   };
 
   const selectedCat = categories.find((c) => c.id === selected);
@@ -372,6 +635,28 @@ export default function CategoriesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {permissions.canAdmin && categories.length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+              onClick={() => setShowDeleteAll(true)}
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete All
+            </Button>
+          )}
+          {permissions.canAdmin && hasUnsavedChanges && (
+            <Button
+              size="sm"
+              variant="outline"
+              className={`gap-1.5 text-xs ${hasUnsavedChanges ? "border-green-500 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/20 animate-pulse" : ""}`}
+              onClick={() => persistToStorage()}
+              disabled={saving}
+            >
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {saving ? "Saving..." : "Save"}
+            </Button>
+          )}
           {permissions.canAdmin && (
             <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={() => setShowUpload(true)}>
               <Upload className="h-3.5 w-3.5" /> Upload Sheet
@@ -444,7 +729,25 @@ export default function CategoriesPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Tree */}
         <div className="lg:col-span-2">
-          <Card className="p-2 min-h-[300px]">
+          <Card
+            className={`p-2 min-h-[300px] transition-all ${
+              dragId && dropTargetId === "__root__" ? "ring-2 ring-primary/50 bg-primary/5" : ""
+            }`}
+            onDragOver={(e) => {
+              // Only trigger root drop when dragging over empty space (not over a node)
+              if (!dragId) return;
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = "move";
+              setDropTargetId("__root__");
+            }}
+            onDragLeave={(e) => {
+              // Only reset if leaving the card entirely
+              if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+              if (dropTargetId === "__root__") setDropTargetId(null);
+            }}
+            onDrop={(e) => handleDrop(e, null)}
+          >
             {filteredTree.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 gap-2">
                 <FolderTree className="h-8 w-8 text-muted-foreground/30" />
@@ -453,7 +756,23 @@ export default function CategoriesPage() {
                 </p>
               </div>
             ) : (
-              filteredTree.map((node) => renderNode(node))
+              <>
+                {filteredTree.map((node) => renderNode(node))}
+                {/* Root drop zone hint — visible only while dragging */}
+                {dragId && (
+                  <div
+                    className={`mt-1 py-2 text-center text-[10px] rounded-lg border-2 border-dashed transition-all ${
+                      dropTargetId === "__root__"
+                        ? "border-primary text-primary bg-primary/5"
+                        : "border-muted-foreground/20 text-muted-foreground/40"
+                    }`}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropTargetId("__root__"); }}
+                    onDrop={(e) => handleDrop(e, null)}
+                  >
+                    Drop here to move to root level
+                  </div>
+                )}
+              </>
             )}
           </Card>
         </div>
@@ -613,30 +932,6 @@ export default function CategoriesPage() {
                     </div>
                   </div>
 
-                  {/* Column mapping */}
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <Label className="text-[10px] font-medium text-muted-foreground uppercase">Name Column *</Label>
-                      <select value={nameColumn} onChange={(e) => setNameColumn(e.target.value)} className="w-full h-8 px-2.5 text-xs rounded border bg-background mt-1">
-                        {parsedSheet.columns.map((col) => <option key={col} value={col}>{col}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <Label className="text-[10px] font-medium text-muted-foreground uppercase">Description Column</Label>
-                      <select value={descColumn} onChange={(e) => setDescColumn(e.target.value)} className="w-full h-8 px-2.5 text-xs rounded border bg-background mt-1">
-                        <option value="">— None —</option>
-                        {parsedSheet.columns.map((col) => <option key={col} value={col}>{col}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <Label className="text-[10px] font-medium text-muted-foreground uppercase">Parent Column</Label>
-                      <select value={parentColumn} onChange={(e) => setParentColumn(e.target.value)} className="w-full h-8 px-2.5 text-xs rounded border bg-background mt-1">
-                        <option value="">— None —</option>
-                        {parsedSheet.columns.map((col) => <option key={col} value={col}>{col}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
                   {/* Preview table */}
                   <div className="overflow-x-auto rounded-lg border">
                     <table className="w-full text-[10px]">
@@ -671,13 +966,56 @@ export default function CategoriesPage() {
               {/* Step 3: Import */}
               {uploadStep === 3 && parsedSheet && (
                 <div className="space-y-4">
+                  {/* Import Mode Selector */}
+                  {categories.length > 0 && (
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold">Import Mode</Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setUploadMode("merge")}
+                          className={`p-3 rounded-lg border text-left transition-all ${
+                            uploadMode === "merge"
+                              ? "border-primary bg-primary/5 ring-1 ring-primary"
+                              : "border-muted hover:border-primary/50"
+                          }`}
+                        >
+                          <div className="text-xs font-semibold mb-0.5">Merge</div>
+                          <div className="text-[10px] text-muted-foreground leading-relaxed">
+                            Match by name, update existing, add new. Keeps manually added categories.
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => setUploadMode("replace")}
+                          className={`p-3 rounded-lg border text-left transition-all ${
+                            uploadMode === "replace"
+                              ? "border-destructive bg-destructive/5 ring-1 ring-destructive"
+                              : "border-muted hover:border-destructive/50"
+                          }`}
+                        >
+                          <div className="text-xs font-semibold mb-0.5 text-destructive">Replace All</div>
+                          <div className="text-[10px] text-muted-foreground leading-relaxed">
+                            Delete all existing categories and replace with the uploaded sheet.
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="p-4 rounded-lg bg-muted/30 border space-y-2 text-xs">
                     <div className="flex justify-between"><span className="text-muted-foreground">File</span><span className="font-medium">{uploadFile?.name}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Total rows</span><span className="font-medium">{parsedSheet.rows.length}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Name column</span><span className="font-medium">{nameColumn}</span></div>
                     {descColumn && <div className="flex justify-between"><span className="text-muted-foreground">Description column</span><span className="font-medium">{descColumn}</span></div>}
                     <div className="flex justify-between"><span className="text-muted-foreground">Existing categories</span><span className="font-medium">{categories.length}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Duplicates will be</span><span className="font-medium text-amber-600">Skipped</span></div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Mode</span>
+                      <span className={`font-medium ${uploadMode === "replace" ? "text-destructive" : "text-primary"}`}>
+                        {uploadMode === "replace" ? "Replace All" : "Smart Merge"}
+                      </span>
+                    </div>
+                    {uploadMode === "merge" && (
+                      <div className="flex justify-between"><span className="text-muted-foreground">Name matches will be</span><span className="font-medium text-amber-600">Updated</span></div>
+                    )}
                   </div>
 
                   {uploading && (
@@ -723,6 +1061,72 @@ export default function CategoriesPage() {
               )}
             </div>
           </Card>
+        </div>
+      )}
+
+      {/* Delete All Confirmation Dialog */}
+      {showDeleteAll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => { setShowDeleteAll(false); setDeleteConfirmText(""); }}
+          />
+          <div className="relative bg-background border rounded-xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+                <AlertTriangle className="h-5 w-5 text-destructive" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm">Delete all categories</h3>
+                <p className="text-xs text-muted-foreground">This action is permanent and cannot be undone</p>
+              </div>
+            </div>
+
+            <div className="bg-destructive/5 border border-destructive/20 rounded-lg p-3 space-y-1">
+              <p className="text-xs text-destructive font-medium">Warning</p>
+              <p className="text-xs text-muted-foreground">
+                You are about to permanently delete <strong className="text-foreground">{categories.length} categor{categories.length !== 1 ? "ies" : "y"}</strong> from this workspace. All category data and hierarchy will be lost forever.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium">
+                Type <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-destructive">delete</span> to confirm
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value.toLowerCase())}
+                placeholder="Type 'delete' here..."
+                className="w-full h-9 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-destructive/50"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="flex-1 h-9 text-xs"
+                onClick={() => { setShowDeleteAll(false); setDeleteConfirmText(""); }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                className="flex-1 h-9 text-xs bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                disabled={deleteConfirmText !== "delete" || deletingAll}
+                onClick={handleDeleteAll}
+              >
+                {deletingAll ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                )}
+                {deletingAll ? "Deleting..." : "Delete All Categories"}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>

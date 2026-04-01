@@ -508,7 +508,8 @@ async function categorizeProduct(
   cmsType?: string,
   workspaceCategories?: CategoryItem[],
   maxCategories: number = 3,
-  customInstruction: string = ""
+  customInstruction: string = "",
+  categoriesRawRows?: Record<string, string>[]
 ): Promise<string> {
   const ai = getClient();
   const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
@@ -524,16 +525,33 @@ async function categorizeProduct(
   let categoriesSection = "";
   const hasCategories = workspaceCategories && workspaceCategories.length > 0;
 
-  if (hasCategories) {
-    const categoryList = workspaceCategories.map((c) => `- ${c.fullPath}`).join("\n");
-    categoriesSection = `\nAVAILABLE CATEGORIES (you MUST pick ONLY from this list):\n${categoryList}\n\nIMPORTANT: You can ONLY use categories from the list above. Do NOT invent new categories.`;
-  } else {
-    categoriesSection = `\nNo predefined categories are available. You should suggest the most appropriate product categories based on the product data and industry standards.`;
-  }
+  const isBigCommerce = cmsType === "bigcommerce";
+  let formattingRules = "";
 
-  // Build CMS formatting instructions
-  const maxCats = cmsConfig.supportsMultiple ? maxCategories : 1;
-  let formattingRules = `\nCMS Platform: ${cmsType || "generic"}
+  if (isBigCommerce && categoriesRawRows && categoriesRawRows.length > 0) {
+    // BigCommerce: send the raw sheet table directly to AI
+    // Detect column names from the first row keys
+    const cols = Object.keys(categoriesRawRows[0]);
+    const header = cols.join(" | ");
+    const rows = categoriesRawRows.map((r) => cols.map((c) => r[c] ?? "").join(" | ")).join("\n");
+    const maxCats = maxCategories;
+    categoriesSection = `\nAVAILABLE CATEGORIES (BigCommerce — use the exact IDs from this table):
+${header}
+${rows}
+
+IMPORTANT: Pick ONLY from the categories in this table. Do NOT invent new categories.`;
+    formattingRules = `\nCMS Platform: bigcommerce
+FORMATTING RULES:
+- Pick up to ${maxCats} of the MOST RELEVANT categories for this product.
+- For each chosen category, output: deepest category_id;parent_id;grandparent_id;...up to root (where parent_id = 0 means root).
+- Separate multiple category chains with "; " (semicolon + space).
+- Example: if category_id=88 has parent_id=45 which has parent_id=12 which has parent_id=0 → output "88;45;12"
+- Output ONLY the id chains, nothing else.`;
+  } else if (hasCategories) {
+    const categoryList = workspaceCategories!.map((c) => `- ${c.fullPath}`).join("\n");
+    categoriesSection = `\nAVAILABLE CATEGORIES (you MUST pick ONLY from this list):\n${categoryList}\n\nIMPORTANT: You can ONLY use categories from the list above. Do NOT invent new categories.`;
+    const maxCats = cmsConfig.supportsMultiple ? maxCategories : 1;
+    formattingRules = `\nCMS Platform: ${cmsType || "generic"}
 Column Name: ${cmsConfig.columnName}
 ${cmsConfig.notes}
 
@@ -541,6 +559,18 @@ FORMATTING RULES:
 - ${cmsConfig.supportsMultiple ? `You may assign up to ${maxCats} categories` : "You must assign exactly 1 category"}
 - ${cmsConfig.supportsHierarchy ? `Use "${cmsConfig.hierarchySeparator}" to show parent/child hierarchy` : "Use only leaf category names, no hierarchy paths"}
 - ${cmsConfig.supportsMultiple ? `Separate multiple categories with "${cmsConfig.multiCategorySeparator}"` : "Only one category allowed"}`;
+  } else {
+    categoriesSection = `\nNo predefined categories are available. You should suggest the most appropriate product categories based on the product data and industry standards.`;
+    const maxCats = cmsConfig.supportsMultiple ? maxCategories : 1;
+    formattingRules = `\nCMS Platform: ${cmsType || "generic"}
+Column Name: ${cmsConfig.columnName}
+${cmsConfig.notes}
+
+FORMATTING RULES:
+- ${cmsConfig.supportsMultiple ? `You may assign up to ${maxCats} categories` : "You must assign exactly 1 category"}
+- ${cmsConfig.supportsHierarchy ? `Use "${cmsConfig.hierarchySeparator}" to show parent/child hierarchy` : "Use only leaf category names, no hierarchy paths"}
+- ${cmsConfig.supportsMultiple ? `Separate multiple categories with "${cmsConfig.multiCategorySeparator}"` : "Only one category allowed"}`;
+  }
 
   const instruction = customInstruction ? `\nAdditional instruction: ${customInstruction}` : "";
 
@@ -585,7 +615,8 @@ export async function enrichProductRow(
   enrichmentColumns?: { id: string; label: string; description: string; type: string; enabled: boolean; imageCount?: number; sourceCount?: number; maxCategories?: number; customInstruction?: string; writingTone?: string; contentLength?: string }[],
   settings?: GeminiSettings,
   cmsType?: string,
-  workspaceCategories?: CategoryItem[]
+  workspaceCategories?: CategoryItem[],
+  categoriesRawRows?: Record<string, string>[]
 ): Promise<EnrichedData> {
   // Determine what's needed
   const specialColumns = ["sourceUrls", "imageUrls", "categories"];
@@ -662,18 +693,16 @@ export async function enrichProductRow(
 
   // Step 3: Attach sources if requested
   if (needsSources) {
-    const sourceCol = enrichmentColumns?.find((c) => c.id === "sourceUrls");
-    const sourceCount = sourceCol?.sourceCount ?? 3;
-    enrichedData.sourceUrls = sources.slice(0, sourceCount);
+    enrichedData.sourceUrls = sources;
   }
 
   // Step 4: Categorize product if categories column is enabled
   if (needsCategories) {
+    console.log(`[Smart Flow] Step 4: Categorizing product (CMS: ${cmsType || "generic"})`);
     const catCol = enrichmentColumns?.find((c) => c.id === "categories");
     const maxCategories = catCol?.maxCategories ?? 3;
     const customInstruction = catCol?.customInstruction ?? "";
     try {
-      console.log(`[Smart Flow] Step 4: Categorizing product (CMS: ${cmsType || "generic"})`);
       const categoryResult = await categorizeProduct(
         productData,
         searchResults,
@@ -681,7 +710,8 @@ export async function enrichProductRow(
         cmsType,
         workspaceCategories,
         maxCategories,
-        customInstruction
+        customInstruction,
+        categoriesRawRows
       );
       enrichedData.categories = categoryResult;
     } catch (error: any) {

@@ -817,6 +817,20 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
         )}
       </div>
 
+      {/* Loading indicator */}
+      {loading && (
+        <div className="flex items-center gap-2 px-1">
+          <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
+          <span className="text-[10px] text-muted-foreground">Generating function...</span>
+          <button
+            onClick={handleStop}
+            className="ml-auto text-[10px] text-destructive hover:text-destructive/80 underline underline-offset-2"
+          >
+            Stop
+          </button>
+        </div>
+      )}
+
       {/* Error */}
       {error && (
         <div className="flex items-start gap-2 p-2 rounded-lg bg-destructive/10 border border-destructive/20">

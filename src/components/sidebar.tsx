@@ -166,27 +166,19 @@ export function Sidebar() {
 
       // Fetch workspace categories if categories column is enabled
       let workspaceCategories: CategoryItem[] | undefined;
+      let categoriesRawRows: Record<string, string>[] | undefined;
       const categoriesEnabled = enabledColumns.includes("categories");
-      console.log(`[Sidebar] Categories debug: enabled=${categoriesEnabled}, workspace.id=${workspace?.id}, cms_type=${workspace?.cms_type}`);
       if (categoriesEnabled && workspace?.id) {
         try {
-          const catUrl = `/api/categories?workspaceId=${workspace.id}`;
-          console.log(`[Sidebar] Fetching categories from: ${catUrl}`);
-          const catRes = await fetch(catUrl);
-          console.log(`[Sidebar] Categories response status: ${catRes.status}`);
+          const catRes = await fetch(`/api/categories?workspaceId=${workspace.id}`);
           if (catRes.ok) {
             const catData = await catRes.json();
             workspaceCategories = catData.categories;
-            console.log(`[Sidebar] Fetched ${workspaceCategories?.length || 0} workspace categories`, workspaceCategories?.slice(0, 3));
-          } else {
-            const errText = await catRes.text();
-            console.warn(`[Sidebar] Categories fetch failed: ${catRes.status} - ${errText}`);
+            categoriesRawRows = catData.rawRows?.length ? catData.rawRows : undefined;
           }
         } catch (err: any) {
           console.warn("[Sidebar] Failed to fetch categories:", err?.message);
         }
-      } else if (categoriesEnabled && !workspace?.id) {
-        console.warn("[Sidebar] Categories enabled but workspace.id is missing!");
       }
 
       const response = await fetch("/api/enrich", {
@@ -229,6 +221,7 @@ export function Sidebar() {
           settings: geminiSettings,
           cmsType: workspace?.cms_type || undefined,
           workspaceCategories,
+          categoriesRawRows,
         }),
       });
 

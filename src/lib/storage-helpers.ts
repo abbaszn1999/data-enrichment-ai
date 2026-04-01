@@ -122,6 +122,7 @@ export interface CategoryJson {
   slug: string;
   description?: string;
   parentId?: string | null;
+  originalId?: string | null; // Original CMS category_id (e.g. BigCommerce numeric id)
   sortOrder?: number;
   attributes?: any[];
   createdAt?: string;
@@ -140,6 +141,21 @@ export async function saveCategoriesJson(workspaceId: string, categories: Catego
 export async function loadCategoriesJson(workspaceId: string): Promise<CategoryJson[]> {
   const path = getCategoriesStoragePath(workspaceId);
   const data = await loadJsonFromStorage<CategoryJson[]>(path);
+  return data ?? [];
+}
+
+// ─── Categories Raw Sheet (original uploaded rows) ────────
+
+export function getCategoriesRawStoragePath(workspaceId: string): string {
+  return `${workspaceId}/categories-raw.json`;
+}
+
+export async function saveCategoriesRawJson(workspaceId: string, rows: Record<string, string>[]): Promise<void> {
+  await saveJsonToStorage(getCategoriesRawStoragePath(workspaceId), rows);
+}
+
+export async function loadCategoriesRawJson(workspaceId: string): Promise<Record<string, string>[]> {
+  const data = await loadJsonFromStorage<Record<string, string>[]>(getCategoriesRawStoragePath(workspaceId));
   return data ?? [];
 }
 

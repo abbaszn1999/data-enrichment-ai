@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { loadCategoriesJsonServer } from "@/lib/storage-helpers-server";
+import { loadCategoriesJsonServer, loadCategoriesRawJsonServer } from "@/lib/storage-helpers-server";
 import type { CategoryJson } from "@/lib/storage-helpers";
 import type { CategoryItem } from "@/types";
 
@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
       name: cat.name,
       slug: cat.slug,
       parentId: cat.parentId ?? null,
+      originalId: cat.originalId ?? null,
       parentName: cat.parentId ? idMap.get(cat.parentId)?.name : undefined,
       fullPath: buildFullPath(cat),
     }));
@@ -76,11 +77,15 @@ export async function GET(request: NextRequest) {
 
     const tree = attachChildren(rootCategories);
 
-    console.log(`[Categories API] Returning ${categoryItems.length} categories (${rootCategories.length} root)`);
+    // Also load raw sheet rows for BigCommerce AI reference
+    const rawRows = await loadCategoriesRawJsonServer(workspaceId);
+
+    console.log(`[Categories API] Returning ${categoryItems.length} categories (${rootCategories.length} root), ${rawRows.length} raw rows`);
 
     return NextResponse.json({
       categories: categoryItems,
       tree,
+      rawRows,
     });
   } catch (err: any) {
     console.error("[Categories API] Unexpected error:", err);
