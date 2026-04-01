@@ -42,12 +42,15 @@ export function useAuth() {
     // this is the most reliable way to get the session and set sessionReady.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       const user = session?.user ?? null;
       setState((prev) => ({ ...prev, user, session, isLoading: false, sessionReady: true }));
       if (user) {
-        const profile = await loadProfile(user.id);
-        setState((prev) => ({ ...prev, profile }));
+        setTimeout(() => {
+          loadProfile(user.id).then((profile) => {
+            setState((prev) => ({ ...prev, profile }));
+          });
+        }, 0);
       } else {
         setState((prev) => ({ ...prev, profile: null }));
       }

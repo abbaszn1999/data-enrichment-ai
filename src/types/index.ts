@@ -255,6 +255,67 @@ export const CMS_CATEGORY_CONFIG: Record<string, CmsCategoryConfig> = {
   },
 };
 
+// CMS-specific category sheet column names (for upload/import detection)
+export interface CmsCategoryColumns {
+  nameColumns: string[];    // Possible column names for category name
+  parentColumns: string[];  // Possible column names for parent reference
+  descColumns: string[];    // Possible column names for description
+  idColumns: string[];      // Possible column names for category ID
+  hint: string;             // Shown in upload dialog Step 1
+}
+
+export const CMS_CATEGORY_COLUMNS: Record<string, CmsCategoryColumns> = {
+  bigcommerce: {
+    nameColumns: ["name", "category_name"],
+    parentColumns: ["parent_id", "parent_category_id"],
+    descColumns: ["description", "page_description"],
+    idColumns: ["category_id", "id"],
+    hint: "BigCommerce: name, parent_id, description",
+  },
+  shopify: {
+    nameColumns: ["title", "name", "collection"],
+    parentColumns: ["parent_id", "handle"],
+    descColumns: ["body_html", "description"],
+    idColumns: ["id"],
+    hint: "Shopify: title, parent_id, body_html",
+  },
+  woocommerce: {
+    nameColumns: ["name", "category_name"],
+    parentColumns: ["parent_id", "parent"],
+    descColumns: ["description"],
+    idColumns: ["id", "category_id"],
+    hint: "WooCommerce: name, parent_id, description",
+  },
+  salla: {
+    nameColumns: ["name", "الاسم", "اسم التصنيف"],
+    parentColumns: ["parent_id"],
+    descColumns: ["description", "الوصف"],
+    idColumns: ["id"],
+    hint: "Salla: name (أو الاسم), parent_id",
+  },
+  zid: {
+    nameColumns: ["name", "الاسم", "اسم التصنيف"],
+    parentColumns: ["parent_id"],
+    descColumns: ["description", "الوصف"],
+    idColumns: ["id"],
+    hint: "Zid: name (أو الاسم), parent_id",
+  },
+  magento: {
+    nameColumns: ["name", "category_name"],
+    parentColumns: ["parent_id", "parent"],
+    descColumns: ["description"],
+    idColumns: ["entity_id", "id"],
+    hint: "Magento: name, parent_id, entity_id",
+  },
+  custom: {
+    nameColumns: ["name", "category_name", "title", "الاسم"],
+    parentColumns: ["parent_id", "parent"],
+    descColumns: ["description", "desc", "الوصف"],
+    idColumns: ["id", "category_id", "entity_id"],
+    hint: "يجب أن تحتوي الورقة على عمود name أو category_name",
+  },
+};
+
 // Default config for unknown/custom CMS
 export const DEFAULT_CMS_CATEGORY_CONFIG: CmsCategoryConfig = {
   columnName: "Categories",

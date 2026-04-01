@@ -29,6 +29,7 @@ import { useRole } from "@/hooks/use-role";
 import { loadCategoriesJson, saveCategoriesJson, type CategoryJson } from "@/lib/storage-helpers";
 
 import { parseExcelFile } from "@/lib/excel";
+import { CMS_CATEGORY_COLUMNS } from "@/types";
 
 // Alias for compatibility with existing tree builder
 type Category = CategoryJson & { parent_id?: string | null; description?: string; sort_order?: number; attributes?: any[] };
@@ -278,14 +279,19 @@ export default function CategoriesPage() {
         });
         setParsedSheet({ columns, rows: rows.map((r) => r.originalData) });
         setPreviewRows(preview);
-        // Auto-detect columns
-        for (const col of columns) {
-          const l = col.toLowerCase();
-          if (l === "name" || l.includes("category") || l.includes("nom")) setNameColumn(col);
-          else if (l.includes("desc")) setDescColumn(col);
-          else if (l.includes("parent")) setParentColumn(col);
-        }
-        if (!nameColumn && columns.length > 0) setNameColumn(columns[0]);
+        // Auto-detect columns based on workspace CMS type
+        const cmsKey = workspace?.cms_type || "custom";
+        const cmsConfig = CMS_CATEGORY_COLUMNS[cmsKey] ?? CMS_CATEGORY_COLUMNS["custom"];
+        const findCol = (candidates: string[]) =>
+          candidates.find((c) => columns.some((col) => col.toLowerCase() === c.toLowerCase())) ??
+          candidates.find((c) => columns.some((col) => col.toLowerCase().includes(c.toLowerCase())));
+        const detectedName = findCol(cmsConfig.nameColumns);
+        const detectedParent = findCol(cmsConfig.parentColumns);
+        const detectedDesc = findCol(cmsConfig.descColumns);
+        if (detectedName) setNameColumn(detectedName);
+        else if (columns.length > 0) setNameColumn(columns[0]);
+        if (detectedParent) setParentColumn(detectedParent);
+        if (detectedDesc) setDescColumn(detectedDesc);
         setUploadStep(2);
       }
     } catch (err) {
@@ -591,7 +597,7 @@ export default function CategoriesPage() {
                   <Upload className="h-10 w-10 text-muted-foreground" />
                   <div className="text-center">
                     <p className="text-sm font-medium">Drag & drop or click to browse</p>
-                    <p className="text-[10px] text-muted-foreground mt-1">.xlsx, .xls, .csv — must have a &quot;name&quot; column</p>
+                    <p className="text-[10px] text-muted-foreground mt-1">.xlsx, .xls, .csv — {CMS_CATEGORY_COLUMNS[workspace?.cms_type || "custom"]?.hint}</p>
                   </div>
                 </div>
               )}
