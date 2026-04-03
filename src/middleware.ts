@@ -13,8 +13,7 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      * - public folder assets
-     * - api/enrich (long-running, middleware Edge Function timeout kills it)
      */
-    "/((?!_next/static|_next/image|favicon.ico|api/enrich|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

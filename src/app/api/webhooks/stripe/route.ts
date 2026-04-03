@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
 
   // Idempotency check
-  const { data: existing } = await admin.from("webhook_events").select("id").eq("id", event.id).single();
+  const { data: existing } = await admin.from("webhook_events").select("id").eq("id", event.id).maybeSingle();
   if (existing) return NextResponse.json({ received: true, duplicate: true });
 
   await admin.from("webhook_events").insert({ id: event.id, type: event.type, payload: event.data.object as any });
