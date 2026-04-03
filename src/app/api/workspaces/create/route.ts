@@ -21,21 +21,24 @@ export async function POST(req: NextRequest) {
 
     const admin = createAdminClient();
 
-    // Check user's subscription and max_workspaces limit
-    const userSub = await getUserSubscription(user.id);
-    if (!userSub || !isSubscriptionActive(userSub.subscription.status)) {
-      return NextResponse.json({ error: "Active subscription required to create workspaces" }, { status: 403 });
-    }
+    // Count user's current workspaces (as owner)
+    const { count: existingCount } = await admin
+      .from("workspaces")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", user.id);
 
-    const maxWorkspaces = userSub.plan?.max_workspaces;
-    if (maxWorkspaces) {
-      // Count user's current workspaces (as owner)
-      const { count } = await admin
-        .from("workspaces")
-        .select("id", { count: "exact", head: true })
-        .eq("owner_id", user.id);
+    const currentCount = existingCount ?? 0;
 
-      if ((count ?? 0) >= maxWorkspaces) {
+    // Allow first workspace for free (no subscription needed)
+    // For additional workspaces, require an active subscription
+    if (currentCount >= 1) {
+      const userSub = await getUserSubscription(user.id);
+      if (!userSub || !isSubscriptionActive(userSub.subscription.status)) {
+        return NextResponse.json({ error: "Active subscription required to create additional workspaces" }, { status: 403 });
+      }
+
+      const maxWorkspaces = userSub.plan?.max_workspaces;
+      if (maxWorkspaces && currentCount >= maxWorkspaces) {
         return NextResponse.json({
           error: `Your plan allows a maximum of ${maxWorkspaces} workspace(s). Upgrade to create more.`,
         }, { status: 403 });
