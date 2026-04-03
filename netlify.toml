@@ -5,5 +5,11 @@
 [build.environment]
   NODE_VERSION = "22"
 
+[functions]
+  node_bundler = "esbuild"
+
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+[functions."*"]
+  max_duration = 60
