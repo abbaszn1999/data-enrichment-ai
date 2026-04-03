@@ -370,7 +370,7 @@ export function Sidebar() {
   }
 
   return (
-    <div className="w-[320px] border-r bg-card flex flex-col shrink-0 h-full">
+    <div className="w-[320px] border-r bg-card flex flex-col shrink-0 h-full min-h-0">
       {/* Header with Tab Toggle */}
       <div className="border-b bg-muted/30">
         <div className="p-3 flex items-center justify-between">
@@ -445,7 +445,7 @@ export function Sidebar() {
 
       {/* AI Tab */}
       {!isViewer && sidebarTab === "ai" && (
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      <div className="flex-1 overflow-y-auto custom-scrollbar min-h-0">
         <div className="p-4 space-y-5">
           {/* Selection Info */}
           <div className="flex items-center justify-between">

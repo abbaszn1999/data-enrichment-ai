@@ -317,10 +317,10 @@ export default function WorkspaceLayout({
           )}
 
           {/* Main Content */}
-          <main className={`flex-1 flex flex-col ${isEnrichPage ? "overflow-hidden" : "overflow-auto"}`}>
+          <main className={`flex-1 flex flex-col min-h-0 ${isEnrichPage ? "overflow-hidden" : "overflow-auto"}`}>
             {!isEnrichPage && <SubscriptionBanner workspaceId={workspace?.id ?? null} />}
-            {isSubscriptionPage ? (
-              <div className="flex-1">{children}</div>
+            {isSubscriptionPage || isEnrichPage ? (
+              <div className={isEnrichPage ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
             ) : (
               <SubscriptionGate workspaceId={workspace?.id ?? null}>
                 <div className="flex-1">{children}</div>
