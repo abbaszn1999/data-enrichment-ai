@@ -79,18 +79,9 @@ export async function POST(request: NextRequest) {
 
     if (isExistingUser) {
       // ── EXISTING USER ──
-      // Use signInWithOtp (magic link) — this ACTUALLY sends an email
-      const { error: otpErr } = await adminClient.auth.admin.generateLink({
-        type: "magiclink",
-        email,
-        options: { redirectTo: inviteUrl },
-      });
-
-      if (otpErr) {
-        console.warn(`[Invite] generateLink failed for existing user ${email}: ${otpErr.message}`);
-      }
-
-      // Also send a magic link via the client-side OTP method which reliably sends email
+      // Send a single magic link via signInWithOtp — one call only to avoid token conflicts.
+      // Two calls (generateLink + signInWithOtp) would issue two tokens where the second
+      // invalidates the first, causing "otp_expired" errors for the user.
       const serverSupabase = await createClient();
       const { error: otpSendErr } = await serverSupabase.auth.signInWithOtp({
         email,
@@ -102,7 +93,6 @@ export async function POST(request: NextRequest) {
 
       if (otpSendErr) {
         console.warn(`[Invite] signInWithOtp failed for ${email}: ${otpSendErr.message}`);
-        // Even if email fails, the invite link is still available for manual sharing
       } else {
         emailSent = true;
         console.log(`[Invite] Sent magic link to existing user ${email}`);

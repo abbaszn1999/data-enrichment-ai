@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Eye,
   PenLine,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -61,6 +62,25 @@ export default function TeamPage() {
   const [inviteLink, setInviteLink] = useState("");
   const [inviteEmailSent, setInviteEmailSent] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const [resendingInvite, setResendingInvite] = useState<string | null>(null);
+
+  const handleResendInvite = async (inviteId: string) => {
+    setResendingInvite(inviteId);
+    try {
+      const res = await fetch("/api/team/invite-resend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inviteId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to resend");
+      alert(data.emailSent ? "Invite email resent successfully!" : "Could not send email. Share the invite link manually.");
+    } catch (err: any) {
+      alert(err?.message || "Failed to resend invite");
+    } finally {
+      setResendingInvite(null);
+    }
+  };
 
   useEffect(() => {
     if (!workspace) return;
@@ -272,6 +292,14 @@ export default function TeamPage() {
                 <Badge variant="secondary" className={`text-[9px] ${ROLE_LABELS[inv.role]?.color}`}>
                   {ROLE_LABELS[inv.role]?.label}
                 </Badge>
+                <button
+                  onClick={() => handleResendInvite(inv.id)}
+                  disabled={resendingInvite === inv.id}
+                  className="h-7 w-7 rounded-lg hover:bg-primary/10 flex items-center justify-center transition-colors"
+                  title="Resend invite email"
+                >
+                  <RefreshCw className={`h-3 w-3 text-primary ${resendingInvite === inv.id ? "animate-spin" : ""}`} />
+                </button>
                 <button
                   onClick={() => copyToClipboard(`${window.location.origin}/invite/${inv.token}`)}
                   className="h-7 w-7 rounded-lg hover:bg-muted flex items-center justify-center transition-colors"

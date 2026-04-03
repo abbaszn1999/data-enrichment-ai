@@ -17,8 +17,26 @@ function LoginForm() {
   const prefillEmail = searchParams.get("email") || "";
   const [email, setEmail] = useState(prefillEmail);
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Detect auth errors from callback redirect or hash fragment
+  const urlError = searchParams.get("error");
+  const [error, setError] = useState(() => {
+    if (urlError === "auth_callback_error") {
+      // Check hash fragment for more details (runs client-side)
+      if (typeof window !== "undefined") {
+        const hash = window.location.hash;
+        if (hash.includes("otp_expired")) {
+          return "The invite link has expired. Please ask the workspace owner to resend the invite.";
+        }
+        if (hash.includes("access_denied")) {
+          return "Access denied. The link may be invalid or expired.";
+        }
+      }
+      return "Authentication failed. Please try signing in manually.";
+    }
+    return "";
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
