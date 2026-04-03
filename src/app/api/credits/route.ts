@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase-server";
+import { createAdminClient } from "@/lib/supabase-admin";
 import { getOwnerSubscription, calculateCreditBalance } from "@/lib/stripe";
 
 export async function GET(request: Request) {
@@ -16,12 +16,12 @@ export async function GET(request: Request) {
     const ownerSub = await getOwnerSubscription(workspaceId);
     const bal = calculateCreditBalance(ownerSub?.subscription ?? null);
 
-    const supabase = await createClient();
+    const admin = createAdminClient();
 
     // Get transactions
-    const { data: transactions } = await supabase
+    const { data: transactions } = await admin
       .from("credit_transactions")
-      .select("*, profiles(full_name)")
+      .select("*")
       .eq("workspace_id", workspaceId)
       .order("created_at", { ascending: false })
       .limit(limit);
