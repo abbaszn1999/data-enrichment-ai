@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { calculateCallCost, costToCredits } from "@/lib/ai-pricing";
 import { createClient } from "@/lib/supabase-server";
 import { getOwnerSubscription, calculateCreditBalance, isSubscriptionActive } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+async function getAI() {
+  const { GoogleGenAI } = await import("@google/genai");
+  return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+}
 
 // ── Types ──────────────────────────────────────────
 
@@ -106,7 +108,7 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
   "targetColumn": "DESCRIPTION"
 }`;
 
-    const result = await ai.models.generateContent({
+    const result = await (await getAI()).models.generateContent({
       model: "gemini-3.1-flash-lite-preview",
       contents: [{ role: "user", parts: [{ text: command }] }],
       config: {
