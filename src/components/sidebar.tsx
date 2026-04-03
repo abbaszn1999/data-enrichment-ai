@@ -31,7 +31,7 @@ import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { ExportDialog } from "@/components/export-dialog";
 import { FunctionsPanel } from "@/components/functions-panel";
-import type { EnrichmentEvent, OutputLanguage, EnrichmentModel, ThinkingLevelOption, WritingTone, ContentLength, CategoryItem } from "@/types";
+import type { OutputLanguage, EnrichmentModel, ThinkingLevelOption, WritingTone, ContentLength, CategoryItem } from "@/types";
 import { LANGUAGE_OPTIONS, MODEL_OPTIONS, TONE_OPTIONS } from "@/types";
 import type { EnrichmentColumn } from "@/types";
 import type { GeminiSettings } from "@/lib/gemini";
@@ -229,74 +229,44 @@ export function Sidebar() {
       });
 
       if (!response.ok) {
-        throw new Error(
-          `API error: ${response.status} - ${await response.text()}`
-        );
+        const errText = await response.text();
+        let errJson: any = {};
+        try { errJson = JSON.parse(errText); } catch {}
+        if (errJson.error === "NO_CREDITS" || response.status === 402) {
+          setIsEnriching(false);
+          setLastError("NO_CREDITS");
+          toast.error("No credits remaining", {
+            description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
+            duration: 8000,
+          });
+          return;
+        }
+        throw new Error(`API error: ${response.status} - ${errText}`);
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response stream");
+      const json = await response.json();
+      const resultRows: { id: string; rowIndex: number; status: "done" | "error"; data?: any; error?: string }[] = json.results || [];
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const dataLine = line.trim();
-          if (!dataLine.startsWith("data: ")) continue;
-
-          try {
-            const event: EnrichmentEvent = JSON.parse(dataLine.slice(6));
-
-            switch (event.type) {
-              case "progress":
-                setRowStatus(event.rowId, "processing");
-                break;
-              case "row_complete":
-                if (event.data) {
-                  setRowEnrichedData(event.rowId, event.data);
-                }
-                setEnrichProgress(event.completedRows, event.totalRows);
-                invalidateCredits();
-                break;
-              case "row_error":
-                setRowStatus(event.rowId, "error", event.error);
-                setEnrichProgress(event.completedRows, event.totalRows);
-                incrementError();
-                if (event.error) setLastError(event.error);
-                break;
-              case "error":
-                if ((event as any).error === "NO_CREDITS") {
-                  setIsEnriching(false);
-                  setLastError("NO_CREDITS");
-                  toast.error("No credits remaining", {
-                    description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
-                    duration: 8000,
-                  });
-                }
-                break;
-              case "done":
-                setIsEnriching(false);
-                {
-                  const doneNow = enrichableRows.filter((r) => r.status !== "error").length;
-                  toast.success(`Enrichment complete`, {
-                    description: `${event.completedRows} rows processed`,
-                  });
-                }
-                break;
-            }
-          } catch {
-            // Skip malformed events
-          }
+      let completedCount = 0;
+      for (const result of resultRows) {
+        completedCount++;
+        if (result.status === "done") {
+          if (result.data) setRowEnrichedData(result.id, result.data);
+          setEnrichProgress(completedCount, enrichableRows.length);
+          invalidateCredits();
+        } else {
+          setRowStatus(result.id, "error", result.error);
+          setEnrichProgress(completedCount, enrichableRows.length);
+          incrementError();
+          if (result.error) setLastError(result.error);
         }
       }
+
+      setIsEnriching(false);
+      toast.success("Enrichment complete", {
+        description: `${resultRows.filter(r => r.status === "done").length} rows processed`,
+      });
+      invalidateCredits();
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         // User stopped enrichment — already handled by handleStopEnrich
