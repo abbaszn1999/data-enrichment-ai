@@ -141,7 +141,7 @@ export default function WorkspacesPage() {
           </div>
         )}
 
-        {workspaces.length === 0 && pendingInvites.length === 0 ? (
+        {workspaces.length === 0 && pendingInvites.length === 0 && (
           <Card className="p-12 flex flex-col items-center gap-4 text-center">
             <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center">
               <Building2 className="h-8 w-8 text-primary" />
@@ -158,7 +158,9 @@ export default function WorkspacesPage() {
               </Button>
             </Link>
           </Card>
-        ) : (
+        )}
+
+        {workspaces.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {workspaces.map((ws) => (
               <Card
