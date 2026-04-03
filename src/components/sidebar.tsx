@@ -184,62 +184,55 @@ export function Sidebar() {
         }
       }
 
-      // Get access token for Edge Runtime auth
-      const supabaseBrowser = createBrowserClient();
-      const { data: { session } } = await supabaseBrowser.auth.getSession();
-      const authHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (session?.access_token) authHeaders["Authorization"] = `Bearer ${session.access_token}`;
+      const commonPayload = {
+        enabledColumns,
+        enrichmentColumns: enrichmentColumns.filter((c) => c.enabled),
+        settings: geminiSettings,
+        cmsType: workspace?.cms_type || undefined,
+        workspaceCategories,
+        categoriesRawRows,
+        workspaceId: workspace?.id,
+      };
 
-      const response = await fetch("/api/enrich", {
-        method: "POST",
-        headers: authHeaders,
-        signal: controller.signal,
-        body: JSON.stringify({
-          rows: enrichableRows.map((r) => {
-            const filteredData: Record<string, string> = {};
-            for (const col of sourceColumns) {
-              if (enrichedColIds.has(col)) {
-                // This is an AI-generated column — pull value from enrichedData
-                const val = r.enrichedData?.[col];
-                if (val !== undefined && val !== null && val !== "") {
-                  if (Array.isArray(val)) {
-                    // Handle arrays of objects (sourceUrls, imageUrls) vs simple string arrays
-                    filteredData[col] = val
-                      .map((item) =>
-                        typeof item === "object" && item !== null
-                          ? (item.uri || item.imageUrl || item.pageUrl || item.title || JSON.stringify(item))
-                          : String(item)
-                      )
-                      .join(", ");
-                  } else {
-                    filteredData[col] = String(val);
-                  }
-                }
-              } else if (r.originalData[col] !== undefined) {
-                filteredData[col] = r.originalData[col];
+      let completedCount = 0;
+
+      for (const r of enrichableRows) {
+        // Check if user stopped enrichment
+        if (controller.signal.aborted) break;
+
+        const filteredData: Record<string, string> = {};
+        for (const col of sourceColumns) {
+          if (enrichedColIds.has(col)) {
+            const val = r.enrichedData?.[col];
+            if (val !== undefined && val !== null && val !== "") {
+              if (Array.isArray(val)) {
+                filteredData[col] = val
+                  .map((item) =>
+                    typeof item === "object" && item !== null
+                      ? (item.uri || item.imageUrl || item.pageUrl || item.title || JSON.stringify(item))
+                      : String(item)
+                  )
+                  .join(", ");
+              } else {
+                filteredData[col] = String(val);
               }
             }
-            return {
-              id: r.id,
-              rowIndex: r.rowIndex,
-              originalData: filteredData,
-            };
-          }),
-          enabledColumns,
-          enrichmentColumns: enrichmentColumns.filter((c) => c.enabled),
-          settings: geminiSettings,
-          cmsType: workspace?.cms_type || undefined,
-          workspaceCategories,
-          categoriesRawRows,
-          workspaceId: workspace?.id,
-        }),
-      });
+          } else if (r.originalData[col] !== undefined) {
+            filteredData[col] = r.originalData[col];
+          }
+        }
 
-      if (!response.ok) {
-        const errText = await response.text();
-        let errJson: any = {};
-        try { errJson = JSON.parse(errText); } catch {}
-        if (errJson.error === "NO_CREDITS" || response.status === 402) {
+        const response = await fetch("/api/enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            row: { id: r.id, rowIndex: r.rowIndex, originalData: filteredData },
+            ...commonPayload,
+          }),
+        });
+
+        if (response.status === 402) {
           setIsEnriching(false);
           setLastError("NO_CREDITS");
           toast.error("No credits remaining", {
@@ -248,67 +241,35 @@ export function Sidebar() {
           });
           return;
         }
-        throw new Error(`API error: ${response.status} - ${errText}`);
-      }
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response stream");
+        completedCount++;
 
-      const decoder = new TextDecoder();
-      let buffer = "";
+        if (!response.ok) {
+          setRowStatus(r.id, "error", `API error: ${response.status}`);
+          setEnrichProgress(completedCount, enrichableRows.length);
+          incrementError();
+          continue;
+        }
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const result = await response.json();
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith(":")) continue;
-          if (!trimmed.startsWith("data: ")) continue;
-
-          try {
-            const event = JSON.parse(trimmed.slice(6));
-            switch (event.type) {
-              case "progress":
-                setRowStatus(event.rowId, "processing");
-                break;
-              case "row_complete":
-                if (event.data) setRowEnrichedData(event.rowId, event.data);
-                setEnrichProgress(event.completedRows, event.totalRows);
-                invalidateCredits();
-                break;
-              case "row_error":
-                setRowStatus(event.rowId, "error", event.error);
-                setEnrichProgress(event.completedRows, event.totalRows);
-                incrementError();
-                if (event.error) setLastError(event.error);
-                break;
-              case "error":
-                if (event.error === "NO_CREDITS") {
-                  setIsEnriching(false);
-                  setLastError("NO_CREDITS");
-                  toast.error("No credits remaining", {
-                    description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
-                    duration: 8000,
-                  });
-                }
-                break;
-              case "done":
-                setIsEnriching(false);
-                toast.success("Enrichment complete", {
-                  description: `${event.completedRows} rows processed`,
-                });
-                break;
-            }
-          } catch {
-            // Skip malformed events
-          }
+        if (result.status === "done" && result.data) {
+          setRowEnrichedData(r.id, result.data);
+          setEnrichProgress(completedCount, enrichableRows.length);
+          invalidateCredits();
+        } else {
+          setRowStatus(r.id, "error", result.error || "Unknown error");
+          setEnrichProgress(completedCount, enrichableRows.length);
+          incrementError();
+          if (result.error) setLastError(result.error);
         }
       }
+
+      setIsEnriching(false);
+      toast.success("Enrichment complete", {
+        description: `${completedCount} rows processed`,
+      });
+      invalidateCredits();
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
