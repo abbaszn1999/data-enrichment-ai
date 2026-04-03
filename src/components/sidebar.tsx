@@ -184,6 +184,12 @@ export function Sidebar() {
         }
       }
 
+      // Get access token for auth (middleware excluded for /api/enrich)
+      const supabaseBrowser = createBrowserClient();
+      const { data: { session } } = await supabaseBrowser.auth.getSession();
+      const enrichHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) enrichHeaders["Authorization"] = `Bearer ${session.access_token}`;
+
       const commonPayload = {
         enabledColumns,
         enrichmentColumns: enrichmentColumns.filter((c) => c.enabled),
@@ -224,7 +230,7 @@ export function Sidebar() {
 
         const response = await fetch("/api/enrich", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: enrichHeaders,
           signal: controller.signal,
           body: JSON.stringify({
             row: { id: r.id, rowIndex: r.rowIndex, originalData: filteredData },

@@ -3,7 +3,6 @@ import { enrichProductRow } from "@/lib/gemini";
 import type { GeminiSettings } from "@/lib/gemini";
 import type { CategoryItem } from "@/types";
 import { sumCosts } from "@/lib/ai-pricing";
-import { createClient } from "@/lib/supabase-server";
 import { getOwnerSubscription, calculateCreditBalance, isSubscriptionActive } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 
@@ -71,17 +70,23 @@ export async function POST(request: NextRequest) {
     // Deduct credits
     if (workspaceId && rowCostSummary && rowCostSummary.totalCredits > 0) {
       try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const admin = createAdminClient();
+        // Get user from Authorization header (middleware excluded for this route)
+        const authHeader = request.headers.get("authorization") ?? "";
+        const accessToken = authHeader.replace("Bearer ", "");
+        let userId: string | undefined;
+        if (accessToken) {
+          const { data: { user } } = await admin.auth.getUser(accessToken);
+          userId = user?.id;
+        }
         const ownerSub = await getOwnerSubscription(workspaceId);
         if (ownerSub) {
-          const admin = createAdminClient();
           await admin.rpc("deduct_user_credits", {
             p_user_id: ownerSub.ownerId,
             p_amount: rowCostSummary.totalCredits,
             p_workspace_id: workspaceId,
             p_operation: "ai_enrichment",
-            p_uid: user?.id,
+            p_uid: userId,
             p_details: { rowIndex: row.rowIndex },
           });
         }
