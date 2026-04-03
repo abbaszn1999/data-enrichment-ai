@@ -1,4 +1,3 @@
-import { GoogleGenAI, ThinkingLevel, createUserContent } from "@google/genai";
 import { buildSearchPrompt, buildEnrichmentPrompt } from "./prompts";
 import type { PromptSettings } from "./prompts";
 import type { EnrichedData, SourceUrl, ImageUrl, ThinkingLevelOption, EnrichmentModel, CategoryItem, CmsCategoryConfig } from "@/types";
@@ -11,14 +10,19 @@ export interface GeminiSettings {
   outputLanguage: string;
 }
 
-const THINKING_LEVEL_MAP: Record<ThinkingLevelOption, ThinkingLevel | undefined> = {
-  none: undefined,
-  low: ThinkingLevel.LOW,
-  medium: ThinkingLevel.MEDIUM,
-  high: ThinkingLevel.HIGH,
-};
+async function getThinkingLevel(level: ThinkingLevelOption | undefined): Promise<any> {
+  const { ThinkingLevel } = await import("@google/genai");
+  const map: Record<string, any> = {
+    none: undefined,
+    low: ThinkingLevel.LOW,
+    medium: ThinkingLevel.MEDIUM,
+    high: ThinkingLevel.HIGH,
+  };
+  return map[level ?? "low"];
+}
 
-function getClient(): GoogleGenAI {
+async function getClient() {
+  const { GoogleGenAI } = await import("@google/genai");
   const apiKey = process.env.GEMINI_API_KEY;
   console.log("[Gemini] API Key present:", !!apiKey, "| Length:", apiKey?.length ?? 0);
   if (!apiKey) {
@@ -28,7 +32,7 @@ function getClient(): GoogleGenAI {
   return new GoogleGenAI({ 
     apiKey,
     httpOptions: {
-      timeout: 180000, // 3 minutes timeout
+      timeout: 180000,
     }
   });
 }
@@ -95,7 +99,8 @@ export async function searchProduct(
   customInstruction?: string
 ): Promise<{ text: string; sources: SourceUrl[]; cost: AiCallCost }> {
   return withRetry(async () => {
-    const ai = getClient();
+    const { createUserContent, ThinkingLevel } = await import("@google/genai");
+    const ai = await getClient();
     const { text: promptText, images } = buildSearchPrompt(productData, customInstruction);
 
     // Build multimodal content: text + images
@@ -183,9 +188,9 @@ async function analyzeProductData(
   productData: Record<string, string>,
   settings?: GeminiSettings
 ): Promise<{ sufficient: boolean; searchQuery: string; productIdentity: string; cost: AiCallCost | null }> {
-  const ai = getClient();
+  const ai = await getClient();
   const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
-  const thinkingLevel = THINKING_LEVEL_MAP[settings?.thinkingLevel || "low"];
+  const thinkingLevel = await getThinkingLevel(settings?.thinkingLevel);
 
   // Prepare product data for analysis (exclude base64 images from text)
   const dataLines: string[] = [];
@@ -219,6 +224,7 @@ Respond ONLY with a valid JSON object:
   console.log(`[AI Analysis] Analyzing product data with ${model}...`);
 
   try {
+    const { createUserContent } = await import("@google/genai");
     const response = await ai.models.generateContent({
       model,
       contents: createUserContent([{ text: prompt }]),
@@ -438,7 +444,7 @@ export async function enrichProduct(
   settings?: GeminiSettings
 ): Promise<{ data: EnrichedData; cost: AiCallCost }> {
   return withRetry(async () => {
-    const ai = getClient();
+    const ai = await getClient();
 
     // Build per-column prompt settings from column configs
     const promptSettings: PromptSettings = {
@@ -469,8 +475,9 @@ export async function enrichProduct(
     }
 
     const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
-    const thinkingLevel = THINKING_LEVEL_MAP[settings?.thinkingLevel || "low"];
+    const thinkingLevel = await getThinkingLevel(settings?.thinkingLevel);
 
+    const { createUserContent } = await import("@google/genai");
     const response = await ai.models.generateContent({
       model,
       contents: createUserContent(parts),
@@ -529,9 +536,9 @@ async function categorizeProduct(
   customInstruction: string = "",
   categoriesRawRows?: Record<string, string>[]
 ): Promise<{ categories: string; cost: AiCallCost | null }> {
-  const ai = getClient();
+  const ai = await getClient();
   const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
-  const thinkingLevel = THINKING_LEVEL_MAP[settings?.thinkingLevel || "low"];
+  const thinkingLevel = await getThinkingLevel(settings?.thinkingLevel);
   const cmsConfig: CmsCategoryConfig = cmsType && CMS_CATEGORY_CONFIG[cmsType]
     ? CMS_CATEGORY_CONFIG[cmsType]
     : DEFAULT_CMS_CATEGORY_CONFIG;
@@ -608,6 +615,7 @@ Respond ONLY with a valid JSON object:
   console.log(`[Categories] Categorizing product with ${model} (CMS: ${cmsType || "generic"}, available: ${hasCategories ? workspaceCategories!.length : 0} categories)`);
 
   try {
+    const { createUserContent } = await import("@google/genai");
     const response = await ai.models.generateContent({
       model,
       contents: createUserContent([{ text: prompt }]),
