@@ -35,6 +35,7 @@ import type { OutputLanguage, EnrichmentModel, ThinkingLevelOption, WritingTone,
 import { LANGUAGE_OPTIONS, MODEL_OPTIONS, TONE_OPTIONS } from "@/types";
 import type { EnrichmentColumn } from "@/types";
 import type { GeminiSettings } from "@/lib/gemini";
+import { createClient as createBrowserClient } from "@/lib/supabase-browser";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -183,9 +184,15 @@ export function Sidebar() {
         }
       }
 
+      // Get access token for Edge Runtime auth
+      const supabaseBrowser = createBrowserClient();
+      const { data: { session } } = await supabaseBrowser.auth.getSession();
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) authHeaders["Authorization"] = `Bearer ${session.access_token}`;
+
       const response = await fetch("/api/enrich", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         signal: controller.signal,
         body: JSON.stringify({
           rows: enrichableRows.map((r) => {
@@ -244,32 +251,66 @@ export function Sidebar() {
         throw new Error(`API error: ${response.status} - ${errText}`);
       }
 
-      const json = await response.json();
-      const resultRows: { id: string; rowIndex: number; status: "done" | "error"; data?: any; error?: string }[] = json.results || [];
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response stream");
 
-      let completedCount = 0;
-      for (const result of resultRows) {
-        completedCount++;
-        if (result.status === "done") {
-          if (result.data) setRowEnrichedData(result.id, result.data);
-          setEnrichProgress(completedCount, enrichableRows.length);
-          invalidateCredits();
-        } else {
-          setRowStatus(result.id, "error", result.error);
-          setEnrichProgress(completedCount, enrichableRows.length);
-          incrementError();
-          if (result.error) setLastError(result.error);
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith(":")) continue;
+          if (!trimmed.startsWith("data: ")) continue;
+
+          try {
+            const event = JSON.parse(trimmed.slice(6));
+            switch (event.type) {
+              case "progress":
+                setRowStatus(event.rowId, "processing");
+                break;
+              case "row_complete":
+                if (event.data) setRowEnrichedData(event.rowId, event.data);
+                setEnrichProgress(event.completedRows, event.totalRows);
+                invalidateCredits();
+                break;
+              case "row_error":
+                setRowStatus(event.rowId, "error", event.error);
+                setEnrichProgress(event.completedRows, event.totalRows);
+                incrementError();
+                if (event.error) setLastError(event.error);
+                break;
+              case "error":
+                if (event.error === "NO_CREDITS") {
+                  setIsEnriching(false);
+                  setLastError("NO_CREDITS");
+                  toast.error("No credits remaining", {
+                    description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
+                    duration: 8000,
+                  });
+                }
+                break;
+              case "done":
+                setIsEnriching(false);
+                toast.success("Enrichment complete", {
+                  description: `${event.completedRows} rows processed`,
+                });
+                break;
+            }
+          } catch {
+            // Skip malformed events
+          }
         }
       }
-
-      setIsEnriching(false);
-      toast.success("Enrichment complete", {
-        description: `${resultRows.filter(r => r.status === "done").length} rows processed`,
-      });
-      invalidateCredits();
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        // User stopped enrichment — already handled by handleStopEnrich
         return;
       }
       console.error("Enrichment failed:", error);

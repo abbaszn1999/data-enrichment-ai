@@ -1,12 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { enrichProductRow } from "@/lib/gemini";
 import type { GeminiSettings } from "@/lib/gemini";
 import type { CategoryItem } from "@/types";
 import { sumCosts } from "@/lib/ai-pricing";
-import { createClient } from "@/lib/supabase-server";
 import { getOwnerSubscription, calculateCreditBalance, isSubscriptionActive } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 
+export const runtime = "edge";
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
@@ -32,11 +32,15 @@ export async function POST(request: NextRequest) {
   } = body;
 
   if (!rows || rows.length === 0) {
-    return NextResponse.json({ error: "No rows provided" }, { status: 400 });
+    return new Response(JSON.stringify({ error: "No rows provided" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
   if (!enabledColumns || enabledColumns.length === 0) {
-    return NextResponse.json({ error: "No enrichment columns selected" }, { status: 400 });
+    return new Response(JSON.stringify({ error: "No enrichment columns selected" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
+
+  // Get user id from Authorization header (works in Edge Runtime)
+  const authHeader = request.headers.get("authorization") ?? "";
+  const accessToken = authHeader.replace("Bearer ", "");
 
   // Helper: get credit balance
   async function getCreditsRemaining(): Promise<{ remaining: number; ownerId: string | null }> {
@@ -55,8 +59,6 @@ export async function POST(request: NextRequest) {
   async function deductCredits(credits: number, rowIndex: number) {
     if (!workspaceId || credits <= 0) return;
     try {
-      const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
       const ownerSub = await getOwnerSubscription(workspaceId);
       if (!ownerSub) return;
       const admin = createAdminClient();
@@ -65,7 +67,7 @@ export async function POST(request: NextRequest) {
         p_amount: credits,
         p_workspace_id: workspaceId,
         p_operation: "ai_enrichment",
-        p_uid: user?.id,
+        p_uid: accessToken ? (await admin.auth.getUser(accessToken)).data.user?.id : undefined,
         p_details: { rowIndex },
       });
     } catch (err: any) {
@@ -73,77 +75,122 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Pre-check credits
-  if (workspaceId) {
-    const { remaining } = await getCreditsRemaining();
-    if (remaining <= 0) {
-      return NextResponse.json({ error: "NO_CREDITS" }, { status: 402 });
-    }
-  }
+  const encoder = new TextEncoder();
 
-  const results: { id: string; rowIndex: number; status: "done" | "error"; data?: any; error?: string; cost?: any }[] = [];
-  const allCosts: any[] = [];
+  const stream = new ReadableStream({
+    async start(controller) {
+      let completedRows = 0;
+      const allCosts: any[] = [];
 
-  for (const row of rows) {
-    // Check credits before each row
-    if (workspaceId) {
-      const { remaining } = await getCreditsRemaining();
-      if (remaining <= 0) {
-        results.push({ id: row.id, rowIndex: row.rowIndex, status: "error", error: "NO_CREDITS" });
-        break;
+      function send(event: object) {
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)); } catch { /* closed */ }
       }
-    }
 
-    try {
-      console.log(`[API] Starting enrichment for row ${row.rowIndex}`);
-      const enrichedData = await enrichProductRow(
-        row.originalData,
-        enabledColumns,
-        enrichmentColumns,
-        settings,
-        cmsType,
-        workspaceCategories,
-        categoriesRawRows
-      );
-      console.log(`[API] Success for row ${row.rowIndex}`);
+      // Keepalive comment every 15s to prevent 504 inactivity timeout
+      function sendKeepalive() {
+        try { controller.enqueue(encoder.encode(": keepalive\n\n")); } catch { /* closed */ }
+      }
+      const keepaliveInterval = setInterval(sendKeepalive, 15000);
 
-      if (enrichedData.costs) allCosts.push(...enrichedData.costs);
-      const rowCostSummary = enrichedData.costs ? sumCosts(enrichedData.costs) : null;
-      if (rowCostSummary) await deductCredits(rowCostSummary.totalCredits, row.rowIndex);
+      try {
+        // Pre-check credits
+        if (workspaceId) {
+          const { remaining } = await getCreditsRemaining();
+          if (remaining <= 0) {
+            send({ type: "error", error: "NO_CREDITS", rowId: "", rowIndex: -1, totalRows: rows.length, completedRows: 0 });
+            return;
+          }
+        }
 
-      results.push({
-        id: row.id,
-        rowIndex: row.rowIndex,
-        status: "done",
-        data: enrichedData.data,
-        cost: rowCostSummary ? {
-          totalCost: rowCostSummary.totalCost,
-          totalCredits: rowCostSummary.totalCredits,
-          totalTokens: rowCostSummary.totalTokens,
-        } : undefined,
-      });
-    } catch (error) {
-      console.error(`[API] Error enriching row ${row.rowIndex}:`, error);
-      results.push({
-        id: row.id,
-        rowIndex: row.rowIndex,
-        status: "error",
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
-  }
+        for (const row of rows) {
+          if (workspaceId) {
+            const { remaining } = await getCreditsRemaining();
+            if (remaining <= 0) {
+              send({ type: "error", error: "NO_CREDITS", rowId: row.id, rowIndex: row.rowIndex, totalRows: rows.length, completedRows });
+              break;
+            }
+          }
 
-  const totalSummary = allCosts.length > 0 ? sumCosts(allCosts) : null;
-  if (totalSummary) {
-    console.log(`[API] Batch total: $${totalSummary.totalCost.toFixed(6)} (${totalSummary.totalCredits} credits, ${totalSummary.totalTokens} tokens)`);
-  }
+          send({ type: "progress", rowId: row.id, rowIndex: row.rowIndex, totalRows: rows.length, completedRows });
+          console.log(`[API] Starting enrichment for row ${row.rowIndex}`);
 
-  return NextResponse.json({
-    results,
-    totalCost: totalSummary ? {
-      totalCost: totalSummary.totalCost,
-      totalCredits: totalSummary.totalCredits,
-      totalTokens: totalSummary.totalTokens,
-    } : null,
+          try {
+            const enrichedData = await enrichProductRow(
+              row.originalData,
+              enabledColumns,
+              enrichmentColumns,
+              settings,
+              cmsType,
+              workspaceCategories,
+              categoriesRawRows
+            );
+            console.log(`[API] Success for row ${row.rowIndex}`);
+            completedRows++;
+
+            if (enrichedData.costs) allCosts.push(...enrichedData.costs);
+            const rowCostSummary = enrichedData.costs ? sumCosts(enrichedData.costs) : null;
+            if (rowCostSummary) await deductCredits(rowCostSummary.totalCredits, row.rowIndex);
+
+            send({
+              type: "row_complete",
+              rowId: row.id,
+              rowIndex: row.rowIndex,
+              data: enrichedData.data,
+              totalRows: rows.length,
+              completedRows,
+              cost: rowCostSummary ? {
+                totalCost: rowCostSummary.totalCost,
+                totalCredits: rowCostSummary.totalCredits,
+                totalTokens: rowCostSummary.totalTokens,
+              } : undefined,
+            });
+          } catch (error) {
+            completedRows++;
+            console.error(`[API] Error enriching row ${row.rowIndex}:`, error);
+            send({
+              type: "row_error",
+              rowId: row.id,
+              rowIndex: row.rowIndex,
+              error: error instanceof Error ? error.message : "Unknown error",
+              totalRows: rows.length,
+              completedRows,
+            });
+          }
+        }
+
+        const totalSummary = allCosts.length > 0 ? sumCosts(allCosts) : null;
+        if (totalSummary) {
+          console.log(`[API] Batch total: $${totalSummary.totalCost.toFixed(6)} (${totalSummary.totalCredits} credits, ${totalSummary.totalTokens} tokens)`);
+        }
+
+        send({
+          type: "done",
+          rowId: "",
+          rowIndex: -1,
+          totalRows: rows.length,
+          completedRows,
+          totalCost: totalSummary ? {
+            totalCost: totalSummary.totalCost,
+            totalCredits: totalSummary.totalCredits,
+            totalTokens: totalSummary.totalTokens,
+          } : undefined,
+        });
+      } finally {
+        clearInterval(keepaliveInterval);
+        controller.close();
+      }
+    },
+    cancel() {
+      console.log("[API] Client disconnected");
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
   });
 }
