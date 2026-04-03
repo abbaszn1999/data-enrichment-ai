@@ -184,11 +184,12 @@ export function Sidebar() {
         }
       }
 
-      // Get access token for auth (middleware excluded for /api/enrich)
+      // Get access token + user ID for the Supabase Edge Function
       const supabaseBrowser = createBrowserClient();
       const { data: { session } } = await supabaseBrowser.auth.getSession();
       const enrichHeaders: Record<string, string> = { "Content-Type": "application/json" };
       if (session?.access_token) enrichHeaders["Authorization"] = `Bearer ${session.access_token}`;
+      const userId = session?.user?.id;
 
       const commonPayload = {
         enabledColumns,
@@ -228,13 +229,14 @@ export function Sidebar() {
           }
         }
 
-        const response = await fetch("/api/enrich", {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich`, {
           method: "POST",
           headers: enrichHeaders,
           signal: controller.signal,
           body: JSON.stringify({
             row: { id: r.id, rowIndex: r.rowIndex, originalData: filteredData },
             ...commonPayload,
+            userId,
           }),
         });
 
