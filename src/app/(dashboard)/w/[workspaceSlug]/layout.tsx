@@ -23,15 +23,19 @@ import {
   Plus,
   Check,
   Loader2,
+  Coins,
+  Crown,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/hooks/use-auth";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRole } from "@/hooks/use-role";
+import { useCredits } from "@/hooks/use-credits";
 import { signOut } from "@/lib/auth";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import { SubscriptionGate, SubscriptionBanner } from "@/components/subscription-gate";
 
 interface WorkspaceContextType {
   workspace: Workspace | null;
@@ -62,6 +66,7 @@ export default function WorkspaceLayout({
   const { workspace, role, isLoading: wsLoading, error } = useWorkspace(slug, user);
   const permissions = useRole(role);
 
+  const credits = useCredits(workspace?.id ?? null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -78,6 +83,8 @@ export default function WorkspaceLayout({
 
   // Hide main sidebar + header on enrichment tool page (it has its own UI)
   const isEnrichPage = pathname.includes("/enrich");
+  // Subscription page should be accessible without an active subscription
+  const isSubscriptionPage = pathname.includes("/subscription");
 
   const sidebarLinks = [
     { href: `${basePath}`, label: "Dashboard", icon: LayoutDashboard },
@@ -91,15 +98,23 @@ export default function WorkspaceLayout({
     ...(permissions.canAdmin
       ? [{ href: `${basePath}/settings`, label: "Settings", icon: Settings }]
       : []),
+    ...(permissions.isOwner
+      ? [{ href: `${basePath}/subscription`, label: "Subscription", icon: Crown }]
+      : []),
   ];
+
+  // Auto-redirect if user is not a member (e.g. removed from workspace)
+  useEffect(() => {
+    if (!wsLoading && error && sessionReady && user) {
+      router.replace("/workspaces");
+    }
+  }, [wsLoading, error, sessionReady, user, router]);
 
   if (!wsLoading && (error || !workspace)) {
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-4">
-        <p className="text-sm text-muted-foreground">{error || "Workspace not found"}</p>
-        <Link href="/workspaces">
-          <button className="text-sm text-primary hover:underline">Back to workspaces</button>
-        </Link>
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Redirecting...</p>
       </div>
     );
   }
@@ -145,8 +160,24 @@ export default function WorkspaceLayout({
               </Link>
             </div>
 
-            {/* Right: Theme + User */}
+            {/* Right: Credits + Theme + User */}
             <div className="flex items-center gap-2">
+              {/* Credits Badge */}
+              {!credits.isLoading && credits.total > 0 && (
+                <Link
+                  href={`${basePath}/usage`}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    credits.isLow
+                      ? "bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                      : "bg-muted hover:bg-muted/80 text-muted-foreground"
+                  }`}
+                >
+                  <Coins className="h-3.5 w-3.5" />
+                  <span>{credits.remaining.toLocaleString()}</span>
+                  <span className="text-muted-foreground/60">/ {credits.total.toLocaleString()}</span>
+                </Link>
+              )}
+
               <button
                 onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
                 className="h-8 w-8 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
@@ -173,6 +204,16 @@ export default function WorkspaceLayout({
                   <span className="text-xs font-medium hidden sm:block">
                     {profile?.full_name || user?.email}
                   </span>
+                  {role && (
+                    <span className={`hidden sm:inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wide border ${
+                      role === "owner" ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" :
+                      role === "admin" ? "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30" :
+                      role === "editor" ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30" :
+                      "bg-muted text-muted-foreground border-border/50"
+                    }`}>
+                      {role}
+                    </span>
+                  )}
                   <ChevronDown className="h-3 w-3 text-muted-foreground" />
                 </button>
                 {userMenuOpen && (
@@ -181,12 +222,24 @@ export default function WorkspaceLayout({
                       className="fixed inset-0 z-40"
                       onClick={() => setUserMenuOpen(false)}
                     />
-                    <div className="absolute top-full right-0 mt-1 w-48 bg-popover border rounded-lg shadow-lg z-50 py-1">
-                      <div className="px-3 py-2 border-b">
-                        <div className="text-xs font-medium">
-                          {profile?.full_name || "User"}
+                    <div className="absolute top-full right-0 mt-1 w-52 bg-popover border rounded-lg shadow-lg z-50 py-1">
+                      <div className="px-3 py-2.5 border-b space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-xs font-semibold truncate">
+                            {profile?.full_name || "User"}
+                          </div>
+                          {role && (
+                            <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wide border ${
+                              role === "owner" ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" :
+                              role === "admin" ? "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30" :
+                              role === "editor" ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30" :
+                              "bg-muted text-muted-foreground border-border/50"
+                            }`}>
+                              {role}
+                            </span>
+                          )}
                         </div>
-                        <div className="text-[10px] text-muted-foreground">
+                        <div className="text-[10px] text-muted-foreground truncate">
                           {user?.email}
                         </div>
                       </div>
@@ -264,7 +317,16 @@ export default function WorkspaceLayout({
           )}
 
           {/* Main Content */}
-          <main className={`flex-1 ${isEnrichPage ? "overflow-hidden" : "overflow-auto"}`}>{children}</main>
+          <main className={`flex-1 flex flex-col ${isEnrichPage ? "overflow-hidden" : "overflow-auto"}`}>
+            {!isEnrichPage && <SubscriptionBanner workspaceId={workspace?.id ?? null} />}
+            {isSubscriptionPage ? (
+              <div className="flex-1">{children}</div>
+            ) : (
+              <SubscriptionGate workspaceId={workspace?.id ?? null}>
+                <div className="flex-1">{children}</div>
+              </SubscriptionGate>
+            )}
+          </main>
         </div>
       </div>
     </WorkspaceContext.Provider>

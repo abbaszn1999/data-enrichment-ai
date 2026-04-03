@@ -1,6 +1,6 @@
 "use client";
 
-import { canEdit, canAdmin, canUpload, isOwner, type Role } from "@/lib/permissions";
+import { canEdit, canAdmin, canUpload, canImport, isOwner, type Role } from "@/lib/permissions";
 
 export function useRole(role: Role | null) {
   return {
@@ -8,6 +8,7 @@ export function useRole(role: Role | null) {
     canEdit: role ? canEdit(role) : false,
     canAdmin: role ? canAdmin(role) : false,
     canUpload: role ? canUpload(role) : false,
+    canImport: role ? canImport(role) : false,
     isOwner: role ? isOwner(role) : false,
   };
 }

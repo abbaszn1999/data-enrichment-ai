@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
   // Mark invite accepted
   await admin
     .from("workspace_invites")
-    .update({ accepted_at: new Date().toISOString() })
+    .update({ accepted_at: new Date().toISOString(), status: "accepted" })
     .eq("id", inviteId);
 
   return NextResponse.json({ success: true, workspaceId: invite.workspace_id });

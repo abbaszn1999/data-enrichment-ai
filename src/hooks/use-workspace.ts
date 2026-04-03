@@ -46,20 +46,32 @@ export function useWorkspace(slug: string, user: User | null | undefined) {
           return;
         }
 
-        const { data: memberData } = await supabase
-          .from("workspace_members")
-          .select("role")
-          .eq("workspace_id", workspace.id)
-          .eq("user_id", user!.id)
-          .single();
+        // Fetch role via API route (bypasses RLS issues)
+        let memberRole: string | null = null;
+        try {
+          const res = await fetch(`/api/team/my-role?workspaceId=${encodeURIComponent(workspace.id)}`);
+          if (res.ok) {
+            const json = await res.json();
+            memberRole = json.role;
+          }
+        } catch {
+          // Fallback: try direct query
+          const { data: memberData } = await supabase
+            .from("workspace_members")
+            .select("role")
+            .eq("workspace_id", workspace.id)
+            .eq("user_id", user!.id)
+            .single();
+          memberRole = memberData?.role ?? null;
+        }
 
         if (cancelled) return;
 
         setState({
           workspace,
-          role: (memberData?.role as Role) ?? null,
+          role: (memberRole as Role) ?? null,
           isLoading: false,
-          error: memberData?.role ? null : "Not a member",
+          error: memberRole ? null : "Not a member",
         });
       } catch (err: any) {
         if (!cancelled) {

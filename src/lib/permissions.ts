@@ -8,7 +8,7 @@ const ROLE_LEVELS: Record<Role, number> = {
 };
 
 export function canEdit(role: Role): boolean {
-  return ROLE_LEVELS[role] >= ROLE_LEVELS.admin;
+  return ROLE_LEVELS[role] >= ROLE_LEVELS.editor;
 }
 
 export function canAdmin(role: Role): boolean {
@@ -16,6 +16,10 @@ export function canAdmin(role: Role): boolean {
 }
 
 export function canUpload(role: Role): boolean {
+  return ROLE_LEVELS[role] >= ROLE_LEVELS.admin;
+}
+
+export function canImport(role: Role): boolean {
   return ROLE_LEVELS[role] >= ROLE_LEVELS.editor;
 }
 

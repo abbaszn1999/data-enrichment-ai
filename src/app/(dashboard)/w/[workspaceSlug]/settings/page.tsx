@@ -9,11 +9,15 @@ import {
   CheckCircle2,
   Trash2,
   Building2,
+  ShieldAlert,
+  Globe,
+  Save,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
 import { updateWorkspace, deleteWorkspace } from "@/lib/supabase";
@@ -84,112 +88,140 @@ export default function SettingsPage() {
   if (!workspace) return null;
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Settings className="h-5 w-5" /> Settings
-        </h1>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Manage workspace settings
+    <div className="p-6 max-w-3xl mx-auto space-y-8">
+      {/* Header */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Settings className="h-5 w-5 text-primary" />
+          <h1 className="text-xl font-bold">Settings</h1>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Manage workspace configuration for{" "}
+          <span className="font-semibold text-foreground">{workspace.name}</span>
         </p>
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-destructive/10 text-destructive text-sm border border-destructive/20">
           <AlertCircle className="h-4 w-4 shrink-0" /> {error}
         </div>
       )}
 
       {/* General Settings */}
-      <Card className="p-5 space-y-5">
-        <h2 className="text-sm font-semibold flex items-center gap-2">
-          <Building2 className="h-4 w-4" /> General
-        </h2>
-
-        <div className="space-y-2">
-          <Label className="text-xs font-medium">Workspace Name</Label>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="h-10"
-            disabled={!permissions.canAdmin}
-          />
+      <div className="rounded-2xl border-2 border-border/60 p-6 space-y-6">
+        <div className="flex items-center gap-3">
+          <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center">
+            <Building2 className="h-4.5 w-4.5 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold">General</h2>
+            <p className="text-[11px] text-muted-foreground">Basic workspace information</p>
+          </div>
         </div>
 
-        <div className="space-y-2">
-          <Label className="text-xs font-medium">CMS / Platform Type</Label>
-          <select
-            value={cmsType}
-            onChange={(e) => setCmsType(e.target.value)}
-            className="w-full h-10 px-3 text-sm rounded-lg border bg-background"
-            disabled={!permissions.canAdmin}
-          >
-            {CMS_TYPES.map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
-            ))}
-          </select>
-        </div>
+        <div className="space-y-4 pt-1">
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold">Workspace Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="h-10"
+              disabled={!permissions.canAdmin}
+            />
+          </div>
 
-        <div className="space-y-2">
-          <Label className="text-xs font-medium">
-            Description <span className="text-muted-foreground font-normal">(optional)</span>
-          </Label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={2}
-            className="w-full px-3 py-2 text-sm rounded-lg border bg-background resize-none"
-            disabled={!permissions.canAdmin}
-          />
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold">CMS / Platform Type</Label>
+            <select
+              value={cmsType}
+              onChange={(e) => setCmsType(e.target.value)}
+              className="w-full h-10 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
+              disabled={!permissions.canAdmin}
+            >
+              {CMS_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold">
+              Description{" "}
+              <span className="text-muted-foreground font-normal">(optional)</span>
+            </Label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2.5 text-sm rounded-lg border bg-background resize-none focus:outline-none focus:ring-1 focus:ring-primary/50"
+              disabled={!permissions.canAdmin}
+            />
+          </div>
         </div>
 
         {permissions.canAdmin && (
-          <div className="flex items-center gap-3">
-            <Button onClick={handleSave} disabled={saving} className="gap-1.5">
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          <div className="flex items-center gap-3 pt-2 border-t border-border/50">
+            <Button onClick={handleSave} disabled={saving} className="gap-2">
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
               Save Changes
             </Button>
             {saved && (
-              <span className="flex items-center gap-1 text-xs text-green-600">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Saved
+              <span className="flex items-center gap-1.5 text-xs text-green-600 font-medium">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Saved successfully
               </span>
             )}
           </div>
         )}
-      </Card>
+      </div>
 
       {/* Danger Zone */}
       {permissions.isOwner && (
-        <Card className="p-5 border-destructive/30 space-y-4">
-          <h2 className="text-sm font-semibold text-destructive flex items-center gap-2">
-            <Trash2 className="h-4 w-4" /> Danger Zone
-          </h2>
-          <p className="text-xs text-muted-foreground">
+        <div className="rounded-2xl border-2 border-destructive/30 p-6 space-y-5">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-destructive/10 flex items-center justify-center">
+              <ShieldAlert className="h-4.5 w-4.5 text-destructive" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-destructive">Danger Zone</h2>
+              <p className="text-[11px] text-muted-foreground">Irreversible and destructive actions</p>
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-relaxed">
             Deleting a workspace permanently removes all products, categories,
-            imports, and files. This cannot be undone.
+            imports, and files. <strong className="text-foreground">This action cannot be undone.</strong>
           </p>
+
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">
-              Type <strong>{workspace.name}</strong> to confirm
+              Type <strong className="text-foreground">{workspace.name}</strong> to confirm deletion
             </Label>
             <Input
               value={deleteConfirm}
               onChange={(e) => setDeleteConfirm(e.target.value)}
               placeholder={workspace.name}
-              className="h-9"
+              className="h-10 border-destructive/30 focus:ring-destructive/30"
             />
           </div>
+
           <Button
             variant="destructive"
-            size="sm"
             disabled={deleteConfirm !== workspace.name || deleting}
             onClick={handleDelete}
-            className="gap-1.5"
+            className="gap-2"
           >
-            {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            {deleting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
             Delete Workspace
           </Button>
-        </Card>
+        </div>
       )}
     </div>
   );

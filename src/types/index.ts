@@ -94,7 +94,7 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
 ];
 
 export interface EnrichmentEvent {
-  type: "progress" | "row_complete" | "row_error" | "done";
+  type: "progress" | "row_complete" | "row_error" | "done" | "error";
   rowId: string;
   rowIndex: number;
   data?: Record<string, any>;

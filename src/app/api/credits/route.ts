@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
+import { getOwnerSubscription, calculateCreditBalance } from "@/lib/stripe";
 
 export async function GET(request: Request) {
   try {
@@ -11,17 +12,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "workspaceId is required" }, { status: 400 });
     }
 
+    // Get owner's subscription (per-user model)
+    const ownerSub = await getOwnerSubscription(workspaceId);
+    const bal = calculateCreditBalance(ownerSub?.subscription ?? null);
+
     const supabase = await createClient();
-
-    // Get balance
-    const { data: sub } = await supabase
-      .from("workspace_subscriptions")
-      .select("credits_used, credits_reset_at, subscription_plans(monthly_ai_credits)")
-      .eq("workspace_id", workspaceId)
-      .single();
-
-    const total = (sub?.subscription_plans as any)?.monthly_ai_credits ?? 0;
-    const used = sub?.credits_used ?? 0;
 
     // Get transactions
     const { data: transactions } = await supabase
@@ -33,10 +28,11 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       balance: {
-        used,
-        total,
-        remaining: Math.max(0, total - used),
-        resetsAt: sub?.credits_reset_at,
+        used: bal.used,
+        total: bal.monthlyTotal,
+        bonus: bal.bonus,
+        remaining: bal.total,
+        resetsAt: ownerSub?.subscription?.credits_reset_at,
       },
       transactions: transactions || [],
     });

@@ -27,6 +27,7 @@ export interface WorkspaceMember {
   role: Role;
   joined_at: string;
   profiles?: { full_name: string; avatar_url: string | null };
+  email?: string | null;
 }
 
 export interface Category {
@@ -112,7 +113,11 @@ export async function updateProfile(userId: string, updates: { full_name?: strin
 
 // ─── Workspaces CRUD ─────────────────────────────────────
 
-export async function getWorkspaces(): Promise<Workspace[]> {
+export interface WorkspaceWithRole extends Workspace {
+  memberRole?: string;
+}
+
+export async function getWorkspaces(): Promise<WorkspaceWithRole[]> {
   const supabase = getClient();
   const { data: { session } } = await supabase.auth.getSession();
   const user = session?.user;
@@ -120,10 +125,12 @@ export async function getWorkspaces(): Promise<Workspace[]> {
 
   const { data, error } = await supabase
     .from("workspace_members")
-    .select("workspace_id, workspaces(*)")
+    .select("workspace_id, role, workspaces(*)")
     .eq("user_id", user.id);
   if (error) throw error;
-  return (data ?? []).map((m: any) => m.workspaces).filter(Boolean);
+  return (data ?? [])
+    .filter((m: any) => m.workspaces)
+    .map((m: any) => ({ ...m.workspaces, memberRole: m.role }));
 }
 
 export async function getWorkspaceBySlug(slug: string): Promise<Workspace | null> {
@@ -180,35 +187,22 @@ export async function updateWorkspace(id: string, updates: Partial<Pick<Workspac
 }
 
 export async function deleteWorkspace(id: string) {
-  const supabase = getClient();
-  const { error } = await supabase.from("workspaces").delete().eq("id", id);
-  if (error) throw error;
+  const res = await fetch("/api/workspaces/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId: id }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to delete workspace");
 }
 
 // ─── Workspace Members ───────────────────────────────────
 
 export async function getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
-  const supabase = getClient();
-  const { data, error } = await supabase
-    .from("workspace_members")
-    .select("*")
-    .eq("workspace_id", workspaceId)
-    .order("joined_at", { ascending: true });
-  if (error) throw error;
-  if (!data || data.length === 0) return [];
-
-  // Fetch profiles separately (no FK relationship in DB)
-  const userIds = data.map((m) => m.user_id);
-  const { data: profiles } = await supabase
-    .from("profiles")
-    .select("id, full_name, avatar_url")
-    .in("id", userIds);
-  const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
-
-  return data.map((m) => ({
-    ...m,
-    profiles: profileMap.get(m.user_id) || undefined,
-  }));
+  const res = await fetch(`/api/team/members?workspaceId=${encodeURIComponent(workspaceId)}`);
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || "Failed to load members");
+  return json.members ?? [];
 }
 
 export async function getCurrentMemberRole(workspaceId: string): Promise<Role | null> {
@@ -228,15 +222,23 @@ export async function getCurrentMemberRole(workspaceId: string): Promise<Role | 
 }
 
 export async function updateMemberRole(memberId: string, role: Role) {
-  const supabase = getClient();
-  const { error } = await supabase.from("workspace_members").update({ role }).eq("id", memberId);
-  if (error) throw error;
+  const res = await fetch("/api/team/members", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memberId, role }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to update role");
 }
 
 export async function removeMember(memberId: string) {
-  const supabase = getClient();
-  const { error } = await supabase.from("workspace_members").delete().eq("id", memberId);
-  if (error) throw error;
+  const res = await fetch("/api/team/members", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memberId }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to remove member");
 }
 
 // ─── Workspace Invites ───────────────────────────────────
@@ -304,10 +306,10 @@ export async function acceptInvite(inviteId: string) {
     role: invite.role,
   });
 
-  // Mark invite accepted (set accepted_at if column exists, otherwise delete the invite)
+  // Mark invite accepted (set accepted_at + status if columns exist, otherwise delete the invite)
   const { error: updateErr } = await supabase
     .from("workspace_invites")
-    .update({ accepted_at: new Date().toISOString() })
+    .update({ accepted_at: new Date().toISOString(), status: "accepted" })
     .eq("id", inviteId);
   if (updateErr) {
     // Fallback: delete the invite if accepted_at column doesn't exist

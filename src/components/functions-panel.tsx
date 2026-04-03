@@ -42,6 +42,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useSheetStore } from "@/store/sheet-store";
+import { useWorkspaceStore } from "@/store/workspace-store";
+import { getBalance } from "@/lib/credits";
 
 type FunctionCategory = "math" | "text" | "generate" | "clean" | "copy";
 type MathOp = "add_percent" | "sub_percent" | "add_fixed" | "sub_fixed" | "multiply" | "divide" | "round";
@@ -566,11 +568,13 @@ function runFnOnRow(fn: (row: Record<string, string>) => Record<string, string>,
 
 function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) => void }) {
   const { rows, originalColumns, enrichmentColumns, selectedRowIds } = useSheetStore();
+  const { workspace } = useWorkspaceStore();
   const [command, setCommand] = useState("");
   const [loading, setLoading] = useState(false);
   const [plan, setPlan] = useState<AiFunctionPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
+  const [noCredits, setNoCredits] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -646,6 +650,17 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
     if (!cmd || loading) return;
     setError(null);
     setPlan(null);
+    setNoCredits(false);
+
+    // Check credits before calling AI
+    if (workspace?.id) {
+      const balance = await getBalance(workspace.id);
+      if (balance.remaining <= 0) {
+        setNoCredits(true);
+        return;
+      }
+    }
+
     setLoading(true);
 
     const controller = new AbortController();
@@ -661,10 +676,15 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
           sampleRows,
           totalRows: rows.length,
           selectedRows: selectedRowIds.size,
+          workspaceId: workspace?.id,
         }),
         signal: controller.signal,
       });
 
+      if (res.status === 402) {
+        setNoCredits(true);
+        return;
+      }
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "API error");
@@ -700,8 +720,19 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
     handleSend(command.trim());
   };
 
-  const handleExecute = () => {
+  const handleExecute = async () => {
     if (!plan || !builtFn || executing) return;
+
+    // Re-check credits before executing
+    if (workspace?.id) {
+      const balance = await getBalance(workspace.id);
+      if (balance.remaining <= 0) {
+        setNoCredits(true);
+        setPlan(null);
+        return;
+      }
+    }
+
     setExecuting(true);
 
     try {
@@ -775,6 +806,16 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
         </Badge>
       </div>
 
+      {/* No credits warning */}
+      {noCredits && (
+        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
+          <div className="text-[10px] text-amber-700 dark:text-amber-400 leading-relaxed">
+            <span className="font-semibold">No AI credits remaining.</span> Upgrade your plan to continue using AI functions.
+          </div>
+        </div>
+      )}
+
       {/* Locked state — no rows selected */}
       {!hasSelection ? (
         <div className="flex items-center gap-2 p-3 rounded-lg border border-dashed bg-muted/10 text-muted-foreground">
@@ -794,7 +835,7 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
           onKeyDown={handleKeyDown}
           placeholder={`Describe what to do with ${selectedRowIds.size} selected row${selectedRowIds.size !== 1 ? "s" : ""}...`}
           rows={2}
-          disabled={loading || !!plan}
+          disabled={loading || !!plan || noCredits}
           className="w-full px-3 py-2 pr-10 text-[11px] rounded-lg border bg-background resize-none focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/60 disabled:opacity-60"
         />
         {loading ? (
@@ -808,7 +849,7 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
         ) : (
           <button
             onClick={() => handleSend()}
-            disabled={!command.trim() || !!plan}
+            disabled={!command.trim() || !!plan || noCredits}
             className="absolute right-2 bottom-2 p-1 rounded-md text-primary hover:bg-primary/10 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
             title="Send"
           >

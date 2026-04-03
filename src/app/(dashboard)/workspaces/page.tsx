@@ -16,11 +16,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getWorkspaces, deleteWorkspace, type Workspace } from "@/lib/supabase";
+import { getWorkspaces, deleteWorkspace, type WorkspaceWithRole } from "@/lib/supabase";
+import { useAuth } from "@/hooks/use-auth";
 
 export default function WorkspacesPage() {
   const router = useRouter();
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const { user } = useAuth();
+  const [workspaces, setWorkspaces] = useState<WorkspaceWithRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
 
@@ -59,11 +61,13 @@ export default function WorkspacesPage() {
               Select a workspace or create a new one
             </p>
           </div>
-          <Link href="/workspaces/new">
-            <Button className="gap-2">
-              <Plus className="h-4 w-4" /> New Workspace
-            </Button>
-          </Link>
+          {workspaces.some((ws) => ws.owner_id === user?.id) || workspaces.length === 0 ? (
+            <Link href="/workspaces/new">
+              <Button className="gap-2">
+                <Plus className="h-4 w-4" /> New Workspace
+              </Button>
+            </Link>
+          ) : null}
         </div>
 
         {workspaces.length === 0 ? (
@@ -119,44 +123,46 @@ export default function WorkspacesPage() {
                   </div>
                 </Link>
 
-                <div className="absolute top-3 right-3">
-                  <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setMenuOpen(menuOpen === ws.id ? null : ws.id);
-                    }}
-                    className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
-                  </button>
-                  {menuOpen === ws.id && (
-                    <>
-                      <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(null)} />
-                      <div className="absolute right-0 top-8 w-40 bg-popover border rounded-lg shadow-lg py-1 z-40">
-                        <button
-                          onClick={() => {
-                            setMenuOpen(null);
-                            router.push(`/w/${ws.slug}/settings`);
-                          }}
-                          className="w-full px-3 py-2 text-xs text-left hover:bg-muted flex items-center gap-2"
-                        >
-                          <Settings className="h-3.5 w-3.5" /> Settings
-                        </button>
-                        <div className="border-t my-1" />
-                        <button
-                          onClick={() => {
-                            setMenuOpen(null);
-                            handleDelete(ws.id);
-                          }}
-                          className="w-full px-3 py-2 text-xs text-left hover:bg-destructive/10 text-destructive flex items-center gap-2"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" /> Delete
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
+                {ws.owner_id === user?.id && (
+                  <div className="absolute top-3 right-3">
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenuOpen(menuOpen === ws.id ? null : ws.id);
+                      }}
+                      className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                    </button>
+                    {menuOpen === ws.id && (
+                      <>
+                        <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(null)} />
+                        <div className="absolute right-0 top-8 w-40 bg-popover border rounded-lg shadow-lg py-1 z-40">
+                          <button
+                            onClick={() => {
+                              setMenuOpen(null);
+                              router.push(`/w/${ws.slug}/settings`);
+                            }}
+                            className="w-full px-3 py-2 text-xs text-left hover:bg-muted flex items-center gap-2"
+                          >
+                            <Settings className="h-3.5 w-3.5" /> Settings
+                          </button>
+                          <div className="border-t my-1" />
+                          <button
+                            onClick={() => {
+                              setMenuOpen(null);
+                              handleDelete(ws.id);
+                            }}
+                            className="w-full px-3 py-2 text-xs text-left hover:bg-destructive/10 text-destructive flex items-center gap-2"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" /> Delete
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </Card>
             ))}
           </div>

@@ -149,3 +149,84 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ═══ Dashboard Animations ═══ */
+
+@keyframes dash-float {
+  0%, 100% { transform: translateY(0px) scale(1); opacity: 0.6; }
+  50% { transform: translateY(-20px) scale(1.1); opacity: 1; }
+}
+
+@keyframes dash-pulse-ring {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  50% { transform: scale(1.2); opacity: 0; }
+  100% { transform: scale(0.8); opacity: 0; }
+}
+
+@keyframes dash-glow {
+  0%, 100% { opacity: 0.4; filter: blur(20px); }
+  50% { opacity: 0.8; filter: blur(30px); }
+}
+
+@keyframes dash-slide-up {
+  from { opacity: 0; transform: translateY(30px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes dash-slide-right {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes dash-counter {
+  from { opacity: 0; transform: translateY(12px); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+
+@keyframes dash-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes dash-orbit {
+  from { transform: rotate(0deg) translateX(var(--orbit-radius)) rotate(0deg); }
+  to { transform: rotate(360deg) translateX(var(--orbit-radius)) rotate(-360deg); }
+}
+
+@keyframes dash-data-flow {
+  0% { transform: translateY(100%) scaleY(0); opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateY(-100%) scaleY(0); opacity: 0; }
+}
+
+@keyframes dash-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 var(--breathe-color, rgba(99, 102, 241, 0.3)); }
+  50% { box-shadow: 0 0 0 8px var(--breathe-color, rgba(99, 102, 241, 0)); }
+}
+
+@keyframes dash-gauge-fill {
+  from { stroke-dashoffset: var(--gauge-circumference); }
+  to { stroke-dashoffset: var(--gauge-offset); }
+}
+
+@keyframes dash-gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes dash-typing {
+  from { width: 0; }
+  to { width: 100%; }
+}
+
+.dash-animate-in { animation: dash-slide-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; opacity: 0; }
+.dash-delay-1 { animation-delay: 0.08s; }
+.dash-delay-2 { animation-delay: 0.16s; }
+.dash-delay-3 { animation-delay: 0.24s; }
+.dash-delay-4 { animation-delay: 0.32s; }
+.dash-delay-5 { animation-delay: 0.4s; }
+.dash-delay-6 { animation-delay: 0.48s; }
+.dash-delay-7 { animation-delay: 0.56s; }
+.dash-delay-8 { animation-delay: 0.64s; }

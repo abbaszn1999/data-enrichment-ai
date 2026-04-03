@@ -215,6 +215,9 @@ export interface Database {
           currency: string;
           is_active: boolean;
           sort_order: number;
+          stripe_product_id: string | null;
+          stripe_price_monthly_id: string | null;
+          stripe_price_yearly_id: string | null;
           created_at: string;
         };
         Insert: {
@@ -224,6 +227,9 @@ export interface Database {
           monthly_ai_credits?: number;
           price_monthly?: number;
           price_yearly?: number;
+          stripe_product_id?: string | null;
+          stripe_price_monthly_id?: string | null;
+          stripe_price_yearly_id?: string | null;
         };
         Update: {
           display_name?: string;
@@ -232,6 +238,53 @@ export interface Database {
           price_monthly?: number;
           price_yearly?: number;
           is_active?: boolean;
+          stripe_product_id?: string | null;
+          stripe_price_monthly_id?: string | null;
+          stripe_price_yearly_id?: string | null;
+        };
+      };
+      user_subscriptions: {
+        Row: {
+          id: string;
+          user_id: string;
+          plan_id: string;
+          billing_cycle: "monthly" | "yearly";
+          status: "active" | "trialing" | "past_due" | "cancelled" | "expired" | "incomplete";
+          stripe_customer_id: string | null;
+          stripe_subscription_id: string | null;
+          current_period_start: string;
+          current_period_end: string | null;
+          trial_end: string | null;
+          cancelled_at: string | null;
+          cancel_at_period_end: boolean;
+          credits_used: number;
+          bonus_credits: number;
+          credits_reset_at: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          plan_id: string;
+          billing_cycle?: "monthly" | "yearly";
+          stripe_customer_id?: string | null;
+          stripe_subscription_id?: string | null;
+        };
+        Update: {
+          plan_id?: string;
+          billing_cycle?: "monthly" | "yearly";
+          status?: "active" | "trialing" | "past_due" | "cancelled" | "expired" | "incomplete";
+          stripe_customer_id?: string | null;
+          stripe_subscription_id?: string | null;
+          current_period_start?: string;
+          current_period_end?: string | null;
+          trial_end?: string | null;
+          cancelled_at?: string | null;
+          cancel_at_period_end?: boolean;
+          credits_used?: number;
+          bonus_credits?: number;
+          credits_reset_at?: string;
+          updated_at?: string;
         };
       };
       workspace_subscriptions: {
@@ -264,6 +317,76 @@ export interface Database {
           credits_reset_at?: string;
           updated_at?: string;
         };
+      };
+      credit_packs: {
+        Row: {
+          id: string;
+          name: string;
+          display_name: string;
+          credits: number;
+          price: number;
+          currency: string;
+          stripe_product_id: string | null;
+          stripe_price_id: string | null;
+          is_active: boolean;
+          sort_order: number;
+          created_at: string;
+        };
+        Insert: {
+          name: string;
+          display_name: string;
+          credits: number;
+          price: number;
+          stripe_product_id?: string | null;
+          stripe_price_id?: string | null;
+        };
+        Update: {
+          display_name?: string;
+          credits?: number;
+          price?: number;
+          stripe_product_id?: string | null;
+          stripe_price_id?: string | null;
+          is_active?: boolean;
+        };
+      };
+      credit_purchases: {
+        Row: {
+          id: string;
+          user_id: string;
+          pack_id: string | null;
+          credits: number;
+          amount_paid: number;
+          currency: string;
+          stripe_checkout_session_id: string | null;
+          stripe_payment_intent_id: string | null;
+          status: "pending" | "completed" | "failed" | "refunded";
+          created_at: string;
+        };
+        Insert: {
+          user_id: string;
+          pack_id?: string | null;
+          credits: number;
+          amount_paid: number;
+          stripe_checkout_session_id?: string | null;
+        };
+        Update: {
+          status?: "pending" | "completed" | "failed" | "refunded";
+          stripe_payment_intent_id?: string | null;
+        };
+      };
+      webhook_events: {
+        Row: {
+          id: string;
+          type: string;
+          processed_at: string;
+          payload: Json;
+        };
+        Insert: {
+          id: string;
+          type: string;
+          payload?: Json;
+        };
+        Update: {};
       };
       credit_transactions: {
         Row: {

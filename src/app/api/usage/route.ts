@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
+import { getOwnerSubscription, calculateCreditBalance } from "@/lib/stripe";
 
 export async function GET(request: Request) {
   try {
@@ -10,14 +11,12 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "workspaceId is required" }, { status: 400 });
     }
 
-    const supabase = await createClient();
+    // Get owner's subscription (per-user model)
+    const ownerSub = await getOwnerSubscription(workspaceId);
+    const bal = calculateCreditBalance(ownerSub?.subscription ?? null);
+    const plan = ownerSub?.plan;
 
-    // Get subscription with plan
-    const { data: sub } = await supabase
-      .from("workspace_subscriptions")
-      .select("*, subscription_plans(*)")
-      .eq("workspace_id", workspaceId)
-      .single();
+    const supabase = await createClient();
 
     // Get credit transactions summary
     const { data: transactions } = await supabase
@@ -35,22 +34,25 @@ export async function GET(request: Request) {
       }
     }
 
-    const plan = sub?.subscription_plans;
-    const monthlyCredits = plan?.monthly_ai_credits ?? 0;
-    const creditsUsed = sub?.credits_used ?? 0;
-
     return NextResponse.json({
       plan: {
         name: plan?.display_name || "No Plan",
-        monthlyCredits,
+        monthlyCredits: bal.monthlyTotal,
         priceMonthly: plan?.price_monthly || 0,
       },
       credits: {
-        used: creditsUsed,
-        total: monthlyCredits,
-        remaining: Math.max(0, monthlyCredits - creditsUsed),
-        resetsAt: sub?.credits_reset_at,
+        used: bal.used,
+        total: bal.monthlyTotal,
+        bonus: bal.bonus,
+        remaining: bal.total,
+        resetsAt: ownerSub?.subscription?.credits_reset_at,
       },
+      subscription: ownerSub?.subscription ? {
+        status: ownerSub.subscription.status,
+        billingCycle: ownerSub.subscription.billing_cycle,
+        cancelAtPeriodEnd: ownerSub.subscription.cancel_at_period_end,
+        currentPeriodEnd: ownerSub.subscription.current_period_end,
+      } : null,
       breakdown,
       totalAllTime: totalUsed,
       totalTransactions: (transactions || []).length,

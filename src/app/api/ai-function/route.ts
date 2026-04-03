@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { calculateCallCost, costToCredits } from "@/lib/ai-pricing";
+import { createClient } from "@/lib/supabase-server";
+import { getOwnerSubscription, calculateCreditBalance, isSubscriptionActive } from "@/lib/stripe";
+import { createAdminClient } from "@/lib/supabase-admin";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
@@ -17,10 +21,24 @@ export interface AiFunctionPlan {
 
 export async function POST(request: NextRequest) {
   try {
-    const { command, columns, sampleRows, totalRows, selectedRows } = await request.json();
+    const { command, columns, sampleRows, totalRows, selectedRows, workspaceId } = await request.json();
 
     if (!command || !columns || !sampleRows) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    // Check credits before calling AI (per-user model)
+    if (workspaceId) {
+      const ownerSub = await getOwnerSubscription(workspaceId);
+      if (ownerSub) {
+        if (!isSubscriptionActive(ownerSub.subscription.status)) {
+          return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402 });
+        }
+        const bal = calculateCreditBalance(ownerSub.subscription);
+        if (bal.total <= 0) {
+          return NextResponse.json({ error: "NO_CREDITS" }, { status: 402 });
+        }
+      }
     }
 
     const systemPrompt = `You are a data manipulation code generator. You receive column names + sample rows from a product spreadsheet and a user command in any language.
@@ -97,6 +115,10 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
       },
     });
 
+    // Calculate cost
+    const cost = calculateCallCost("gemini-3.1-flash-lite-preview", result.usageMetadata, false);
+    console.log(`[AI Function] Cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens, ${costToCredits(cost.totalCost)} credits)`);
+
     const text = result.text?.trim() || "";
 
     // Parse JSON (strip markdown code fences if present)
@@ -120,7 +142,37 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
 
     console.log(`[AI Function] "${command}" → target: ${plan.targetColumn}${plan.newColumn ? `, new col: ${plan.newColumn}` : ""}`);
 
-    return NextResponse.json({ plan });
+    // Deduct credits (per-user model)
+    const credits = costToCredits(cost.totalCost);
+    if (workspaceId && credits > 0) {
+      try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        const ownerSub = await getOwnerSubscription(workspaceId);
+        if (ownerSub) {
+          const admin = createAdminClient();
+          await admin.rpc("deduct_user_credits", {
+            p_user_id: ownerSub.ownerId,
+            p_amount: credits,
+            p_workspace_id: workspaceId,
+            p_operation: "ai_function",
+            p_uid: user?.id,
+            p_details: { command: command.slice(0, 200) },
+          });
+        }
+      } catch (err: any) {
+        console.warn(`[AI Function] Credit deduction failed: ${err?.message}`);
+      }
+    }
+
+    return NextResponse.json({
+      plan,
+      cost: {
+        totalCost: cost.totalCost,
+        totalCredits: credits,
+        totalTokens: cost.usage.totalTokens,
+      },
+    });
   } catch (err: any) {
     console.error("[AI Function] Error:", err);
     return NextResponse.json({ error: err?.message || "Failed to process command" }, { status: 500 });

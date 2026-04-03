@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
+import { getOwnerSubscription, isSubscriptionActive, calculateCreditBalance } from "@/lib/stripe";
+import { createAdminClient } from "@/lib/supabase-admin";
 
 export async function GET(request: Request) {
   try {
@@ -11,74 +13,44 @@ export async function GET(request: Request) {
     }
 
     const supabase = await createClient();
+    const admin = createAdminClient();
 
-    const { data: sub, error } = await supabase
-      .from("workspace_subscriptions")
-      .select("*, subscription_plans(*)")
-      .eq("workspace_id", workspaceId)
-      .single();
-
-    if (error && error.code !== "PGRST116") {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    // Get owner's subscription (per-user model)
+    const ownerSub = await getOwnerSubscription(workspaceId);
 
     // Get all available plans
-    const { data: plans } = await supabase
+    const { data: plans } = await admin
       .from("subscription_plans")
       .select("*")
       .eq("is_active", true)
       .order("sort_order", { ascending: true });
 
+    // Get credit packs
+    const { data: packs } = await admin
+      .from("credit_packs")
+      .select("*")
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true });
+
+    const sub = ownerSub?.subscription ?? null;
+    const bal = calculateCreditBalance(sub);
+
     return NextResponse.json({
-      subscription: sub || null,
-      currentPlan: sub?.subscription_plans || null,
+      subscription: sub ? {
+        id: sub.id,
+        status: sub.status,
+        billingCycle: sub.billing_cycle,
+        cancelAtPeriodEnd: sub.cancel_at_period_end,
+        currentPeriodEnd: sub.current_period_end,
+        stripeCustomerId: sub.stripe_customer_id,
+        stripeSubscriptionId: sub.stripe_subscription_id,
+      } : null,
+      currentPlan: ownerSub?.plan || null,
       availablePlans: plans || [],
+      creditPacks: packs || [],
+      credits: bal,
+      isActive: sub ? isSubscriptionActive(sub.status) : false,
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error?.message || "Internal server error" }, { status: 500 });
-  }
-}
-
-export async function PUT(request: Request) {
-  try {
-    const { workspaceId, planId } = await request.json();
-
-    if (!workspaceId || !planId) {
-      return NextResponse.json({ error: "workspaceId and planId are required" }, { status: 400 });
-    }
-
-    const supabase = await createClient();
-
-    // Check workspace ownership
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    }
-
-    const { data: workspace } = await supabase
-      .from("workspaces")
-      .select("owner_id")
-      .eq("id", workspaceId)
-      .single();
-
-    if (!workspace || workspace.owner_id !== user.id) {
-      return NextResponse.json({ error: "Only the workspace owner can change the plan" }, { status: 403 });
-    }
-
-    // Update subscription
-    const { error } = await supabase
-      .from("workspace_subscriptions")
-      .update({
-        plan_id: planId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("workspace_id", workspaceId);
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || "Internal server error" }, { status: 500 });
   }

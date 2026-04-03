@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { getUserSubscription, isSubscriptionActive } from "@/lib/stripe";
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,8 +19,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Name and slug are required" }, { status: 400 });
     }
 
-    // Use admin client to bypass RLS
     const admin = createAdminClient();
+
+    // Check user's subscription and max_workspaces limit
+    const userSub = await getUserSubscription(user.id);
+    if (!userSub || !isSubscriptionActive(userSub.subscription.status)) {
+      return NextResponse.json({ error: "Active subscription required to create workspaces" }, { status: 403 });
+    }
+
+    const maxWorkspaces = userSub.plan?.max_workspaces;
+    if (maxWorkspaces) {
+      // Count user's current workspaces (as owner)
+      const { count } = await admin
+        .from("workspaces")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_id", user.id);
+
+      if ((count ?? 0) >= maxWorkspaces) {
+        return NextResponse.json({
+          error: `Your plan allows a maximum of ${maxWorkspaces} workspace(s). Upgrade to create more.`,
+        }, { status: 403 });
+      }
+    }
 
     // 1. Create workspace
     const { data: workspace, error: wsError } = await admin
@@ -54,21 +75,6 @@ export async function POST(req: NextRequest) {
       // Rollback workspace creation
       await admin.from("workspaces").delete().eq("id", workspace.id);
       return NextResponse.json({ error: memberError.message }, { status: 500 });
-    }
-
-    // 3. Auto-assign Starter plan
-    const { data: starterPlan } = await admin
-      .from("subscription_plans")
-      .select("id")
-      .eq("name", "starter")
-      .limit(1)
-      .single();
-
-    if (starterPlan) {
-      await admin.from("workspace_subscriptions").insert({
-        workspace_id: workspace.id,
-        plan_id: starterPlan.id,
-      });
     }
 
     return NextResponse.json(workspace);

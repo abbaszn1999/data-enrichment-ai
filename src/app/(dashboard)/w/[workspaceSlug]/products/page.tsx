@@ -58,7 +58,7 @@ export default function ProductsPage() {
     return Array.from(colSet);
   }, [allProducts]);
 
-  const totalColSpan = dataColumns.length + (permissions.canAdmin ? 1 : 0);
+  const totalColSpan = dataColumns.length + (permissions.canEdit ? 1 : 0);
 
   // Load all products + categories from Storage once
   const loadAll = async () => {
@@ -174,7 +174,7 @@ export default function ProductsPage() {
               <Trash2 className="h-3.5 w-3.5" /> Delete All
             </Button>
           )}
-          {permissions.canAdmin && (
+          {permissions.canUpload && (
             <Link href={`/w/${slug}/products/upload`}>
               <Button size="sm" className="gap-1.5 text-xs">
                 <Upload className="h-3.5 w-3.5" /> Upload Products
@@ -223,7 +223,7 @@ export default function ProductsPage() {
       </div>
 
       {/* Bulk Actions */}
-      {selected.size > 0 && permissions.canAdmin && (
+      {selected.size > 0 && permissions.canEdit && (
         <div className="flex items-center gap-3 p-2 rounded-lg bg-muted/50 border">
           <span className="text-xs font-medium">{selected.size} selected</span>
           <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1 text-destructive" onClick={handleBulkDelete}>
@@ -241,7 +241,7 @@ export default function ProductsPage() {
           <table className="w-max min-w-full">
             <thead className="sticky top-0 z-20">
               <tr className="border-b bg-muted/80 backdrop-blur-sm">
-                {permissions.canAdmin && (
+                {permissions.canEdit && (
                   <th className="w-10 px-3 py-3 sticky left-0 bg-muted/80 z-30">
                     <input
                       type="checkbox"
@@ -278,7 +278,7 @@ export default function ProductsPage() {
               ) : (
                 products.map((p, idx) => (
                   <tr key={`${p.sku}-${idx}`} className="border-b last:border-0 hover:bg-muted/20">
-                    {permissions.canAdmin && (
+                    {permissions.canEdit && (
                       <td className="w-10 px-3 py-3 sticky left-0 bg-background z-10">
                         <input
                           type="checkbox"

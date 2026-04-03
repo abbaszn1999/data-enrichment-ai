@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspaceContext } from "../layout";
+import { useRole } from "@/hooks/use-role";
 import { getImportSessions, deleteImportSession } from "@/lib/supabase";
 
 function timeAgo(dateStr: string): string {
@@ -56,7 +57,8 @@ const tagColors: Record<string, string> = {
 export default function ImportPage() {
   const params = useParams();
   const slug = params.workspaceSlug as string;
-  const { workspace } = useWorkspaceContext();
+  const { workspace, role } = useWorkspaceContext();
+  const permissions = useRole(role);
   const [sessions, setSessions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("all");
@@ -130,11 +132,13 @@ export default function ImportPage() {
           </h1>
           <p className="text-xs text-muted-foreground mt-0.5">{stats.total} sessions</p>
         </div>
-        <Link href={`/w/${slug}/import/new`}>
-          <Button size="sm" className="gap-1.5 text-xs">
-            <Plus className="h-3.5 w-3.5" /> New Import
-          </Button>
-        </Link>
+        {permissions.canImport && (
+          <Link href={`/w/${slug}/import/new`}>
+            <Button size="sm" className="gap-1.5 text-xs">
+              <Plus className="h-3.5 w-3.5" /> New Import
+            </Button>
+          </Link>
+        )}
       </div>
 
       {/* Stats */}
@@ -266,28 +270,30 @@ export default function ImportPage() {
                 </div>
               </Link>
 
-              <div className="absolute top-3 right-3">
-                <button
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpenMenu(openMenu === session.id ? null : session.id); }}
-                  className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-                {openMenu === session.id && (
-                  <>
-                    <div className="fixed inset-0 z-30" onClick={() => setOpenMenu(null)} />
-                    <div className="absolute right-0 top-8 w-36 bg-background border rounded-lg shadow-lg py-1 z-40">
-                      <div className="border-t my-1" />
-                      <button
-                        onClick={(e) => { e.preventDefault(); handleDelete(session.id); }}
-                        className="w-full px-3 py-1.5 text-[11px] text-left hover:bg-destructive/10 text-destructive flex items-center gap-2"
-                      >
-                        <Trash2 className="h-3 w-3" /> Delete
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
+              {permissions.canAdmin && (
+                <div className="absolute top-3 right-3">
+                  <button
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpenMenu(openMenu === session.id ? null : session.id); }}
+                    className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                  {openMenu === session.id && (
+                    <>
+                      <div className="fixed inset-0 z-30" onClick={() => setOpenMenu(null)} />
+                      <div className="absolute right-0 top-8 w-36 bg-background border rounded-lg shadow-lg py-1 z-40">
+                        <div className="border-t my-1" />
+                        <button
+                          onClick={(e) => { e.preventDefault(); handleDelete(session.id); }}
+                          className="w-full px-3 py-1.5 text-[11px] text-left hover:bg-destructive/10 text-destructive flex items-center gap-2"
+                        >
+                          <Trash2 className="h-3 w-3" /> Delete
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </Card>
           );
         })}

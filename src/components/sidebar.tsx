@@ -21,6 +21,7 @@ import {
   Plus,
   X,
   ArrowLeft,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,7 +49,8 @@ function downloadBlob(blob: Blob, filename: string) {
 
 export function Sidebar() {
   const router = useRouter();
-  const { workspace } = useWorkspaceStore();
+  const { workspace, invalidateCredits, role } = useWorkspaceStore();
+  const isViewer = role === "viewer";
   const {
     rows,
     fileName,
@@ -222,6 +224,7 @@ export function Sidebar() {
           cmsType: workspace?.cms_type || undefined,
           workspaceCategories,
           categoriesRawRows,
+          workspaceId: workspace?.id,
         }),
       });
 
@@ -261,12 +264,23 @@ export function Sidebar() {
                   setRowEnrichedData(event.rowId, event.data);
                 }
                 setEnrichProgress(event.completedRows, event.totalRows);
+                invalidateCredits();
                 break;
               case "row_error":
                 setRowStatus(event.rowId, "error", event.error);
                 setEnrichProgress(event.completedRows, event.totalRows);
                 incrementError();
                 if (event.error) setLastError(event.error);
+                break;
+              case "error":
+                if ((event as any).error === "NO_CREDITS") {
+                  setIsEnriching(false);
+                  setLastError("NO_CREDITS");
+                  toast.error("No credits remaining", {
+                    description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
+                    duration: 8000,
+                  });
+                }
                 break;
               case "done":
                 setIsEnriching(false);
@@ -309,6 +323,7 @@ export function Sidebar() {
     setRowStatus,
     setRowEnrichedData,
     incrementError,
+    invalidateCredits,
   ]);
 
   const doneCount = rows.filter((r) => r.status === "done").length;
@@ -368,6 +383,12 @@ export function Sidebar() {
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
+          {isViewer ? (
+            <div className="flex items-center gap-1.5 flex-1 mr-2 px-2 py-1.5 rounded-lg bg-muted/60 border border-border/50">
+              <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-[11px] font-semibold text-muted-foreground">View Only</span>
+            </div>
+          ) : (
           <div className="flex items-center bg-muted rounded-lg p-0.5 flex-1 mr-2">
             <button
               onClick={() => setSidebarTab("ai")}
@@ -392,6 +413,7 @@ export function Sidebar() {
               Functions
             </button>
           </div>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -403,11 +425,26 @@ export function Sidebar() {
         </div>
       </div>
 
+      {/* Viewer locked view — Export only */}
+      {isViewer && (
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
+          <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
+            <Lock className="h-6 w-6 text-muted-foreground" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-sm font-semibold">View Only Access</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              You can view and export data, but cannot run AI enrichment or use functions.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Functions Tab */}
-      {sidebarTab === "functions" && <FunctionsPanel />}
+      {!isViewer && sidebarTab === "functions" && <FunctionsPanel />}
 
       {/* AI Tab */}
-      {sidebarTab === "ai" && (
+      {!isViewer && sidebarTab === "ai" && (
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="p-4 space-y-5">
           {/* Selection Info */}
@@ -1127,8 +1164,12 @@ export function Sidebar() {
       </div>
       )}
 
-      {/* Action Buttons - Fixed at bottom (AI tab only) */}
-      {sidebarTab === "ai" && (
+      {/* Action Buttons - Fixed at bottom */}
+      {isViewer ? (
+        <div className="p-4 border-t bg-muted/20">
+          <ExportDialog />
+        </div>
+      ) : sidebarTab === "ai" && (
       <div className="p-4 border-t bg-muted/20 space-y-2">
         {!isEnriching && (
           <Button

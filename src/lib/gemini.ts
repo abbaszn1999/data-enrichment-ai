@@ -3,6 +3,7 @@ import { buildSearchPrompt, buildEnrichmentPrompt } from "./prompts";
 import type { PromptSettings } from "./prompts";
 import type { EnrichedData, SourceUrl, ImageUrl, ThinkingLevelOption, EnrichmentModel, CategoryItem, CmsCategoryConfig } from "@/types";
 import { CMS_CATEGORY_CONFIG, DEFAULT_CMS_CATEGORY_CONFIG } from "@/types";
+import { calculateCallCost, createSerperCost, sumCosts, costToCredits, type AiCallCost } from "./ai-pricing";
 
 export interface GeminiSettings {
   enrichmentModel: EnrichmentModel;
@@ -92,7 +93,7 @@ async function resolveSourceUrls(sources: SourceUrl[]): Promise<SourceUrl[]> {
 export async function searchProduct(
   productData: Record<string, string>,
   customInstruction?: string
-): Promise<{ text: string; sources: SourceUrl[] }> {
+): Promise<{ text: string; sources: SourceUrl[]; cost: AiCallCost }> {
   return withRetry(async () => {
     const ai = getClient();
     const { text: promptText, images } = buildSearchPrompt(productData, customInstruction);
@@ -118,6 +119,10 @@ export async function searchProduct(
 
     const text = response.text || "";
 
+    // Calculate cost from usageMetadata
+    const cost = calculateCallCost("gemini-3.1-pro-preview", response.usageMetadata, true);
+    console.log(`[Gemini] Search cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens)`);
+
     const sources: SourceUrl[] = [];
     const chunks =
       response.candidates?.[0]?.groundingMetadata?.groundingChunks;
@@ -136,7 +141,7 @@ export async function searchProduct(
     const resolvedSources = await resolveSourceUrls(sources);
     console.log(`[Gemini] Resolved ${resolvedSources.length} source URLs`);
 
-    return { text, sources: resolvedSources };
+    return { text, sources: resolvedSources, cost };
   }, 2, 2000);
 }
 
@@ -177,7 +182,7 @@ async function filterValidImages(images: ImageUrl[]): Promise<ImageUrl[]> {
 async function analyzeProductData(
   productData: Record<string, string>,
   settings?: GeminiSettings
-): Promise<{ sufficient: boolean; searchQuery: string; productIdentity: string }> {
+): Promise<{ sufficient: boolean; searchQuery: string; productIdentity: string; cost: AiCallCost | null }> {
   const ai = getClient();
   const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
   const thinkingLevel = THINKING_LEVEL_MAP[settings?.thinkingLevel || "low"];
@@ -225,15 +230,20 @@ Respond ONLY with a valid JSON object:
 
     const text = response.text || "{}";
     const result = JSON.parse(text);
+
+    // Calculate cost from usageMetadata
+    const cost = calculateCallCost(model, response.usageMetadata, false);
     console.log(`[AI Analysis] sufficient=${result.sufficient}, query="${result.searchQuery}", identity="${result.productIdentity}"`);
+    console.log(`[AI Analysis] Cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens)`);
     return {
       sufficient: !!result.sufficient,
       searchQuery: result.searchQuery || "",
       productIdentity: result.productIdentity || "",
+      cost,
     };
   } catch (err: any) {
     console.warn(`[AI Analysis] Failed: ${err.message}, defaulting to insufficient`);
-    return { sufficient: false, searchQuery: "", productIdentity: "" };
+    return { sufficient: false, searchQuery: "", productIdentity: "", cost: null };
   }
 }
 
@@ -426,7 +436,7 @@ export async function enrichProduct(
   enabledColumns: string[],
   enrichmentColumns?: { id: string; label: string; description: string; type: string; customInstruction?: string; writingTone?: string; contentLength?: string }[],
   settings?: GeminiSettings
-): Promise<EnrichedData> {
+): Promise<{ data: EnrichedData; cost: AiCallCost }> {
   return withRetry(async () => {
     const ai = getClient();
 
@@ -473,29 +483,37 @@ export async function enrichProduct(
 
     const text = response.text || "{}";
 
+    // Calculate cost from usageMetadata
+    const cost = calculateCallCost(model, response.usageMetadata, false);
+    console.log(`[Gemini] Enrich cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens)`);
+
+    let parsed: EnrichedData;
     try {
-      return JSON.parse(text) as EnrichedData;
+      parsed = JSON.parse(text) as EnrichedData;
     } catch {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         try {
-          return JSON.parse(jsonMatch[0]) as EnrichedData;
+          parsed = JSON.parse(jsonMatch[0]) as EnrichedData;
         } catch {
           // Try to repair truncated JSON
           const repaired = repairTruncatedJson(jsonMatch[0]);
           if (repaired) {
             try {
               console.warn("[Gemini] Repaired truncated JSON response");
-              return JSON.parse(repaired) as EnrichedData;
+              parsed = JSON.parse(repaired) as EnrichedData;
             } catch {
-              // Fall through to error
+              throw new Error(`Failed to parse AI response as JSON: ${text.slice(0, 200)}`);
             }
+          } else {
+            throw new Error(`Failed to parse AI response as JSON: ${text.slice(0, 200)}`);
           }
-          throw new Error(`Failed to parse AI response as JSON: ${text.slice(0, 200)}`);
         }
+      } else {
+        throw new Error(`Failed to parse AI response as JSON: ${text.slice(0, 200)}`);
       }
-      throw new Error(`Failed to parse AI response as JSON: ${text.slice(0, 200)}`);
     }
+    return { data: parsed, cost };
   }, 2, 3000);
 }
 
@@ -510,7 +528,7 @@ async function categorizeProduct(
   maxCategories: number = 3,
   customInstruction: string = "",
   categoriesRawRows?: Record<string, string>[]
-): Promise<string> {
+): Promise<{ categories: string; cost: AiCallCost | null }> {
   const ai = getClient();
   const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
   const thinkingLevel = THINKING_LEVEL_MAP[settings?.thinkingLevel || "low"];
@@ -601,11 +619,15 @@ Respond ONLY with a valid JSON object:
 
     const text = response.text || "{}";
     const result = JSON.parse(text);
+
+    // Calculate cost from usageMetadata
+    const cost = calculateCallCost(model, response.usageMetadata, false);
     console.log(`[Categories] Result: "${result.categories}" | Reason: ${result.reasoning}`);
-    return result.categories || "";
+    console.log(`[Categories] Cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens)`);
+    return { categories: result.categories || "", cost };
   } catch (err: any) {
     console.warn(`[Categories] Categorization failed: ${err.message}`);
-    return "";
+    return { categories: "", cost: null };
   }
 }
 
@@ -617,7 +639,9 @@ export async function enrichProductRow(
   cmsType?: string,
   workspaceCategories?: CategoryItem[],
   categoriesRawRows?: Record<string, string>[]
-): Promise<EnrichedData> {
+): Promise<{ data: EnrichedData; costs: AiCallCost[] }> {
+  const costs: AiCallCost[] = [];
+
   // Determine what's needed
   const specialColumns = ["sourceUrls", "imageUrls", "categories"];
   const columnsToGenerate = enabledColumns.filter((c) => !specialColumns.includes(c));
@@ -636,6 +660,7 @@ export async function enrichProductRow(
   if (!needsSearch && (needsImages || needsCategories)) {
     console.log(`[Smart Flow] Special-columns-only mode — analyzing product data with AI...`);
     const analysis = await analyzeProductData(productData, settings);
+    if (analysis.cost) costs.push(analysis.cost);
 
     if (analysis.sufficient) {
       console.log(`[Smart Flow] Data sufficient ✓ — skipping web search, AI query: "${analysis.searchQuery}"`);
@@ -663,12 +688,14 @@ export async function enrichProductRow(
     const result = await searchProduct(productData, searchInstruction);
     searchResults = result.text;
     sources = result.sources;
+    costs.push(result.cost);
 
     // If we needed search for images, now generate a better query from search results
     if (needsImages && !imageSearchQuery) {
       console.log(`[Smart Flow] Product identified via search — generating image query with AI...`);
       const enrichedProductData = { ...productData, "__searchResults": searchResults.slice(0, 500) };
       const analysis = await analyzeProductData(enrichedProductData, settings);
+      if (analysis.cost) costs.push(analysis.cost);
       imageSearchQuery = analysis.searchQuery;
       console.log(`[Smart Flow] AI image query from search: "${imageSearchQuery}"`);
     }
@@ -680,13 +707,15 @@ export async function enrichProductRow(
   let enrichedData: EnrichedData = {};
   if (needsEnrich) {
     console.log(`[Smart Flow] Step 2: Enriching ${columnsToGenerate.length} columns`);
-    enrichedData = await enrichProduct(
+    const enrichResult = await enrichProduct(
       productData,
       searchResults,
       columnsToGenerate,
       enrichmentColumns,
       settings
     );
+    enrichedData = enrichResult.data;
+    costs.push(enrichResult.cost);
   } else {
     console.log(`[Smart Flow] Step 2: SKIPPED (no text columns)`);
   }
@@ -713,7 +742,8 @@ export async function enrichProductRow(
         customInstruction,
         categoriesRawRows
       );
-      enrichedData.categories = categoryResult;
+      enrichedData.categories = categoryResult.categories;
+      if (categoryResult.cost) costs.push(categoryResult.cost);
     } catch (error: any) {
       console.warn(`[Categories] Categorization failed: ${error.message}`);
       enrichedData.categories = "";
@@ -735,11 +765,17 @@ export async function enrichProductRow(
         imageSearchQuery || undefined
       );
       enrichedData.imageUrls = imageResults;
+      // Track Serper cost (1 query per image search call)
+      costs.push(createSerperCost(1));
     } catch (error: any) {
       console.warn(`[ImageSearch] Image search failed: ${error.message}`);
       enrichedData.imageUrls = [];
     }
   }
 
-  return enrichedData;
+  // Log total cost for this row
+  const total = sumCosts(costs);
+  console.log(`[Smart Flow] Row total: $${total.totalCost.toFixed(6)} (${total.totalTokens} tokens, ${total.totalCredits} credits)`);
+
+  return { data: enrichedData, costs };
 }

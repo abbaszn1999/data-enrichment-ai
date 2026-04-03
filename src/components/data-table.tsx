@@ -70,6 +70,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useSheetStore } from "@/store/sheet-store";
+import { useWorkspaceStore } from "@/store/workspace-store";
 import type { ProductRow } from "@/types";
 import { FileSpreadsheet, Package, Cloud, CloudOff } from "lucide-react";
 
@@ -1045,6 +1046,9 @@ export function DataTable() {
     saveStatus,
   } = useSheetStore();
 
+  const { role } = useWorkspaceStore();
+  const isViewer = role === "viewer";
+
   const [globalFilter, setGlobalFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [previewRowId, setPreviewRowId] = useState<string | null>(null);
@@ -1267,9 +1271,10 @@ export function DataTable() {
         ),
         cell: ({ row }) => {
           const canEdit =
-            !isEnriching ||
+            !isViewer &&
+            (!isEnriching ||
             row.original.status === "done" ||
-            row.original.status === "pending";
+            row.original.status === "pending");
           return (
             <EditableCell
               value={row.original.originalData[colName] || ""}
@@ -1333,7 +1338,7 @@ export function DataTable() {
               </div>
             );
           }
-          const canEditEnriched = row.original.status !== "processing";
+          const canEditEnriched = !isViewer && row.original.status !== "processing";
           return (
             <EditableEnrichedCell
               value={row.original.enrichedData[enrichCol.id]}
@@ -1495,7 +1500,7 @@ export function DataTable() {
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
                   {sheetSelectedCount} selected
                 </Badge>
-                {!isEnriching && (
+                {!isEnriching && !isViewer && (
                   <button
                     onClick={handleDeleteRows}
                     className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-destructive border border-destructive/30 hover:bg-destructive/10 transition-colors font-medium"
@@ -1540,6 +1545,7 @@ export function DataTable() {
             <div className="w-px h-4 bg-border" />
 
             {/* Add Row */}
+            {!isViewer && (
             <Button
               variant="ghost"
               size="sm"
@@ -1551,6 +1557,7 @@ export function DataTable() {
               <Plus className="h-3 w-3" />
               Row
             </Button>
+            )}
 
             {/* Column visibility toggle */}
             <div className="relative">
@@ -1931,6 +1938,7 @@ export function DataTable() {
                   Hide Column
                 </button>
                 <div className="border-t my-1" />
+                {!isViewer && (
                 <button
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-destructive hover:bg-destructive/10 transition-colors text-xs"
                   onClick={() => { deleteColumn(contextMenu.colName); setContextMenu(null); }}
@@ -1938,6 +1946,7 @@ export function DataTable() {
                   <Trash2 className="h-3.5 w-3.5" />
                   Delete Column
                 </button>
+                )}
               </>
             )}
 
@@ -2014,7 +2023,7 @@ export function DataTable() {
                     <ArrowUpDown className="h-3.5 w-3.5" />
                     Invert Selection
                   </button>
-                  {!isEnriching && selectedRowIds.has(contextMenu.rowId) && (
+                  {!isEnriching && !isViewer && selectedRowIds.has(contextMenu.rowId) && (
                     <>
                       <div className="border-t my-1" />
                       <button
