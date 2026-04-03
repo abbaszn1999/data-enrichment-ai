@@ -35,8 +35,28 @@ export async function GET(request: Request) {
 
   if (code) {
     const supabase = await createClient();
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    const { error, data } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
+      // Check if this is a newly invited user who needs to set a password.
+      // Users created via inviteUserByEmail have no password set.
+      // We detect this by: redirect is to an invite page + user was created recently (within 5 min of last sign-in)
+      const inviteMatch = next.match(/^\/invite\/([a-zA-Z0-9-]+)$/);
+      if (inviteMatch && data?.user) {
+        const user = data.user;
+        const createdAt = new Date(user.created_at).getTime();
+        const lastSignIn = user.last_sign_in_at ? new Date(user.last_sign_in_at).getTime() : 0;
+        // If this is the user's first sign-in (created_at ≈ last_sign_in_at within 2 min), 
+        // they are a new invited user who needs to set a password
+        const isFirstSignIn = Math.abs(createdAt - lastSignIn) < 120000;
+        // Also check if they have no password set via user_metadata or identities
+        const hasNoPassword = !user.user_metadata?.full_name;
+
+        if (isFirstSignIn && hasNoPassword) {
+          const token = inviteMatch[1];
+          return NextResponse.redirect(`${origin}/invite/${token}/setup`);
+        }
+      }
+
       // If next is a full URL, redirect directly
       if (next.startsWith("http")) {
         return NextResponse.redirect(next);

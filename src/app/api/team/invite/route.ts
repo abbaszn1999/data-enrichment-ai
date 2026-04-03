@@ -30,20 +30,23 @@ export async function POST(request: NextRequest) {
 
     const adminClient = createAdminClient();
 
-    // Check if user already exists in Supabase Auth
-    const { data: existingUsers } = await adminClient.auth.admin.listUsers();
-    const existingUser = existingUsers?.users?.find(
-      (u) => u.email?.toLowerCase() === email.toLowerCase()
-    );
+    // Check if user already exists (via profiles table — efficient, no listUsers)
+    const { data: existingProfile } = await adminClient
+      .from("profiles")
+      .select("id, full_name")
+      .ilike("email", email)
+      .maybeSingle();
+
+    const isExistingUser = !!(existingProfile?.full_name);
 
     // Check if already a member of this workspace
-    if (existingUser) {
-      const { data: existingMember } = await supabase
+    if (existingProfile) {
+      const { data: existingMember } = await adminClient
         .from("workspace_members")
         .select("id")
         .eq("workspace_id", workspaceId)
-        .eq("user_id", existingUser.id)
-        .single();
+        .eq("user_id", existingProfile.id)
+        .maybeSingle();
 
       if (existingMember) {
         return NextResponse.json(
@@ -74,7 +77,7 @@ export async function POST(request: NextRequest) {
 
     let emailSent = false;
 
-    if (existingUser) {
+    if (isExistingUser) {
       // ── EXISTING USER ──
       // Use signInWithOtp (magic link) — this ACTUALLY sends an email
       const { error: otpErr } = await adminClient.auth.admin.generateLink({
@@ -124,7 +127,7 @@ export async function POST(request: NextRequest) {
       invite,
       inviteUrl,
       emailSent,
-      isExistingUser: !!existingUser,
+      isExistingUser,
     });
   } catch (err: any) {
     console.error("[Invite] Error:", err);

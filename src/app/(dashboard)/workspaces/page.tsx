@@ -12,6 +12,8 @@ import {
   Loader2,
   MoreHorizontal,
   Trash2,
+  Mail,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -25,13 +27,43 @@ export default function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState<WorkspaceWithRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [pendingInvites, setPendingInvites] = useState<any[]>([]);
+  const [acceptingInvite, setAcceptingInvite] = useState<string | null>(null);
 
   useEffect(() => {
     getWorkspaces()
       .then(setWorkspaces)
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    // Check for pending invites for this user
+    fetch("/api/team/pending-invites")
+      .then((r) => r.json())
+      .then((data) => setPendingInvites(data.invites || []))
+      .catch(() => {});
   }, []);
+
+  const handleAcceptInvite = async (inviteId: string, workspaceSlug?: string) => {
+    setAcceptingInvite(inviteId);
+    try {
+      const res = await fetch("/api/team/invite-accept", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inviteId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error);
+      setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
+      // Refresh workspaces to show the new one
+      const updated = await getWorkspaces();
+      setWorkspaces(updated);
+      if (workspaceSlug) router.push(`/w/${workspaceSlug}`);
+    } catch (err: any) {
+      alert(err?.message || "Failed to accept invite");
+    } finally {
+      setAcceptingInvite(null);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this workspace? This action cannot be undone.")) return;
@@ -70,7 +102,46 @@ export default function WorkspacesPage() {
           ) : null}
         </div>
 
-        {workspaces.length === 0 ? (
+        {/* Pending invites banner */}
+        {pendingInvites.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+              <Mail className="h-4 w-4" /> Pending Invitations
+            </h2>
+            {pendingInvites.map((inv) => (
+              <Card key={inv.id} className="p-4 flex items-center justify-between gap-4 border-primary/30 bg-primary/5">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <Building2 className="h-5 w-5 text-primary" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {inv.workspace?.name || "Workspace"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Invited as <strong>{inv.role}</strong>
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  className="gap-1.5 shrink-0"
+                  disabled={acceptingInvite === inv.id}
+                  onClick={() => handleAcceptInvite(inv.id, inv.workspace?.slug)}
+                >
+                  {acceptingInvite === inv.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                  )}
+                  Accept
+                </Button>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {workspaces.length === 0 && pendingInvites.length === 0 ? (
           <Card className="p-12 flex flex-col items-center gap-4 text-center">
             <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center">
               <Building2 className="h-8 w-8 text-primary" />

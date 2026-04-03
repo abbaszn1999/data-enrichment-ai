@@ -39,5 +39,18 @@ export async function GET(request: NextRequest) {
     .eq("id", invite.workspace_id)
     .single();
 
-  return NextResponse.json({ invite, workspace });
+  // Check if the invited email belongs to an existing user who has a password set
+  // (i.e. a real registered user, not just an invite-created stub)
+  // We check profiles table — the handle_new_user trigger copies email there on signup
+  const { data: existingProfile } = await adminClient
+    .from("profiles")
+    .select("id, full_name")
+    .ilike("email", invite.email)
+    .maybeSingle();
+
+  // A user "exists" as a real user if they have a profile with a name set
+  // (inviteUserByEmail creates auth.users entry but profile may have empty name)
+  const isExistingUser = !!(existingProfile?.full_name);
+
+  return NextResponse.json({ invite, workspace, isExistingUser });
 }
