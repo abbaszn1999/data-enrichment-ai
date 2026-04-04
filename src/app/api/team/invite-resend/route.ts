@@ -50,42 +50,22 @@ export async function POST(request: NextRequest) {
       "http://localhost:4000";
     const callbackUrl = `${origin}/auth/callback?next=/invite/${invite.token}`;
 
-    // Check if user exists in auth.users directly (not profiles.full_name — unreliable).
-    const { data: listData } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-    const existingAuthUser = listData?.users?.find(
-      (u) => u.email?.toLowerCase() === invite.email.toLowerCase()
-    );
-    const isExistingUser = !!existingAuthUser;
+    // Use signInWithOtp for all users (PKCE-compatible, sends magic link with ?code= flow).
+    // shouldCreateUser=true to handle edge case where user doesn't exist yet.
     let emailSent = false;
+    const { error: otpSendErr } = await supabase.auth.signInWithOtp({
+      email: invite.email,
+      options: {
+        shouldCreateUser: true,
+        emailRedirectTo: callbackUrl,
+      },
+    });
 
-    if (isExistingUser) {
-      // Existing user — resend magic link
-      const { error: otpSendErr } = await supabase.auth.signInWithOtp({
-        email: invite.email,
-        options: {
-          shouldCreateUser: false,
-          emailRedirectTo: callbackUrl,
-        },
-      });
-
-      if (!otpSendErr) {
-        emailSent = true;
-        console.log(`[Invite Resend] Sent magic link to existing user ${invite.email}`);
-      } else {
-        console.warn(`[Invite Resend] signInWithOtp failed: ${otpSendErr.message}`);
-      }
+    if (!otpSendErr) {
+      emailSent = true;
+      console.log(`[Invite Resend] Sent magic link to ${invite.email}`);
     } else {
-      // New user — resend invite email
-      const { error: inviteEmailErr } = await adminClient.auth.admin.inviteUserByEmail(invite.email, {
-        redirectTo: callbackUrl,
-      });
-
-      if (!inviteEmailErr) {
-        emailSent = true;
-        console.log(`[Invite Resend] Sent invite email to new user ${invite.email}`);
-      } else {
-        console.warn(`[Invite Resend] inviteUserByEmail failed: ${inviteEmailErr.message}`);
-      }
+      console.warn(`[Invite Resend] signInWithOtp failed: ${otpSendErr.message}`);
     }
 
     return NextResponse.json({ emailSent });

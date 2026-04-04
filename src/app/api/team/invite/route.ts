@@ -77,40 +77,25 @@ export async function POST(request: NextRequest) {
 
     let emailSent = false;
 
-    if (isExistingUser) {
-      // ── EXISTING USER ──
-      // Send a single magic link via signInWithOtp — one call only to avoid token conflicts.
-      // Two calls (generateLink + signInWithOtp) would issue two tokens where the second
-      // invalidates the first, causing "otp_expired" errors for the user.
-      const serverSupabase = await createClient();
-      const { error: otpSendErr } = await serverSupabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: false,
-          emailRedirectTo: callbackUrl,
-        },
-      });
+    // Use signInWithOtp for BOTH existing and new users.
+    // - For existing users: shouldCreateUser=false → sends magic link to existing account
+    // - For new users: shouldCreateUser=true → creates account + sends magic link
+    // signInWithOtp uses PKCE flow → sends email with link that redirects to callback with ?code=
+    // This avoids inviteUserByEmail's implicit flow (#access_token) which server callback can't read.
+    const serverSupabase = await createClient();
+    const { error: otpSendErr } = await serverSupabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: !isExistingUser, // create account only for new users
+        emailRedirectTo: callbackUrl,
+      },
+    });
 
-      if (otpSendErr) {
-        console.warn(`[Invite] signInWithOtp failed for ${email}: ${otpSendErr.message}`);
-      } else {
-        emailSent = true;
-        console.log(`[Invite] Sent magic link to existing user ${email}`);
-      }
+    if (otpSendErr) {
+      console.warn(`[Invite] signInWithOtp failed for ${email}: ${otpSendErr.message}`);
     } else {
-      // ── NEW USER ──
-      // Use inviteUserByEmail — creates user + sends invite email in one step
-      const { error: inviteEmailErr } = await adminClient.auth.admin.inviteUserByEmail(email, {
-        redirectTo: callbackUrl,
-      });
-
-      if (inviteEmailErr) {
-        console.warn(`[Invite] inviteUserByEmail failed for ${email}: ${inviteEmailErr.message}`);
-        // Even if email fails, the invite link is still available for manual sharing
-      } else {
-        emailSent = true;
-        console.log(`[Invite] Sent invite email to new user ${email}`);
-      }
+      emailSent = true;
+      console.log(`[Invite] Sent magic link to ${isExistingUser ? "existing" : "new"} user ${email}`);
     }
 
     return NextResponse.json({
