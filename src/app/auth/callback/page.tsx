@@ -51,7 +51,7 @@ function AuthCallbackHandler() {
     next: string
   ) {
     await supabase.auth.getSession();
-    const redirect = getInviteSetupRedirect(user, next);
+    const redirect = await getInviteSetupRedirect(user, next);
     if (redirect) {
       router.replace(redirect);
       router.refresh();
@@ -120,23 +120,33 @@ function AuthCallbackHandler() {
    * If the user is navigating to an invite page and this is their first sign-in
    * (new user created via invite), redirect to the setup page.
    */
-  function getInviteSetupRedirect(
+  async function getInviteSetupRedirect(
     user: { created_at: string; last_sign_in_at?: string | null; user_metadata?: any },
     next: string
-  ): string | null {
-    const inviteMatch = next.match(/^\/invite\/([a-zA-Z0-9]+)$/);
-    if (!inviteMatch) return null;
-
+  ): Promise<string | null> {
     const createdAt = new Date(user.created_at).getTime();
     const lastSignIn = user.last_sign_in_at
       ? new Date(user.last_sign_in_at).getTime()
       : 0;
     const isFirstSignIn = Math.abs(createdAt - lastSignIn) < 120000;
-    const hasNoPassword = !user.user_metadata?.full_name;
+    if (!isFirstSignIn) return null;
 
-    if (isFirstSignIn && hasNoPassword) {
+    const inviteMatch = next.match(/^\/invite\/([a-zA-Z0-9]+)$/);
+    if (inviteMatch) {
       return `/invite/${inviteMatch[1]}/setup`;
     }
+
+    try {
+      const res = await fetch("/api/team/pending-invites", { cache: "no-store" });
+      const json = await res.json();
+      const pendingInvite = json?.invites?.[0];
+      if (res.ok && pendingInvite?.token) {
+        return `/invite/${pendingInvite.token}/setup`;
+      }
+    } catch {
+      return null;
+    }
+
     return null;
   }
 
