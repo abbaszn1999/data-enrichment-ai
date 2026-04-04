@@ -19,10 +19,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
-import { loadProductsJson, saveProductsJson, loadCategoriesJson, type MasterProductJson, type CategoryJson } from "@/lib/storage-helpers";
+import { loadProductsJson, saveProductsJson, type MasterProductJson } from "@/lib/storage-helpers";
 
 const PAGE_SIZES = [25, 50, 100];
-
 
 export default function ProductsPage() {
   const params = useParams();
@@ -33,11 +32,8 @@ export default function ProductsPage() {
   const [allProducts, setAllProducts] = useState<MasterProductJson[]>([]);
   const [products, setProducts] = useState<MasterProductJson[]>([]);
   const [total, setTotal] = useState(0);
-  const [categories, setCategories] = useState<CategoryJson[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -65,12 +61,8 @@ export default function ProductsPage() {
     if (!workspace) return;
     setLoading(true);
     try {
-      const [prods, cats] = await Promise.all([
-        loadProductsJson(workspace.id),
-        loadCategoriesJson(workspace.id),
-      ]);
+      const prods = await loadProductsJson(workspace.id);
       setAllProducts(prods);
-      setCategories(cats);
     } catch (err) {
       console.error(err);
     } finally {
@@ -92,16 +84,10 @@ export default function ProductsPage() {
         Object.values(p.data || {}).some((v) => String(v).toLowerCase().includes(s))
       );
     }
-    if (categoryFilter) {
-      filtered = filtered.filter((p) => p.categoryId === categoryFilter);
-    }
-    if (statusFilter) {
-      filtered = filtered.filter((p) => (p.status || "active") === statusFilter);
-    }
     setTotal(filtered.length);
     const start = (page - 1) * pageSize;
     setProducts(filtered.slice(start, start + pageSize));
-  }, [allProducts, search, categoryFilter, statusFilter, page, pageSize]);
+  }, [allProducts, search, page, pageSize]);
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -200,26 +186,6 @@ export default function ProductsPage() {
             </button>
           )}
         </div>
-        <select
-          value={categoryFilter}
-          onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }}
-          className="h-9 px-2.5 text-xs rounded-md border bg-background"
-        >
-          <option value="">All Categories</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
-        <select
-          value={statusFilter}
-          onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-          className="h-9 px-2.5 text-xs rounded-md border bg-background"
-        >
-          <option value="">All Status</option>
-          <option value="active">Active</option>
-          <option value="archived">Archived</option>
-          <option value="draft">Draft</option>
-        </select>
       </div>
 
       {/* Bulk Actions */}

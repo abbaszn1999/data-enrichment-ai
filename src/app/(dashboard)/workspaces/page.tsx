@@ -14,10 +14,20 @@ import {
   Trash2,
   Mail,
   CheckCircle2,
+  Lock,
+  Crown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { getWorkspaces, deleteWorkspace, type WorkspaceWithRole } from "@/lib/supabase";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -29,6 +39,14 @@ export default function WorkspacesPage() {
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState<any[]>([]);
   const [acceptingInvite, setAcceptingInvite] = useState<string | null>(null);
+  const [checkingLimit, setCheckingLimit] = useState(false);
+  const [limitDialogOpen, setLimitDialogOpen] = useState(false);
+  const [workspaceLimit, setWorkspaceLimit] = useState<{
+    currentCount: number;
+    maxWorkspaces: number;
+    planName: string | null;
+    hasActiveSubscription: boolean;
+  } | null>(null);
 
   useEffect(() => {
     getWorkspaces()
@@ -65,6 +83,32 @@ export default function WorkspacesPage() {
     }
   };
 
+  const handleNewWorkspaceClick = async () => {
+    setCheckingLimit(true);
+    try {
+      const res = await fetch("/api/workspaces/limit", { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to check workspace limit");
+
+      if (json.canCreate) {
+        router.push("/workspaces/new");
+        return;
+      }
+
+      setWorkspaceLimit({
+        currentCount: json.currentCount,
+        maxWorkspaces: json.maxWorkspaces,
+        planName: json.planName,
+        hasActiveSubscription: json.hasActiveSubscription,
+      });
+      setLimitDialogOpen(true);
+    } catch (err: any) {
+      alert(err?.message || "Failed to check workspace limit");
+    } finally {
+      setCheckingLimit(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this workspace? This action cannot be undone.")) return;
     try {
@@ -94,11 +138,9 @@ export default function WorkspacesPage() {
             </p>
           </div>
           {workspaces.some((ws) => ws.owner_id === user?.id) || workspaces.length === 0 ? (
-            <Link href="/workspaces/new">
-              <Button className="gap-2">
-                <Plus className="h-4 w-4" /> New Workspace
-              </Button>
-            </Link>
+            <Button className="gap-2" onClick={handleNewWorkspaceClick} disabled={checkingLimit}>
+              {checkingLimit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} New Workspace
+            </Button>
           ) : null}
         </div>
 
@@ -152,11 +194,9 @@ export default function WorkspacesPage() {
                 Create your first workspace to get started
               </p>
             </div>
-            <Link href="/workspaces/new">
-              <Button className="gap-2">
-                <Plus className="h-4 w-4" /> Create Workspace
-              </Button>
-            </Link>
+            <Button className="gap-2" onClick={handleNewWorkspaceClick} disabled={checkingLimit}>
+              {checkingLimit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Create Workspace
+            </Button>
           </Card>
         )}
 
@@ -240,6 +280,50 @@ export default function WorkspacesPage() {
             ))}
           </div>
         )}
+
+        <Dialog open={limitDialogOpen} onOpenChange={setLimitDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Lock className="h-5 w-5 text-amber-500" /> Workspace limit reached
+              </DialogTitle>
+              <DialogDescription>
+                You have reached the maximum number of workspaces allowed for your current plan.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="rounded-xl border bg-muted/40 p-4 space-y-3">
+              <div className="flex items-start gap-3">
+                <div className="h-10 w-10 rounded-xl bg-amber-500/10 flex items-center justify-center shrink-0">
+                  <Crown className="h-5 w-5 text-amber-500" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold">
+                    {workspaceLimit?.planName || "Current plan"}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {workspaceLimit?.currentCount ?? 0} of {workspaceLimit?.maxWorkspaces ?? 1} workspace slots used.
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-sm text-muted-foreground leading-6">
+                {workspaceLimit?.hasActiveSubscription
+                  ? "Upgrade your plan to create more workspaces."
+                  : "You can create only one workspace without an active subscription. Upgrade your plan to create more."}
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setLimitDialogOpen(false)}>
+                Close
+              </Button>
+              <Button onClick={() => router.push(workspaces[0] ? `/w/${workspaces[0].slug}/subscription` : "/workspaces")}>
+                Upgrade Plan
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
