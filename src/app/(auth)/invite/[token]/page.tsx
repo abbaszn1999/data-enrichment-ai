@@ -151,13 +151,31 @@ export default function InvitePage() {
       )}
 
       {isExistingUser ? (
-        // Existing user — only show Sign In
+        // Existing user — we sent them a magic link, so tell them to check email first.
+        // Also offer Sign In with password as a secondary option.
         <div className="w-full space-y-3 mt-2">
-          <p className="text-xs text-muted-foreground">
-            Sign in with <strong>{invite?.email}</strong> to accept this invite.
+          <div className="flex items-center gap-2 p-4 rounded-lg bg-muted/50 w-full">
+            <Mail className="h-5 w-5 text-primary flex-shrink-0" />
+            <div className="text-left">
+              <p className="text-sm font-medium">Check your email</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                We sent a sign-in link to <strong>{invite?.email}</strong>. Click the link in that email to accept this invite.
+              </p>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Don&apos;t see the email? Check your spam folder or ask the workspace owner to resend the invite.
           </p>
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-border/50" />
+            </div>
+            <div className="relative flex justify-center text-[10px] uppercase">
+              <span className="bg-card px-2 text-muted-foreground">or</span>
+            </div>
+          </div>
           <Link href={`/login?redirect=/invite/${token}&email=${encodeURIComponent(invite?.email || "")}`} className="block">
-            <Button className="w-full">Sign In</Button>
+            <Button variant="outline" className="w-full text-sm">Sign in with password</Button>
           </Link>
         </div>
       ) : (
