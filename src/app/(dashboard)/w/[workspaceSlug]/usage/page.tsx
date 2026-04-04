@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   CreditCard,
   Sparkles,
@@ -11,31 +11,28 @@ import {
   Zap,
   ArrowUpRight,
   BarChart3,
-  Search as SearchIcon,
   Image as ImageIcon,
   FolderTree,
   Columns3,
   Coins,
   Activity,
   Crown,
+  Filter,
+  Users,
+  ChevronDown,
 } from "lucide-react";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useWorkspaceContext } from "../layout";
-import {
-  getWorkspaceSubscription,
-  getCreditBalance,
-  getCreditTransactions,
-} from "@/lib/supabase";
 
 const OP_LABELS: Record<string, { label: string; icon: any; color: string }> = {
   ai_enrichment: { label: "AI Enrichment", icon: Sparkles, color: "text-purple-600" },
   ai_image_search: { label: "AI Image Search", icon: ImageIcon, color: "text-blue-600" },
   ai_column_mapping: { label: "AI Column Mapping", icon: Columns3, color: "text-amber-600" },
   ai_category_suggest: { label: "AI Category Suggest", icon: FolderTree, color: "text-green-600" },
+  ai_function: { label: "AI Function", icon: Zap, color: "text-indigo-600" },
   credit_topup: { label: "Credit Top-up", icon: Zap, color: "text-emerald-600" },
   monthly_reset: { label: "Monthly Reset", icon: Clock, color: "text-gray-600" },
 };
@@ -44,25 +41,36 @@ export default function UsagePage() {
   const { workspace } = useWorkspaceContext();
   const params = useParams();
   const slug = params.workspaceSlug as string;
-  const [subscription, setSubscription] = useState<any>(null);
-  const [credits, setCredits] = useState({ used: 0, total: 0, remaining: 0 });
-  const [transactions, setTransactions] = useState<any[]>([]);
+
+  const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [filterUser, setFilterUser] = useState<string>("all");
+  const [filterOpen, setFilterOpen] = useState(false);
 
   useEffect(() => {
     if (!workspace) return;
-    Promise.all([
-      getWorkspaceSubscription(workspace.id),
-      getCreditBalance(workspace.id),
-      getCreditTransactions(workspace.id),
-    ])
-      .then(([sub, bal, txns]) => {
-        setSubscription(sub);
-        setCredits(bal);
-        setTransactions(txns);
-      })
+    fetch(`/api/credits?workspaceId=${workspace.id}&limit=200`)
+      .then((r) => r.json())
+      .then((d) => setData(d))
+      .catch(console.error)
       .finally(() => setLoading(false));
   }, [workspace]);
+
+  const transactions = data?.transactions ?? [];
+  const members = data?.members ?? [];
+  const balance = data?.balance ?? { used: 0, total: 0, remaining: 0, bonus: 0 };
+  const plan = data?.plan;
+  const subscription = data?.subscription;
+
+  const filteredTransactions = useMemo(() => {
+    if (filterUser === "all") return transactions;
+    return transactions.filter((tx: any) => tx.user_id === filterUser);
+  }, [transactions, filterUser]);
+
+  const allTimeUsed = useMemo(
+    () => transactions.reduce((sum: number, t: any) => sum + (t.credits_used > 0 ? t.credits_used : 0), 0),
+    [transactions]
+  );
 
   if (loading) {
     return (
@@ -72,9 +80,8 @@ export default function UsagePage() {
     );
   }
 
-  const plan = subscription?.subscription_plans;
-  const usagePercent = credits.total > 0 ? Math.round((credits.used / credits.total) * 100) : 0;
-  const isLow = credits.total > 0 && credits.remaining < credits.total * 0.2;
+  const usagePercent = balance.total > 0 ? Math.round((balance.used / balance.total) * 100) : 0;
+  const isLow = balance.total > 0 && balance.remaining < balance.total * 0.2;
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-8">
@@ -102,16 +109,16 @@ export default function UsagePage() {
               <div>
                 <div className="text-xs text-muted-foreground font-medium">AI Credits Remaining</div>
                 <div className="text-3xl font-extrabold tracking-tight mt-0.5">
-                  {credits.remaining.toLocaleString()}
+                  {balance.remaining.toLocaleString()}
                   <span className="text-base font-normal text-muted-foreground ml-1.5">
-                    / {credits.total.toLocaleString()}
+                    / {balance.total.toLocaleString()}
                   </span>
                 </div>
               </div>
             </div>
             {plan && (
               <Badge variant="secondary" className="text-xs px-3 py-1 font-semibold">
-                {plan.display_name} Plan
+                {plan.displayName} Plan
               </Badge>
             )}
           </div>
@@ -126,12 +133,19 @@ export default function UsagePage() {
               />
             </div>
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>{credits.used.toLocaleString()} used this month</span>
-              {subscription?.credits_reset_at && (
-                <span>Resets {new Date(subscription.credits_reset_at).toLocaleDateString()}</span>
+              <span>{balance.used.toLocaleString()} used this month</span>
+              {balance.resetsAt && (
+                <span>Resets {new Date(balance.resetsAt).toLocaleDateString()}</span>
               )}
             </div>
           </div>
+
+          {balance.bonus > 0 && (
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+              <Zap className="h-3 w-3 text-emerald-500" />
+              <span>+{balance.bonus.toLocaleString()} bonus credits available</span>
+            </div>
+          )}
 
           {isLow && (
             <div className="flex items-center gap-3 p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200/40">
@@ -161,18 +175,18 @@ export default function UsagePage() {
             </div>
             <div>
               <div className="text-xs text-muted-foreground">Current Plan</div>
-              <div className="text-base font-bold">{plan?.display_name || "Free"}</div>
+              <div className="text-base font-bold">{plan?.displayName || "Free"}</div>
             </div>
           </div>
           <div className="space-y-2.5 text-[11px] border-t border-border/50 pt-3">
             <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Monthly Credits</span>
-              <span className="font-semibold">{plan?.monthly_ai_credits?.toLocaleString() || "50"}</span>
+              <span className="font-semibold">{(plan?.monthlyCredits ?? 0).toLocaleString()}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Price</span>
               <span className="font-semibold">
-                {plan?.price_monthly > 0 ? `$${plan.price_monthly}/mo` : "Free"}
+                {plan?.priceMonthly > 0 ? `$${plan.priceMonthly}/mo` : "Free"}
               </span>
             </div>
             <div className="flex justify-between items-center">
@@ -194,10 +208,10 @@ export default function UsagePage() {
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: "Credits Used (Month)", value: credits.used, icon: Coins, color: "text-primary bg-primary/10" },
-          { label: "Credits Used (All Time)", value: transactions.reduce((sum, t) => sum + (t.credits_used > 0 ? t.credits_used : 0), 0), icon: TrendingUp, color: "text-purple-600 bg-purple-500/10" },
+          { label: "Credits Used (Month)", value: balance.used, icon: Coins, color: "text-primary bg-primary/10" },
+          { label: "Credits Used (All Time)", value: allTimeUsed, icon: TrendingUp, color: "text-purple-600 bg-purple-500/10" },
           { label: "AI Operations", value: transactions.length, icon: Activity, color: "text-blue-600 bg-blue-500/10" },
-          { label: "Avg Credits / Op", value: transactions.length > 0 ? Math.round(credits.used / transactions.length) : 0, icon: BarChart3, color: "text-amber-600 bg-amber-500/10" },
+          { label: "Avg Credits / Op", value: transactions.length > 0 ? Math.round(allTimeUsed / transactions.length) : 0, icon: BarChart3, color: "text-amber-600 bg-amber-500/10" },
         ].map((stat) => (
           <div key={stat.label} className="rounded-2xl border-2 border-border/60 p-4 space-y-2">
             <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${stat.color}`}>
@@ -242,27 +256,75 @@ export default function UsagePage() {
 
       {/* Transaction Log */}
       <div className="rounded-2xl border-2 border-border/60 overflow-hidden">
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-border/60 bg-muted/20">
-          <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Activity className="h-4.5 w-4.5 text-primary" />
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border/60 bg-muted/20">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center">
+              <Activity className="h-4.5 w-4.5 text-primary" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold">Credit Transaction Log</h2>
+              <p className="text-[11px] text-muted-foreground">
+                {filteredTransactions.length} {filterUser !== "all" ? "filtered" : "total"} operations
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-sm font-bold">Credit Transaction Log</h2>
-            <p className="text-[11px] text-muted-foreground">{transactions.length} total operations</p>
-          </div>
+
+          {/* Team member filter */}
+          {members.length > 1 && (
+            <div className="relative">
+              <button
+                onClick={() => setFilterOpen(!filterOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border/60 bg-background hover:bg-muted/50 transition-colors text-xs"
+              >
+                <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="font-medium">
+                  {filterUser === "all"
+                    ? "All Members"
+                    : members.find((m: any) => m.userId === filterUser)?.fullName || "Unknown"}
+                </span>
+                <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${filterOpen ? "rotate-180" : ""}`} />
+              </button>
+              {filterOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setFilterOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-20 w-52 rounded-lg border border-border/60 bg-background shadow-lg py-1">
+                    <button
+                      onClick={() => { setFilterUser("all"); setFilterOpen(false); }}
+                      className={`w-full text-left px-3 py-2 text-xs hover:bg-muted/50 transition-colors flex items-center gap-2 ${filterUser === "all" ? "bg-muted/30 font-semibold" : ""}`}
+                    >
+                      <Users className="h-3 w-3 text-muted-foreground" />
+                      All Members
+                    </button>
+                    {members.map((m: any) => (
+                      <button
+                        key={m.userId}
+                        onClick={() => { setFilterUser(m.userId); setFilterOpen(false); }}
+                        className={`w-full text-left px-3 py-2 text-xs hover:bg-muted/50 transition-colors flex items-center justify-between ${filterUser === m.userId ? "bg-muted/30 font-semibold" : ""}`}
+                      >
+                        <span>{m.fullName}</span>
+                        <Badge variant="secondary" className="text-[8px] px-1.5 py-0">{m.role}</Badge>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
-        <div className="overflow-x-auto">
+
+        {/* Scrollable table */}
+        <div className="overflow-auto max-h-[420px]">
           <table className="w-full">
-            <thead>
+            <thead className="sticky top-0 z-[1]">
               <tr className="border-b bg-muted/30">
-                <th className="text-left px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Operation</th>
-                <th className="text-right px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Credits</th>
-                <th className="text-left px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">User</th>
-                <th className="text-left px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Date</th>
+                <th className="text-left px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">Operation</th>
+                <th className="text-right px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">Credits</th>
+                <th className="text-left px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">User</th>
+                <th className="text-left px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">Date</th>
               </tr>
             </thead>
             <tbody>
-              {transactions.length === 0 ? (
+              {filteredTransactions.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="text-center py-12">
                     <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-3">
@@ -273,7 +335,7 @@ export default function UsagePage() {
                   </td>
                 </tr>
               ) : (
-                transactions.map((tx) => {
+                filteredTransactions.map((tx: any) => {
                   const op = OP_LABELS[tx.operation] || { label: tx.operation, icon: Zap, color: "text-gray-600" };
                   const OpIcon = op.icon;
                   return (
@@ -292,7 +354,7 @@ export default function UsagePage() {
                         </span>
                       </td>
                       <td className="px-5 py-3 text-xs text-muted-foreground">
-                        {tx.profiles?.full_name || "System"}
+                        {tx.user_name || "System"}
                       </td>
                       <td className="px-5 py-3 text-xs text-muted-foreground">
                         {new Date(tx.created_at).toLocaleString()}
