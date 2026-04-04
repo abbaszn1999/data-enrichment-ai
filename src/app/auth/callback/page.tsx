@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "@/lib/supabase-browser";
 
 function LoadingSpinner() {
   return (
@@ -37,6 +37,7 @@ function AuthCallbackHandler() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const processed = useRef(false);
+  const supabase = createClient();
 
   useEffect(() => {
     if (processed.current) return;
@@ -45,26 +46,30 @@ function AuthCallbackHandler() {
     handleCallback();
   }, []);
 
+  async function finalizeRedirect(
+    user: { created_at: string; last_sign_in_at?: string | null; user_metadata?: any },
+    next: string
+  ) {
+    await supabase.auth.getSession();
+    const redirect = getInviteSetupRedirect(user, next);
+    if (redirect) {
+      router.replace(redirect);
+      router.refresh();
+      return;
+    }
+    router.replace(next);
+    router.refresh();
+  }
+
   async function handleCallback() {
     const next = searchParams.get("next") || "/workspaces";
     const code = searchParams.get("code");
-
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { auth: { flowType: "pkce" } }
-    );
 
     // ── Flow 1: PKCE — ?code= in query params ──
     if (code) {
       const { error, data } = await supabase.auth.exchangeCodeForSession(code);
       if (!error && data?.user) {
-        const redirect = getInviteSetupRedirect(data.user, next);
-        if (redirect) {
-          router.replace(redirect);
-          return;
-        }
-        router.replace(next);
+        await finalizeRedirect(data.user, next);
         return;
       }
       console.error("[auth/callback] Code exchange failed:", error?.message);
@@ -85,12 +90,7 @@ function AuthCallbackHandler() {
           refresh_token: refreshToken,
         });
         if (!error && data?.user) {
-          const redirect = getInviteSetupRedirect(data.user, next);
-          if (redirect) {
-            router.replace(redirect);
-            return;
-          }
-          router.replace(next);
+          await finalizeRedirect(data.user, next);
           return;
         }
         console.error("[auth/callback] Session set failed:", error?.message);
@@ -106,12 +106,7 @@ function AuthCallbackHandler() {
         type: type as any,
       });
       if (!error && data?.user) {
-        const redirect = getInviteSetupRedirect(data.user, next);
-        if (redirect) {
-          router.replace(redirect);
-          return;
-        }
-        router.replace(next);
+        await finalizeRedirect(data.user, next);
         return;
       }
       console.error("[auth/callback] verifyOtp failed:", error?.message);
