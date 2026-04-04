@@ -30,22 +30,22 @@ export async function POST(request: NextRequest) {
 
     const adminClient = createAdminClient();
 
-    // Check if user already exists (via profiles table — efficient, no listUsers)
-    const { data: existingProfile } = await adminClient
-      .from("profiles")
-      .select("id, full_name")
-      .ilike("email", email)
-      .maybeSingle();
-
-    const isExistingUser = !!(existingProfile?.full_name);
+    // Check if user already exists in auth.users directly.
+    // We cannot use profiles.full_name because inviteUserByEmail creates an auth.users
+    // record with no full_name, making the user appear "new" on subsequent invites → 422.
+    const { data: listData } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
+    const existingAuthUser = listData?.users?.find(
+      (u) => u.email?.toLowerCase() === email.toLowerCase()
+    );
+    const isExistingUser = !!existingAuthUser;
 
     // Check if already a member of this workspace
-    if (existingProfile) {
+    if (existingAuthUser) {
       const { data: existingMember } = await adminClient
         .from("workspace_members")
         .select("id")
         .eq("workspace_id", workspaceId)
-        .eq("user_id", existingProfile.id)
+        .eq("user_id", existingAuthUser.id)
         .maybeSingle();
 
       if (existingMember) {

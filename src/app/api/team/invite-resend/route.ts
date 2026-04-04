@@ -50,14 +50,12 @@ export async function POST(request: NextRequest) {
       "http://localhost:4000";
     const callbackUrl = `${origin}/auth/callback?next=/invite/${invite.token}`;
 
-    // Check if this is an existing user or new user
-    const { data: existingProfile } = await adminClient
-      .from("profiles")
-      .select("id, full_name")
-      .ilike("email", invite.email)
-      .maybeSingle();
-
-    const isExistingUser = !!(existingProfile?.full_name);
+    // Check if user exists in auth.users directly (not profiles.full_name — unreliable).
+    const { data: listData } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
+    const existingAuthUser = listData?.users?.find(
+      (u) => u.email?.toLowerCase() === invite.email.toLowerCase()
+    );
+    const isExistingUser = !!existingAuthUser;
     let emailSent = false;
 
     if (isExistingUser) {
