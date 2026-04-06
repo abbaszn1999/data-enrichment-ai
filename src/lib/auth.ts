@@ -31,7 +31,7 @@ export async function signIn(email: string, password: string) {
 
 export async function signInWithGoogle(redirectTo?: string) {
   const supabase = createClient();
-  const callbackBase = `${window.location.origin}/auth/callback`;
+  const callbackBase = `${window.location.origin}/auth/callback/google`;
   const callbackUrl = redirectTo
     ? `${callbackBase}?next=${encodeURIComponent(redirectTo)}`
     : `${callbackBase}?next=/workspaces`;
