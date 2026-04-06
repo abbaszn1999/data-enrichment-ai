@@ -129,10 +129,10 @@ export function createSerperCost(queryCount: number = 1): AiCallCost {
 /**
  * Convert dollar cost to credits.
  * 10 credits = $1 (1 credit = $0.10)
- * Example: $0.075 = 1 credit, $1.00 = 10 credits
+ * Example: $0.075 = 0.750 credits, $1.00 = 10.000 credits
  */
 export function costToCredits(dollarCost: number): number {
-  return Math.ceil(dollarCost * 10);
+  return Math.ceil(dollarCost * 10 * 1000) / 1000;
 }
 
 export function creditsToDollars(credits: number): number {

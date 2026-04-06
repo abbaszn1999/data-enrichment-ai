@@ -19,19 +19,48 @@ export async function GET(request: Request) {
     const bal = calculateCreditBalance(ownerSub?.subscription ?? null);
     const plan = ownerSub?.plan;
 
-    // Get transactions with user profile names
-    const { data: transactions } = await admin
+    // Get transactions first
+    const { data: transactions, error: transactionsError } = await admin
       .from("credit_transactions")
-      .select("*, profiles!credit_transactions_user_id_fkey(full_name)")
+      .select("*")
       .eq("workspace_id", workspaceId)
       .order("created_at", { ascending: false })
       .limit(limit);
 
+    if (transactionsError) {
+      throw transactionsError;
+    }
+
     // Get workspace members for filter dropdown
-    const { data: members } = await admin
+    const { data: members, error: membersError } = await admin
       .from("workspace_members")
-      .select("user_id, role, profiles!workspace_members_user_id_fkey(full_name)")
+      .select("user_id, role")
       .eq("workspace_id", workspaceId);
+
+    if (membersError) {
+      throw membersError;
+    }
+
+    const profileIds = Array.from(
+      new Set([
+        ...(transactions || []).map((tx: any) => tx.user_id).filter(Boolean),
+        ...(members || []).map((m: any) => m.user_id).filter(Boolean),
+      ])
+    );
+
+    let profilesById = new Map<string, string>();
+    if (profileIds.length > 0) {
+      const { data: profiles, error: profilesError } = await admin
+        .from("profiles")
+        .select("id, full_name")
+        .in("id", profileIds);
+
+      if (profilesError) {
+        throw profilesError;
+      }
+
+      profilesById = new Map((profiles || []).map((profile: any) => [profile.id, profile.full_name || "Unknown"]));
+    }
 
     return NextResponse.json({
       balance: {
@@ -56,12 +85,12 @@ export async function GET(request: Request) {
       } : null,
       transactions: (transactions || []).map((tx: any) => ({
         ...tx,
-        user_name: tx.profiles?.full_name || null,
+        user_name: tx.user_id ? profilesById.get(tx.user_id) || null : null,
       })),
       members: (members || []).map((m: any) => ({
         userId: m.user_id,
         role: m.role,
-        fullName: (m.profiles as any)?.full_name || "Unknown",
+        fullName: profilesById.get(m.user_id) || "Unknown",
       })),
     });
   } catch (error: any) {

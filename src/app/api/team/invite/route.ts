@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { createClient } from "@/lib/supabase-server";
+import { getOwnerSubscription, isSubscriptionActive } from "@/lib/stripe";
 
 export async function POST(request: NextRequest) {
   try {
@@ -29,6 +30,39 @@ export async function POST(request: NextRequest) {
     }
 
     const adminClient = createAdminClient();
+
+    const ownerSub = await getOwnerSubscription(workspaceId);
+    const hasActiveSubscription = !!ownerSub?.subscription && isSubscriptionActive(ownerSub.subscription.status);
+
+    if (!hasActiveSubscription) {
+      return NextResponse.json(
+        { error: "An active subscription is required before inviting team members" },
+        { status: 403 }
+      );
+    }
+
+    const maxMembers = ownerSub?.plan?.max_members_per_workspace;
+    if (maxMembers) {
+      const [{ count: memberCount }, { count: pendingInviteCount }] = await Promise.all([
+        adminClient
+          .from("workspace_members")
+          .select("id", { count: "exact", head: true })
+          .eq("workspace_id", workspaceId),
+        adminClient
+          .from("workspace_invites")
+          .select("id", { count: "exact", head: true })
+          .eq("workspace_id", workspaceId)
+          .is("accepted_at", null),
+      ]);
+
+      const currentSeatCount = (memberCount ?? 0) + (pendingInviteCount ?? 0);
+      if (currentSeatCount >= maxMembers) {
+        return NextResponse.json(
+          { error: `Your current plan allows up to ${maxMembers} team members per workspace. Upgrade to invite more.` },
+          { status: 403 }
+        );
+      }
+    }
 
     // Check if user already exists in auth.users directly.
     // We cannot use profiles.full_name because inviteUserByEmail creates an auth.users

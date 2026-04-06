@@ -32,6 +32,7 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { useRole } from "@/hooks/use-role";
 import { useCredits } from "@/hooks/use-credits";
 import { signOut } from "@/lib/auth";
+import { formatCredits } from "@/lib/format-credits";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -173,8 +174,8 @@ export default function WorkspaceLayout({
                   }`}
                 >
                   <Coins className="h-3.5 w-3.5" />
-                  <span>{credits.remaining.toLocaleString()}</span>
-                  <span className="text-muted-foreground/60">/ {credits.total.toLocaleString()}</span>
+                  <span>{formatCredits(credits.remaining)}</span>
+                  <span className="text-muted-foreground/60">/ {formatCredits(credits.total)}</span>
                 </Link>
               )}
 

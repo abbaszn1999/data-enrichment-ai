@@ -150,33 +150,6 @@ export interface Database {
         };
       };
       // NOTE: import_rows stored in Storage JSON (projects/{sessionId}.json)
-      export_templates: {
-        Row: {
-          id: string;
-          workspace_id: string | null;
-          platform: string;
-          name: string;
-          description: string;
-          file_format: "csv" | "xlsx" | "tsv";
-          column_mapping: Json;
-          is_system: boolean;
-          created_at: string;
-        };
-        Insert: {
-          workspace_id?: string | null;
-          platform: string;
-          name: string;
-          description?: string;
-          file_format?: "csv" | "xlsx" | "tsv";
-          column_mapping?: Json;
-          is_system?: boolean;
-        };
-        Update: {
-          name?: string;
-          description?: string;
-          column_mapping?: Json;
-        };
-      };
       activity_log: {
         Row: {
           id: string;
@@ -287,37 +260,6 @@ export interface Database {
           updated_at?: string;
         };
       };
-      workspace_subscriptions: {
-        Row: {
-          id: string;
-          workspace_id: string;
-          plan_id: string;
-          billing_cycle: "monthly" | "yearly" | "lifetime";
-          status: "active" | "trialing" | "past_due" | "cancelled" | "expired";
-          current_period_start: string;
-          current_period_end: string | null;
-          trial_end: string | null;
-          cancelled_at: string | null;
-          credits_used: number;
-          credits_reset_at: string;
-          external_subscription_id: string | null;
-          external_customer_id: string | null;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: {
-          workspace_id: string;
-          plan_id: string;
-          billing_cycle?: "monthly" | "yearly" | "lifetime";
-        };
-        Update: {
-          plan_id?: string;
-          status?: "active" | "trialing" | "past_due" | "cancelled" | "expired";
-          credits_used?: number;
-          credits_reset_at?: string;
-          updated_at?: string;
-        };
-      };
       credit_packs: {
         Row: {
           id: string;
@@ -393,7 +335,7 @@ export interface Database {
           id: string;
           workspace_id: string;
           user_id: string;
-          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "credit_topup" | "monthly_reset";
+          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "credit_topup" | "monthly_reset";
           credits_used: number;
           entity_type: string | null;
           entity_id: string | null;
@@ -403,7 +345,7 @@ export interface Database {
         Insert: {
           workspace_id: string;
           user_id: string;
-          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "credit_topup" | "monthly_reset";
+          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "credit_topup" | "monthly_reset";
           credits_used?: number;
           entity_type?: string | null;
           entity_id?: string | null;

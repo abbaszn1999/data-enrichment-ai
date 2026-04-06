@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Users,
   Plus,
@@ -24,11 +25,20 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
 import { useAuth } from "@/hooks/use-auth";
+import { useSubscription } from "@/hooks/use-subscription";
 import {
   getWorkspaceMembers,
   getWorkspaceInvites,
@@ -50,10 +60,13 @@ export default function TeamPage() {
   const { workspace, role } = useWorkspaceContext();
   const permissions = useRole(role);
   const { user } = useAuth();
+  const router = useRouter();
+  const { subscription, plan, isActive, isLoading: subscriptionLoading } = useSubscription(workspace?.id ?? null);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [invites, setInvites] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
+  const [limitDialogOpen, setLimitDialogOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Role>("editor");
   const [inviteLoading, setInviteLoading] = useState(false);
@@ -63,6 +76,25 @@ export default function TeamPage() {
   const [inviteEmailSent, setInviteEmailSent] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [resendingInvite, setResendingInvite] = useState<string | null>(null);
+
+  const pendingInviteCount = invites.length;
+  const currentMemberCount = members.length;
+  const currentSeatCount = currentMemberCount + pendingInviteCount;
+  const maxMembers = plan?.max_members_per_workspace ?? null;
+  const hasReachedMemberLimit = !!maxMembers && currentSeatCount >= maxMembers;
+
+  const handleOpenInvite = () => {
+    if (subscriptionLoading) return;
+    if (!subscription || !isActive) {
+      return;
+    }
+    if (hasReachedMemberLimit) {
+      setLimitDialogOpen(true);
+      return;
+    }
+    setInviteError("");
+    setShowInvite((prev) => !prev);
+  };
 
   const handleResendInvite = async (inviteId: string) => {
     setResendingInvite(inviteId);
@@ -186,7 +218,7 @@ export default function TeamPage() {
           </p>
         </div>
         {permissions.canAdmin && (
-          <Button size="sm" className="gap-1.5" onClick={() => setShowInvite(!showInvite)}>
+          <Button size="sm" className="gap-1.5" onClick={handleOpenInvite} disabled={subscriptionLoading}>
             <UserPlus className="h-4 w-4" />
             Invite Member
           </Button>
@@ -514,6 +546,46 @@ export default function TeamPage() {
           </div>
         );
       })()}
+
+      <Dialog open={limitDialogOpen} onOpenChange={setLimitDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5 text-amber-500" /> Team member limit reached
+            </DialogTitle>
+            <DialogDescription>
+              You have reached the maximum number of team members allowed for your current plan.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-xl border bg-muted/40 p-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-xl bg-amber-500/10 flex items-center justify-center shrink-0">
+                <Crown className="h-5 w-5 text-amber-500" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold">{plan?.display_name || "Current plan"}</p>
+                <p className="text-sm text-muted-foreground">
+                  {currentSeatCount} of {maxMembers ?? 0} team member slots used.
+                </p>
+              </div>
+            </div>
+
+            <div className="text-sm text-muted-foreground leading-6">
+              Upgrade your plan to invite more team members to this workspace.
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLimitDialogOpen(false)}>
+              Close
+            </Button>
+            <Button onClick={() => router?.push(`/w/${workspace?.slug}/subscription`)}>
+              Upgrade Plan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

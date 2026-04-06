@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { roundCredits } from "@/lib/format-credits";
 
 let _stripe: Stripe | null = null;
 
@@ -107,16 +108,16 @@ export function calculateCreditBalance(sub: {
 } | null) {
   if (!sub) return { monthlyRemaining: 0, bonus: 0, total: 0, used: 0, monthlyTotal: 0 };
 
-  const monthlyTotal = (sub.subscription_plans as any)?.monthly_ai_credits ?? 0;
-  const monthlyRemaining = Math.max(0, monthlyTotal - sub.credits_used);
-  const bonus = sub.bonus_credits ?? 0;
+  const monthlyTotal = roundCredits((sub.subscription_plans as any)?.monthly_ai_credits ?? 0);
+  const monthlyRemaining = roundCredits(Math.max(0, monthlyTotal - sub.credits_used));
+  const bonus = roundCredits(sub.bonus_credits ?? 0);
 
   return {
     monthlyTotal,
     monthlyRemaining,
     bonus,
-    total: monthlyRemaining + bonus,
-    used: sub.credits_used,
+    total: roundCredits(monthlyRemaining + bonus),
+    used: roundCredits(sub.credits_used),
   };
 }
 

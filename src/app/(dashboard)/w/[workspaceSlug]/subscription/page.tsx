@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useParams } from "next/navigation";
+import { useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import {
   Check,
   Zap,
@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspaceContext } from "../layout";
 import { useSubscription } from "@/hooks/use-subscription";
+import { formatCredits } from "@/lib/format-credits";
 
 const PLAN_META: Record<string, { icon: any; color: string; bgColor: string; borderColor: string; activeBorder: string }> = {
   starter: { icon: Zap, color: "text-blue-500", bgColor: "bg-blue-500/10", borderColor: "border-blue-500/20", activeBorder: "border-blue-500" },
@@ -114,8 +115,8 @@ export default function SubscriptionPage() {
             <div>
               <div className="text-sm font-semibold">{currentPlan?.display_name || "No Plan"}</div>
               <div className="text-xs text-muted-foreground">
-                {credits ? `${credits.total.toLocaleString()} credits remaining` : "No credits"}
-                {credits?.bonus ? ` (incl. ${credits.bonus.toLocaleString()} bonus)` : ""}
+                {credits ? `${formatCredits(credits.total)} credits remaining` : "No credits"}
+                {credits?.bonus ? ` (incl. ${formatCredits(credits.bonus)} bonus)` : ""}
                 {subscription.status === "past_due" && " · Payment failed"}
                 {subscription.cancelAtPeriodEnd && " · Cancels at period end"}
               </div>

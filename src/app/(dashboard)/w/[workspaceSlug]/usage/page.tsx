@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useWorkspaceContext } from "../layout";
+import { formatCredits } from "@/lib/format-credits";
 
 const OP_LABELS: Record<string, { label: string; icon: any; color: string }> = {
   ai_enrichment: { label: "AI Enrichment", icon: Sparkles, color: "text-purple-600" },
@@ -49,10 +50,18 @@ export default function UsagePage() {
 
   useEffect(() => {
     if (!workspace) return;
-    fetch(`/api/credits?workspaceId=${workspace.id}&limit=200`)
-      .then((r) => r.json())
+    setLoading(true);
+    fetch(`/api/credits?workspaceId=${workspace.id}&limit=200`, { cache: "no-store" })
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json?.error || "Failed to load credits");
+        return json;
+      })
       .then((d) => setData(d))
-      .catch(console.error)
+      .catch((err) => {
+        console.error(err);
+        setData(null);
+      })
       .finally(() => setLoading(false));
   }, [workspace]);
 
@@ -109,9 +118,9 @@ export default function UsagePage() {
               <div>
                 <div className="text-xs text-muted-foreground font-medium">AI Credits Remaining</div>
                 <div className="text-3xl font-extrabold tracking-tight mt-0.5">
-                  {balance.remaining.toLocaleString()}
+                  {formatCredits(balance.remaining)}
                   <span className="text-base font-normal text-muted-foreground ml-1.5">
-                    / {balance.total.toLocaleString()}
+                    / {formatCredits(balance.total)}
                   </span>
                 </div>
               </div>
@@ -133,7 +142,7 @@ export default function UsagePage() {
               />
             </div>
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>{balance.used.toLocaleString()} used this month</span>
+              <span>{formatCredits(balance.used)} used this month</span>
               {balance.resetsAt && (
                 <span>Resets {new Date(balance.resetsAt).toLocaleDateString()}</span>
               )}
@@ -143,7 +152,7 @@ export default function UsagePage() {
           {balance.bonus > 0 && (
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
               <Zap className="h-3 w-3 text-emerald-500" />
-              <span>+{balance.bonus.toLocaleString()} bonus credits available</span>
+              <span>+{formatCredits(balance.bonus)} bonus credits available</span>
             </div>
           )}
 
@@ -181,7 +190,7 @@ export default function UsagePage() {
           <div className="space-y-2.5 text-[11px] border-t border-border/50 pt-3">
             <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Monthly Credits</span>
-              <span className="font-semibold">{(plan?.monthlyCredits ?? 0).toLocaleString()}</span>
+              <span className="font-semibold">{formatCredits(plan?.monthlyCredits ?? 0)}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Price</span>
@@ -211,13 +220,13 @@ export default function UsagePage() {
           { label: "Credits Used (Month)", value: balance.used, icon: Coins, color: "text-primary bg-primary/10" },
           { label: "Credits Used (All Time)", value: allTimeUsed, icon: TrendingUp, color: "text-purple-600 bg-purple-500/10" },
           { label: "AI Operations", value: transactions.length, icon: Activity, color: "text-blue-600 bg-blue-500/10" },
-          { label: "Avg Credits / Op", value: transactions.length > 0 ? Math.round(allTimeUsed / transactions.length) : 0, icon: BarChart3, color: "text-amber-600 bg-amber-500/10" },
+          { label: "Avg Credits / Op", value: transactions.length > 0 ? allTimeUsed / transactions.length : 0, icon: BarChart3, color: "text-amber-600 bg-amber-500/10" },
         ].map((stat) => (
           <div key={stat.label} className="rounded-2xl border-2 border-border/60 p-4 space-y-2">
             <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${stat.color}`}>
               <stat.icon className="h-4 w-4" />
             </div>
-            <div className="text-2xl font-extrabold tracking-tight">{stat.value.toLocaleString()}</div>
+            <div className="text-2xl font-extrabold tracking-tight">{formatCredits(stat.value)}</div>
             <div className="text-[10px] text-muted-foreground font-medium">{stat.label}</div>
           </div>
         ))}
@@ -350,7 +359,7 @@ export default function UsagePage() {
                         <span className={`text-xs font-mono font-bold ${
                           tx.credits_used > 0 ? "text-destructive" : "text-green-600"
                         }`}>
-                          {tx.credits_used > 0 ? `-${tx.credits_used}` : `+${Math.abs(tx.credits_used)}`}
+                          {tx.credits_used > 0 ? `-${formatCredits(tx.credits_used, true)}` : `+${formatCredits(Math.abs(tx.credits_used), true)}`}
                         </span>
                       </td>
                       <td className="px-5 py-3 text-xs text-muted-foreground">
