@@ -67,12 +67,17 @@ function AuthCallbackHandler() {
 
     // ── Flow 1: PKCE — ?code= in query params ──
     if (code) {
-      const { error, data } = await supabase.auth.exchangeCodeForSession(code);
-      if (!error && data?.user) {
-        await finalizeRedirect(data.user, next);
+      const res = await fetch(`/api/auth/exchange-code?code=${encodeURIComponent(code)}`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+      });
+      const json = await res.json();
+      if (res.ok && json?.user) {
+        await finalizeRedirect(json.user, next);
         return;
       }
-      console.error("[auth/callback] Code exchange failed:", error?.message);
+      console.error("[auth/callback] Code exchange failed:", json?.error || "Unknown error");
       router.replace(`/login?error=auth_callback_error`);
       return;
     }
