@@ -98,7 +98,7 @@ export default function InviteSetupPage() {
       const res = await fetch("/api/team/invite-accept", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inviteId: invite.id }),
+        body: JSON.stringify({ inviteId: invite.id, fullName: fullName.trim() }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to accept invite");

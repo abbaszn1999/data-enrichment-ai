@@ -241,12 +241,28 @@ export function Sidebar() {
         });
 
         if (response.status === 402) {
+          let errorCode = "NO_CREDITS";
+          try {
+            const errorBody = await response.json();
+            if (typeof errorBody?.error === "string" && errorBody.error) {
+              errorCode = errorBody.error;
+            }
+          } catch {}
+
           setIsEnriching(false);
-          setLastError("NO_CREDITS");
-          toast.error("No credits remaining", {
-            description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
-            duration: 8000,
-          });
+          setLastError(errorCode);
+
+          if (errorCode === "INACTIVE_SUBSCRIPTION") {
+            toast.error("Subscription inactive", {
+              description: "Your subscription is not active. Renew or reactivate your subscription to use AI credits.",
+              duration: 8000,
+            });
+          } else {
+            toast.error("No credits remaining", {
+              description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
+              duration: 8000,
+            });
+          }
           return;
         }
 

@@ -181,7 +181,9 @@ export default function SubscriptionPage() {
                 <div>
                   <div className="text-sm font-bold">{plan.display_name}</div>
                   <div className={`text-[10px] font-semibold ${meta.color}`}>
-                    {(plan.monthly_ai_credits ?? 0).toLocaleString()} credits/mo
+                    {billing === "yearly"
+                      ? `${((plan.monthly_ai_credits ?? 0) * 12).toLocaleString()} credits/year`
+                      : `${(plan.monthly_ai_credits ?? 0).toLocaleString()} credits/mo`}
                   </div>
                 </div>
               </div>
@@ -215,7 +217,9 @@ export default function SubscriptionPage() {
               <div className="space-y-2 pt-1 border-t border-border/50">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pt-1">Includes</p>
                 {[
-                  `${(plan.monthly_ai_credits ?? 0).toLocaleString()} AI credits / month`,
+                  billing === "yearly"
+                    ? `${((plan.monthly_ai_credits ?? 0) * 12).toLocaleString()} AI credits / year`
+                    : `${(plan.monthly_ai_credits ?? 0).toLocaleString()} AI credits / month`,
                   plan.max_workspaces ? `Up to ${plan.max_workspaces} workspaces` : "Unlimited workspaces",
                   plan.max_members_per_workspace ? `Up to ${plan.max_members_per_workspace} team members` : "Unlimited team members",
                   "AI Enrichment (all columns)",

@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 
 export async function POST(request: NextRequest) {
-  const { inviteId } = await request.json();
+  const { inviteId, fullName } = await request.json();
 
   if (!inviteId) {
     return NextResponse.json({ error: "Missing inviteId" }, { status: 400 });
@@ -18,6 +18,11 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createAdminClient();
+  const resolvedFullName = [
+    typeof fullName === "string" ? fullName.trim() : "",
+    typeof user.user_metadata?.full_name === "string" ? user.user_metadata.full_name.trim() : "",
+    typeof user.user_metadata?.name === "string" ? user.user_metadata.name.trim() : "",
+  ].find(Boolean) || null;
 
   // Fetch the invite
   const { data: invite, error: fetchErr } = await admin
@@ -40,6 +45,20 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (!existing) {
+    if (resolvedFullName) {
+      const { error: profileErr } = await admin.from("profiles").upsert(
+        {
+          id: user.id,
+          full_name: resolvedFullName,
+        },
+        { onConflict: "id" }
+      );
+
+      if (profileErr) {
+        return NextResponse.json({ error: profileErr.message }, { status: 500 });
+      }
+    }
+
     // Add member
     const { error: insertErr } = await admin.from("workspace_members").insert({
       workspace_id: invite.workspace_id,

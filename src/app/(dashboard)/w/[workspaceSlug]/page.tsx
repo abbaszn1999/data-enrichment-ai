@@ -20,6 +20,7 @@ import { useRole } from "@/hooks/use-role";
 import { useCredits } from "@/hooks/use-credits";
 import { createClient } from "@/lib/supabase-browser";
 import { loadProductsJson, loadCategoriesJson } from "@/lib/storage-helpers";
+import { formatCredits } from "@/lib/format-credits";
 
 // ─── Animated Counter Hook ───
 function useAnimatedCounter(target: number, duration = 1200) {
@@ -66,7 +67,7 @@ function CreditGauge({ used, total, remaining }: { used: number; total: number; 
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className="text-2xl font-black tabular-nums" style={{ color: gaugeColor }}>
-          {animatedRemaining}
+          {formatCredits(animatedRemaining)}
         </span>
         <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mt-0.5">
           credits left
@@ -356,8 +357,8 @@ export default function WorkspaceDashboardPage() {
               <div className="space-y-1.5 hidden sm:block">
                 <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">AI Credits</div>
                 <div className="flex items-baseline gap-1">
-                  <span className="text-lg font-black tabular-nums">{credits.used}</span>
-                  <span className="text-xs text-muted-foreground">/ {credits.total} used</span>
+                  <span className="text-lg font-black tabular-nums">{formatCredits(credits.used)}</span>
+                  <span className="text-xs text-muted-foreground">/ {formatCredits(credits.total)} used</span>
                 </div>
                 <div className="w-32 h-1.5 rounded-full bg-muted overflow-hidden">
                   <div className="h-full rounded-full transition-all duration-1000 ease-out"
@@ -548,13 +549,13 @@ export default function WorkspaceDashboardPage() {
                     <svg width="140" height="140" viewBox="0 0 120 120">
                       {slices.map((s, i) => (
                         <path key={i} d={s.path} fill={s.color} opacity="0.85" className="transition-opacity hover:opacity-100">
-                          <title>{opLabels[s.operation] || s.operation}: {s.total} credits</title>
+                          <title>{opLabels[s.operation] || s.operation}: {formatCredits(s.total)} credits</title>
                         </path>
                       ))}
                       <circle cx="60" cy="60" r="28" className="fill-card" />
                     </svg>
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-lg font-black tabular-nums">{total}</span>
+                      <span className="text-lg font-black tabular-nums">{formatCredits(total)}</span>
                       <span className="text-[8px] text-muted-foreground uppercase tracking-wider">Total</span>
                     </div>
                   </div>
@@ -563,7 +564,7 @@ export default function WorkspaceDashboardPage() {
                       <div key={i} className="flex items-center gap-2 text-[10px]">
                         <div className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
                         <span className="flex-1 text-muted-foreground truncate">{opLabels[s.operation] || s.operation}</span>
-                        <span className="font-bold tabular-nums">{s.total}</span>
+                        <span className="font-bold tabular-nums">{formatCredits(s.total)}</span>
                         <span className="text-muted-foreground/60 w-8 text-right">{Math.round((s.total / total) * 100)}%</span>
                       </div>
                     ))}

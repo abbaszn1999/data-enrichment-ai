@@ -151,7 +151,7 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         const ownerSub = await getOwnerSubscription(workspaceId);
-        if (ownerSub) {
+        if (ownerSub && isSubscriptionActive(ownerSub.subscription?.status)) {
           const admin = createAdminClient();
           await admin.rpc("deduct_user_credits", {
             p_user_id: ownerSub.ownerId,

@@ -189,13 +189,19 @@ export default function UsagePage() {
           </div>
           <div className="space-y-2.5 text-[11px] border-t border-border/50 pt-3">
             <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Monthly Credits</span>
-              <span className="font-semibold">{formatCredits(plan?.monthlyCredits ?? 0)}</span>
+              <span className="text-muted-foreground">{subscription?.billingCycle === "yearly" ? "Yearly Credits" : "Monthly Credits"}</span>
+              <span className="font-semibold">{formatCredits(subscription?.billingCycle === "yearly" ? (plan?.monthlyCredits ?? 0) * 12 : plan?.monthlyCredits ?? 0)}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Price</span>
               <span className="font-semibold">
-                {plan?.priceMonthly > 0 ? `$${plan.priceMonthly}/mo` : "Free"}
+                {subscription?.billingCycle === "yearly"
+                  ? plan?.priceYearly > 0
+                    ? `$${plan.priceYearly}/yr`
+                    : "Free"
+                  : plan?.priceMonthly > 0
+                    ? `$${plan.priceMonthly}/mo`
+                    : "Free"}
               </span>
             </div>
             <div className="flex justify-between items-center">

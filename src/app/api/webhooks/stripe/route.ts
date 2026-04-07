@@ -101,7 +101,9 @@ async function handleInvoicePaid(invoice: Stripe.Invoice, admin: any) {
   if (!subId || invoice.billing_reason === "subscription_create") return;
 
   await admin.from("user_subscriptions").update({
-    status: "active", credits_used: 0, credits_reset_at: new Date().toISOString(),
+    status: "active", 
+    credits_used: 0, 
+    credits_reset_at: new Date().toISOString(),
     current_period_start: invoice.period_start ? new Date(invoice.period_start * 1000).toISOString() : new Date().toISOString(),
     current_period_end: invoice.period_end ? new Date(invoice.period_end * 1000).toISOString() : null,
     cancel_at_period_end: false, updated_at: new Date().toISOString(),
@@ -111,7 +113,11 @@ async function handleInvoicePaid(invoice: Stripe.Invoice, admin: any) {
 async function handlePaymentFailed(invoice: Stripe.Invoice, admin: any) {
   const subId = (invoice as any).subscription as string;
   if (!subId) return;
-  await admin.from("user_subscriptions").update({ status: "past_due", updated_at: new Date().toISOString() }).eq("stripe_subscription_id", subId);
+  await admin.from("user_subscriptions").update({
+    status: "past_due",
+    credits_used: 0,
+    updated_at: new Date().toISOString(),
+  }).eq("stripe_subscription_id", subId);
 }
 
 async function handleSubUpdated(sub: Stripe.Subscription, admin: any) {
@@ -132,18 +138,21 @@ async function handleSubUpdated(sub: Stripe.Subscription, admin: any) {
   const subItem = sub.items.data[0];
   const periodStart = subItem?.current_period_start;
   const periodEnd = subItem?.current_period_end;
+  const normalizedStatus = statusMap[sub.status] || sub.status;
+  const shouldResetIncludedCredits = normalizedStatus !== "active" && normalizedStatus !== "trialing";
 
   await admin.from("user_subscriptions").update({
-    ...planUpdate, billing_cycle: cycle, status: statusMap[sub.status] || sub.status,
+    ...planUpdate, billing_cycle: cycle, status: normalizedStatus,
     cancel_at_period_end: sub.cancel_at_period_end,
     current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
     current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
+    ...(shouldResetIncludedCredits ? { credits_used: 0 } : {}),
     updated_at: new Date().toISOString(),
   }).eq("stripe_subscription_id", sub.id);
 }
 
 async function handleSubDeleted(sub: Stripe.Subscription, admin: any) {
   await admin.from("user_subscriptions").update({
-    status: "cancelled", cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    status: "cancelled", credits_used: 0, cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   }).eq("stripe_subscription_id", sub.id);
 }

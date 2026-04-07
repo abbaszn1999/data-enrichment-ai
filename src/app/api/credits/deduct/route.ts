@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
-import { getOwnerSubscription } from "@/lib/stripe";
+import { getOwnerSubscription, isSubscriptionActive } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 
 export async function POST(request: Request) {
@@ -22,6 +22,10 @@ export async function POST(request: Request) {
     const ownerSub = await getOwnerSubscription(workspaceId);
     if (!ownerSub) {
       return NextResponse.json({ error: "No subscription found" }, { status: 404 });
+    }
+
+    if (!isSubscriptionActive(ownerSub.subscription?.status)) {
+      return NextResponse.json({ error: "An active subscription is required to use credits" }, { status: 402 });
     }
 
     // Use atomic RPC to deduct credits

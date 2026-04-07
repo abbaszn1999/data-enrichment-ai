@@ -97,27 +97,51 @@ export async function getUserSubscription(userId: string) {
 
 // ── Check if subscription is active ──
 export function isSubscriptionActive(status: string | null | undefined): boolean {
-  return status === "active" || status === "trialing" || status === "past_due";
+  return status === "active" || status === "trialing";
 }
 
 // ── Calculate credit balance ──
 export function calculateCreditBalance(sub: {
+  status?: string | null;
+  billing_cycle?: string | null;
   credits_used: number;
   bonus_credits: number;
   subscription_plans?: { monthly_ai_credits: number } | null;
 } | null) {
-  if (!sub) return { monthlyRemaining: 0, bonus: 0, total: 0, used: 0, monthlyTotal: 0 };
+  if (!sub) {
+    return {
+      monthlyRemaining: 0,
+      bonus: 0,
+      bonusAvailable: 0,
+      bonusLocked: 0,
+      total: 0,
+      used: 0,
+      monthlyTotal: 0,
+      canUseCredits: false,
+    };
+  }
 
-  const monthlyTotal = roundCredits((sub.subscription_plans as any)?.monthly_ai_credits ?? 0);
-  const monthlyRemaining = roundCredits(Math.max(0, monthlyTotal - sub.credits_used));
+  const canUseCredits = isSubscriptionActive(sub.status);
+  const planCredits = roundCredits((sub.subscription_plans as any)?.monthly_ai_credits ?? 0);
+  const monthlyTotal = sub.billing_cycle === "yearly"
+    ? roundCredits(planCredits * 12)
+    : planCredits;
+  const monthlyRemaining = canUseCredits
+    ? roundCredits(Math.max(0, monthlyTotal - sub.credits_used))
+    : 0;
   const bonus = roundCredits(sub.bonus_credits ?? 0);
+  const bonusAvailable = canUseCredits ? bonus : 0;
+  const bonusLocked = canUseCredits ? 0 : bonus;
 
   return {
     monthlyTotal,
     monthlyRemaining,
     bonus,
-    total: roundCredits(monthlyRemaining + bonus),
+    bonusAvailable,
+    bonusLocked,
+    total: roundCredits(monthlyRemaining + bonusAvailable),
     used: roundCredits(sub.credits_used),
+    canUseCredits,
   };
 }
 

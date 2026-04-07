@@ -35,6 +35,7 @@ SET search_path = public
 AS $$
 DECLARE
   sub_record         RECORD;
+  included_credits   numeric(12,3);
   monthly_remaining  numeric(12,3);
   bonus_remaining    numeric(12,3);
   from_monthly       numeric(12,3);
@@ -46,6 +47,7 @@ BEGIN
   SELECT
     us.credits_used,
     us.bonus_credits,
+    us.billing_cycle,
     sp.monthly_ai_credits
   INTO sub_record
   FROM public.user_subscriptions us
@@ -61,10 +63,18 @@ BEGIN
     );
   END IF;
 
+  included_credits := ROUND(
+    CASE
+      WHEN sub_record.billing_cycle = 'yearly' THEN COALESCE(sub_record.monthly_ai_credits, 0)::numeric * 12
+      ELSE COALESCE(sub_record.monthly_ai_credits, 0)::numeric
+    END,
+    3
+  );
+
   monthly_remaining := GREATEST(
     0::numeric,
     ROUND(
-      COALESCE(sub_record.monthly_ai_credits, 0)::numeric
+      included_credits
       - COALESCE(sub_record.credits_used, 0)::numeric,
       3
     )
@@ -110,7 +120,7 @@ BEGIN
   total_remaining := ROUND(
     GREATEST(
       0::numeric,
-      COALESCE(sub_record.monthly_ai_credits, 0)::numeric - new_credits_used
+      included_credits - new_credits_used
     ) + new_bonus_credits,
     3
   );
