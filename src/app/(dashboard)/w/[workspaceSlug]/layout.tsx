@@ -86,6 +86,10 @@ export default function WorkspaceLayout({
   const isEnrichPage = pathname.includes("/enrich");
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage = pathname.includes("/subscription");
+  const isTeamPage = pathname.includes("/team");
+  const isSettingsPage = pathname.includes("/settings");
+  const requiresAdminAccess = isTeamPage || isSettingsPage;
+  const canAccessAdminPages = role === "owner" || role === "admin";
 
   const sidebarLinks = [
     { href: `${basePath}`, label: "Dashboard", icon: LayoutDashboard },
@@ -111,7 +115,37 @@ export default function WorkspaceLayout({
     }
   }, [wsLoading, error, sessionReady, user, router]);
 
+  useEffect(() => {
+    if (!wsLoading && workspace && isSubscriptionPage && role !== "owner") {
+      router.replace(basePath);
+    }
+  }, [wsLoading, workspace, isSubscriptionPage, role, router, basePath]);
+
+  useEffect(() => {
+    if (!wsLoading && workspace && requiresAdminAccess && !canAccessAdminPages) {
+      router.replace(basePath);
+    }
+  }, [wsLoading, workspace, requiresAdminAccess, canAccessAdminPages, router, basePath]);
+
   if (!wsLoading && (error || !workspace)) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center gap-4">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Redirecting...</p>
+      </div>
+    );
+  }
+
+  if (!wsLoading && workspace && isSubscriptionPage && role !== "owner") {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center gap-4">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Redirecting...</p>
+      </div>
+    );
+  }
+
+  if (!wsLoading && workspace && requiresAdminAccess && !canAccessAdminPages) {
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-4">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -323,7 +357,7 @@ export default function WorkspaceLayout({
             {isSubscriptionPage || isEnrichPage ? (
               <div className={isEnrichPage ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
             ) : (
-              <SubscriptionGate workspaceId={workspace?.id ?? null}>
+              <SubscriptionGate workspaceId={workspace?.id ?? null} role={role}>
                 <div className="flex-1">{children}</div>
               </SubscriptionGate>
             )}

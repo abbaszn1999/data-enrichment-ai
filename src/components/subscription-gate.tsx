@@ -4,17 +4,20 @@ import { useRouter, useParams } from "next/navigation";
 import { Crown, ArrowRight, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSubscription } from "@/hooks/use-subscription";
+import type { Role } from "@/lib/permissions";
 
 interface SubscriptionGateProps {
   workspaceId: string | null;
+  role: Role | null;
   children: React.ReactNode;
 }
 
-export function SubscriptionGate({ workspaceId, children }: SubscriptionGateProps) {
+export function SubscriptionGate({ workspaceId, role, children }: SubscriptionGateProps) {
   const params = useParams();
   const router = useRouter();
   const slug = params.workspaceSlug as string;
   const { subscription, isActive, isLoading } = useSubscription(workspaceId);
+  const isOwner = role === "owner";
 
   if (isLoading) return <>{children}</>;
 
@@ -32,10 +35,16 @@ export function SubscriptionGate({ workspaceId, children }: SubscriptionGateProp
               You need an active subscription to use this workspace. Subscribe to unlock all platform features including AI enrichment, team collaboration, and unlimited projects.
             </p>
           </div>
-          <Button onClick={() => router.push(`/w/${slug}/subscription`)} className="gap-2">
-            <ArrowRight className="h-4 w-4" />
-            View Plans
-          </Button>
+          {isOwner ? (
+            <Button onClick={() => router.push(`/w/${slug}/subscription`)} className="gap-2">
+              <ArrowRight className="h-4 w-4" />
+              View Plans
+            </Button>
+          ) : (
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              This workspace subscription has ended. Please contact the workspace owner to renew access.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -64,10 +73,16 @@ export function SubscriptionGate({ workspaceId, children }: SubscriptionGateProp
                 : "Your subscription is no longer active. Please update your billing to continue."}
             </p>
           </div>
-          <Button onClick={() => router.push(`/w/${slug}/subscription`)} className="gap-2">
-            <ArrowRight className="h-4 w-4" />
-            Manage Subscription
-          </Button>
+          {isOwner ? (
+            <Button onClick={() => router.push(`/w/${slug}/subscription`)} className="gap-2">
+              <ArrowRight className="h-4 w-4" />
+              Manage Subscription
+            </Button>
+          ) : (
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              This workspace subscription has ended. Please contact the workspace owner to restore access.
+            </p>
+          )}
         </div>
       </div>
     );
