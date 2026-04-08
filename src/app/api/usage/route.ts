@@ -42,7 +42,7 @@ export async function GET(request: Request) {
       },
       credits: {
         used: bal.used,
-        total: bal.monthlyTotal,
+        total: bal.monthlyTotal + bal.bonusAvailable,
         bonus: bal.bonus,
         remaining: bal.total,
         resetsAt: ownerSub?.subscription?.credits_reset_at,
