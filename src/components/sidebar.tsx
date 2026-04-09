@@ -73,6 +73,8 @@ export function Sidebar() {
     existingColumnsToEnrich,
     toggleExistingColumnEnrich,
     clearExistingColumnEnrich,
+    existingColumnInstructions,
+    setExistingColumnInstruction,
     updateCellValue,
     isEnriching,
     isPaused,
@@ -106,6 +108,8 @@ export function Sidebar() {
   const [expandedColumns, setExpandedColumns] = useState<Set<string>>(new Set());
   const [enrichOutputTab, setEnrichOutputTab] = useState<"new" | "existing">("new");
   const [existingSearch, setExistingSearch] = useState("");
+  const [expandedExistingCols, setExpandedExistingCols] = useState<Set<string>>(new Set());
+  const [existingColDrafts, setExistingColDrafts] = useState<Record<string, string>>({});
 
   const enabledColumns = enrichmentColumns
     .filter((col) => col.enabled)
@@ -147,7 +151,8 @@ export function Sidebar() {
   }, [rows, setIsEnriching, setPaused, setRowStatus]);
 
   const handleEnrich = useCallback(async () => {
-    if ((enabledColumns.length === 0 && existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
+    const isNewTab = enrichOutputTab === "new";
+    if ((isNewTab ? enabledColumns.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -199,24 +204,32 @@ export function Sidebar() {
       if (session?.access_token) enrichHeaders["Authorization"] = `Bearer ${session.access_token}`;
       const userId = session?.user?.id;
 
-      const existingAsEnrichCols = existingColumnsToEnrich.map((col) => ({
-        id: `existing__${col}`,
-        label: col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col"),
-        description: `Fill in the "${col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col")}" field for this product. Use the available product data to generate an accurate and appropriate value.`,
-        type: "text" as const,
-        enabled: true,
-        isCustom: true,
-      }));
+      const isNewTab = enrichOutputTab === "new";
+
+      const existingAsEnrichCols = !isNewTab
+        ? existingColumnsToEnrich.map((col) => {
+            const displayLabel = col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col");
+            const customInstruction = existingColumnInstructions[col]?.trim();
+            return {
+              id: `existing__${col}`,
+              label: displayLabel,
+              description: customInstruction
+                ? customInstruction
+                : `Fill in the "${displayLabel}" field for this product. Use the available product data to generate an accurate and appropriate value.`,
+              type: "text" as const,
+              enabled: true,
+              isCustom: true,
+            };
+          })
+        : [];
 
       const commonPayload = {
-        enabledColumns: [
-          ...enabledColumns,
-          ...existingColumnsToEnrich.map((c) => `existing__${c}`),
-        ],
-        enrichmentColumns: [
-          ...enrichmentColumns.filter((c) => c.enabled),
-          ...existingAsEnrichCols,
-        ],
+        enabledColumns: isNewTab
+          ? enabledColumns
+          : existingColumnsToEnrich.map((c) => `existing__${c}`),
+        enrichmentColumns: isNewTab
+          ? enrichmentColumns.filter((c) => c.enabled)
+          : existingAsEnrichCols,
         settings: geminiSettings,
         cmsType: workspace?.cms_type || undefined,
         workspaceCategories,
@@ -344,8 +357,10 @@ export function Sidebar() {
     }
   }, [
     enrichableRows,
+    enrichOutputTab,
     enabledColumns,
     existingColumnsToEnrich,
+    existingColumnInstructions,
     enrichmentColumns,
     enrichmentSettings,
     sourceColumns,
@@ -555,29 +570,95 @@ export function Sidebar() {
                     className="w-full h-7 pl-7 pr-2 text-[10px] rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40"
                   />
                 </div>
-                <div className="space-y-1 max-h-52 overflow-y-auto custom-scrollbar">
+                <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar">
                   {originalColumns
                     .filter((col) => !existingSearch || col.toLowerCase().includes(existingSearch.toLowerCase()) || col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col").toLowerCase().includes(existingSearch.toLowerCase()))
                     .map((col) => {
                       const isSelected = existingColumnsToEnrich.includes(col);
                       const displayName = col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col");
+                      const isExpanded = expandedExistingCols.has(col);
+                      const savedInstruction = existingColumnInstructions[col] || "";
+                      const draft = existingColDrafts[col] ?? savedInstruction;
+                      const hasCustomInstruction = savedInstruction.trim().length > 0;
+
+                      const toggleExpand = (e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        setExpandedExistingCols((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(col)) {
+                            next.delete(col);
+                          } else {
+                            next.add(col);
+                            setExistingColDrafts((d) => ({ ...d, [col]: existingColumnInstructions[col] || "" }));
+                          }
+                          return next;
+                        });
+                      };
+
                       return (
-                        <label
-                          key={col}
-                          className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md cursor-pointer transition-all text-xs border ${
-                            isSelected
-                              ? "bg-primary/5 border-primary/20 text-foreground"
-                              : "border-transparent hover:bg-muted/50 text-muted-foreground"
-                          }`}
-                          onClick={() => toggleExistingColumnEnrich(col)}
-                        >
-                          <div className={`h-3 w-3 rounded-sm border-2 flex items-center justify-center transition-all shrink-0 ${
-                            isSelected ? "bg-primary border-primary" : "border-muted-foreground/40"
-                          }`}>
-                            {isSelected && <CheckCircle2 className="h-2 w-2 text-white" />}
+                        <div key={col} className={`rounded-md border transition-all ${
+                          isSelected ? "border-primary/20 bg-primary/5" : "border-transparent"
+                        }`}>
+                          <div
+                            className={`flex items-center gap-2 px-2.5 py-1.5 cursor-pointer text-xs ${
+                              isSelected ? "text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md"
+                            }`}
+                            onClick={() => toggleExistingColumnEnrich(col)}
+                          >
+                            <div className={`h-3 w-3 rounded-sm border-2 flex items-center justify-center transition-all shrink-0 ${
+                              isSelected ? "bg-primary border-primary" : "border-muted-foreground/40"
+                            }`}>
+                              {isSelected && <CheckCircle2 className="h-2 w-2 text-white" />}
+                            </div>
+                            <span className="truncate font-medium flex-1">{displayName}</span>
+                            {hasCustomInstruction && (
+                              <span className="h-1.5 w-1.5 rounded-full bg-primary/70 shrink-0" title="Has custom instruction" />
+                            )}
+                            <button
+                              onClick={toggleExpand}
+                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+                            >
+                              {isExpanded
+                                ? <ChevronDown className="h-3 w-3" />
+                                : <ChevronRight className="h-3 w-3" />
+                              }
+                            </button>
                           </div>
-                          <span className="truncate font-medium">{displayName}</span>
-                        </label>
+
+                          {isExpanded && (
+                            <div className="px-2.5 pb-2 space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                              <textarea
+                                rows={3}
+                                placeholder={`Custom instruction for "${displayName}" (optional)…`}
+                                value={draft}
+                                onChange={(e) => setExistingColDrafts((d) => ({ ...d, [col]: e.target.value }))}
+                                className="w-full text-[10px] rounded-md border bg-background px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 leading-relaxed"
+                              />
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    setExistingColumnInstruction(col, draft.trim());
+                                    setExpandedExistingCols((prev) => { const n = new Set(prev); n.delete(col); return n; });
+                                  }}
+                                  className="flex-1 h-6 text-[10px] font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                                >
+                                  Save
+                                </button>
+                                {savedInstruction && (
+                                  <button
+                                    onClick={() => {
+                                      setExistingColumnInstruction(col, "");
+                                      setExistingColDrafts((d) => ({ ...d, [col]: "" }));
+                                    }}
+                                    className="h-6 px-2 text-[10px] rounded-md border text-muted-foreground hover:text-destructive hover:border-destructive/50 transition-colors"
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                 </div>
@@ -1267,7 +1348,7 @@ export function Sidebar() {
           <Button
             onClick={handleEnrich}
             disabled={
-              (enabledColumns.length === 0 && existingColumnsToEnrich.length === 0) ||
+              (enrichOutputTab === "new" ? enabledColumns.length === 0 : existingColumnsToEnrich.length === 0) ||
               enrichableRows.length === 0 ||
               sourceColumns.length === 0
             }

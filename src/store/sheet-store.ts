@@ -82,6 +82,7 @@ interface SheetActions {
   // Existing column enrichment
   toggleExistingColumnEnrich: (col: string) => void;
   clearExistingColumnEnrich: () => void;
+  setExistingColumnInstruction: (col: string, instruction: string) => void;
 }
 
 type SheetStore = SheetState & SheetActions;
@@ -106,6 +107,7 @@ const initialState: SheetState = {
   sidebarOpen: true,
   activeSheet: "new" as "existing" | "new",
   existingColumnsToEnrich: [],
+  existingColumnInstructions: {},
   undoVersion: 0,
   saveStatus: "saved",
   lastSavedAt: null,
@@ -690,6 +692,13 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       return { existingColumnsToEnrich: [...current, col] };
     }),
   clearExistingColumnEnrich: () => set({ existingColumnsToEnrich: [] }),
+  setExistingColumnInstruction: (col, instruction) =>
+    set((state) => ({
+      existingColumnInstructions: {
+        ...state.existingColumnInstructions,
+        [col]: instruction,
+      },
+    })),
 }));
 
 // ─── Optimized Auto-save ─────────────────────────────────────────────────────
