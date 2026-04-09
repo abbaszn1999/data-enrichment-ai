@@ -22,6 +22,8 @@ import {
   X,
   ArrowLeft,
   Lock,
+  Search,
+  FileEdit,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +70,10 @@ export function Sidebar() {
     updateEnrichmentColumnConfig,
     toggleSourceColumn,
     setAllSourceColumns,
+    existingColumnsToEnrich,
+    toggleExistingColumnEnrich,
+    clearExistingColumnEnrich,
+    updateCellValue,
     isEnriching,
     isPaused,
     setIsEnriching,
@@ -98,6 +104,8 @@ export function Sidebar() {
   const [newColType, setNewColType] = useState<"text" | "list">("text");
   const [newColPrompt, setNewColPrompt] = useState("");
   const [expandedColumns, setExpandedColumns] = useState<Set<string>>(new Set());
+  const [enrichOutputTab, setEnrichOutputTab] = useState<"new" | "existing">("new");
+  const [existingSearch, setExistingSearch] = useState("");
 
   const enabledColumns = enrichmentColumns
     .filter((col) => col.enabled)
@@ -139,7 +147,7 @@ export function Sidebar() {
   }, [rows, setIsEnriching, setPaused, setRowStatus]);
 
   const handleEnrich = useCallback(async () => {
-    if (enabledColumns.length === 0 || enrichableRows.length === 0) return;
+    if ((enabledColumns.length === 0 && existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -191,9 +199,24 @@ export function Sidebar() {
       if (session?.access_token) enrichHeaders["Authorization"] = `Bearer ${session.access_token}`;
       const userId = session?.user?.id;
 
+      const existingAsEnrichCols = existingColumnsToEnrich.map((col) => ({
+        id: `existing__${col}`,
+        label: col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col"),
+        description: `Fill in the "${col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col")}" field for this product. Use the available product data to generate an accurate and appropriate value.`,
+        type: "text" as const,
+        enabled: true,
+        isCustom: true,
+      }));
+
       const commonPayload = {
-        enabledColumns,
-        enrichmentColumns: enrichmentColumns.filter((c) => c.enabled),
+        enabledColumns: [
+          ...enabledColumns,
+          ...existingColumnsToEnrich.map((c) => `existing__${c}`),
+        ],
+        enrichmentColumns: [
+          ...enrichmentColumns.filter((c) => c.enabled),
+          ...existingAsEnrichCols,
+        ],
         settings: geminiSettings,
         cmsType: workspace?.cms_type || undefined,
         workspaceCategories,
@@ -278,7 +301,20 @@ export function Sidebar() {
         const result = await response.json();
 
         if (result.status === "done" && result.data) {
-          setRowEnrichedData(r.id, result.data);
+          const enrichedResult: Record<string, any> = {};
+          for (const [key, value] of Object.entries(result.data as Record<string, any>)) {
+            if (key.startsWith("existing__")) {
+              const colName = key.replace("existing__", "");
+              updateCellValue(r.id, colName, String(value ?? ""));
+            } else {
+              enrichedResult[key] = value;
+            }
+          }
+          if (Object.keys(enrichedResult).length > 0) {
+            setRowEnrichedData(r.id, enrichedResult);
+          } else {
+            setRowStatus(r.id, "done");
+          }
           setEnrichProgress(completedCount, enrichableRows.length);
           invalidateCredits();
         } else {
@@ -309,6 +345,7 @@ export function Sidebar() {
   }, [
     enrichableRows,
     enabledColumns,
+    existingColumnsToEnrich,
     enrichmentColumns,
     enrichmentSettings,
     sourceColumns,
@@ -318,6 +355,7 @@ export function Sidebar() {
     setEnrichProgress,
     setRowStatus,
     setRowEnrichedData,
+    updateCellValue,
     incrementError,
     invalidateCredits,
   ]);
@@ -476,27 +514,85 @@ export function Sidebar() {
                 <Sparkles className="h-4 w-4 text-primary" />
                 <span className="text-xs font-semibold">AI Output Columns</span>
               </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-[10px] h-5 px-1.5"
-                  onClick={() => setAllEnrichmentColumns(true)}
+              <div className="flex items-center bg-muted rounded-lg p-0.5">
+                <button
+                  onClick={() => setEnrichOutputTab("new")}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all ${
+                    enrichOutputTab === "new"
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
                 >
-                  All
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-[10px] h-5 px-1.5"
-                  onClick={() => setAllEnrichmentColumns(false)}
+                  <Sparkles className="h-2.5 w-2.5" />
+                  New
+                </button>
+                <button
+                  onClick={() => setEnrichOutputTab("existing")}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all ${
+                    enrichOutputTab === "existing"
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
                 >
-                  None
-                </Button>
+                  <FileEdit className="h-2.5 w-2.5" />
+                  Existing
+                </button>
               </div>
             </div>
 
-            {enrichSectionOpen && (
+            {enrichSectionOpen && enrichOutputTab === "existing" && (
+              <div className="mt-3 pl-6 space-y-2">
+                <p className="text-[10px] text-muted-foreground leading-tight">
+                  Select existing columns for AI to fill. Results overwrite the original cell values.
+                </p>
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50" />
+                  <input
+                    type="text"
+                    placeholder="Search columns..."
+                    value={existingSearch}
+                    onChange={(e) => setExistingSearch(e.target.value)}
+                    className="w-full h-7 pl-7 pr-2 text-[10px] rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40"
+                  />
+                </div>
+                <div className="space-y-1 max-h-52 overflow-y-auto custom-scrollbar">
+                  {originalColumns
+                    .filter((col) => !existingSearch || col.toLowerCase().includes(existingSearch.toLowerCase()) || col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col").toLowerCase().includes(existingSearch.toLowerCase()))
+                    .map((col) => {
+                      const isSelected = existingColumnsToEnrich.includes(col);
+                      const displayName = col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col");
+                      return (
+                        <label
+                          key={col}
+                          className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md cursor-pointer transition-all text-xs border ${
+                            isSelected
+                              ? "bg-primary/5 border-primary/20 text-foreground"
+                              : "border-transparent hover:bg-muted/50 text-muted-foreground"
+                          }`}
+                          onClick={() => toggleExistingColumnEnrich(col)}
+                        >
+                          <div className={`h-3 w-3 rounded-sm border-2 flex items-center justify-center transition-all shrink-0 ${
+                            isSelected ? "bg-primary border-primary" : "border-muted-foreground/40"
+                          }`}>
+                            {isSelected && <CheckCircle2 className="h-2 w-2 text-white" />}
+                          </div>
+                          <span className="truncate font-medium">{displayName}</span>
+                        </label>
+                      );
+                    })}
+                </div>
+                {existingColumnsToEnrich.length > 0 && (
+                  <button
+                    onClick={clearExistingColumnEnrich}
+                    className="text-[10px] text-muted-foreground hover:text-destructive transition-colors"
+                  >
+                    Clear all ({existingColumnsToEnrich.length} selected)
+                  </button>
+                )}
+              </div>
+            )}
+
+            {enrichSectionOpen && enrichOutputTab === "new" && (
               <div className="mt-3 space-y-1.5 pl-6">
                 {enrichmentColumns.map((col) => {
                   const isExpanded = expandedColumns.has(col.id);
@@ -1171,7 +1267,7 @@ export function Sidebar() {
           <Button
             onClick={handleEnrich}
             disabled={
-              enabledColumns.length === 0 ||
+              (enabledColumns.length === 0 && existingColumnsToEnrich.length === 0) ||
               enrichableRows.length === 0 ||
               sourceColumns.length === 0
             }

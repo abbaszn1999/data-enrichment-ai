@@ -79,6 +79,9 @@ interface SheetActions {
   setSidebarOpen: (open: boolean) => void;
   // Sheet toggle
   setActiveSheet: (sheet: "existing" | "new") => void;
+  // Existing column enrichment
+  toggleExistingColumnEnrich: (col: string) => void;
+  clearExistingColumnEnrich: () => void;
 }
 
 type SheetStore = SheetState & SheetActions;
@@ -102,6 +105,7 @@ const initialState: SheetState = {
   errorCount: 0,
   sidebarOpen: true,
   activeSheet: "new" as "existing" | "new",
+  existingColumnsToEnrich: [],
   undoVersion: 0,
   saveStatus: "saved",
   lastSavedAt: null,
@@ -675,6 +679,17 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   // UI
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setActiveSheet: (sheet) => set({ activeSheet: sheet }),
+
+  // Existing column enrichment
+  toggleExistingColumnEnrich: (col) =>
+    set((state) => {
+      const current = state.existingColumnsToEnrich;
+      if (current.includes(col)) {
+        return { existingColumnsToEnrich: current.filter((c) => c !== col) };
+      }
+      return { existingColumnsToEnrich: [...current, col] };
+    }),
+  clearExistingColumnEnrich: () => set({ existingColumnsToEnrich: [] }),
 }));
 
 // ─── Optimized Auto-save ─────────────────────────────────────────────────────

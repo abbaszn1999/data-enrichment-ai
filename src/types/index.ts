@@ -346,6 +346,7 @@ export interface SheetState {
   errorCount: number;
   sidebarOpen: boolean;
   activeSheet: "existing" | "new";
+  existingColumnsToEnrich: string[];
   undoVersion: number;
   saveStatus: "saved" | "saving" | "unsaved" | "error";
   lastSavedAt: number | null;

@@ -66,18 +66,15 @@ function AuthCallbackHandler() {
     const code = searchParams.get("code");
 
     // ── Flow 1: PKCE — ?code= in query params ──
+    // Must use client-side exchange so the PKCE code verifier stored in the
+    // browser is accessible. Server-side exchange fails with "invalid flow state".
     if (code) {
-      const res = await fetch(`/api/auth/exchange-code?code=${encodeURIComponent(code)}`, {
-        method: "GET",
-        cache: "no-store",
-        credentials: "include",
-      });
-      const json = await res.json();
-      if (res.ok && json?.user) {
-        await finalizeRedirect(json.user, next);
+      const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+      if (!error && data?.user) {
+        await finalizeRedirect(data.user, next);
         return;
       }
-      console.error("[auth/callback] Code exchange failed:", json?.error || "Unknown error");
+      console.error("[auth/callback] Code exchange failed:", error?.message);
       router.replace(`/login?error=auth_callback_error`);
       return;
     }

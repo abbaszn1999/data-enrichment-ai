@@ -1035,6 +1035,7 @@ export function DataTable() {
     addRow,
     deleteColumn,
     renameColumn,
+    reorderColumns,
     toggleColumnVisibility,
     setRowStatus,
     undo,
@@ -1060,6 +1061,8 @@ export function DataTable() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const columnResizeMode: ColumnResizeMode = "onChange";
+  const [dragOverColId, setDragOverColId] = useState<string | null>(null);
+  const dragColIdRef = useRef<string | null>(null);
 
   // Pre-filter rows by active sheet (existing/new)
   const sheetFilteredRows = useMemo(() => {
@@ -1618,33 +1621,73 @@ export function DataTable() {
             <div className="sticky top-0 z-10 bg-muted/90 backdrop-blur-md border-b border-border/40">
               {table.getHeaderGroups().map((headerGroup) => (
                 <div key={headerGroup.id} className="flex">
-                  {headerGroup.headers.map((header) => (
-                    <div
-                      key={header.id}
-                      className="h-9 px-3 flex items-center border-r last:border-r-0 border-border/40 overflow-hidden relative"
-                      style={{
-                        width: header.getSize(),
-                        minWidth: header.getSize(),
-                      }}
-                    >
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )}
-                      {/* Column resize handle */}
-                      {header.column.getCanResize() && (
-                        <div
-                          onMouseDown={header.getResizeHandler()}
-                          onTouchStart={header.getResizeHandler()}
-                          className={`absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none hover:bg-primary/50 transition-colors ${
-                            header.column.getIsResizing() ? "bg-primary/60" : "bg-transparent"
-                          }`}
-                        />
-                      )}
-                    </div>
-                  ))}
+                  {headerGroup.headers.map((header) => {
+                const isOrigCol = header.column.id.startsWith("orig_");
+                const isDragOver = dragOverColId === header.column.id;
+                return (
+                  <div
+                    key={header.id}
+                    className={`h-9 px-3 flex items-center border-r last:border-r-0 overflow-hidden relative transition-all group/dragcol ${
+                      isDragOver && isOrigCol
+                        ? "border-l-2 border-l-primary border-border/40 bg-primary/5"
+                        : "border-border/40"
+                    }`}
+                    style={{
+                      width: header.getSize(),
+                      minWidth: header.getSize(),
+                    }}
+                    draggable={isOrigCol && !isEnriching}
+                    onDragStart={isOrigCol ? (e) => {
+                      dragColIdRef.current = header.column.id;
+                      e.dataTransfer.effectAllowed = "move";
+                    } : undefined}
+                    onDragOver={isOrigCol ? (e) => {
+                      e.preventDefault();
+                      if (dragColIdRef.current && dragColIdRef.current !== header.column.id) {
+                        setDragOverColId(header.column.id);
+                      }
+                    } : undefined}
+                    onDragLeave={isOrigCol ? () => setDragOverColId(null) : undefined}
+                    onDrop={isOrigCol ? (e) => {
+                      e.preventDefault();
+                      setDragOverColId(null);
+                      if (!dragColIdRef.current || dragColIdRef.current === header.column.id) return;
+                      const fromColName = dragColIdRef.current.replace("orig_", "");
+                      const toColName = header.column.id.replace("orig_", "");
+                      const fromIndex = originalColumns.indexOf(fromColName);
+                      const toIndex = originalColumns.indexOf(toColName);
+                      if (fromIndex !== -1 && toIndex !== -1) {
+                        reorderColumns(fromIndex, toIndex);
+                      }
+                      dragColIdRef.current = null;
+                    } : undefined}
+                    onDragEnd={() => {
+                      dragColIdRef.current = null;
+                      setDragOverColId(null);
+                    }}
+                  >
+                    {isOrigCol && (
+                      <GripVertical className="h-3 w-3 text-muted-foreground/20 group-hover/dragcol:text-muted-foreground/60 cursor-grab shrink-0 mr-1 transition-colors" />
+                    )}
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(
+                          header.column.columnDef.header,
+                          header.getContext()
+                        )}
+                    {/* Column resize handle */}
+                    {header.column.getCanResize() && (
+                      <div
+                        onMouseDown={header.getResizeHandler()}
+                        onTouchStart={header.getResizeHandler()}
+                        className={`absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none hover:bg-primary/50 transition-colors ${
+                          header.column.getIsResizing() ? "bg-primary/60" : "bg-transparent"
+                        }`}
+                      />
+                    )}
+                  </div>
+                );
+              })}
                 </div>
               ))}
             </div>
@@ -1681,10 +1724,6 @@ export function DataTable() {
                     `}
                     style={{
                       transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setContextMenu({ type: "row", x: e.clientX, y: e.clientY, rowId: row.original.id });
                     }}
                   >
                     {row.getVisibleCells().map((cell) => (
@@ -1950,97 +1989,6 @@ export function DataTable() {
               </>
             )}
 
-            {contextMenu.type === "row" && (() => {
-              const ctxRow = rows.find((r) => r.id === contextMenu.rowId);
-              if (!ctxRow) return null;
-              return (
-                <>
-                  <div className="px-3 py-1.5 text-[10px] text-muted-foreground font-semibold border-b mb-1 uppercase tracking-wider">
-                    Row #{ctxRow.rowIndex + 1}
-                  </div>
-                  <button
-                    className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted transition-colors text-xs"
-                    onClick={() => {
-                      setPreviewRowId(contextMenu.rowId);
-                      setContextMenu(null);
-                    }}
-                  >
-                    <Eye className="h-3.5 w-3.5 text-muted-foreground" />
-                    Preview Row
-                  </button>
-                  {!selectedRowIds.has(contextMenu.rowId) && (
-                    <button
-                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted transition-colors text-xs"
-                      onClick={() => {
-                        toggleRowSelection(contextMenu.rowId);
-                        setContextMenu(null);
-                      }}
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground" />
-                      Select Row
-                    </button>
-                  )}
-                  {(ctxRow.status === "done" || ctxRow.status === "error") && (
-                    <button
-                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted transition-colors text-xs"
-                      onClick={() => {
-                        setRowStatus(contextMenu.rowId, "pending");
-                        setContextMenu(null);
-                      }}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5 text-amber-500" />
-                      Reset to Pending
-                    </button>
-                  )}
-                  <div className="border-t my-1" />
-                  <button
-                    className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted transition-colors text-xs text-muted-foreground"
-                    onClick={() => {
-                      selectByStatus("pending");
-                      setContextMenu(null);
-                    }}
-                  >
-                    <Filter className="h-3.5 w-3.5" />
-                    Select All Pending
-                  </button>
-                  <button
-                    className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted transition-colors text-xs text-muted-foreground"
-                    onClick={() => {
-                      selectByStatus("error");
-                      setContextMenu(null);
-                    }}
-                  >
-                    <Filter className="h-3.5 w-3.5" />
-                    Select All Errors
-                  </button>
-                  <button
-                    className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted transition-colors text-xs text-muted-foreground"
-                    onClick={() => {
-                      invertSelection();
-                      setContextMenu(null);
-                    }}
-                  >
-                    <ArrowUpDown className="h-3.5 w-3.5" />
-                    Invert Selection
-                  </button>
-                  {!isEnriching && !isViewer && selectedRowIds.has(contextMenu.rowId) && (
-                    <>
-                      <div className="border-t my-1" />
-                      <button
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-destructive hover:bg-destructive/10 transition-colors text-xs"
-                        onClick={() => {
-                          deleteSelectedRows();
-                          setContextMenu(null);
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete Selected ({sheetSelectedCount})
-                      </button>
-                    </>
-                  )}
-                </>
-              );
-            })()}
           </div>
         </>
       )}
