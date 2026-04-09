@@ -25,6 +25,7 @@ import {
   Loader2,
   Coins,
   Crown,
+  RefreshCw,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/hooks/use-auth";
@@ -96,6 +97,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}/products`, label: "Products", icon: Package },
     { href: `${basePath}/categories`, label: "Categories", icon: FolderTree },
     { href: `${basePath}/import`, label: "Import", icon: Upload },
+    { href: "", label: "Sync", icon: RefreshCw, comingSoon: true },
     { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
     ...(permissions.canAdmin
       ? [{ href: `${basePath}/team`, label: "Team", icon: Users }]
@@ -313,6 +315,25 @@ export default function WorkspaceLayout({
           >
             <nav className="flex-1 py-2 px-2 space-y-0.5">
               {sidebarLinks.map((link) => {
+                if ((link as any).comingSoon) {
+                  return (
+                    <div
+                      key={link.label}
+                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium cursor-not-allowed text-muted-foreground/40 select-none"
+                      title={sidebarCollapsed ? link.label : undefined}
+                    >
+                      <link.icon className="h-4 w-4 shrink-0" />
+                      {!sidebarCollapsed && (
+                        <>
+                          <span className="flex-1">{link.label}</span>
+                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground/60 leading-none">
+                            Soon
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  );
+                }
                 const isActive =
                   pathname === link.href ||
                   (link.href !== basePath && pathname.startsWith(link.href + "/")) ||
