@@ -939,17 +939,16 @@ export default function SyncPage() {
           try {
             const sb = createBrowserSupabase();
             const { data: { session } } = await sb.auth.getSession();
-            const token = session?.access_token ?? "";
+            const userId = session?.user?.id;
             const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+
+            const edgeHeaders: Record<string, string> = { "Content-Type": "application/json" };
+            if (session?.access_token) edgeHeaders["Authorization"] = `Bearer ${session.access_token}`;
 
             const edgeRes = await fetch(`${supabaseUrl}/functions/v1/load-shopify-products`, {
               method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-                apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
-              },
-              body: JSON.stringify({ workspaceId: workspace.id, limit: loadStep.args?.limit ?? 0 }),
+              headers: edgeHeaders,
+              body: JSON.stringify({ workspaceId: workspace.id, userId, limit: loadStep.args?.limit ?? 0 }),
             });
 
             const edgeData = await edgeRes.json().catch(() => ({}));
