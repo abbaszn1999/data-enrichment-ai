@@ -195,8 +195,8 @@ export default function WorkspaceLayout({
     <WorkspaceContext.Provider value={{ workspace, role, wsLoading }}>
       <div className="h-screen flex flex-col bg-background overflow-hidden">
         {/* Top Header — hidden in immersive mode */}
-        <header className={`border-b bg-background/95 backdrop-blur-sm sticky top-0 z-30 shrink-0 transition-all duration-300 overflow-hidden ${
-          isImmersive ? "h-0 border-transparent" : "h-12"
+        <header className={`border-b bg-background/95 backdrop-blur-sm sticky top-0 z-50 shrink-0 transition-all duration-300 ${
+          isImmersive ? "h-0 border-transparent overflow-hidden" : "h-12 overflow-visible"
         }`}>
           <div className="flex items-center justify-between h-12 px-4">
             {/* Left: Logo + Workspace Name */}
