@@ -1332,7 +1332,7 @@ export function DataTable() {
           </div>
         ),
         cell: ({ row }) => {
-          if (row.original.status === "processing" && enrichCol.enabled) {
+          if (row.original.status === "processing" && enrichCol.enabled && activeSheet === "new") {
             return (
               <div className="py-1 space-y-1.5 w-full">
                 <div className="h-1.5 w-3/4 bg-primary/10 animate-pulse rounded-full" />
@@ -1376,6 +1376,7 @@ export function DataTable() {
     selectAllRows,
     deselectAllRows,
     renameColumn,
+    activeSheet,
   ]);
 
   const table = useReactTable({
