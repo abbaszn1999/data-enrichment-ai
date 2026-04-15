@@ -58,6 +58,7 @@ import { useWorkspaceContext } from "../layout";
 import { useSyncStore, type SyncMessage, type SyncMode, type SyncWorkingMemory, type SyncActionReceipt } from "@/store/sync-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { getWorkspaceIntegration, type WorkspaceIntegration } from "@/lib/supabase";
+import { createClient as createBrowserSupabase } from "@/lib/supabase-browser";
 
 type SyncSheetRow = Record<string, any>;
 
@@ -929,9 +930,64 @@ export default function SyncPage() {
       const allSafe = plan.steps.every((step) => SAFE_AUTO_EXECUTE_TOOLS.has(step.tool));
 
       if (allSafe) {
-        // Auto-execute safe operations
-        updateLastAssistantProgress(["Executing plan..."]);
-        await executeApprovedPlan(trimmed, attachmentPayloads, plan);
+        // Check if the plan starts with load_products_from_shopify — handle via Supabase Edge Function
+        const loadStep = plan.steps.find((s) => s.tool === "load_products_from_shopify");
+        const remainingSteps = plan.steps.filter((s) => s.tool !== "load_products_from_shopify");
+
+        if (loadStep && workspace?.id) {
+          updateLastAssistantProgress(["Loading products from the connected Shopify integration..."]);
+          try {
+            const sb = createBrowserSupabase();
+            const { data: { session } } = await sb.auth.getSession();
+            const token = session?.access_token ?? "";
+            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+
+            const edgeRes = await fetch(`${supabaseUrl}/functions/v1/load-shopify-products`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+                apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+              },
+              body: JSON.stringify({ workspaceId: workspace.id, limit: loadStep.args?.limit ?? 0 }),
+            });
+
+            const edgeData = await edgeRes.json().catch(() => ({}));
+            if (!edgeRes.ok) {
+              throw new Error(edgeData?.error || "Failed to load products");
+            }
+
+            const loadedSheet = edgeData?.sheet as SyncSheet | undefined;
+            if (loadedSheet && Array.isArray(loadedSheet.columns) && Array.isArray(loadedSheet.rows)) {
+              if (resultColumns.length > 0 || resultRows.length > 0) {
+                pushSheetSnapshot({ title: resultsTitle, columns: resultColumns, rows: resultRows });
+              }
+              setOriginalAndWorkingSheet(loadedSheet);
+              updateLastAssistantProgress([`Loaded ${loadedSheet.rows.length} products into the sheet workspace`]);
+
+              if (remainingSteps.length > 0) {
+                // Continue with remaining steps on Netlify agent
+                const continuePlan: AgentPlan = { ...plan, steps: remainingSteps };
+                await executeApprovedPlan(trimmed, attachmentPayloads, continuePlan);
+              } else {
+                updateLastAssistantMessage(
+                  plan.assistantMessage || `Loaded ${loadedSheet.rows.length} products from Shopify into the results workspace.`
+                );
+                updateLastAssistantProgress([
+                  `Loaded ${loadedSheet.rows.length} products into the sheet workspace`,
+                ]);
+              }
+            } else {
+              throw new Error("Invalid sheet data returned from product loader");
+            }
+          } catch (err: any) {
+            updateLastAssistantMessage(`⚠️ ${err?.message || "Failed to load products"}`);
+          }
+        } else {
+          // Auto-execute safe operations normally
+          updateLastAssistantProgress(["Executing plan..."]);
+          await executeApprovedPlan(trimmed, attachmentPayloads, plan);
+        }
       } else {
         // Show intent preview for confirmation
         setPendingPlan({ plan, userMessage: trimmed, attachmentPayloads, estimatedCredits });
