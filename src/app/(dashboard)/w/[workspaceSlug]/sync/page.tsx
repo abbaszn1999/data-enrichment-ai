@@ -594,6 +594,7 @@ export default function SyncPage() {
           if (!trimmedLine) continue;
 
           const event = JSON.parse(trimmedLine) as
+            | { type: "ping" }
             | { type: "progress"; progress: string[] }
             | {
                 type: "result";
@@ -608,6 +609,8 @@ export default function SyncPage() {
                 };
               }
             | { type: "error"; error: string };
+
+          if (event.type === "ping") continue;
 
           if (event.type === "progress") {
             updateLastAssistantProgress(event.progress);

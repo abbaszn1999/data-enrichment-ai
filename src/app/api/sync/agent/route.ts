@@ -1646,6 +1646,20 @@ function createNdjsonStream(executor: (push: (event: AgentStreamEvent) => void) 
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
+      let closed = false;
+
+      // Keepalive: send a ping every 10 seconds to prevent Netlify/proxies
+      // from closing the connection during long AI planning/writing phases.
+      const keepalive = setInterval(() => {
+        if (!closed) {
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "ping" })}\n`));
+          } catch {
+            clearInterval(keepalive);
+          }
+        }
+      }, 10_000);
+
       const push = (event: AgentStreamEvent) => {
         controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
       };
@@ -1656,6 +1670,8 @@ function createNdjsonStream(executor: (push: (event: AgentStreamEvent) => void) 
         const message = error instanceof Error ? error.message : "Internal error";
         push({ type: "error", error: message });
       } finally {
+        closed = true;
+        clearInterval(keepalive);
         controller.close();
       }
     },
@@ -2370,6 +2386,7 @@ export async function POST(request: NextRequest) {
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
     },
     status: 200,
   });
