@@ -105,7 +105,7 @@ export interface EnrichmentEvent {
 
 export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turkish" | "German" | "Chinese" | "Japanese" | "custom";
 
-export type EnrichmentModel = "gemini-3.1-pro-preview" | "gemini-3.1-flash-lite-preview";
+export type EnrichmentModel = "gemini-3.1-pro-preview" | "gemini-3-flash-preview";
 
 export type ThinkingLevelOption = "none" | "low" | "medium" | "high";
 
@@ -141,7 +141,7 @@ export const LANGUAGE_OPTIONS: { value: OutputLanguage; label: string; flag: str
 
 export const MODEL_OPTIONS: { value: EnrichmentModel; label: string; description: string; icon: string }[] = [
   { value: "gemini-3.1-pro-preview", label: "Pro", description: "Highest quality, slower", icon: "✨" },
-  { value: "gemini-3.1-flash-lite-preview", label: "Fast", description: "Fastest, lower cost", icon: "⚡" },
+  { value: "gemini-3-flash-preview", label: "Fast", description: "Fastest, lower cost", icon: "⚡" },
 ];
 
 export const TONE_OPTIONS: { value: WritingTone; label: string; description: string }[] = [

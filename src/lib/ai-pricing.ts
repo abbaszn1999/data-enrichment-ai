@@ -33,6 +33,13 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
+  "gemini-3-flash-preview": {
+    inputPerMillion: 0.25,
+    outputPerMillion: 1.50,
+    cachedInputPerMillion: 0.025,
+    searchPerQuery: 0.014,
+    freeSearchQuota: 5000,
+  },
 };
 
 const DEFAULT_PRICING: ModelPricing = {

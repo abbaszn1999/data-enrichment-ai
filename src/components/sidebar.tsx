@@ -243,6 +243,7 @@ export function Sidebar() {
         // Check if user stopped enrichment
         if (controller.signal.aborted) break;
 
+        const MAX_FIELD_CHARS = 800;
         const filteredData: Record<string, string> = {};
         for (const col of sourceColumns) {
           if (enrichedColIds.has(col)) {
@@ -262,6 +263,9 @@ export function Sidebar() {
             }
           } else if (r.originalData[col] !== undefined) {
             filteredData[col] = r.originalData[col];
+          }
+          if (filteredData[col] && filteredData[col].length > MAX_FIELD_CHARS) {
+            filteredData[col] = filteredData[col].slice(0, MAX_FIELD_CHARS);
           }
         }
 
@@ -305,9 +309,18 @@ export function Sidebar() {
         completedCount++;
 
         if (!response.ok) {
-          setRowStatus(r.id, "error", `API error: ${response.status}`);
+          let errorMsg = `API error: ${response.status}`;
+          try {
+            const errBody = await response.json();
+            if (typeof errBody?.error === "string" && errBody.error) {
+              errorMsg = errBody.error;
+            }
+          } catch {}
+          setRowStatus(r.id, "error", errorMsg);
           setEnrichProgress(completedCount, enrichableRows.length);
           incrementError();
+          if (response.status >= 500) setLastError(errorMsg);
+          await new Promise((resolve) => setTimeout(resolve, 2000));
           continue;
         }
 
@@ -336,6 +349,8 @@ export function Sidebar() {
           incrementError();
           if (result.error) setLastError(result.error);
         }
+
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
 
       setIsEnriching(false);

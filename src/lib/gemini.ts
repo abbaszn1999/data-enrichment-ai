@@ -112,20 +112,17 @@ export async function searchProduct(
     console.log(`[Gemini] Search request: ${images.length} image(s) attached`);
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: createUserContent(parts),
       config: {
         tools: [{ googleSearch: {} }],
-        thinkingConfig: {
-          thinkingLevel: ThinkingLevel.LOW,
-        },
       },
     });
 
     const text = response.text || "";
 
     // Calculate cost from usageMetadata
-    const cost = calculateCallCost("gemini-3.1-pro-preview", response.usageMetadata, true);
+    const cost = calculateCallCost("gemini-3-flash-preview", response.usageMetadata, true);
     console.log(`[Gemini] Search cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens)`);
 
     const sources: SourceUrl[] = [];
@@ -189,7 +186,7 @@ async function analyzeProductData(
   settings?: GeminiSettings
 ): Promise<{ sufficient: boolean; searchQuery: string; productIdentity: string; cost: AiCallCost | null }> {
   const ai = await getClient();
-  const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
+  const model = settings?.enrichmentModel || "gemini-3-flash-preview";
   const thinkingLevel = await getThinkingLevel(settings?.thinkingLevel);
 
   // Prepare product data for analysis (exclude base64 images from text)
@@ -474,7 +471,7 @@ export async function enrichProduct(
       parts.push(img);
     }
 
-    const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
+    const model = settings?.enrichmentModel || "gemini-3-flash-preview";
     const thinkingLevel = await getThinkingLevel(settings?.thinkingLevel);
 
     const { createUserContent } = await import("@google/genai");
@@ -537,7 +534,7 @@ async function categorizeProduct(
   categoriesRawRows?: Record<string, string>[]
 ): Promise<{ categories: string; cost: AiCallCost | null }> {
   const ai = await getClient();
-  const model = settings?.enrichmentModel || "gemini-3.1-pro-preview";
+  const model = settings?.enrichmentModel || "gemini-3-flash-preview";
   const thinkingLevel = await getThinkingLevel(settings?.thinkingLevel);
   const cmsConfig: CmsCategoryConfig = cmsType && CMS_CATEGORY_CONFIG[cmsType]
     ? CMS_CATEGORY_CONFIG[cmsType]
