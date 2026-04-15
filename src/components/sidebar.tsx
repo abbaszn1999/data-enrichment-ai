@@ -92,6 +92,7 @@ export function Sidebar() {
     sidebarOpen,
     setSidebarOpen,
     updateSettings,
+    setEnrichingContext,
   } = useSheetStore();
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -141,6 +142,7 @@ export function Sidebar() {
     }
     setIsEnriching(false);
     setPaused(false);
+    setEnrichingContext(null, []);
     // Reset processing rows back to pending
     for (const row of rows) {
       if (row.status === "processing") {
@@ -148,7 +150,7 @@ export function Sidebar() {
       }
     }
     toast.info("Enrichment stopped");
-  }, [rows, setIsEnriching, setPaused, setRowStatus]);
+  }, [rows, setIsEnriching, setPaused, setRowStatus, setEnrichingContext]);
 
   const handleEnrich = useCallback(async () => {
     const isNewTab = enrichOutputTab === "new";
@@ -161,6 +163,7 @@ export function Sidebar() {
     setPaused(false);
     setEnrichProgress(0, enrichableRows.length);
     setLastError(null);
+    setEnrichingContext(isNewTab ? "new" : "existing", isNewTab ? [] : existingColumnsToEnrich);
 
     for (const row of enrichableRows) {
       setRowStatus(row.id, "processing");
@@ -354,6 +357,7 @@ export function Sidebar() {
       }
 
       setIsEnriching(false);
+      setEnrichingContext(null, []);
       toast.success("Enrichment complete", {
         description: `${completedCount} rows processed`,
       });
@@ -367,6 +371,7 @@ export function Sidebar() {
       setLastError(errMsg);
       toast.error("Enrichment failed", { description: errMsg });
       setIsEnriching(false);
+      setEnrichingContext(null, []);
     } finally {
       abortControllerRef.current = null;
     }
@@ -388,6 +393,7 @@ export function Sidebar() {
     updateCellValue,
     incrementError,
     invalidateCredits,
+    setEnrichingContext,
   ]);
 
   const doneCount = rows.filter((r) => r.status === "done").length;

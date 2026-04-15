@@ -1045,6 +1045,8 @@ export function DataTable() {
     activeSheet,
     setActiveSheet,
     saveStatus,
+    enrichingTab,
+    enrichingExistingColumns,
   } = useSheetStore();
 
   const { role } = useWorkspaceStore();
@@ -1273,6 +1275,15 @@ export function DataTable() {
           </div>
         ),
         cell: ({ row }) => {
+          if (row.original.status === "processing" && enrichingTab === "existing" && enrichingExistingColumns.includes(colName)) {
+            return (
+              <div className="py-1 space-y-1.5 w-full">
+                <div className="h-1.5 w-3/4 bg-primary/10 animate-pulse rounded-full" />
+                <div className="h-1.5 w-1/2 bg-primary/10 animate-pulse rounded-full" />
+                <div className="h-1.5 w-5/6 bg-primary/10 animate-pulse rounded-full" />
+              </div>
+            );
+          }
           const canEdit =
             !isViewer &&
             (!isEnriching ||
@@ -1332,7 +1343,7 @@ export function DataTable() {
           </div>
         ),
         cell: ({ row }) => {
-          if (row.original.status === "processing" && enrichCol.enabled && activeSheet === "new") {
+          if (row.original.status === "processing" && enrichCol.enabled && enrichingTab === "new") {
             return (
               <div className="py-1 space-y-1.5 w-full">
                 <div className="h-1.5 w-3/4 bg-primary/10 animate-pulse rounded-full" />
@@ -1377,6 +1388,8 @@ export function DataTable() {
     deselectAllRows,
     renameColumn,
     activeSheet,
+    enrichingTab,
+    enrichingExistingColumns,
   ]);
 
   const table = useReactTable({

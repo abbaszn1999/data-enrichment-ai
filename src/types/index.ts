@@ -348,6 +348,8 @@ export interface SheetState {
   activeSheet: "existing" | "new";
   existingColumnsToEnrich: string[];
   existingColumnInstructions: Record<string, string>;
+  enrichingTab: "existing" | "new" | null;
+  enrichingExistingColumns: string[];
   undoVersion: number;
   saveStatus: "saved" | "saving" | "unsaved" | "error";
   lastSavedAt: number | null;
