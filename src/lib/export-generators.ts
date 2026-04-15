@@ -1,4 +1,3 @@
-import * as XLSX from "xlsx";
 import { getPlatformFormat, type PlatformFormat } from "./export-formats";
 
 export function transformValue(value: any, transform: string): string {
@@ -101,7 +100,8 @@ export function generateCSV(data: Record<string, string>[], delimiter = ","): st
   return lines.join("\n");
 }
 
-export function generateXLSX(data: Record<string, string>[]): ArrayBuffer {
+export async function generateXLSX(data: Record<string, string>[]): Promise<ArrayBuffer> {
+  const XLSX = await import("xlsx");
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data);
   XLSX.utils.book_append_sheet(wb, ws, "Products");
@@ -118,7 +118,7 @@ export function downloadBlob(content: string | ArrayBuffer, fileName: string, mi
   URL.revokeObjectURL(url);
 }
 
-export function exportProducts(
+export async function exportProducts(
   products: { data: Record<string, any>; enriched_data?: Record<string, any> }[],
   platformId: string,
   options?: {
@@ -151,7 +151,7 @@ export function exportProducts(
       break;
     }
     case "xlsx": {
-      const xlsx = generateXLSX(data);
+      const xlsx = await generateXLSX(data);
       downloadBlob(xlsx, `${baseName}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       break;
     }

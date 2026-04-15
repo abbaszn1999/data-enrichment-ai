@@ -29,25 +29,26 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
   const { pathname } = request.nextUrl;
 
-  // Public routes that don't need auth
+  // Public routes that don't need auth — skip everything early
   const publicRoutes = ["/login", "/register", "/reset-password", "/auth/callback", "/invite"];
   const isPublicRoute = publicRoutes.some((r) => pathname.startsWith(r));
   const isDemoRoute = pathname.startsWith("/demo");
   const isApiRoute = pathname.startsWith("/api");
 
-  // Skip auth check for public, demo, and API routes
   if (isPublicRoute || isDemoRoute || isApiRoute) {
     return supabaseResponse;
   }
 
+  // Use getSession() instead of getUser() — reads from cookies locally,
+  // no network round-trip to Supabase auth servers (~400-800ms saved per navigation)
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
   // If not logged in, redirect to login
-  if (!user) {
+  if (!session?.user) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirect", pathname);

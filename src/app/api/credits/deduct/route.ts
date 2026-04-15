@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
-import { getOwnerSubscription, isSubscriptionActive } from "@/lib/stripe";
+import { getOwnerSubscription, isSubscriptionActive, invalidateSubscriptionCache } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 
 export async function POST(request: Request) {
@@ -52,6 +52,9 @@ export async function POST(request: Request) {
         required: amount,
       }, { status: 402 });
     }
+
+    // Invalidate cached subscription data so next balance check reflects the deduction
+    invalidateSubscriptionCache(workspaceId);
 
     return NextResponse.json({
       success: true,

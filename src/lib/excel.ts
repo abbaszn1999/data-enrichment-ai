@@ -1,5 +1,3 @@
-import * as XLSX from "xlsx";
-import JSZip from "jszip";
 import type { ProductRow, EnrichedData, EnrichmentColumn } from "@/types";
 
 // --- Image extraction from xlsx ---
@@ -17,6 +15,7 @@ async function extractImagesFromXlsx(
   const rowImages = new Map<number, string>();
 
   try {
+    const JSZip = (await import("jszip")).default;
     const zip = await JSZip.loadAsync(buffer);
 
     // 1. Find drawing relationship files to map rId -> image file paths
@@ -130,6 +129,7 @@ export async function parseExcelFile(buffer: ArrayBuffer): Promise<{
   columns: string[];
   rows: ProductRow[];
 }> {
+  const XLSX = await import("xlsx");
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[sheetName];

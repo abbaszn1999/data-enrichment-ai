@@ -92,6 +92,25 @@ export interface ImportRow {
   created_at: string;
 }
 
+export interface WorkspaceIntegration {
+  id: string;
+  workspace_id: string;
+  provider: "shopify" | "woocommerce" | "wordpress";
+  integration_name: string;
+  base_url: string;
+  config: Record<string, any>;
+  status: "connected";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceIntegrationTestResult {
+  provider: "shopify" | "woocommerce" | "wordpress";
+  accountLabel: string;
+  baseUrl: string;
+  metadata?: Record<string, any>;
+}
+
 // ─── Profiles ────────────────────────────────────────────
 
 export async function getProfile(userId: string) {
@@ -194,6 +213,89 @@ export async function deleteWorkspace(id: string) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Failed to delete workspace");
+}
+
+export async function getWorkspaceIntegration(workspaceId: string): Promise<WorkspaceIntegration | null> {
+  const res = await fetch(`/api/integrations?workspaceId=${encodeURIComponent(workspaceId)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to load integration");
+  return data.integration ?? null;
+}
+
+export async function testWorkspaceIntegration(input: {
+  workspaceId: string;
+  provider: "shopify" | "woocommerce" | "wordpress";
+  integrationName: string;
+  config: Record<string, any>;
+}): Promise<WorkspaceIntegrationTestResult> {
+  const res = await fetch("/api/integrations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...input, action: "test" }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to test integration");
+  return data.result;
+}
+
+export async function saveWorkspaceIntegration(input: {
+  workspaceId: string;
+  provider: "shopify" | "woocommerce" | "wordpress";
+  integrationName: string;
+  config: Record<string, any>;
+}): Promise<WorkspaceIntegration> {
+  const res = await fetch("/api/integrations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...input, action: "save" }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to save integration");
+  return data.integration;
+}
+
+export async function testShopifyIntegration(input: {
+  workspaceId: string;
+  integrationName: string;
+  storeUrl: string;
+  adminApiToken: string;
+}): Promise<WorkspaceIntegrationTestResult> {
+  return testWorkspaceIntegration({
+    workspaceId: input.workspaceId,
+    provider: "shopify",
+    integrationName: input.integrationName,
+    config: {
+      store_url: input.storeUrl,
+      admin_api_token: input.adminApiToken,
+    },
+  });
+}
+
+export async function saveShopifyIntegration(input: {
+  workspaceId: string;
+  integrationName: string;
+  storeUrl: string;
+  adminApiToken: string;
+}): Promise<WorkspaceIntegration> {
+  return saveWorkspaceIntegration({
+    workspaceId: input.workspaceId,
+    provider: "shopify",
+    integrationName: input.integrationName,
+    config: {
+      store_url: input.storeUrl,
+      admin_api_token: input.adminApiToken,
+    },
+  });
+}
+
+export async function disconnectWorkspaceIntegration(workspaceId: string): Promise<void> {
+  const res = await fetch("/api/integrations", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to disconnect integration");
 }
 
 // ─── Workspace Members ───────────────────────────────────

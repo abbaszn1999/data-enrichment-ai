@@ -453,7 +453,7 @@ export default function WorkspaceDashboardPage() {
                 return (
                   <div>
                     <div className="flex items-baseline gap-2 mb-3">
-                      <span className="text-2xl font-black tabular-nums">{totalCredits}</span>
+                      <span className="text-2xl font-black tabular-nums">{formatCredits(totalCredits)}</span>
                       <span className="text-[10px] text-muted-foreground">credits used this week</span>
                     </div>
                     <div className="relative">

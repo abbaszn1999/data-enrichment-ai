@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { stripe, findPlanByStripePriceId } from "@/lib/stripe";
+import { stripe, findPlanByStripePriceId, invalidateSubscriptionCache } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 import Stripe from "stripe";
 
@@ -42,6 +42,8 @@ export async function POST(request: NextRequest) {
         await handleSubDeleted(event.data.object as Stripe.Subscription, admin);
         break;
     }
+    // Clear subscription cache after any subscription-related change
+    invalidateSubscriptionCache();
   } catch (err: any) {
     console.error(`[Webhook] Error ${event.type}:`, err.message);
     return NextResponse.json({ error: err.message }, { status: 500 });

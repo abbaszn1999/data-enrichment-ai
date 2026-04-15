@@ -30,14 +30,14 @@ export async function deductCredits(
 }
 
 export async function getBalance(workspaceId: string): Promise<{ used: number; total: number; bonus: number; remaining: number }> {
-  const res = await fetch(`/api/credits?workspaceId=${workspaceId}`);
+  const res = await fetch(`/api/credits/balance?workspaceId=${workspaceId}`);
   if (!res.ok) return { used: 0, total: 0, bonus: 0, remaining: 0 };
   const data = await res.json();
   return {
-    used: data.balance?.used ?? 0,
-    total: data.balance?.total ?? 0,
-    bonus: data.balance?.bonus ?? 0,
-    remaining: data.balance?.remaining ?? 0,
+    used: data.used ?? 0,
+    total: data.total ?? 0,
+    bonus: data.bonus ?? 0,
+    remaining: data.remaining ?? 0,
   };
 }
 

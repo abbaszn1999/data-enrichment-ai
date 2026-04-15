@@ -3,20 +3,20 @@
 import { useRouter, useParams } from "next/navigation";
 import { Crown, ArrowRight, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useSubscription } from "@/hooks/use-subscription";
 import type { Role } from "@/lib/permissions";
 
 interface SubscriptionGateProps {
-  workspaceId: string | null;
+  subscription: any | null;
+  isActive: boolean;
+  isLoading: boolean;
   role: Role | null;
   children: React.ReactNode;
 }
 
-export function SubscriptionGate({ workspaceId, role, children }: SubscriptionGateProps) {
+export function SubscriptionGate({ subscription, isActive, isLoading, role, children }: SubscriptionGateProps) {
   const params = useParams();
   const router = useRouter();
   const slug = params.workspaceSlug as string;
-  const { subscription, isActive, isLoading } = useSubscription(workspaceId);
   const isOwner = role === "owner";
 
   if (isLoading) return <>{children}</>;
@@ -93,11 +93,10 @@ export function SubscriptionGate({ workspaceId, role, children }: SubscriptionGa
 }
 
 // Notification banner for subscription status issues (past_due, cancel_at_period_end)
-export function SubscriptionBanner({ workspaceId }: { workspaceId: string | null }) {
+export function SubscriptionBanner({ subscription, isLoading }: { subscription: any | null; isLoading: boolean }) {
   const params = useParams();
   const router = useRouter();
   const slug = params.workspaceSlug as string;
-  const { subscription, isLoading } = useSubscription(workspaceId);
 
   if (isLoading || !subscription) return null;
 

@@ -32,11 +32,14 @@ import { useAuth } from "@/hooks/use-auth";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRole } from "@/hooks/use-role";
 import { useCredits } from "@/hooks/use-credits";
+import { useSubscription } from "@/hooks/use-subscription";
 import { signOut } from "@/lib/auth";
 import { formatCredits } from "@/lib/format-credits";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import { useSyncStore } from "@/store/sync-store";
+import { getWorkspaceIntegration } from "@/lib/supabase";
 import { SubscriptionGate, SubscriptionBanner } from "@/components/subscription-gate";
 
 interface WorkspaceContextType {
@@ -69,10 +72,23 @@ export default function WorkspaceLayout({
   const permissions = useRole(role);
 
   const credits = useCredits(workspace?.id ?? null);
+  const { subscription, isActive, isLoading: subLoading } = useSubscription(workspace?.id ?? null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [hasIntegration, setHasIntegration] = useState(false);
   useEffect(() => setMounted(true), []);
+
+  // Check if workspace has an active integration (for Sync nav gating)
+  useEffect(() => {
+    if (!workspace?.id) return;
+    getWorkspaceIntegration(workspace.id)
+      .then((i) => { setHasIntegration(!!i); })
+      .catch(() => { setHasIntegration(false); });
+  }, [workspace?.id]);
+
+  // Sync focus mode — hides header + sidebar when chat is active
+  const { isFocusMode: syncFocusMode } = useSyncStore();
 
   // Sync workspace into Zustand store so Sidebar and other components can access it
   const { setWorkspace: setStoreWorkspace, setRole: setStoreRole } = useWorkspaceStore();
@@ -85,6 +101,10 @@ export default function WorkspaceLayout({
 
   // Hide main sidebar + header on enrichment tool page (it has its own UI)
   const isEnrichPage = pathname.includes("/enrich");
+  const isSyncPage = pathname.includes("/sync");
+  const hideWorkspaceSidebar = isEnrichPage || (isSyncPage && syncFocusMode);
+  // Full immersive mode: hides header + sidebar only for dedicated full-screen pages
+  const isImmersive = isEnrichPage;
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage = pathname.includes("/subscription");
   const isTeamPage = pathname.includes("/team");
@@ -97,7 +117,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}/products`, label: "Products", icon: Package },
     { href: `${basePath}/categories`, label: "Categories", icon: FolderTree },
     { href: `${basePath}/import`, label: "Import", icon: Upload },
-    { href: "", label: "Sync", icon: RefreshCw, comingSoon: true },
+    { href: hasIntegration ? `${basePath}/sync` : "", label: "Sync", icon: RefreshCw, disabled: !hasIntegration },
     { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
     ...(permissions.canAdmin
       ? [{ href: `${basePath}/team`, label: "Team", icon: Users }]
@@ -174,8 +194,10 @@ export default function WorkspaceLayout({
   return (
     <WorkspaceContext.Provider value={{ workspace, role, wsLoading }}>
       <div className="h-screen flex flex-col bg-background overflow-hidden">
-        {/* Top Header */}
-        <header className="border-b bg-background/95 backdrop-blur-sm sticky top-0 z-30 shrink-0">
+        {/* Top Header — hidden in immersive mode */}
+        <header className={`border-b bg-background/95 backdrop-blur-sm sticky top-0 z-30 shrink-0 transition-all duration-300 overflow-hidden ${
+          isImmersive ? "h-0 border-transparent" : "h-12"
+        }`}>
           <div className="flex items-center justify-between h-12 px-4">
             {/* Left: Logo + Workspace Name */}
             <div className="flex items-center gap-3">
@@ -306,8 +328,8 @@ export default function WorkspaceLayout({
 
         {/* Body: Sidebar + Content */}
         <div className="flex-1 flex min-h-0">
-          {/* Sidebar — hidden on enrichment tool page */}
-          {!isEnrichPage && (
+          {/* Sidebar — hidden in enrich and Sync focused mode */}
+          {!hideWorkspaceSidebar && (
           <aside
             className={`border-r bg-muted/30 shrink-0 flex flex-col transition-all duration-200 ${
               sidebarCollapsed ? "w-14" : "w-52"
@@ -315,7 +337,7 @@ export default function WorkspaceLayout({
           >
             <nav className="flex-1 py-2 px-2 space-y-0.5">
               {sidebarLinks.map((link) => {
-                if ((link as any).comingSoon) {
+                if ((link as any).disabled) {
                   return (
                     <div
                       key={link.label}
@@ -323,14 +345,7 @@ export default function WorkspaceLayout({
                       title={sidebarCollapsed ? link.label : undefined}
                     >
                       <link.icon className="h-4 w-4 shrink-0" />
-                      {!sidebarCollapsed && (
-                        <>
-                          <span className="flex-1">{link.label}</span>
-                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground/60 leading-none">
-                            Soon
-                          </span>
-                        </>
-                      )}
+                      {!sidebarCollapsed && <span>{link.label}</span>}
                     </div>
                   );
                 }
@@ -373,12 +388,12 @@ export default function WorkspaceLayout({
           )}
 
           {/* Main Content */}
-          <main className={`flex-1 flex flex-col min-h-0 ${isEnrichPage ? "overflow-hidden" : "overflow-auto"}`}>
-            {!isEnrichPage && <SubscriptionBanner workspaceId={workspace?.id ?? null} />}
-            {isSubscriptionPage || isEnrichPage ? (
-              <div className={isEnrichPage ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
+          <main className={`flex-1 flex flex-col min-h-0 ${(isImmersive || isSyncPage) ? "overflow-hidden" : "overflow-auto"}`}>
+            {!isImmersive && <SubscriptionBanner subscription={subscription} isLoading={subLoading} />}
+            {isSubscriptionPage || isImmersive || isSyncPage ? (
+              <div className={(isImmersive || isSyncPage) ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
             ) : (
-              <SubscriptionGate workspaceId={workspace?.id ?? null} role={role}>
+              <SubscriptionGate subscription={subscription} isActive={isActive} isLoading={subLoading} role={role}>
                 <div className="flex-1">{children}</div>
               </SubscriptionGate>
             )}

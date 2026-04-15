@@ -48,33 +48,67 @@ export async function getOrCreateStripeCustomer(userId: string, email: string): 
   return customer.id;
 }
 
+// In-memory caches to avoid redundant DB round-trips
+const _ownerCache = new Map<string, { ownerId: string; ts: number }>();
+const _subCache = new Map<string, { result: any; ts: number }>();
+const OWNER_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const SUB_CACHE_TTL = 60 * 1000; // 60 seconds
+
+// Call this after credit deductions or subscription changes to force fresh data
+export function invalidateSubscriptionCache(workspaceId?: string) {
+  if (workspaceId) {
+    _subCache.delete(workspaceId);
+  } else {
+    _subCache.clear();
+  }
+}
+
 // ── Get the workspace owner's subscription (single source of truth) ──
 export async function getOwnerSubscription(workspaceId: string) {
+  // Check full subscription cache first
+  const subCached = _subCache.get(workspaceId);
+  if (subCached && Date.now() - subCached.ts < SUB_CACHE_TTL) {
+    return subCached.result;
+  }
+
   const admin = createAdminClient();
 
-  // Get workspace owner
-  const { data: workspace } = await admin
-    .from("workspaces")
-    .select("owner_id")
-    .eq("id", workspaceId)
-    .single();
+  // Check owner cache to skip a DB round-trip
+  let ownerId: string | null = null;
+  const ownerCached = _ownerCache.get(workspaceId);
+  if (ownerCached && Date.now() - ownerCached.ts < OWNER_CACHE_TTL) {
+    ownerId = ownerCached.ownerId;
+  } else {
+    const { data: workspace } = await admin
+      .from("workspaces")
+      .select("owner_id")
+      .eq("id", workspaceId)
+      .single();
 
-  if (!workspace) return null;
+    if (!workspace) return null;
+    ownerId = workspace.owner_id;
+    _ownerCache.set(workspaceId, { ownerId: ownerId!, ts: Date.now() });
+  }
 
   // Get owner's subscription with plan
   const { data: sub } = await admin
     .from("user_subscriptions")
     .select("*, subscription_plans(*)")
-    .eq("user_id", workspace.owner_id)
+    .eq("user_id", ownerId)
     .single();
 
-  if (!sub) return null;
+  if (!sub) {
+    _subCache.set(workspaceId, { result: null, ts: Date.now() });
+    return null;
+  }
 
-  return {
+  const result = {
     subscription: sub,
     plan: sub.subscription_plans as any,
-    ownerId: workspace.owner_id,
+    ownerId,
   };
+  _subCache.set(workspaceId, { result, ts: Date.now() });
+  return result;
 }
 
 // ── Get user's own subscription ──

@@ -11,9 +11,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Missing workspaceId" }, { status: 400 });
     }
 
+    // Use getSession (reads cookies, no network call) instead of getUser (network round-trip)
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
       .from("workspace_members")
       .select("role")
       .eq("workspace_id", workspaceId)
-      .eq("user_id", user.id)
+      .eq("user_id", session.user.id)
       .single();
 
     return NextResponse.json({ role: member?.role ?? null });

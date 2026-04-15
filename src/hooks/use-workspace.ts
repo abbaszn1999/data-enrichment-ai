@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase-browser";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import type { User } from "@supabase/supabase-js";
@@ -31,41 +30,20 @@ export function useWorkspace(slug: string, user: User | null | undefined) {
     let cancelled = false;
 
     async function load() {
-      const supabase = createClient();
       try {
-        const { data: workspace, error: wsErr } = await supabase
-          .from("workspaces")
-          .select("*")
-          .eq("slug", slug)
-          .single();
+        // Single API call that resolves workspace + role server-side in parallel
+        // This avoids 2 sequential round-trips (browser→supabase + browser→API→supabase)
+        const res = await fetch(`/api/workspace-init?slug=${encodeURIComponent(slug)}`);
 
         if (cancelled) return;
 
-        if (wsErr || !workspace) {
-          setState({ workspace: null, role: null, isLoading: false, error: "Workspace not found" });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setState({ workspace: null, role: null, isLoading: false, error: err?.error || "Failed to load workspace" });
           return;
         }
 
-        // Fetch role via API route (bypasses RLS issues)
-        let memberRole: string | null = null;
-        try {
-          const res = await fetch(`/api/team/my-role?workspaceId=${encodeURIComponent(workspace.id)}`);
-          if (res.ok) {
-            const json = await res.json();
-            memberRole = json.role;
-          }
-        } catch {
-          // Fallback: try direct query
-          const { data: memberData } = await supabase
-            .from("workspace_members")
-            .select("role")
-            .eq("workspace_id", workspace.id)
-            .eq("user_id", user!.id)
-            .single();
-          memberRole = memberData?.role ?? null;
-        }
-
-        if (cancelled) return;
+        const { workspace, role: memberRole } = await res.json();
 
         setState({
           workspace,

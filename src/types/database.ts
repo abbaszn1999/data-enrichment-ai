@@ -94,6 +94,35 @@ export interface Database {
           status?: "pending" | "accepted" | "expired";
         };
       };
+      workspace_integrations: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          provider: "shopify" | "woocommerce" | "wordpress";
+          integration_name: string;
+          base_url: string;
+          config: Json;
+          status: "connected";
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          provider: "shopify" | "woocommerce" | "wordpress";
+          integration_name: string;
+          base_url: string;
+          config?: Json;
+          status?: "connected";
+        };
+        Update: {
+          provider?: "shopify" | "woocommerce" | "wordpress";
+          integration_name?: string;
+          base_url?: string;
+          config?: Json;
+          status?: "connected";
+          updated_at?: string;
+        };
+      };
       // NOTE: categories, master_products stored in Storage JSON (workspace-files bucket)
       // See: storage-helpers.ts → CategoryJson, MasterProductJson
       import_sessions: {
