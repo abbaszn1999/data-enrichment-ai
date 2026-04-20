@@ -56,7 +56,6 @@ export default function ProductsPage() {
 
   const totalColSpan = dataColumns.length + (permissions.canEdit ? 1 : 0);
 
-  // Load all products + categories from Storage once
   const loadAll = async () => {
     if (!workspace) return;
     setLoading(true);
