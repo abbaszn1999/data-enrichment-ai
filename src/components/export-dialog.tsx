@@ -25,16 +25,12 @@ function buildCSV(
   enrichmentColumns: { id: string; label: string; enabled: boolean }[],
 ): string {
   const visibleEnrichment = enrichmentColumns.filter(
-    (c) => {
-      // Exclude sourceUrls from export
-      if (c.id === "sourceUrls") return false;
-      return c.enabled ||
-        rows.some((r) => {
-          const val = r.enrichedData?.[c.id];
-          if (Array.isArray(val)) return val.length > 0;
-          return val !== undefined && val !== null && val !== "";
-        });
-    }
+    (c) => c.enabled ||
+      rows.some((r) => {
+        const val = r.enrichedData?.[c.id];
+        if (Array.isArray(val)) return val.length > 0;
+        return val !== undefined && val !== null && val !== "";
+      })
   );
   const headers = [...originalColumns, ...visibleEnrichment.map((c) => c.label)];
   const csvRows = [headers.map((h) => `"${h.replace(/"/g, '""')}"`).join(",")];
@@ -49,14 +45,20 @@ function buildCSV(
         if (!v) return '""';
         if (Array.isArray(v)) {
           if (col.id === "imageUrls") {
-            // Export only the first image URL
-            const first = v[0];
-            const url = typeof first === "object" && first !== null ? (first.imageUrl || "") : String(first || "");
-            return `"${url.replace(/"/g, '""')}"`;
+            const urls = (v as any[])
+              .map((i: any) => (typeof i === "object" && i !== null ? (i.imageUrl || "") : String(i || "")))
+              .filter(Boolean);
+            return `"${urls.join("\n").replace(/"/g, '""')}"`;
+          }
+          if (col.id === "sourceUrls") {
+            const urls = (v as any[])
+              .map((i: any) => (typeof i === "object" && i !== null ? (i.uri || i.url || "") : String(i || "")))
+              .filter(Boolean);
+            return `"${urls.join("\n").replace(/"/g, '""')}"`;
           }
           return `"${(v as any[])
             .map((i: any) => (typeof i === "object" ? i.imageUrl || i.uri || i.title || JSON.stringify(i) : i))
-            .join("; ")
+            .join("\n")
             .replace(/"/g, '""')}"`;
         }
         return `"${String(v).replace(/"/g, '""')}"`;
@@ -73,15 +75,12 @@ function buildJSON(
   enrichmentColumns: { id: string; label: string; enabled: boolean }[],
 ): any[] {
   const visibleEnrichment = enrichmentColumns.filter(
-    (c) => {
-      if (c.id === "sourceUrls") return false;
-      return c.enabled ||
-        rows.some((r) => {
-          const val = r.enrichedData?.[c.id];
-          if (Array.isArray(val)) return val.length > 0;
-          return val !== undefined && val !== null && val !== "";
-        });
-    }
+    (c) => c.enabled ||
+      rows.some((r) => {
+        const val = r.enrichedData?.[c.id];
+        if (Array.isArray(val)) return val.length > 0;
+        return val !== undefined && val !== null && val !== "";
+      })
   );
   return rows.map((row) => {
     const obj: Record<string, any> = {};
@@ -92,9 +91,13 @@ function buildJSON(
     for (const col of visibleEnrichment) {
       const v = row.enrichedData[col.id];
       if (col.id === "imageUrls" && Array.isArray(v)) {
-        // Export only the first image URL
-        const first = v[0];
-        obj[col.label] = typeof first === "object" && first !== null ? (first.imageUrl || "") : String(first || "");
+        obj[col.label] = (v as any[])
+          .map((i: any) => (typeof i === "object" && i !== null ? (i.imageUrl || "") : String(i || "")))
+          .filter(Boolean);
+      } else if (col.id === "sourceUrls" && Array.isArray(v)) {
+        obj[col.label] = (v as any[])
+          .map((i: any) => (typeof i === "object" && i !== null ? (i.uri || i.url || "") : String(i || "")))
+          .filter(Boolean);
       } else {
         obj[col.label] = v ?? "";
       }

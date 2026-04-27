@@ -234,10 +234,7 @@ export async function exportToExcel(
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Enriched Data");
 
-  const enabledEnrichment = enrichmentColumns.filter((col) => {
-    if (col.id === "sourceUrls") return false;
-    return col.enabled;
-  });
+  const enabledEnrichment = enrichmentColumns.filter((col) => col.enabled);
 
   // Identify image columns
   const imageColNames = new Set<string>();
@@ -295,9 +292,15 @@ export async function exportToExcel(
         strValue = "";
       } else if (Array.isArray(value)) {
         if (col.id === "imageUrls") {
-          // Export only the first image URL string
-          const first = value[0];
-          strValue = typeof first === "object" && first !== null ? (first.imageUrl || "") : String(first || "");
+          strValue = (value as any[])
+            .map((i: any) => (typeof i === "object" && i !== null ? (i.imageUrl || "") : String(i || "")))
+            .filter(Boolean)
+            .join("\n");
+        } else if (col.id === "sourceUrls") {
+          strValue = (value as any[])
+            .map((i: any) => (typeof i === "object" && i !== null ? (i.uri || i.url || "") : String(i || "")))
+            .filter(Boolean)
+            .join("\n");
         } else {
           strValue = (value as any[]).map((i: any) => typeof i === "object" ? (i.imageUrl || i.uri || i.title || JSON.stringify(i)) : String(i)).join("\n");
         }
@@ -367,8 +370,6 @@ function addSheetRows(
   enrichmentColumns: EnrichmentColumn[],
 ) {
   const enabledEnrichment = enrichmentColumns.filter((col) => {
-    // Exclude sourceUrls from export
-    if (col.id === "sourceUrls") return false;
     return col.enabled || rows.some((r) => {
       const val = r.enrichedData?.[col.id];
       if (Array.isArray(val)) return val.length > 0;
@@ -417,9 +418,15 @@ function addSheetRows(
       if (value === undefined || value === null) strValue = "";
       else if (Array.isArray(value)) {
         if (col.id === "imageUrls") {
-          // Export only the first image URL string
-          const first = value[0];
-          strValue = typeof first === "object" && first !== null ? (first.imageUrl || "") : String(first || "");
+          strValue = (value as any[])
+            .map((i: any) => (typeof i === "object" && i !== null ? (i.imageUrl || "") : String(i || "")))
+            .filter(Boolean)
+            .join("\n");
+        } else if (col.id === "sourceUrls") {
+          strValue = (value as any[])
+            .map((i: any) => (typeof i === "object" && i !== null ? (i.uri || i.url || "") : String(i || "")))
+            .filter(Boolean)
+            .join("\n");
         } else {
           strValue = (value as any[]).map((i: any) => typeof i === "object" ? (i.imageUrl || i.uri || i.title || JSON.stringify(i)) : String(i)).join("\n");
         }
