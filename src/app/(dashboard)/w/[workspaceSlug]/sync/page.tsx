@@ -58,7 +58,7 @@ import { useWorkspaceContext } from "../layout";
 import { useSyncStore, type SyncMessage, type SyncMode, type SyncWorkingMemory, type SyncActionReceipt } from "@/store/sync-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { getWorkspaceIntegration, type WorkspaceIntegration } from "@/lib/supabase";
-import { createClient as createBrowserSupabase } from "@/lib/supabase-browser";
+// createBrowserSupabase removed — product loading now uses /api/sync/products
 
 type SyncSheetRow = Record<string, any>;
 
@@ -99,14 +99,18 @@ type PendingPlanInfo = {
 const SAFE_AUTO_EXECUTE_TOOLS = new Set([
   "reply_only",
   "answer_question_about_sheet",
+  "load_products",
   "load_products_from_shopify",
+  "load_products_from_woocommerce",
   "analyze_attachments",
   "run_sheet_program",
   "research_with_web",
 ]);
 
 const TOOL_LABELS: Record<string, string> = {
+  load_products: "Load products from connected store",
   load_products_from_shopify: "Load products from Shopify",
+  load_products_from_woocommerce: "Load products from WooCommerce",
   append_row_from_ai: "Add a new row",
   write_sheet_column_with_ai: "Write/update column",
   search_images_with_serper: "Search images",
@@ -558,7 +562,7 @@ export default function SyncPage() {
         role: "assistant",
         content: data?.message || "Sync completed successfully.",
         timestamp: Date.now(),
-        progress: ["Prepared reviewed changes", "Applied changes to Shopify", "Kept the current sheet view in place"],
+        progress: ["Prepared reviewed changes", "Applied changes to the connected store", "Kept the current sheet view in place"],
       });
     } catch (error: any) {
       addMessage({
@@ -626,7 +630,7 @@ export default function SyncPage() {
                 rows: event.data.sheet.rows,
               };
               const loadedFreshSource = Array.isArray(event.data?.executedSteps)
-                ? event.data.executedSteps.some((step) => step.tool === "load_products_from_shopify")
+                ? event.data.executedSteps.some((step) => step.tool === "load_products" || step.tool === "load_products_from_shopify" || step.tool === "load_products_from_woocommerce")
                 : false;
 
               // Push current sheet as snapshot before replacing (for undo)
@@ -930,33 +934,27 @@ export default function SyncPage() {
       const allSafe = plan.steps.every((step) => SAFE_AUTO_EXECUTE_TOOLS.has(step.tool));
 
       if (allSafe) {
-        // Check if the plan starts with load_products_from_shopify — handle via Supabase Edge Function
-        const loadStep = plan.steps.find((s) => s.tool === "load_products_from_shopify");
-        const remainingSteps = plan.steps.filter((s) => s.tool !== "load_products_from_shopify");
+        // Check if the plan starts with a load_products tool — handle via /api/sync/products
+        const loadStep = plan.steps.find((s) => s.tool === "load_products" || s.tool === "load_products_from_shopify" || s.tool === "load_products_from_woocommerce");
+        const remainingSteps = plan.steps.filter((s) => s.tool !== "load_products" && s.tool !== "load_products_from_shopify" && s.tool !== "load_products_from_woocommerce");
 
         if (loadStep && workspace?.id) {
-          updateLastAssistantProgress(["Loading products from the connected Shopify integration..."]);
+          updateLastAssistantProgress(["Loading products from the connected integration..."]);
           try {
-            const sb = createBrowserSupabase();
-            const { data: { session } } = await sb.auth.getSession();
-            const userId = session?.user?.id;
-            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-
-            const edgeHeaders: Record<string, string> = { "Content-Type": "application/json" };
-            if (session?.access_token) edgeHeaders["Authorization"] = `Bearer ${session.access_token}`;
-
-            const edgeRes = await fetch(`${supabaseUrl}/functions/v1/load-shopify-products`, {
+            const productsRes = await fetch("/api/sync/products", {
               method: "POST",
-              headers: edgeHeaders,
-              body: JSON.stringify({ workspaceId: workspace.id, userId, limit: loadStep.args?.limit ?? 0 }),
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ workspaceId: workspace.id, limit: loadStep.args?.limit ?? 0 }),
             });
 
-            const edgeData = await edgeRes.json().catch(() => ({}));
-            if (!edgeRes.ok) {
-              throw new Error(edgeData?.error || "Failed to load products");
+            const productsData = await productsRes.json().catch(() => ({}));
+            if (!productsRes.ok) {
+              throw new Error(productsData?.error || "Failed to load products");
             }
 
-            const loadedSheet = edgeData?.sheet as SyncSheet | undefined;
+            const loadedSheet: SyncSheet | undefined = productsData?.title
+              ? { title: productsData.title, columns: productsData.columns, rows: productsData.rows }
+              : undefined;
             if (loadedSheet && Array.isArray(loadedSheet.columns) && Array.isArray(loadedSheet.rows)) {
               if (resultColumns.length > 0 || resultRows.length > 0) {
                 pushSheetSnapshot({ title: resultsTitle, columns: resultColumns, rows: resultRows });
@@ -970,7 +968,7 @@ export default function SyncPage() {
                 await executeApprovedPlan(trimmed, attachmentPayloads, continuePlan);
               } else {
                 updateLastAssistantMessage(
-                  plan.assistantMessage || `Loaded ${loadedSheet.rows.length} products from Shopify into the results workspace.`
+                  plan.assistantMessage || `Loaded ${loadedSheet.rows.length} products into the results workspace.`
                 );
                 updateLastAssistantProgress([
                   `Loaded ${loadedSheet.rows.length} products into the sheet workspace`,

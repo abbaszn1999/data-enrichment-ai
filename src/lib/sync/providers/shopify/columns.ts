@@ -1,0 +1,36 @@
+export const SHOPIFY_CORE_PRODUCT_COLUMNS = [
+  "id",
+  "title",
+  "handle",
+  "status",
+  "vendor",
+  "product_type",
+  "tags",
+  "price",
+  "compare_at_price",
+  "inventory_total",
+  "primary_sku",
+  "barcode",
+  "inventory_policy",
+  "variant_count",
+  "featured_image",
+  "featured_image_alt_text",
+  "body_html",
+  "seo_title",
+  "seo_description",
+  "published_at",
+  "created_at",
+  "updated_at",
+] as const;
+
+/** Shopify product columns that map directly onto the REST `product` payload. */
+export const SHOPIFY_SYNCABLE_COLUMN_MAP: Record<string, string> = {
+  title: "title",
+  handle: "handle",
+  status: "status",
+  vendor: "vendor",
+  product_type: "product_type",
+  tags: "tags",
+  description: "body_html",
+  body_html: "body_html",
+};

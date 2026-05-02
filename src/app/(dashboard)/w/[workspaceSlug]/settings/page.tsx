@@ -36,8 +36,8 @@ import {
   updateWorkspace,
   deleteWorkspace,
   getWorkspaceIntegration,
-  testShopifyIntegration,
-  saveShopifyIntegration,
+  testWorkspaceIntegration,
+  saveWorkspaceIntegration,
   disconnectWorkspaceIntegration,
   type WorkspaceIntegration,
 } from "@/lib/supabase";
@@ -52,24 +52,36 @@ const CMS_TYPES = [
   { value: "custom", label: "Custom / Other" },
 ];
 
+type ConfigField = {
+  key: string;
+  label: string;
+  type: "text" | "password" | "url";
+  placeholder?: string;
+  required?: boolean;
+  helpText?: string;
+};
+
 const INTEGRATION_PROVIDERS = [
   {
     value: "shopify" as const,
     label: "Shopify",
     description: "Configure your Shopify store connection",
     available: true,
+    configFields: [
+      { key: "store_url", label: "Store URL", type: "url" as const, placeholder: "yourstore.myshopify.com", required: true, helpText: "Your .myshopify.com domain." },
+      { key: "admin_api_token", label: "Admin API Access Token", type: "password" as const, placeholder: "shpat_xxxxxxxxxxxx", required: true, helpText: "Generate from Shopify Admin → Apps → Develop apps → API credentials." },
+    ] satisfies ConfigField[],
   },
   {
     value: "woocommerce" as const,
     label: "WooCommerce",
-    description: "Coming soon",
-    available: false,
-  },
-  {
-    value: "wordpress" as const,
-    label: "WordPress",
-    description: "Coming soon",
-    available: false,
+    description: "Configure your WooCommerce / WordPress store connection",
+    available: true,
+    configFields: [
+      { key: "store_url", label: "Store URL", type: "url" as const, placeholder: "https://your-store.com", required: true, helpText: "Your WordPress site URL where WooCommerce is installed." },
+      { key: "username", label: "WordPress Username", type: "text" as const, placeholder: "admin", required: true, helpText: "Your WordPress admin username." },
+      { key: "application_password", label: "Application Password", type: "password" as const, placeholder: "xxxx xxxx xxxx xxxx xxxx xxxx", required: true, helpText: "Generate from WordPress → Users → Profile → Application Passwords." },
+    ] satisfies ConfigField[],
   },
 ];
 
@@ -92,10 +104,9 @@ export default function SettingsPage() {
   const [selectedProvider, setSelectedProvider] = useState<"shopify" | "woocommerce" | "wordpress" | null>(null);
   const [integrationStep, setIntegrationStep] = useState<"select" | "configure">("select");
   const [integrationName, setIntegrationName] = useState("");
-  const [storeUrl, setStoreUrl] = useState("");
-  const [adminApiToken, setAdminApiToken] = useState("");
+  const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [testingConnection, setTestingConnection] = useState(false);
-  const [testedConnection, setTestedConnection] = useState<{ accountLabel: string; baseUrl: string; storeDomain?: string; storeName?: string | null } | null>(null);
+  const [testedConnection, setTestedConnection] = useState<{ accountLabel: string; baseUrl: string; metadata?: Record<string, unknown> } | null>(null);
   const [savingIntegration, setSavingIntegration] = useState(false);
   const [disconnectingIntegration, setDisconnectingIntegration] = useState(false);
   const [integrationError, setIntegrationError] = useState("");
@@ -173,8 +184,7 @@ export default function SettingsPage() {
     setSelectedProvider(null);
     setIntegrationStep("select");
     setIntegrationName("");
-    setStoreUrl("");
-    setAdminApiToken("");
+    setConfigValues({});
     setTestedConnection(null);
     setIntegrationError("");
   };
@@ -185,47 +195,46 @@ export default function SettingsPage() {
   };
 
   const handleTestConnection = async () => {
-    if (!workspace || selectedProvider !== "shopify") return;
+    if (!workspace || !selectedProvider) return;
     setIntegrationError("");
     setTestingConnection(true);
     try {
-      const result = await testShopifyIntegration({
+      const result = await testWorkspaceIntegration({
         workspaceId: workspace.id,
+        provider: selectedProvider,
         integrationName,
-        storeUrl,
-        adminApiToken,
+        config: configValues,
       });
       setTestedConnection({
         accountLabel: result.accountLabel,
         baseUrl: result.baseUrl,
-        storeDomain: result.metadata?.storeDomain,
-        storeName: result.metadata?.storeName,
+        metadata: result.metadata,
       });
     } catch (err: any) {
       setTestedConnection(null);
-      setIntegrationError(err?.message || "Failed to test Shopify connection");
+      setIntegrationError(err?.message || `Failed to test ${selectedProvider} connection`);
     } finally {
       setTestingConnection(false);
     }
   };
 
   const handleSaveIntegration = async () => {
-    if (!workspace || selectedProvider !== "shopify") return;
+    if (!workspace || !selectedProvider) return;
     setIntegrationError("");
     setSavingIntegration(true);
     try {
-      const savedIntegration = await saveShopifyIntegration({
+      const savedIntegration = await saveWorkspaceIntegration({
         workspaceId: workspace.id,
+        provider: selectedProvider,
         integrationName,
-        storeUrl,
-        adminApiToken,
+        config: configValues,
       });
       setIntegration(savedIntegration);
       setIntegrationSuccess(`Connected to ${savedIntegration.integration_name}`);
       setIntegrationDialogOpen(false);
       resetIntegrationDialog();
     } catch (err: any) {
-      setIntegrationError(err?.message || "Failed to save Shopify integration");
+      setIntegrationError(err?.message || `Failed to save ${selectedProvider} integration`);
     } finally {
       setSavingIntegration(false);
     }
@@ -412,7 +421,7 @@ export default function SettingsPage() {
           <div className="rounded-xl border border-dashed border-border/70 p-5 bg-muted/20 flex items-center justify-between gap-4">
             <div className="space-y-1">
               <p className="text-sm font-semibold">No integration connected</p>
-              <p className="text-xs text-muted-foreground">Connect Shopify now. Additional platforms will be added later.</p>
+              <p className="text-xs text-muted-foreground">Connect Shopify or WooCommerce to enable product sync.</p>
             </div>
             <Button onClick={handleOpenIntegrationDialog} className="gap-2">
               <PlugZap className="h-4 w-4" />
@@ -535,7 +544,7 @@ export default function SettingsPage() {
                 <span>{selectedProviderConfig?.label} Integration</span>
               </div>
 
-              {selectedProvider === "shopify" && (
+              {selectedProviderConfig && (
                 <div className="rounded-xl border border-border/60 p-4 space-y-4 bg-muted/10">
                   <div className="space-y-2">
                     <Label className="text-xs font-semibold">Integration Name</Label>
@@ -547,48 +556,32 @@ export default function SettingsPage() {
                         setIntegrationName(e.target.value);
                         setTestedConnection(null);
                       }}
-                      placeholder="e.g. My Shopify Store"
+                      placeholder={`e.g. My ${selectedProviderConfig.label} Store`}
                       className="h-10"
                     />
                     <p className="text-xs text-muted-foreground">A friendly name to identify this integration.</p>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Store URL</Label>
-                    <Input
-                      name="shopify-store-url"
-                      autoComplete="off"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      value={storeUrl}
-                      onChange={(e) => {
-                        setStoreUrl(e.target.value);
-                        setTestedConnection(null);
-                      }}
-                      placeholder="yourstore.myshopify.com"
-                      className="h-10"
-                    />
-                    <p className="text-xs text-muted-foreground">Your Shopify store URL.</p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Admin API Access Token</Label>
-                    <Input
-                      type="password"
-                      name="shopify-admin-api-token"
-                      autoComplete="new-password"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      value={adminApiToken}
-                      onChange={(e) => {
-                        setAdminApiToken(e.target.value);
-                        setTestedConnection(null);
-                      }}
-                      placeholder="shpat_xxxxxxxxxxxx"
-                      className="h-10"
-                    />
-                    <p className="text-xs text-muted-foreground">Generate this from Shopify admin under Apps → Develop apps.</p>
-                  </div>
+                  {selectedProviderConfig.configFields.map((field) => (
+                    <div key={field.key} className="space-y-2">
+                      <Label className="text-xs font-semibold">{field.label}</Label>
+                      <Input
+                        type={field.type === "password" ? "password" : "text"}
+                        name={`${selectedProvider}-${field.key}`}
+                        autoComplete={field.type === "password" ? "new-password" : "off"}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        value={configValues[field.key] ?? ""}
+                        onChange={(e) => {
+                          setConfigValues((prev) => ({ ...prev, [field.key]: e.target.value }));
+                          setTestedConnection(null);
+                        }}
+                        placeholder={field.placeholder}
+                        className="h-10"
+                      />
+                      {field.helpText && <p className="text-xs text-muted-foreground">{field.helpText}</p>}
+                    </div>
+                  ))}
 
                   <div className="rounded-xl border border-border/60 bg-background p-4 flex items-center justify-between gap-4">
                     <div>
@@ -598,7 +591,11 @@ export default function SettingsPage() {
                     <Button
                       variant="outline"
                       onClick={handleTestConnection}
-                      disabled={testingConnection || !integrationName.trim() || !storeUrl.trim() || !adminApiToken.trim()}
+                      disabled={
+                        testingConnection ||
+                        !integrationName.trim() ||
+                        selectedProviderConfig.configFields.some((f) => f.required && !configValues[f.key]?.trim())
+                      }
                       className="gap-2"
                     >
                       {testingConnection && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -613,7 +610,6 @@ export default function SettingsPage() {
                         <span>Connection successful</span>
                       </div>
                       <p className="mt-1">Store: {testedConnection.accountLabel}</p>
-                      {testedConnection.storeDomain && <p className="mt-1">Domain: {testedConnection.storeDomain}</p>}
                     </div>
                   )}
                 </div>

@@ -3,7 +3,7 @@ import { calculateCallCost, costToCredits } from "@/lib/ai-pricing";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { calculateCreditBalance, getOwnerSubscription, isSubscriptionActive } from "@/lib/stripe";
-import { buildShopifyCoreProductsSheet, type SyncSheet as ShopifyCoreSyncSheet, type SyncSheetRow as ShopifyCoreSyncSheetRow } from "@/lib/sync/shopify-products";
+import { getProvider, isProviderSupported, type SyncSheet as CoreSyncSheet, type SyncSheetRow as CoreSyncSheetRow } from "@/lib/sync";
 import { searchProduct, searchProductImages } from "@/lib/gemini";
 import { aiJsonParse } from "ai-json-safe-parse";
 import type { AiCallCost } from "@/lib/ai-pricing";
@@ -19,9 +19,9 @@ type IntegrationContext = {
   base_url?: string;
 } | null;
 
-type SyncSheetRow = ShopifyCoreSyncSheetRow;
+type SyncSheetRow = CoreSyncSheetRow;
 
-type SyncSheet = ShopifyCoreSyncSheet;
+type SyncSheet = CoreSyncSheet;
 
 type SheetProgramPredicate =
   | { type: "is_empty"; field: string }
@@ -52,6 +52,8 @@ type SheetProgram = {
 
 type AgentStep =
   | { tool: "load_products_from_shopify"; args?: { limit?: number } }
+  | { tool: "load_products_from_woocommerce"; args?: { limit?: number } }
+  | { tool: "load_products"; args?: { limit?: number } }
   | {
       tool: "append_row_from_ai";
       args?: {
@@ -617,77 +619,38 @@ async function requireWorkspaceMember(workspaceId: string, userId: string) {
   return admin;
 }
 
-async function fetchShopifyProductsSheet(workspaceId: string, userId: string, limit = 50): Promise<SyncSheet> {
+async function fetchProductsSheet(
+  workspaceId: string,
+  userId: string,
+  limit = 50,
+  expectedProvider?: string
+): Promise<SyncSheet> {
   const admin = await requireWorkspaceMember(workspaceId, userId);
-
   const { data: integration, error: integrationError } = await admin
     .from("workspace_integrations")
     .select("provider, integration_name, base_url, config")
     .eq("workspace_id", workspaceId)
     .maybeSingle();
 
-  if (integrationError) {
-    throw new Error(integrationError.message);
-  }
-
-  if (!integration) {
-    throw new Error("No connected integration found");
-  }
-
-  if (integration.provider !== "shopify") {
+  if (integrationError) throw new Error(integrationError.message);
+  if (!integration) throw new Error("No connected integration found");
+  if (!isProviderSupported(integration.provider)) {
     throw new Error(`${integration.provider} is not supported yet in Sync actions`);
   }
-
-  const adminApiToken = String(integration.config?.admin_api_token ?? "").trim();
-  if (!adminApiToken) {
-    throw new Error("Missing Shopify admin token in integration config");
+  if (expectedProvider && integration.provider !== expectedProvider) {
+    throw new Error(`The connected integration is ${integration.provider}, not ${expectedProvider}.`);
   }
 
-  const allProducts: any[] = [];
-  const shouldLoadAll = limit <= 0;
-  let nextUrl = new URL(`${integration.base_url}/admin/api/2024-10/products.json`);
-  nextUrl.searchParams.set("limit", shouldLoadAll ? "250" : String(Math.min(Math.max(limit, 1), 250)));
-  nextUrl.searchParams.set(
-    "fields",
-    "id,title,handle,status,vendor,product_type,tags,body_html,seo_title,seo_description,published_at,created_at,updated_at,variants,image,images"
+  const provider = getProvider(integration.provider);
+  return provider.fetchProductsSheet(
+    {
+      provider: integration.provider,
+      integration_name: integration.integration_name,
+      base_url: integration.base_url,
+      config: integration.config,
+    },
+    { limit }
   );
-
-  while (nextUrl) {
-    const response = await fetch(nextUrl.toString(), {
-      method: "GET",
-      headers: {
-        "X-Shopify-Access-Token": adminApiToken,
-        "Content-Type": "application/json",
-      },
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(`Shopify products request failed (${response.status})${text ? `: ${text}` : ""}`);
-    }
-
-    const data = await response.json();
-    const products = Array.isArray(data?.products) ? data.products : [];
-    allProducts.push(...products);
-
-    if (!shouldLoadAll || products.length < 250) {
-      break;
-    }
-
-    const linkHeader = response.headers.get("link") || response.headers.get("Link") || "";
-    const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/i);
-    if (!nextMatch?.[1]) {
-      break;
-    }
-
-    nextUrl = new URL(nextMatch[1]);
-  }
-
-  return buildShopifyCoreProductsSheet({
-    integrationName: integration.integration_name,
-    products: allProducts,
-  });
 }
 
 async function writeSheetColumnWithAi(params: {
@@ -1489,7 +1452,7 @@ async function createPlan(params: {
 Your job is to select the right tools and produce a structured JSON execution plan.
 
 Available tools:
-1. load_products_from_shopify(limit?) — Load products into the sheet. Use limit 0 for all products.
+1. load_products(limit?) — Load products from the connected platform (Shopify or WooCommerce) into the sheet. Use limit 0 for all products. Aliases: load_products_from_shopify, load_products_from_woocommerce.
 2. append_row_from_ai(instruction) — Add a new row based on the current sheet schema.
 3. write_sheet_column_with_ai(targetColumn, instruction, overwrite) — Create or rewrite a column for targeted rows. Includes descriptions, titles, SEO, translations, etc.
 4. search_images_with_serper(instruction, targetColumn, overwrite) — Search product images. Default targetColumn is "featured_image".
@@ -1504,7 +1467,7 @@ Rules:
 - Prefer operating on the current sheet if it exists.
 - Result modes: answer_only (no sheet change), show_filtered_sheet (show matching rows only), target_rows (keep full sheet, select rows for follow-up edit).
 - If the user asks to add/create a product or row, use append_row_from_ai.
-- If writing content but no sheet exists, first load_products_from_shopify, then write.
+- If writing content but no sheet exists, first load_products, then write.
 - For tabular filter/query/count, prefer run_sheet_program.
 - For analytical questions expecting an answer, use answer_question_about_sheet.
 - For showing rows matching a condition, prefer show_filtered_sheet.
@@ -1519,7 +1482,8 @@ Rules:
 - Infer the target column from the user's message and existing schema. Create columns that don't exist.
 - If a language name is mentioned alone (e.g. English, Arabic), infer the most likely text column to rewrite.
 - If the request is ambiguous, use reply_only and ask for clarification.
-- Never claim to apply changes to Shopify directly.
+- Never claim to apply changes to the connected platform directly until the user confirms.
+- The connected platform may be Shopify or WooCommerce — use the same load_products tool either way; the system will pick the right loader based on the active integration.
 - Maximum 5 steps per plan.`;
 
   const prompt = `Connected platform: ${params.integration ? `${params.integration.provider} (${params.integration.integration_name})` : "none"}
@@ -1568,7 +1532,9 @@ User message: ${params.userMessage}`;
               type: "STRING" as const,
               description: "Tool name",
               enum: [
+                "load_products",
                 "load_products_from_shopify",
+                "load_products_from_woocommerce",
                 "append_row_from_ai",
                 "write_sheet_column_with_ai",
                 "search_images_with_serper",
@@ -1869,9 +1835,23 @@ export async function POST(request: NextRequest) {
     emitProgress(`Planned ${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}`);
 
     for (const step of plan.steps) {
-      if (step.tool === "load_products_from_shopify") {
-        emitProgress("Loading products from the connected Shopify integration");
-        sheet = await fetchShopifyProductsSheet(workspaceId, user.id, step.args?.limit ?? 50);
+      if (
+        step.tool === "load_products" ||
+        step.tool === "load_products_from_shopify" ||
+        step.tool === "load_products_from_woocommerce"
+      ) {
+        const expectedProvider =
+          step.tool === "load_products_from_shopify"
+            ? "shopify"
+            : step.tool === "load_products_from_woocommerce"
+              ? "woocommerce"
+              : undefined;
+        emitProgress(
+          expectedProvider
+            ? `Loading products from the connected ${expectedProvider} integration`
+            : "Loading products from the connected integration"
+        );
+        sheet = await fetchProductsSheet(workspaceId, user.id, step.args?.limit ?? 50, expectedProvider);
         workingMemory = {
           ...workingMemory,
           lastCreatedRowIndexes: [],
