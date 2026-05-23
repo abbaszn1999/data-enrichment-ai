@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase-browser";
 import type { Role } from "@/lib/permissions";
+import type { EnrichmentPreset } from "@/types";
 
 // Re-export a convenience singleton for client-side use
 function getClient() {
@@ -16,6 +17,7 @@ export interface Workspace {
   logo_url: string | null;
   cms_type: string;
   owner_id: string;
+  enrichment_presets?: EnrichmentPreset[];
   created_at: string;
   updated_at: string;
 }
@@ -179,6 +181,33 @@ export async function getWorkspaceById(id: string): Promise<Workspace | null> {
     throw error;
   }
   return data;
+}
+
+export async function getEnrichmentPresets(workspaceId: string): Promise<EnrichmentPreset[]> {
+  const supabase = getClient();
+  const { data, error } = await supabase
+    .from("workspaces")
+    .select("enrichment_presets")
+    .eq("id", workspaceId)
+    .single();
+  if (error) throw error;
+  return Array.isArray(data?.enrichment_presets) ? data.enrichment_presets : [];
+}
+
+export async function saveEnrichmentPreset(workspaceId: string, preset: EnrichmentPreset): Promise<EnrichmentPreset[]> {
+  const supabase = getClient();
+  const existing = await getEnrichmentPresets(workspaceId);
+  const presetName = preset.name.trim().toLowerCase();
+  const next = [
+    preset,
+    ...existing.filter((item) => item.id !== preset.id && item.name.trim().toLowerCase() !== presetName),
+  ].slice(0, 30);
+  const { error } = await supabase
+    .from("workspaces")
+    .update({ enrichment_presets: next })
+    .eq("id", workspaceId);
+  if (error) throw error;
+  return next;
 }
 
 export async function createWorkspace(workspace: {

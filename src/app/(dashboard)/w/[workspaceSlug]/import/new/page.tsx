@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import {
   Upload,
@@ -26,12 +26,14 @@ import { useWorkspaceContext } from "../../layout";
 import { useRole } from "@/hooks/use-role";
 import {
   createImportSession,
+  getEnrichmentPresets,
   updateImportSession,
 } from "@/lib/supabase";
 import { uploadWorkspaceFile } from "@/lib/supabase-storage";
 import { saveProjectJson, saveSuppliersJson, loadSuppliersJson, type ProjectJson, type ProjectRow, type SupplierJson } from "@/lib/storage-helpers";
 import { parseExcelFile } from "@/lib/excel";
 import { ImportStepper } from "@/components/import/import-stepper";
+import type { EnrichmentPreset } from "@/types";
 
 export default function NewImportPage() {
   const router = useRouter();
@@ -50,6 +52,8 @@ export default function NewImportPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [suppliersLoaded, setSuppliersLoaded] = useState(false);
+  const [presets, setPresets] = useState<EnrichmentPreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState("");
 
 
   // Load suppliers from Storage
@@ -60,7 +64,16 @@ export default function NewImportPage() {
     setSuppliersLoaded(true);
   }, [workspace, suppliersLoaded]);
 
-  useState(() => { loadSuppliers(); });
+  useEffect(() => {
+    loadSuppliers();
+  }, [loadSuppliers]);
+
+  useEffect(() => {
+    if (!workspace?.id) return;
+    getEnrichmentPresets(workspace.id)
+      .then(setPresets)
+      .catch(console.error);
+  }, [workspace?.id]);
 
   const handleFileSelect = async (selectedFile: File) => {
     setFile(selectedFile);
@@ -141,12 +154,17 @@ export default function NewImportPage() {
         matchType: "new" as const,
       }));
 
+      const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
+      const presetSourceColumns = selectedPreset
+        ? selectedPreset.settings.sourceColumns.filter((col) => fileData.columns.includes(col))
+        : null;
+
       const projectJson: ProjectJson = {
         columns: fileData.columns,
         rows: projectRows,
-        sourceColumns: [...fileData.columns],
-        enrichmentColumns: [],
-        enrichmentSettings: {},
+        sourceColumns: presetSourceColumns?.length ? presetSourceColumns : [...fileData.columns],
+        enrichmentColumns: selectedPreset ? selectedPreset.settings.enrichmentColumns : [],
+        enrichmentSettings: selectedPreset ? selectedPreset.settings.enrichmentSettings : {},
         columnVisibility: {},
       };
 
@@ -232,6 +250,39 @@ export default function NewImportPage() {
                 rows={2}
                 className="w-full px-3 py-2 text-sm rounded-lg border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-medium flex items-center gap-1.5">
+                <Zap className="h-3 w-3" /> AI Enrichment Settings
+              </Label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedPresetId("")}
+                  className={`text-left p-3 rounded-lg border transition-colors ${
+                    selectedPresetId === "" ? "border-primary/50 bg-primary/5" : "hover:bg-muted/50"
+                  }`}
+                >
+                  <div className="text-xs font-semibold">New settings</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    Start with default enrichment settings
+                  </div>
+                </button>
+                <select
+                  value={selectedPresetId}
+                  onChange={(e) => setSelectedPresetId(e.target.value)}
+                  disabled={presets.length === 0}
+                  className="w-full h-[62px] px-3 text-xs rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
+                >
+                  <option value="">
+                    {presets.length === 0 ? "No saved settings yet" : "Choose saved setting..."}
+                  </option>
+                  {presets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>{preset.name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* File Upload */}

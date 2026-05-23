@@ -120,6 +120,20 @@ export interface EnrichmentSettings {
   thinkingLevel: ThinkingLevelOption;
 }
 
+export interface EnrichmentPresetSettings {
+  sourceColumns: string[];
+  enrichmentColumns: EnrichmentColumn[];
+  enrichmentSettings: EnrichmentSettings;
+}
+
+export interface EnrichmentPreset {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  settings: EnrichmentPresetSettings;
+}
+
 export const DEFAULT_ENRICHMENT_SETTINGS: EnrichmentSettings = {
   outputLanguage: "English",
   customLanguage: "",

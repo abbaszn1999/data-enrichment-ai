@@ -33,11 +33,12 @@ import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { ExportDialog } from "@/components/export-dialog";
 import { FunctionsPanel } from "@/components/functions-panel";
-import type { OutputLanguage, EnrichmentModel, ThinkingLevelOption, WritingTone, ContentLength, CategoryItem } from "@/types";
+import type { OutputLanguage, EnrichmentModel, ThinkingLevelOption, WritingTone, ContentLength, CategoryItem, EnrichmentPreset } from "@/types";
 import { LANGUAGE_OPTIONS, MODEL_OPTIONS, TONE_OPTIONS } from "@/types";
 import type { EnrichmentColumn } from "@/types";
 import type { GeminiSettings } from "@/lib/gemini";
 import { createClient as createBrowserClient } from "@/lib/supabase-browser";
+import { saveEnrichmentPreset } from "@/lib/supabase";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -404,6 +405,37 @@ export function Sidebar() {
       setRowStatus(row.id, "pending");
     }
   }, [rows, setRowStatus]);
+
+  const handleSavePreset = useCallback(async () => {
+    if (!workspace?.id) return;
+    const selectedColumns = enrichmentColumns.filter((col) => col.enabled);
+    if (selectedColumns.length === 0) {
+      toast.error("Select at least one AI output column");
+      return;
+    }
+    const name = window.prompt("Setting name", "AI Setting");
+    if (!name?.trim()) return;
+    const now = new Date().toISOString();
+    const preset: EnrichmentPreset = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      createdAt: now,
+      updatedAt: now,
+      settings: {
+        sourceColumns: [...sourceColumns],
+        enrichmentColumns: enrichmentColumns.map((col) => ({ ...col })),
+        enrichmentSettings: { ...enrichmentSettings },
+      },
+    };
+    try {
+      await saveEnrichmentPreset(workspace.id, preset);
+      toast.success("Setting saved", { description: preset.name });
+    } catch (error) {
+      toast.error("Failed to save setting", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }, [workspace?.id, enrichmentColumns, sourceColumns, enrichmentSettings]);
 
   const handleAddCustomColumn = useCallback(() => {
     if (!newColLabel.trim()) return;
@@ -1323,9 +1355,10 @@ export function Sidebar() {
             </div>
           )}
 
-          {!isEnriching && (doneCount > 0 || errorCount > 0) && (
+          {!isEnriching && (
             <div className="space-y-2">
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                 {doneCount > 0 && (
                   <Badge
                     variant="secondary"
@@ -1343,6 +1376,16 @@ export function Sidebar() {
                     <AlertCircle className="h-3 w-3" />
                     {errorCount} errors
                   </Badge>
+                )}
+                </div>
+                {enrichOutputTab === "new" && (
+                  <button
+                    onClick={handleSavePreset}
+                    disabled={enabledColumns.length === 0}
+                    className="h-6 px-2 rounded-md border border-border/60 text-[10px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    Save Setting
+                  </button>
                 )}
               </div>
 

@@ -118,7 +118,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}/products`, label: "Products", icon: Package },
     { href: `${basePath}/categories`, label: "Categories", icon: FolderTree },
     { href: `${basePath}/import`, label: "Import", icon: Upload },
-    { href: `${basePath}/image-classify`, label: "Image Classification", icon: ImageIcon },
+    { href: `${basePath}/image-classify`, label: "AI Classify", icon: ImageIcon },
     { href: hasIntegration ? `${basePath}/sync` : "", label: "Sync", icon: RefreshCw, disabled: !hasIntegration },
     { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
     ...(permissions.canAdmin
