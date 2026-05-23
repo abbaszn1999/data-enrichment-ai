@@ -4,4 +4,8 @@ read_products
 write_products
 read_inventory
 write_inventory
+write_locations
 read_locations
+read_files
+write_files
+read_publications

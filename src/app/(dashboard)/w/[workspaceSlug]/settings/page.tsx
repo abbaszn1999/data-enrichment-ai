@@ -80,7 +80,7 @@ const INTEGRATION_PROVIDERS = [
     configFields: [
       { key: "store_url", label: "Store URL", type: "url" as const, placeholder: "https://your-store.com", required: true, helpText: "Your WordPress site URL where WooCommerce is installed." },
       { key: "username", label: "WordPress Username", type: "text" as const, placeholder: "admin", required: true, helpText: "Your WordPress admin username." },
-      { key: "application_password", label: "Application Password", type: "password" as const, placeholder: "xxxx xxxx xxxx xxxx xxxx xxxx", required: true, helpText: "Generate from WordPress → Users → Profile → Application Passwords." },
+      { key: "application_password", label: "WordPress Application Password", type: "password" as const, placeholder: "xxxx xxxx xxxx xxxx xxxx xxxx", required: true, helpText: "Generate from WordPress → Users → Profile → Application Passwords. Do not use your normal login password." },
     ] satisfies ConfigField[],
   },
 ];

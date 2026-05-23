@@ -14,8 +14,56 @@ const VARIATIONS_BATCH_LIMIT = 100;
 const CONCURRENCY = 2;
 const BATCH_DELAY_MS = 750;
 
+type BatchApplyResult = {
+  updated: number;
+  skipped: number;
+  errors: string[];
+};
+
 function toText(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function hasChangedColumn(changedColumns: string[], column: string) {
+  return changedColumns.length === 0 || changedColumns.includes(column);
+}
+
+function formatWooItemError(scope: string, item: any) {
+  const error = item?.error ?? item;
+  const code = toText(error?.code);
+  const message = toText(error?.message) || "Unknown WooCommerce batch item error";
+  return `${scope}: ${message}${code ? ` [${code}]` : ""}`;
+}
+
+function validateProductBatchItem(item: any, source: { id: number; row: SyncSheetRow; changedColumns: string[] }) {
+  const errors: string[] = [];
+  const scope = `Product ${source.id}`;
+  if (item?.error || !item?.id) {
+    errors.push(formatWooItemError(scope, item));
+    return errors;
+  }
+  if (hasChangedColumn(source.changedColumns, "featured_image") && toText(source.row.featured_image)) {
+    const images = Array.isArray(item.images) ? item.images : [];
+    if (images.length === 0 || !toText(images[0]?.src)) {
+      errors.push(`${scope}: WooCommerce did not return an attached image for featured_image`);
+    }
+  }
+  return errors;
+}
+
+function validateVariationBatchItem(item: any, source: { id: number; row: SyncSheetRow; changedColumns: string[] }, productId: string) {
+  const errors: string[] = [];
+  const scope = `Product ${productId} variation ${source.id}`;
+  if (item?.error || !item?.id) {
+    errors.push(formatWooItemError(scope, item));
+    return errors;
+  }
+  if (hasChangedColumn(source.changedColumns, "featured_image") && toText(source.row.featured_image)) {
+    if (!toText(item.image?.src)) {
+      errors.push(`${scope}: WooCommerce did not return an attached variation image for featured_image`);
+    }
+  }
+  return errors;
 }
 
 function isVariationUpdate(row: SyncSheetRow, productId: string) {
@@ -30,9 +78,9 @@ async function attachTaxonomies(
   row: SyncSheetRow,
   allowedColumns?: string[]
 ) {
-  const { categoryNames, tagNames } = extractTaxonomyNames(row, allowedColumns);
-  if (categoryNames.length > 0) {
-    payload.categories = await resolveTerms(client, "/products/categories", categoryNames);
+  const { categoryIds, categoryNames, tagNames } = extractTaxonomyNames(row, allowedColumns);
+  if (categoryIds.length > 0 || categoryNames.length > 0) {
+    payload.categories = await resolveTerms(client, "/products/categories", categoryNames, categoryIds);
   }
   if (tagNames.length > 0) {
     payload.tags = await resolveTerms(client, "/products/tags", tagNames);
@@ -70,8 +118,9 @@ function groupUpdates(updates: ApplyChangesInput["updates"]) {
 async function applyProductBatch(
   client: HttpClient,
   items: Array<{ id: number; row: SyncSheetRow; changedColumns: string[] }>
-): Promise<{ updated: number; skipped: number }> {
+): Promise<BatchApplyResult> {
   const updateEntries: Record<string, any>[] = [];
+  const updateSources: Array<{ id: number; row: SyncSheetRow; changedColumns: string[] }> = [];
   let skipped = 0;
   for (const item of items) {
     const payload = buildWooProductPayload(item.row, item.changedColumns);
@@ -81,28 +130,41 @@ async function applyProductBatch(
       continue;
     }
     updateEntries.push({ id: item.id, ...payload });
+    updateSources.push(item);
   }
-  if (updateEntries.length === 0) return { updated: 0, skipped };
+  if (updateEntries.length === 0) return { updated: 0, skipped, errors: [] };
 
   const chunks = chunk(updateEntries, PRODUCTS_BATCH_LIMIT);
+  const sourceChunks = chunk(updateSources, PRODUCTS_BATCH_LIMIT);
   let updated = 0;
-  for (const c of chunks) {
+  const errors: string[] = [];
+  for (let i = 0; i < chunks.length; i += 1) {
+    const c = chunks[i] ?? [];
+    const sources = sourceChunks[i] ?? [];
     const response = await client.post<{ update?: any[] }>("/products/batch", { update: c });
     if (Array.isArray(response?.update)) {
-      updated += response.update.filter((p: any) => p?.id).length;
+      response.update.forEach((item: any, index: number) => {
+        const itemErrors = validateProductBatchItem(item, sources[index] ?? c[index]);
+        if (itemErrors.length > 0) {
+          errors.push(...itemErrors);
+        } else {
+          updated += 1;
+        }
+      });
     } else {
-      updated += c.length;
+      errors.push("WooCommerce product batch returned no update array");
     }
   }
-  return { updated, skipped };
+  return { updated, skipped, errors };
 }
 
 async function applyVariationBatch(
   client: HttpClient,
   productId: string,
   items: Array<{ id: number; row: SyncSheetRow; changedColumns: string[] }>
-): Promise<{ updated: number; skipped: number }> {
+): Promise<BatchApplyResult> {
   const entries: Record<string, any>[] = [];
+  const sources: Array<{ id: number; row: SyncSheetRow; changedColumns: string[] }> = [];
   let skipped = 0;
   for (const item of items) {
     const payload = buildWooVariationPayload(item.row, item.changedColumns);
@@ -111,23 +173,35 @@ async function applyVariationBatch(
       continue;
     }
     entries.push({ id: item.id, ...payload });
+    sources.push(item);
   }
-  if (entries.length === 0) return { updated: 0, skipped };
+  if (entries.length === 0) return { updated: 0, skipped, errors: [] };
 
   const chunks = chunk(entries, VARIATIONS_BATCH_LIMIT);
+  const sourceChunks = chunk(sources, VARIATIONS_BATCH_LIMIT);
   let updated = 0;
-  for (const c of chunks) {
+  const errors: string[] = [];
+  for (let i = 0; i < chunks.length; i += 1) {
+    const c = chunks[i] ?? [];
+    const chunkSources = sourceChunks[i] ?? [];
     const response = await client.post<{ update?: any[] }>(
       `/products/${productId}/variations/batch`,
       { update: c }
     );
     if (Array.isArray(response?.update)) {
-      updated += response.update.filter((p: any) => p?.id).length;
+      response.update.forEach((item: any, index: number) => {
+        const itemErrors = validateVariationBatchItem(item, chunkSources[index] ?? c[index], productId);
+        if (itemErrors.length > 0) {
+          errors.push(...itemErrors);
+        } else {
+          updated += 1;
+        }
+      });
     } else {
-      updated += c.length;
+      errors.push(`WooCommerce variation batch for product ${productId} returned no update array`);
     }
   }
-  return { updated, skipped };
+  return { updated, skipped, errors };
 }
 
 async function createWooProduct(client: HttpClient, row: SyncSheetRow): Promise<void> {
@@ -160,6 +234,7 @@ export async function applyWooCommerceChanges(input: ApplyChangesInput): Promise
     for (const r of result.successes) {
       updatedCount += r.updated;
       skippedCount += r.skipped;
+      errors.push(...r.errors);
     }
     errors.push(...result.errors.map((e) => e.error));
   }
@@ -178,6 +253,7 @@ export async function applyWooCommerceChanges(input: ApplyChangesInput): Promise
     for (const r of result.successes) {
       updatedCount += r.updated;
       skippedCount += r.skipped;
+      errors.push(...r.errors);
     }
     errors.push(...result.errors.map((e) => e.error));
   }

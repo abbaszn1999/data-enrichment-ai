@@ -39,6 +39,9 @@ export async function testWooCommerceConnection(config: Record<string, any>): Pr
   if (!username || !applicationPassword) {
     throw new Error("WordPress username and application password are required");
   }
+  if (!normalizedStoreUrl.startsWith("https://")) {
+    throw new Error("WordPress Application Password authentication requires an HTTPS store URL.");
+  }
 
   const authHeader = buildWooCommerceAuthHeader(username, applicationPassword);
 
@@ -71,6 +74,7 @@ export async function testWooCommerceConnection(config: Record<string, any>): Pr
   let storeName: string | null = null;
   let currency: string | null = null;
   let wcVersion: string | null = null;
+  const diagnosticWarnings: string[] = [];
   try {
     const settingsResponse = await fetch(`${normalizedStoreUrl}/wp-json/wc/v3/settings/general`, {
       method: "GET",
@@ -83,9 +87,11 @@ export async function testWooCommerceConnection(config: Record<string, any>): Pr
       storeName = findValue("woocommerce_store_address") ? null : null;
       // The actual blog/site name is in WP options, not WC settings. Try /wp-json/ root.
       currency = findValue("woocommerce_currency") || null;
+    } else if (settingsResponse.status === 401 || settingsResponse.status === 403) {
+      diagnosticWarnings.push("Connected, but the user cannot read WooCommerce settings; currency/version metadata may be incomplete.");
     }
   } catch {
-    // ignore — non-fatal
+    diagnosticWarnings.push("Connected, but WooCommerce settings diagnostics could not be completed.");
   }
   try {
     const rootResponse = await fetch(`${normalizedStoreUrl}/wp-json/`, {
@@ -98,7 +104,7 @@ export async function testWooCommerceConnection(config: Record<string, any>): Pr
       if (root.name) storeName = root.name;
     }
   } catch {
-    // ignore
+    diagnosticWarnings.push("Connected, but WordPress root API diagnostics could not be completed.");
   }
   try {
     const sysResponse = await fetch(`${normalizedStoreUrl}/wp-json/wc/v3/system_status`, {
@@ -109,9 +115,35 @@ export async function testWooCommerceConnection(config: Record<string, any>): Pr
     if (sysResponse.ok) {
       const sys = (await sysResponse.json().catch(() => ({}))) as any;
       wcVersion = sys?.environment?.version ?? null;
+    } else if (sysResponse.status === 401 || sysResponse.status === 403) {
+      diagnosticWarnings.push("Connected, but the user cannot read WooCommerce system status; version diagnostics may be unavailable.");
     }
   } catch {
-    // ignore
+    diagnosticWarnings.push("Connected, but WooCommerce system status diagnostics could not be completed.");
+  }
+  try {
+    const categoriesResponse = await fetch(`${normalizedStoreUrl}/wp-json/wc/v3/products/categories?per_page=1`, {
+      method: "GET",
+      headers: { Authorization: authHeader, Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!categoriesResponse.ok) {
+      diagnosticWarnings.push("Connected, but product category reads failed; category sync may need stronger WordPress/WooCommerce permissions.");
+    }
+  } catch {
+    diagnosticWarnings.push("Connected, but product category diagnostics could not be completed.");
+  }
+  try {
+    const mediaResponse = await fetch(`${normalizedStoreUrl}/wp-json/wp/v2/media?per_page=1`, {
+      method: "GET",
+      headers: { Authorization: authHeader, Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!mediaResponse.ok) {
+      diagnosticWarnings.push("Connected, but WordPress media reads failed; image sync may need media library permissions.");
+    }
+  } catch {
+    diagnosticWarnings.push("Connected, but WordPress media diagnostics could not be completed.");
   }
 
   return {
@@ -123,6 +155,7 @@ export async function testWooCommerceConnection(config: Record<string, any>): Pr
       storeName,
       currency,
       wcVersion,
+      diagnosticWarnings,
     },
   };
 }

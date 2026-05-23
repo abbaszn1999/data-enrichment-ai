@@ -32,11 +32,11 @@ export const WooCommerceProvider: SyncProvider = {
     },
     {
       key: "application_password",
-      label: "Application Password",
+      label: "WordPress Application Password",
       type: "password",
       placeholder: "xxxx xxxx xxxx xxxx xxxx xxxx",
       required: true,
-      helpText: "Generate from WordPress → Users → Profile → Application Passwords.",
+      helpText: "Generate from WordPress → Users → Profile → Application Passwords. Do not use your normal login password.",
     },
   ],
   async testConnection(config) {
@@ -66,3 +66,9 @@ export const WooCommerceProvider: SyncProvider = {
 
 export { normalizeWooCommerceStoreUrl };
 export { WOOCOMMERCE_CORE_PRODUCT_COLUMNS } from "./columns";
+export {
+  WOOCOMMERCE_API_VERSION,
+  WOOCOMMERCE_COLUMN_PROFILES,
+  WOOCOMMERCE_LIMITS,
+  WOOCOMMERCE_WRITABLE_COLUMNS,
+} from "./schema-catalog";

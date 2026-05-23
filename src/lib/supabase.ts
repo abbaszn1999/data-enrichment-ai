@@ -75,6 +75,7 @@ export interface ImportSession {
   updated_at: string;
 }
 
+
 export interface ImportRow {
   id: string;
   session_id: string;
@@ -422,6 +423,129 @@ export async function acceptInvite(inviteId: string) {
 // ─── Categories, Products, Suppliers ─────────────────────
 // NOTE: These are now stored as JSON files in Supabase Storage.
 // See src/lib/storage-helpers.ts for the new CRUD functions.
+
+// ─── Image Classification Sessions ───────────────────────
+
+export interface ImageClassificationSession {
+  id: string;
+  workspace_id: string;
+  name: string;
+  notes: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  total_images: number;
+  group_count: number;
+  model: string;
+  storage_path: string | null;
+  images_prefix: string | null;
+  total_cost: number;
+  total_credits: number;
+  total_tokens: number;
+  error_message: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getImageClassificationSessions(workspaceId: string) {
+  const supabase = getClient();
+  const { data, error } = await supabase
+    .from("image_classification_sessions")
+    .select("*")
+    .eq("workspace_id", workspaceId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as ImageClassificationSession[];
+}
+
+export async function getImageClassificationSession(id: string): Promise<ImageClassificationSession | null> {
+  const supabase = getClient();
+  const { data, error } = await supabase
+    .from("image_classification_sessions")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (error) {
+    if (error.code === "PGRST116") return null;
+    throw error;
+  }
+  return data as ImageClassificationSession;
+}
+
+export async function createImageClassificationSession(
+  workspaceId: string,
+  payload: { name: string; notes?: string; total_images: number; model?: string }
+) {
+  const supabase = getClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const { data, error } = await supabase
+    .from("image_classification_sessions")
+    .insert({
+      workspace_id: workspaceId,
+      created_by: user.id,
+      name: payload.name,
+      notes: payload.notes ?? "",
+      total_images: payload.total_images,
+      model: payload.model ?? "gemini-3.5-flash",
+      status: "pending",
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data as ImageClassificationSession;
+}
+
+export async function updateImageClassificationSession(
+  id: string,
+  updates: Partial<ImageClassificationSession>
+) {
+  const supabase = getClient();
+  const { error } = await supabase
+    .from("image_classification_sessions")
+    .update(updates)
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteImageClassificationSession(id: string) {
+  const supabase = getClient();
+  const { data: session } = await supabase
+    .from("image_classification_sessions")
+    .select("workspace_id, storage_path, images_prefix")
+    .eq("id", id)
+    .single();
+
+  if (session?.workspace_id) {
+    const resultPath =
+      session.storage_path ??
+      `${session.workspace_id}/image-classification/${id}/result.json`;
+    const imagesPrefix =
+      session.images_prefix ??
+      `${session.workspace_id}/image-classification/${id}/images`;
+
+    await supabase.storage.from("workspace-files").remove([resultPath]).catch(() => {});
+
+    if (imagesPrefix) {
+      const { data: files } = await supabase.storage
+        .from("workspace-files")
+        .list(imagesPrefix, { limit: 1000 });
+      if (files && files.length > 0) {
+        await supabase.storage
+          .from("workspace-files")
+          .remove(files.map((f) => `${imagesPrefix}/${f.name}`))
+          .catch(() => {});
+      }
+    }
+  }
+
+  const { error } = await supabase
+    .from("image_classification_sessions")
+    .delete()
+    .eq("id", id);
+  if (error) throw error;
+}
 
 // ─── Import Sessions CRUD ────────────────────────────────
 

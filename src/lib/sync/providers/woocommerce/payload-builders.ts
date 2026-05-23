@@ -6,8 +6,6 @@ function toText(value: unknown) {
   return String(value ?? "").trim();
 }
 
-const META_PREFIX = "meta_data:";
-
 const DIRECT_FIELDS: Record<string, string> = {
   title: "name",
   handle: "slug",
@@ -59,6 +57,10 @@ export function buildWooProductPayload(
     const sku = toText(row.primary_sku);
     if (sku) payload.sku = sku;
   }
+  if (include("global_unique_id") || include("barcode")) {
+    const globalUniqueId = toText(row.global_unique_id || row.barcode);
+    if (globalUniqueId) payload.global_unique_id = globalUniqueId;
+  }
   if (include("inventory_total")) {
     const qty = Number(row.inventory_total);
     if (Number.isFinite(qty)) {
@@ -104,9 +106,21 @@ export function buildWooProductPayload(
 }
 
 export type TaxonomyResolution = {
+  categoryIds: number[];
   categoryNames: string[];
   tagNames: string[];
 };
+
+function parseIdList(value: unknown): number[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => Number(toText(v)))
+      .filter((id) => Number.isInteger(id) && id > 0);
+  }
+  return parseCommaList(value)
+    .map((v) => Number(v))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
 
 /** Extracts taxonomy names from a row for resolution before apply. */
 export function extractTaxonomyNames(
@@ -116,6 +130,7 @@ export function extractTaxonomyNames(
   const all = !allowedColumns || allowedColumns.length === 0;
   const cols = new Set(allowedColumns ?? []);
   return {
+    categoryIds: all || cols.has("categories_ids") ? parseIdList(row.categories_ids) : [],
     categoryNames: all || cols.has("categories") ? parseCommaList(row.categories) : [],
     tagNames: all || cols.has("tags") ? parseCommaList(row.tags) : [],
   };
@@ -152,6 +167,13 @@ export function buildWooVariationPayload(
   if (include("status")) {
     const status = mapStatusToWoo(row.status);
     if (status) payload.status = status;
+  }
+  if (include("featured_image")) {
+    const url = toText(row.featured_image);
+    if (url) {
+      const alt = toText(row.featured_image_alt_text);
+      payload.image = { src: url, ...(alt ? { alt } : {}) };
+    }
   }
   return payload;
 }

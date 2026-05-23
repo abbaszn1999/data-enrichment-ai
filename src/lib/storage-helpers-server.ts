@@ -3,8 +3,8 @@
  * Uses supabase-server (cookies-based) instead of supabase-browser.
  */
 import { createClient } from "@/lib/supabase-server";
-import type { ProjectJson, MasterProductJson, CategoryJson } from "@/lib/storage-helpers";
-import { getCategoriesStoragePath, getCategoriesRawStoragePath } from "@/lib/storage-helpers";
+import type { ProjectJson, MasterProductJson, CategoryJson, ImageClassificationJson } from "@/lib/storage-helpers";
+import { getCategoriesStoragePath, getCategoriesRawStoragePath, getImageClassificationResultPath } from "@/lib/storage-helpers";
 
 const BUCKET = "workspace-files";
 
@@ -65,4 +65,12 @@ export async function loadCategoriesRawJsonServer(workspaceId: string): Promise<
   const path = getCategoriesRawStoragePath(workspaceId);
   const data = await loadJsonFromStorageServer<Record<string, string>[]>(path);
   return data ?? [];
+}
+
+export async function saveImageClassificationJsonServer(workspaceId: string, sessionId: string, data: ImageClassificationJson): Promise<void> {
+  await saveJsonToStorageServer(getImageClassificationResultPath(workspaceId, sessionId), data);
+}
+
+export async function loadImageClassificationJsonServer(workspaceId: string, sessionId: string): Promise<ImageClassificationJson | null> {
+  return loadJsonFromStorageServer<ImageClassificationJson>(getImageClassificationResultPath(workspaceId, sessionId));
 }

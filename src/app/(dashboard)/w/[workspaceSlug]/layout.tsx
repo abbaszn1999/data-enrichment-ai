@@ -26,6 +26,7 @@ import {
   Coins,
   Crown,
   RefreshCw,
+  Image as ImageIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/hooks/use-auth";
@@ -117,6 +118,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}/products`, label: "Products", icon: Package },
     { href: `${basePath}/categories`, label: "Categories", icon: FolderTree },
     { href: `${basePath}/import`, label: "Import", icon: Upload },
+    { href: `${basePath}/image-classify`, label: "Image Classification", icon: ImageIcon },
     { href: hasIntegration ? `${basePath}/sync` : "", label: "Sync", icon: RefreshCw, disabled: !hasIntegration },
     { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
     ...(permissions.canAdmin

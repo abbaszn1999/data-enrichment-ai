@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -31,6 +31,8 @@ import {
   AlertTriangle,
   Undo2,
   Redo2,
+  Brain,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +46,15 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { getBalance } from "@/lib/credits";
 import {
   Table,
@@ -58,7 +69,8 @@ import { useWorkspaceContext } from "../layout";
 import { useSyncStore, type SyncMessage, type SyncMode, type SyncWorkingMemory, type SyncActionReceipt } from "@/store/sync-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { getWorkspaceIntegration, type WorkspaceIntegration } from "@/lib/supabase";
-// createBrowserSupabase removed — product loading now uses /api/sync/products
+import { COLUMN_PROFILES } from "@/lib/sync/providers/shopify/schema-catalog";
+import type { ColumnProfileKey } from "@/lib/sync/core/types";
 
 type SyncSheetRow = Record<string, any>;
 
@@ -95,34 +107,44 @@ type PendingPlanInfo = {
   estimatedCredits?: number;
 };
 
-// Tools that are safe to auto-execute without user confirmation
-const SAFE_AUTO_EXECUTE_TOOLS = new Set([
-  "reply_only",
-  "answer_question_about_sheet",
-  "load_products",
-  "load_products_from_shopify",
-  "load_products_from_woocommerce",
-  "analyze_attachments",
-  "run_sheet_program",
-  "research_with_web",
-]);
-
+// Human-readable labels for v3 tools, used in confirmation previews.
 const TOOL_LABELS: Record<string, string> = {
-  load_products: "Load products from connected store",
-  load_products_from_shopify: "Load products from Shopify",
-  load_products_from_woocommerce: "Load products from WooCommerce",
-  append_row_from_ai: "Add a new row",
-  write_sheet_column_with_ai: "Write/update column",
-  search_images_with_serper: "Search images",
-  delete_column: "Delete column",
-  run_sheet_program: "Filter/analyze sheet",
-  answer_question_about_sheet: "Answer question",
-  reply_only: "Reply",
-  research_with_web: "Web research",
-  analyze_attachments: "Analyze attachments",
+  sync_products_load: "Load products",
+  sync_products_filter_client: "Filter products",
+  sync_collections_load: "Load taxonomy groups",
+  sync_collections_resolve: "Resolve taxonomy group",
+  sync_collections_create: "Create taxonomy group",
+  sync_collections_assign: "Assign taxonomy group",
+  sync_columns_write_with_ai: "Write column with AI",
+  sync_images_search: "Search product images",
+  sync_row_append: "Add row",
+  sync_sheet_program: "Filter/analyze sheet",
+  sync_answer_question: "Answer question",
+  sync_research_web: "Web research",
+  sync_attachments_analyze: "Analyze attachments",
+  sync_column_delete: "Delete column",
+  sync_apply_to_shopify: "Apply changes to connected platform",
+  sync_reply_only: "Reply",
 };
 
-type SheetViewKey = "core" | "content" | "publishing" | "all";
+type SheetViewKey = ColumnProfileKey;
+
+// Human-readable labels per profile for tab buttons.
+const PROFILE_LABELS: Record<ColumnProfileKey, string> = {
+  core: "Core",
+  pricing: "Pricing",
+  seo: "SEO",
+  content: "Content",
+  imagery: "Imagery",
+  inventory: "Inventory",
+  collections: "Collections",
+  publishing: "Publishing",
+  taxonomy: "Taxonomy",
+  translations: "Translations",
+  variants: "Variants",
+  metafields: "Metafields",
+  all: "All fields",
+};
 
 type SyncChangeSummary = {
   creates: Array<{ rowIndex: number; row: SyncSheetRow }>;
@@ -141,10 +163,24 @@ const SUPPORTED_ATTACHMENT_MIME_TYPES = new Set([
   "image/png",
   "image/webp",
   "image/bmp",
+  "text/csv",
+  "text/plain",
+  "application/json",
 ]);
 
 const MAX_IMAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_TEXT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+function taxonomyLabel(provider?: string | null) {
+  return provider === "woocommerce" ? "Categories" : "Collections";
+}
+
+function taxonomyPrompt(provider?: string | null) {
+  return provider === "woocommerce"
+    ? "اعرض كل تصنيفات المنتجات من WooCommerce"
+    : "اعرض كل الـ collections من Shopify";
+}
 
 function formatFileSize(bytes: number) {
   if (bytes < 1024 * 1024) {
@@ -156,10 +192,15 @@ function formatFileSize(bytes: number) {
 
 function getAttachmentValidationError(file: File) {
   if (!SUPPORTED_ATTACHMENT_MIME_TYPES.has(file.type)) {
-    return `The file format for ${file.name} is not supported right now. Only JPG, PNG, WEBP, BMP, and PDF are allowed.`;
+    return `The file format for ${file.name} is not supported right now. Only JPG, PNG, WEBP, BMP, PDF, CSV, TXT, and JSON are allowed.`;
   }
 
-  const maxSize = file.type === "application/pdf" ? MAX_PDF_ATTACHMENT_BYTES : MAX_IMAGE_ATTACHMENT_BYTES;
+  const isText = file.type.startsWith("text/") || file.type === "application/json";
+  const maxSize = file.type === "application/pdf"
+    ? MAX_PDF_ATTACHMENT_BYTES
+    : isText
+    ? MAX_TEXT_ATTACHMENT_BYTES
+    : MAX_IMAGE_ATTACHMENT_BYTES;
   if (file.size > maxSize) {
     return `The file size for ${file.name} is ${formatFileSize(file.size)}, which exceeds the allowed limit of ${formatFileSize(maxSize)} for this file type.`;
   }
@@ -180,31 +221,101 @@ async function fileToBase64(file: File) {
   return btoa(binary);
 }
 
-const SHEET_VIEWS: Array<{ key: SheetViewKey; label: string; columns: string[] }> = [
-  {
-    key: "core",
-    label: "Core",
-    columns: ["title", "status", "vendor", "product_type", "tags", "price", "inventory_total", "primary_sku", "variant_count"],
-  },
-  {
-    key: "content",
-    label: "Content",
-    columns: ["title", "body_html", "featured_image", "featured_image_alt_text", "seo_title", "seo_description", "tags"],
-  },
-  {
-    key: "publishing",
-    label: "Publishing",
-    columns: ["title", "handle", "status", "published_at", "updated_at", "created_at"],
-  },
-  {
-    key: "all",
-    label: "All fields",
-    columns: [],
-  },
-];
+// Dynamic sheet-view derivation from COLUMN_PROFILES (shared with the server-side
+// Shopify schema catalog). The agent picks a `columnProfile` per turn which auto-selects
+// the matching tab. Users can still override with any other tab.
+type SheetView = { key: SheetViewKey; label: string; columns: string[] };
+
+/**
+ * Build the tab bar shown above the sheet.
+ *
+ * Rules (v3 intent-aware):
+ * - If there's no loaded sheet or entity → return [] (hide bar).
+ * - If entity is "collections" → only the `Collections` tab is valid.
+ * - If entity is "products" → expose `relevantProfiles` (planner-driven), falling
+ *   back to ["core","all"] when the planner didn't provide a hint. Never include
+ *   the `collections` profile here — that's a different entity.
+ *
+ * A profile is only shown when at least one of its columns actually exists in
+ * the current sheet, except for `core`/`all` which always render.
+ */
+function buildSheetViews(
+  availableColumns: string[],
+  entity: "products" | "collections" | null,
+  relevantProfiles: ColumnProfileKey[] | null,
+  labels: Record<ColumnProfileKey, string> = PROFILE_LABELS
+): SheetView[] {
+  if (!entity || availableColumns.length === 0) return [];
+  const available = new Set(availableColumns);
+
+  const toView = (key: ColumnProfileKey): SheetView => ({
+    key,
+    label: labels[key] ?? key,
+    columns: key === "all" ? [] : COLUMN_PROFILES[key] ?? [],
+  });
+
+  if (entity === "collections") {
+    return [{
+      key: "collections",
+      label: labels.collections ?? "Taxonomy",
+      columns: availableColumns,
+    }];
+  }
+
+  // Products entity — use relevantProfiles when provided; otherwise a sensible default.
+  const requested: ColumnProfileKey[] =
+    relevantProfiles && relevantProfiles.length > 0
+      ? relevantProfiles.filter((p) => p !== "collections")
+      : ["core", "all"];
+  // Preserve planner order, dedupe, drop unknown keys.
+  const seen = new Set<ColumnProfileKey>();
+  const ordered: ColumnProfileKey[] = [];
+  for (const k of requested) {
+    if (seen.has(k)) continue;
+    if (!COLUMN_PROFILES[k]) continue;
+    seen.add(k);
+    ordered.push(k);
+  }
+
+  return ordered
+    .map(toView)
+    .filter((view) => {
+      if (view.key === "all" || view.key === "core") return true;
+      return view.columns.some((c) => available.has(c));
+    });
+}
+
+/** Column label overrides for cleaner UI display. */
+const COLUMN_LABEL_MAP: Record<string, string> = {
+  body_html: "Description",
+  description: "Description",
+  featured_image: "Image",
+  featured_image_alt_text: "Image Alt Text",
+  image_alt_text: "Image Alt Text",
+  image_id: "Image ID",
+  image_name: "Image Name",
+  seo_title: "SEO Title",
+  seo_description: "SEO Description",
+  products_count: "Products",
+  count: "Products",
+  sort_order: "Sort Order",
+  menu_order: "Menu Order",
+  parent: "Parent ID",
+  display: "Display",
+  slug: "Slug",
+  published: "Sales Channels",
+  product_type: "Type",
+  compare_at_price: "Compare Price",
+  inventory_total: "Inventory",
+  variant_count: "Variants",
+  primary_sku: "SKU",
+  updated_at: "Updated",
+  created_at: "Created",
+  published_at: "Published",
+};
 
 function formatColumnLabel(column: string) {
-  return column.replaceAll("_", " ");
+  return COLUMN_LABEL_MAP[column] ?? column.replaceAll("_", " ");
 }
 
 function stripHtml(value: string) {
@@ -237,6 +348,32 @@ function formatTimestamp(value: unknown) {
   }).format(date);
 }
 
+/** Expandable text cell — shows truncated preview, click to expand/collapse. */
+function ExpandableText({ text, maxLen = 80 }: { text: string; maxLen?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const needsTruncation = text.length > maxLen;
+  if (!needsTruncation) {
+    return <span>{text}</span>;
+  }
+  return (
+    <button
+      type="button"
+      className="text-left max-w-[320px] leading-relaxed cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1 transition-colors"
+      onClick={() => setExpanded((prev) => !prev)}
+      title={expanded ? "Click to collapse" : "Click to expand"}
+    >
+      {expanded ? (
+        <span>{text}</span>
+      ) : (
+        <span>{truncateText(text, maxLen)}</span>
+      )}
+    </button>
+  );
+}
+
+/** Columns that should never appear in the UI table. */
+const HIDDEN_COLUMNS = new Set(["id"]);
+
 function renderCellValue(column: string, value: unknown) {
   const text = String(value ?? "").trim();
 
@@ -244,18 +381,29 @@ function renderCellValue(column: string, value: unknown) {
     return <span className="text-muted-foreground">—</span>;
   }
 
-  if (column === "featured_image") {
+  // Image columns — render as thumbnail + truncated URL caption.
+  // `featured_image` is the products column; `image` is the collections one.
+  // Both store a single URL string.
+  if (column === "featured_image" || column === "image") {
     return (
       <div className="flex items-center gap-2 min-w-[140px]">
-        <img src={text} alt="Product" className="h-10 w-10 rounded-md border object-cover bg-muted" />
+        <img
+          src={text}
+          alt={column === "image" ? "Collection" : "Product"}
+          className="h-10 w-10 rounded-md border object-cover bg-muted"
+          onError={(e) => {
+            (e.target as HTMLImageElement).style.display = "none";
+          }}
+        />
         <div className="min-w-0 text-[11px] text-muted-foreground break-all">{truncateText(text, 42)}</div>
       </div>
     );
   }
 
-  if (column === "body_html") {
-    const preview = truncateText(stripHtml(text), 120);
-    return <div className="max-w-[320px] leading-relaxed">{preview || "—"}</div>;
+  // Description / body_html — expandable preview
+  if (column === "body_html" || column === "description") {
+    const clean = stripHtml(text);
+    return <ExpandableText text={clean} maxLen={80} />;
   }
 
   if (column === "tags") {
@@ -268,6 +416,11 @@ function renderCellValue(column: string, value: unknown) {
 
   if (["price", "compare_at_price"].includes(column)) {
     return <span className="whitespace-nowrap font-medium">{text}</span>;
+  }
+
+  // Long generic text — also expandable
+  if (text.length > 100) {
+    return <ExpandableText text={text} maxLen={80} />;
   }
 
   return <span>{text}</span>;
@@ -349,12 +502,15 @@ export default function SyncPage() {
     messages,
     addMessage,
     updateLastAssistantMessage,
+    updateLastAssistantThinking,
     updateLastAssistantProgress,
     updateLastAssistantSessionSummary,
     isStreaming,
     setStreaming,
     mode,
     setMode,
+    thinkingLevel,
+    setThinkingLevel,
     webEnabled,
     toggleWebEnabled,
     pendingAttachments,
@@ -370,6 +526,8 @@ export default function SyncPage() {
     sheetHistory,
     redoHistory,
     updateLastAssistantActionReceipt,
+    appendAssistantTraceEvent,
+    setRemainingCount,
     resetChat,
   } = useSyncStore();
 
@@ -382,6 +540,73 @@ export default function SyncPage() {
   const [originalSheet, setOriginalSheet] = useState<SyncSheet | null>(null);
   const [isApplying, setIsApplying] = useState(false);
   const [sheetView, setSheetView] = useState<SheetViewKey>("core");
+  // Active row filter: when set, only these row indexes are displayed in the table
+  const [filteredRowIndexes, setFilteredRowIndexes] = useState<number[] | null>(null);
+  const [filterDescription, setFilterDescription] = useState<string | null>(null);
+  // Which assistant message IDs have their thinking section expanded.
+  // Auto-expands for the current streaming message so the user sees text live.
+  const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set());
+  const toggleThinking = useCallback((id: string) => {
+    setExpandedThinking((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Auto-expand the thinking section of the last assistant message when
+  // streaming starts so the user sees thinking text appear live.
+  const lastMsgId = messages[messages.length - 1]?.id;
+  useEffect(() => {
+    if (isStreaming && lastMsgId) {
+      setExpandedThinking((prev) => {
+        if (prev.has(lastMsgId)) return prev;
+        const next = new Set(prev);
+        next.add(lastMsgId);
+        return next;
+      });
+    }
+  }, [isStreaming, lastMsgId]);
+
+  // Live progress for long-running AI writes / image searches. Cleared when
+  // the tool finishes (result event) or the user cancels.
+  const [liveProgress, setLiveProgress] = useState<{
+    tool: string;
+    column?: string;
+    processed: number;
+    total: number;
+    percent: number;
+    failedCount?: number;
+  } | null>(null);
+  const currentColumnProfile = useSyncStore((s) => s.currentColumnProfile);
+  const setColumnProfile = useSyncStore((s) => s.setColumnProfile);
+  const currentEntity = useSyncStore((s) => s.currentEntity);
+  const setEntity = useSyncStore((s) => s.setEntity);
+  const relevantProfiles = useSyncStore((s) => s.relevantProfiles);
+  const setRelevantProfiles = useSyncStore((s) => s.setRelevantProfiles);
+  const remainingCount = useSyncStore((s) => s.remainingCount);
+
+  // When the agent returns a columnProfile, auto-switch the UI tab.
+  useEffect(() => {
+    if (currentColumnProfile && currentColumnProfile !== sheetView) {
+      setSheetView(currentColumnProfile);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentColumnProfile]);
+
+  const profileLabels = useMemo(
+    () => ({
+      ...PROFILE_LABELS,
+      collections: taxonomyLabel(integration?.provider),
+    }),
+    [integration?.provider]
+  );
+
+  const sheetViews = useMemo(
+    () => buildSheetViews(resultColumns, currentEntity, relevantProfiles, profileLabels),
+    [resultColumns, currentEntity, relevantProfiles, profileLabels]
+  );
   const [currentPage, setCurrentPage] = useState(1);
   const [chatBlockedReason, setChatBlockedReason] = useState<"NO_CREDITS" | "NO_SUBSCRIPTION" | null>(null);
   const [pendingPlan, setPendingPlan] = useState<PendingPlanInfo | null>(null);
@@ -403,6 +628,9 @@ export default function SyncPage() {
       columns: [...sheet.columns],
       rows: sheet.rows.map((row) => ({ ...row })),
     });
+    // Clear any active filter when loading a fresh sheet
+    setFilteredRowIndexes(null);
+    setFilterDescription(null);
     setSheet(sheet);
   }, [setSheet]);
 
@@ -415,19 +643,26 @@ export default function SyncPage() {
         }
       : null;
 
-  const visibleColumns = (() => {
-    const activeView = SHEET_VIEWS.find((view) => view.key === sheetView);
+  const visibleColumns: string[] = (() => {
+    const activeView = sheetViews.find((view: SheetView) => view.key === sheetView);
+    let cols: string[];
     if (!activeView || activeView.key === "all") {
-      return resultColumns;
+      cols = resultColumns;
+    } else {
+      const scopedColumns = activeView.columns.filter((column: string) => resultColumns.includes(column));
+      cols = scopedColumns.length > 0 ? scopedColumns : resultColumns;
     }
-
-    const scopedColumns = activeView.columns.filter((column) => resultColumns.includes(column));
-    return scopedColumns.length > 0 ? scopedColumns : resultColumns;
+    // Hide internal columns (e.g. id) from UI display
+    return cols.filter((c) => !HIDDEN_COLUMNS.has(c));
   })();
 
-  const totalPages = Math.max(1, Math.ceil(resultRows.length / PAGE_SIZE));
+  // When a filter is active, show only the matching rows; otherwise show all
+  const displayRows = filteredRowIndexes
+    ? filteredRowIndexes.map((i) => resultRows[i]).filter(Boolean)
+    : resultRows;
+  const totalPages = Math.max(1, Math.ceil(displayRows.length / PAGE_SIZE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
-  const paginatedRows = resultRows.slice((safeCurrentPage - 1) * PAGE_SIZE, safeCurrentPage * PAGE_SIZE);
+  const paginatedRows = displayRows.slice((safeCurrentPage - 1) * PAGE_SIZE, safeCurrentPage * PAGE_SIZE);
 
   const pendingChangeCount = (() => {
     if (!originalSheet || !currentSheet) {
@@ -521,63 +756,11 @@ export default function SyncPage() {
     .map((message) => `${message.role}: ${message.content}`)
     .join("\n");
 
-  const handleApplySync = useCallback(async () => {
-    if (!workspace?.id || !integration || !currentSheet || pendingChangeCount === 0 || isApplying) {
-      return;
-    }
-
-    setIsApplying(true);
-
-    try {
-      const res = await fetch("/api/sync/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workspaceId: workspace.id,
-          creates: changeSummary.creates.map((item) => item.row),
-          updates: changeSummary.updates
-            .filter((item) => item.productId)
-            .map((item) => ({
-              productId: item.productId,
-              row: item.row,
-              changedColumns: item.changes.map((change) => change.column),
-            })),
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || "Failed to sync changes");
-      }
-
-      if ((data?.errorCount ?? 0) > 0) {
-        const backendErrors = Array.isArray(data?.errors) ? data.errors.filter(Boolean) : [];
-        const detail = backendErrors.length > 0 ? `\n\n${backendErrors.join("\n")}` : "";
-        throw new Error((data?.message || "Sync completed with errors.") + detail);
-      }
-
-      setOriginalAndWorkingSheet(currentSheet);
-      addMessage({
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: data?.message || "Sync completed successfully.",
-        timestamp: Date.now(),
-        progress: ["Prepared reviewed changes", "Applied changes to the connected store", "Kept the current sheet view in place"],
-      });
-    } catch (error: any) {
-      addMessage({
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: `⚠️ ${error?.message || "Failed to sync changes"}`,
-        timestamp: Date.now(),
-      });
-    } finally {
-      setIsApplying(false);
-    }
-  }, [addMessage, changeSummary.creates, changeSummary.updates, currentSheet, integration, isApplying, pendingChangeCount, setOriginalAndWorkingSheet, workspace?.id]);
-
   const processAgentStream = useCallback(
-    async (response: Response) => {
+    async (
+      response: Response,
+      opts?: { onNeedsConfirmation?: (plan: AgentPlan) => void }
+    ) => {
       const reader = response.body?.getReader();
       if (!reader) {
         throw new Error("Failed to read agent response stream");
@@ -601,6 +784,26 @@ export default function SyncPage() {
           const event = JSON.parse(trimmedLine) as
             | { type: "ping" }
             | { type: "progress"; progress: string[] }
+            | { type: "plan"; data: any }
+            | { type: "step.start"; data: { index: number; tool: string; args: any } }
+            | { type: "step.end"; data: { index: number; tool: string; output: any; warnings?: string[]; userErrorCount?: number; elapsedMs: number } }
+            | { type: "thinking"; data: { text: string; turn: number; partial?: boolean } }
+            | {
+                type: "tool_progress";
+                data: {
+                  index: number;
+                  tool: string;
+                  column?: string;
+                  processed: number;
+                  total: number;
+                  percent: number;
+                  partialValues?: Array<{ rowIndex: number; column: string; value: string }>;
+                  failedCount?: number;
+                };
+              }
+            | { type: "reflection"; data: { stepIndex: number; decision: string; rationale: string } }
+            | { type: "working_memory"; data: AgentWorkingMemoryPayload }
+            | { type: "needs_confirmation"; data: { plan: AgentPlan } }
             | {
                 type: "result";
                 data: {
@@ -608,6 +811,8 @@ export default function SyncPage() {
                   progress?: string[];
                   sessionSummary?: string;
                   sheet?: SyncSheet;
+                  columnProfile?: string;
+                  remainingCount?: number | null;
                   executedSteps?: Array<{ tool: string }>;
                   workingMemory?: AgentWorkingMemoryPayload;
                   actionReceipt?: SyncActionReceipt;
@@ -616,6 +821,121 @@ export default function SyncPage() {
             | { type: "error"; error: string };
 
           if (event.type === "ping") continue;
+
+          if (event.type === "needs_confirmation") {
+            opts?.onNeedsConfirmation?.(event.data.plan);
+            // Stop reading — the run is paused awaiting user approval.
+            try { await reader.cancel(); } catch { /* ignore */ }
+            return;
+          }
+
+          // v3 plan event — no UI yet, consumed silently for future use.
+          if (event.type === "plan") continue;
+
+          if (event.type === "step.start") {
+            appendAssistantTraceEvent({
+              kind: "step_start",
+              index: event.data.index,
+              tool: event.data.tool,
+              args: event.data.args,
+              startedAt: Date.now(),
+            });
+            continue;
+          }
+
+          if (event.type === "thinking") {
+            updateLastAssistantThinking(event.data.text, event.data.partial);
+            continue;
+          }
+
+          if (event.type === "step.end") {
+            appendAssistantTraceEvent({
+              kind: "step_end",
+              index: event.data.index,
+              tool: event.data.tool,
+              elapsedMs: event.data.elapsedMs,
+              warnings: event.data.warnings,
+              userErrorCount: event.data.userErrorCount,
+              output: event.data.output,
+            });
+            // The tool that just finished — clear the live progress widget
+            // so it doesn't linger between turns.
+            setLiveProgress((prev) =>
+              prev && prev.tool === event.data.tool ? null : prev
+            );
+            continue;
+          }
+
+          if (event.type === "tool_progress") {
+            // 1) Merge partial values into the live sheet so cells fill in
+            //    progressively as each batch lands (no waiting for tool_result).
+            if (Array.isArray(event.data.partialValues) && event.data.partialValues.length > 0) {
+              const updates = event.data.partialValues;
+              setResultColumns((prev) =>
+                event.data.column && !prev.includes(event.data.column)
+                  ? [...prev, event.data.column]
+                  : prev
+              );
+              setResultRows((prev) => {
+                const next = prev.slice();
+                for (const { rowIndex, column, value } of updates) {
+                  if (rowIndex < 0 || rowIndex >= next.length) continue;
+                  next[rowIndex] = { ...next[rowIndex], [column]: value };
+                }
+                return next;
+              });
+            }
+            // 2) Update the floating progress widget.
+            setLiveProgress({
+              tool: event.data.tool,
+              column: event.data.column,
+              processed: event.data.processed,
+              total: event.data.total,
+              percent: event.data.percent,
+              failedCount: event.data.failedCount,
+            });
+            continue;
+          }
+
+          if (event.type === "reflection") {
+            appendAssistantTraceEvent({
+              kind: "reflection",
+              stepIndex: event.data.stepIndex,
+              decision: event.data.decision,
+              rationale: event.data.rationale,
+            });
+            continue;
+          }
+
+          if (event.type === "working_memory") {
+            if (event.data) {
+              setWorkingMemory(event.data);
+              setEntity(event.data.lastEntity ?? null);
+              setRelevantProfiles(
+                Array.isArray(event.data.lastRelevantProfiles)
+                  ? (event.data.lastRelevantProfiles as ColumnProfileKey[])
+                  : null
+              );
+              if (event.data.lastColumnProfile) {
+                setColumnProfile(event.data.lastColumnProfile as ColumnProfileKey);
+              }
+              // When the agent targets rows (filter/show_filtered), activate the UI filter;
+              // when the agent performs a different action, clear any stale filter.
+              if (
+                event.data.lastActionType === "target_rows" &&
+                Array.isArray(event.data.lastTargetedRowIndexes) &&
+                event.data.lastTargetedRowIndexes.length > 0
+              ) {
+                setFilteredRowIndexes(event.data.lastTargetedRowIndexes);
+                setFilterDescription(event.data.lastFilterDescription ?? null);
+                setCurrentPage(1);
+              } else if (event.data.lastActionType && event.data.lastActionType !== "target_rows") {
+                setFilteredRowIndexes(null);
+                setFilterDescription(null);
+              }
+            }
+            continue;
+          }
 
           if (event.type === "progress") {
             updateLastAssistantProgress(event.progress);
@@ -629,9 +949,17 @@ export default function SyncPage() {
                 columns: event.data.sheet.columns,
                 rows: event.data.sheet.rows,
               };
-              const loadedFreshSource = Array.isArray(event.data?.executedSteps)
-                ? event.data.executedSteps.some((step) => step.tool === "load_products" || step.tool === "load_products_from_shopify" || step.tool === "load_products_from_woocommerce")
-                : false;
+              const executedSteps = Array.isArray(event.data?.executedSteps)
+                ? event.data.executedSteps
+                : [];
+              const loadedFreshSource = executedSteps.some(
+                (step) =>
+                  step.tool === "sync_products_load" ||
+                  step.tool === "sync_collections_load"
+              );
+              const appliedToShopify = executedSteps.some(
+                (step) => step.tool === "sync_apply_to_shopify"
+              );
 
               // Push current sheet as snapshot before replacing (for undo)
               if (resultColumns.length > 0 || resultRows.length > 0) {
@@ -642,7 +970,7 @@ export default function SyncPage() {
                 });
               }
 
-              if (loadedFreshSource || !originalSheet) {
+              if (loadedFreshSource || appliedToShopify || !originalSheet) {
                 setOriginalAndWorkingSheet(nextSheet);
               } else {
                 setSheet(nextSheet);
@@ -657,8 +985,26 @@ export default function SyncPage() {
               updateLastAssistantSessionSummary(event.data.sessionSummary);
             }
 
+            if (event.data?.columnProfile) {
+              setColumnProfile(event.data.columnProfile as ColumnProfileKey);
+            }
+
+            if (event.data?.remainingCount !== undefined) {
+              setRemainingCount(event.data.remainingCount);
+            }
+
             if (event.data?.workingMemory) {
               setWorkingMemory(event.data.workingMemory);
+              // Also check for filter in result's workingMemory
+              if (
+                event.data.workingMemory.lastActionType === "target_rows" &&
+                Array.isArray(event.data.workingMemory.lastTargetedRowIndexes) &&
+                event.data.workingMemory.lastTargetedRowIndexes.length > 0
+              ) {
+                setFilteredRowIndexes(event.data.workingMemory.lastTargetedRowIndexes);
+                setFilterDescription(event.data.workingMemory.lastFilterDescription ?? null);
+                setCurrentPage(1);
+              }
             }
 
             if (event.data?.actionReceipt) {
@@ -666,22 +1012,43 @@ export default function SyncPage() {
             }
 
             updateLastAssistantMessage(event.data?.assistantMessage || "Done.");
+            // Clear the live progress widget — the run is fully resolved.
+            setLiveProgress(null);
             continue;
           }
 
           if (event.type === "error") {
             updateLastAssistantMessage(`⚠️ ${event.error}`);
+            setLiveProgress(null);
           }
         }
       }
     },
-    [originalSheet, setOriginalAndWorkingSheet, setSheet, setWorkingMemory, updateLastAssistantMessage, updateLastAssistantProgress, updateLastAssistantSessionSummary, updateLastAssistantActionReceipt, pushSheetSnapshot, resultColumns, resultRows, resultsTitle]
+    [
+      originalSheet,
+      setOriginalAndWorkingSheet,
+      setSheet,
+      setWorkingMemory,
+      updateLastAssistantMessage,
+      updateLastAssistantThinking,
+      updateLastAssistantProgress,
+      updateLastAssistantSessionSummary,
+      updateLastAssistantActionReceipt,
+      appendAssistantTraceEvent,
+      pushSheetSnapshot,
+      resultColumns,
+      resultRows,
+      resultsTitle,
+      setColumnProfile,
+      setRemainingCount,
+    ]
   );
 
   const handleStopStreaming = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setStreaming(false);
+    setLiveProgress(null);
     updateLastAssistantProgress([]);
     updateLastAssistantMessage("Stopped.");
   }, [setStreaming, updateLastAssistantMessage, updateLastAssistantProgress]);
@@ -781,6 +1148,7 @@ export default function SyncPage() {
       })),
       sessionSummary,
       mode,
+      thinkingLevel,
       webEnabled,
       attachments: attachmentPayloads,
       integration: integration
@@ -791,53 +1159,97 @@ export default function SyncPage() {
         }
         : null,
       currentSheet,
+      originalSheet,
       workingMemory,
       ...extra,
     }),
-    [workspace?.id, messages, sessionSummary, mode, webEnabled, integration, currentSheet, workingMemory]
+    [workspace?.id, messages, sessionSummary, mode, thinkingLevel, webEnabled, integration, currentSheet, originalSheet, workingMemory]
   );
 
-  // Execute an approved plan (either auto-approved or user-confirmed)
-  const executeApprovedPlan = useCallback(
-    async (trimmed: string, attachmentPayloads: SyncAttachmentPayload[], plan: AgentPlan) => {
+  // ──────────────────────────────────────────────────────────────────────────
+  // Unified agent runner — every interaction (chat, apply, continue, confirm)
+  // goes through this single function. The server is the source of truth for:
+  //   • Whether the plan needs confirmation (via `needs_confirmation` event)
+  //   • Tool execution, ordering, locks, tracing, working memory updates
+  // The client only renders stream events and (optionally) shows a confirm
+  // preview when the server requests one.
+  // ──────────────────────────────────────────────────────────────────────────
+  const runAgent = useCallback(
+    async (
+      trimmed: string,
+      attachmentPayloads: SyncAttachmentPayload[],
+      opts: { preApprovedPlan?: AgentPlan } = {}
+    ) => {
       setStreaming(true);
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
+      let confirmationPlan: AgentPlan | null = null;
       try {
+        const extra = opts.preApprovedPlan ? { preApprovedPlan: opts.preApprovedPlan } : {};
         const res = await fetch("/api/sync/agent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify(buildAgentRequestBody(trimmed, attachmentPayloads, { preApprovedPlan: plan })),
+          body: JSON.stringify(buildAgentRequestBody(trimmed, attachmentPayloads, extra)),
         });
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: "Failed to get response" }));
-
           if (res.status === 402) {
-            const errorCode = err?.error === "NO_SUBSCRIPTION" ? "NO_SUBSCRIPTION" : "NO_CREDITS";
-            setChatBlockedReason(errorCode);
+            setChatBlockedReason(
+              err?.error === "NO_SUBSCRIPTION" ? "NO_SUBSCRIPTION" : "NO_CREDITS"
+            );
             updateLastAssistantMessage("");
             updateLastAssistantProgress([]);
             return;
           }
-
           updateLastAssistantMessage(`⚠️ ${err.error || "Something went wrong"}`);
           return;
         }
 
-        await processAgentStream(res);
-        invalidateCredits();
+        await processAgentStream(res, {
+          onNeedsConfirmation: (plan) => {
+            confirmationPlan = plan;
+          },
+        });
+
+        if (confirmationPlan) {
+          const plan = confirmationPlan as AgentPlan;
+          setPendingPlan({ plan, userMessage: trimmed, attachmentPayloads });
+          const stepLabels = plan.steps
+            .map((s) => TOOL_LABELS[s.tool] || s.tool)
+            .join(" → ");
+          updateLastAssistantMessage(
+            `📋 **Plan preview:**\n${plan.assistantMessage || ""}\n\nSteps: ${stepLabels}\n\n_Waiting for your confirmation to proceed._`
+          );
+          updateLastAssistantProgress([]);
+        } else {
+          invalidateCredits();
+        }
       } catch (err: any) {
         if (err?.name === "AbortError") return;
         updateLastAssistantMessage(`⚠️ ${err?.message || "Network error"}`);
       } finally {
         abortControllerRef.current = null;
-        setStreaming(false);
+        // Only clear streaming when the run is fully resolved (no pending
+        // confirmation). When confirmation is needed, streaming stays on so the
+        // composer remains locked until the user confirms or dismisses.
+        if (!confirmationPlan) {
+          setStreaming(false);
+        }
       }
     },
-    [buildAgentRequestBody, processAgentStream, invalidateCredits, setStreaming, updateLastAssistantMessage, updateLastAssistantProgress]
+    [
+      buildAgentRequestBody,
+      processAgentStream,
+      invalidateCredits,
+      setStreaming,
+      setChatBlockedReason,
+      setPendingPlan,
+      updateLastAssistantMessage,
+      updateLastAssistantProgress,
+    ]
   );
 
   const handleSend = useCallback(async () => {
@@ -900,134 +1312,30 @@ export default function SyncPage() {
       progress: ["Analyzing your request..."],
     });
 
-    setStreaming(true);
-
-    try {
-      // Phase 1: Get the plan first
-      updateLastAssistantProgress(["Planning steps..."]);
-      const planRes = await fetch("/api/sync/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildAgentRequestBody(trimmed, attachmentPayloads, { planOnly: true })),
-      });
-
-      if (!planRes.ok) {
-        const err = await planRes.json().catch(() => ({ error: "Failed to get response" }));
-        if (planRes.status === 402) {
-          setChatBlockedReason(err?.error === "NO_SUBSCRIPTION" ? "NO_SUBSCRIPTION" : "NO_CREDITS");
-          updateLastAssistantMessage("");
-          updateLastAssistantProgress([]);
-          return;
-        }
-        updateLastAssistantMessage(`⚠️ ${err.error || "Something went wrong"}`);
-        return;
-      }
-
-      const { plan, estimatedCredits } = (await planRes.json()) as { plan: AgentPlan; estimatedCredits?: number };
-
-      if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) {
-        updateLastAssistantMessage(plan?.assistantMessage || "I couldn't determine what to do. Could you rephrase?");
-        return;
-      }
-
-      // Phase 2: Decide whether to auto-execute or ask for confirmation
-      const allSafe = plan.steps.every((step) => SAFE_AUTO_EXECUTE_TOOLS.has(step.tool));
-
-      if (allSafe) {
-        // Check if the plan starts with a load_products tool — handle via /api/sync/products
-        const loadStep = plan.steps.find((s) => s.tool === "load_products" || s.tool === "load_products_from_shopify" || s.tool === "load_products_from_woocommerce");
-        const remainingSteps = plan.steps.filter((s) => s.tool !== "load_products" && s.tool !== "load_products_from_shopify" && s.tool !== "load_products_from_woocommerce");
-
-        if (loadStep && workspace?.id) {
-          updateLastAssistantProgress(["Loading products from the connected integration..."]);
-          try {
-            const productsRes = await fetch("/api/sync/products", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ workspaceId: workspace.id, limit: loadStep.args?.limit ?? 0 }),
-            });
-
-            const productsData = await productsRes.json().catch(() => ({}));
-            if (!productsRes.ok) {
-              throw new Error(productsData?.error || "Failed to load products");
-            }
-
-            const loadedSheet: SyncSheet | undefined = productsData?.title
-              ? { title: productsData.title, columns: productsData.columns, rows: productsData.rows }
-              : undefined;
-            if (loadedSheet && Array.isArray(loadedSheet.columns) && Array.isArray(loadedSheet.rows)) {
-              if (resultColumns.length > 0 || resultRows.length > 0) {
-                pushSheetSnapshot({ title: resultsTitle, columns: resultColumns, rows: resultRows });
-              }
-              setOriginalAndWorkingSheet(loadedSheet);
-              updateLastAssistantProgress([`Loaded ${loadedSheet.rows.length} products into the sheet workspace`]);
-
-              if (remainingSteps.length > 0) {
-                // Continue with remaining steps on Netlify agent
-                const continuePlan: AgentPlan = { ...plan, steps: remainingSteps };
-                await executeApprovedPlan(trimmed, attachmentPayloads, continuePlan);
-              } else {
-                updateLastAssistantMessage(
-                  plan.assistantMessage || `Loaded ${loadedSheet.rows.length} products into the results workspace.`
-                );
-                updateLastAssistantProgress([
-                  `Loaded ${loadedSheet.rows.length} products into the sheet workspace`,
-                ]);
-              }
-            } else {
-              throw new Error("Invalid sheet data returned from product loader");
-            }
-          } catch (err: any) {
-            updateLastAssistantMessage(`⚠️ ${err?.message || "Failed to load products"}`);
-          }
-        } else {
-          // Auto-execute safe operations normally
-          updateLastAssistantProgress(["Executing plan..."]);
-          await executeApprovedPlan(trimmed, attachmentPayloads, plan);
-        }
-      } else {
-        // Show intent preview for confirmation
-        setPendingPlan({ plan, userMessage: trimmed, attachmentPayloads, estimatedCredits });
-        const stepLabels = plan.steps.map((s) => TOOL_LABELS[s.tool] || s.tool).join(" → ");
-        updateLastAssistantMessage(
-          `📋 **Plan preview:**\n${plan.assistantMessage || ""}\n\nSteps: ${stepLabels}\n\n_Waiting for your confirmation to proceed._`
-        );
-        updateLastAssistantProgress([]);
-      }
-    } catch (err: any) {
-      if (err?.name === "AbortError") return;
-      updateLastAssistantMessage(`⚠️ ${err?.message || "Network error"}`);
-    } finally {
-      if (!pendingPlan) {
-        setStreaming(false);
-      }
-    }
+    // Single streaming POST. Server decides whether to confirm or execute.
+    await runAgent(trimmed, attachmentPayloads, {});
   }, [
     chatBlockedReason,
     input,
     pendingAttachments,
     isStreaming,
-    mode,
     workspace?.id,
     addMessage,
-    updateLastAssistantMessage,
-    updateLastAssistantProgress,
-    setStreaming,
+    setChatBlockedReason,
     clearPendingAttachments,
-    buildAgentRequestBody,
-    executeApprovedPlan,
-    pendingPlan,
+    runAgent,
   ]);
 
-  // User confirms the pending plan
+  // User confirms the pending plan — re-runs the agent with `preApprovedPlan`
+  // so the server skips the confirmation gate and executes immediately.
   const handleConfirmPlan = useCallback(async () => {
     if (!pendingPlan) return;
     const { plan, userMessage, attachmentPayloads } = pendingPlan;
     setPendingPlan(null);
     updateLastAssistantMessage("");
     updateLastAssistantProgress(["Executing approved plan..."]);
-    await executeApprovedPlan(userMessage, attachmentPayloads, plan);
-  }, [pendingPlan, executeApprovedPlan, updateLastAssistantMessage, updateLastAssistantProgress]);
+    await runAgent(userMessage, attachmentPayloads, { preApprovedPlan: plan });
+  }, [pendingPlan, runAgent, updateLastAssistantMessage, updateLastAssistantProgress]);
 
   // User dismisses the pending plan
   const handleDismissPlan = useCallback(() => {
@@ -1036,6 +1344,77 @@ export default function SyncPage() {
     updateLastAssistantMessage("Plan cancelled.");
     updateLastAssistantProgress([]);
   }, [setStreaming, updateLastAssistantMessage, updateLastAssistantProgress]);
+
+  // Apply pending sheet changes — routes through the agent so the server's
+  // policy gate, advisory lock, tracer and working memory all apply uniformly.
+  // The user's intent is conveyed as a chat message; the planner emits a single
+  // `sync_apply_to_shopify` step which the orchestrator executes after asking
+  // the user for confirmation (apply is in the "red" tier).
+  const handleApplySync = useCallback(async () => {
+    if (
+      !workspace?.id ||
+      !integration ||
+      !currentSheet ||
+      pendingChangeCount === 0 ||
+      isApplying ||
+      isStreaming
+    ) {
+      return;
+    }
+
+    const message = `Apply ${pendingChangeCount} pending sheet change${pendingChangeCount === 1 ? "" : "s"} to the connected platform.`;
+
+    addMessage({
+      id: crypto.randomUUID(),
+      role: "user",
+      content: message,
+      timestamp: Date.now(),
+    });
+    addMessage({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      progress: ["Preparing apply…"],
+    });
+
+    setIsApplying(true);
+    try {
+      await runAgent(message, []);
+    } finally {
+      setIsApplying(false);
+    }
+  }, [
+    addMessage,
+    currentSheet,
+    integration,
+    isApplying,
+    isStreaming,
+    pendingChangeCount,
+    runAgent,
+    workspace?.id,
+  ]);
+
+  // Continue (load more) — sends a follow-up agent message that uses the
+  // remembered targets / cursor in working memory to fetch the next page.
+  const handleContinueLoad = useCallback(async () => {
+    if (isStreaming || !workspace?.id || !integration) return;
+    const message = "Continue loading more products from where we left off.";
+    addMessage({
+      id: crypto.randomUUID(),
+      role: "user",
+      content: message,
+      timestamp: Date.now(),
+    });
+    addMessage({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      progress: ["Loading more products…"],
+    });
+    await runAgent(message, []);
+  }, [addMessage, integration, isStreaming, runAgent, workspace?.id]);
 
   // Handle quick prompt click
   const handleQuickPrompt = useCallback(
@@ -1098,6 +1477,53 @@ export default function SyncPage() {
       </div>
     );
   }
+
+  // ─── Live progress widget (column writes / image search) ──
+  // Renders a small floating card whenever the agent is mid-batch on a
+  // long-running tool. The user sees throughput in real time and can hit
+  // "Stop" to abort gracefully (the handler exits at the next batch boundary).
+  const liveProgressWidget = liveProgress ? (
+    <div className="fixed bottom-24 right-6 z-50 w-80 rounded-xl border bg-background/95 backdrop-blur shadow-lg p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
+          <div className="text-xs font-medium truncate">
+            {liveProgress.tool === "sync_images_search"
+              ? "Finding images"
+              : liveProgress.column
+                ? `Writing ${liveProgress.column}`
+                : "Working"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleStopStreaming}
+          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-muted"
+        >
+          Stop
+        </button>
+      </div>
+      <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+        <div
+          className="h-full bg-primary transition-all duration-300 ease-out"
+          style={{ width: `${liveProgress.percent}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>
+          {liveProgress.processed} / {liveProgress.total}
+        </span>
+        <span>
+          {liveProgress.percent}%
+          {liveProgress.failedCount && liveProgress.failedCount > 0 ? (
+            <span className="ml-2 text-amber-600 dark:text-amber-400">
+              · {liveProgress.failedCount} failed
+            </span>
+          ) : null}
+        </span>
+      </div>
+    </div>
+  ) : null;
 
   // ─── Composer (shared between onboarding and focused) ──
 
@@ -1203,14 +1629,18 @@ export default function SyncPage() {
           accept="image/jpeg,image/png,image/webp,image/bmp,.pdf"
           onChange={handleFileSelect}
         />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-          title="Upload files"
-        >
-          <Paperclip className="h-3.5 w-3.5" />
-          Upload
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              aria-label="Upload files"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Upload files</TooltipContent>
+        </Tooltip>
 
         <button
           onClick={toggleWebEnabled}
@@ -1219,10 +1649,10 @@ export default function SyncPage() {
               ? "bg-primary/10 text-primary"
               : "text-muted-foreground hover:bg-muted hover:text-foreground"
           }`}
-          title="Connect to web"
+          aria-label={webEnabled ? "Web search enabled" : "Enable web search"}
+          title={webEnabled ? "Web search enabled" : "Enable web search"}
         >
-          <Globe className="h-3.5 w-3.5" />
-          Web
+          <Globe className="h-4 w-4" />
         </button>
 
         <div className="flex items-center bg-muted rounded-lg p-0.5">
@@ -1250,6 +1680,51 @@ export default function SyncPage() {
           </button>
         </div>
 
+        {/* ── Thinking depth (Gemini 3 thinkingLevel) ────────────────────── */}
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="flex items-center gap-1 h-8 px-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground transition-colors"
+                  aria-label={`Thinking: ${thinkingLevel}`}
+                >
+                  <Brain className="h-4 w-4" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wide">
+                    {thinkingLevel === "low" ? "L" : thinkingLevel === "medium" ? "M" : "H"}
+                  </span>
+                </button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top">Reasoning depth</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+              Thinking depth
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {([
+              { value: "low" as const, label: "Low", desc: "Fastest — quick replies" },
+              { value: "medium" as const, label: "Medium", desc: "Balanced quality + speed" },
+              { value: "high" as const, label: "High", desc: "Deepest reasoning, slower" },
+            ]).map((opt) => (
+              <DropdownMenuItem
+                key={opt.value}
+                onSelect={() => setThinkingLevel(opt.value)}
+                className="flex flex-col items-start gap-0.5 py-2 cursor-pointer"
+              >
+                <div className="flex items-center gap-2 w-full">
+                  <span className="text-xs font-semibold">{opt.label}</span>
+                  {thinkingLevel === opt.value && (
+                    <Check className="h-3.5 w-3.5 ml-auto text-primary" />
+                  )}
+                </div>
+                <span className="text-[10px] text-muted-foreground">{opt.desc}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <div className="flex-1" />
 
         {integration && (
@@ -1267,6 +1742,7 @@ export default function SyncPage() {
   if (messages.length > 0) {
     return (
       <div className="flex flex-col h-full min-h-0 overflow-hidden bg-background">
+        {liveProgressWidget}
         {/* Split Workspace */}
         <div className="flex-1 flex min-h-0 overflow-hidden">
           {/* Left: Chat Panel */}
@@ -1293,27 +1769,97 @@ export default function SyncPage() {
                       {msg.role === "user" ? "You" : "Sync AI"}
                     </div>
                     <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-                      {msg.role === "user" ? (
-                        msg.content
-                      ) : msg.content ? null : (
-                        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Thinking...
-                        </span>
-                      )}
+                      {msg.role === "user" ? msg.content : null}
                     </div>
-                    {msg.role === "assistant" && msg.progress && msg.progress.length > 0 && (
+
+                    {/* ── Inline Thinking indicator (only while streaming) ── */}
+                    {msg.role === "assistant" &&
+                      isStreaming &&
+                      msg.id === messages[messages.length - 1]?.id && (
+                        <div className="text-sm">
+                          <button
+                            type="button"
+                            onClick={() => msg.thinkingText && toggleThinking(msg.id)}
+                            disabled={!msg.thinkingText}
+                            className={`inline-flex items-center gap-1.5 text-muted-foreground transition-colors ${
+                              msg.thinkingText ? "hover:text-foreground cursor-pointer" : "cursor-default"
+                            }`}
+                          >
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <span>Thinking...</span>
+                            {msg.thinkingText && (
+                              <svg
+                                className={`h-3.5 w-3.5 shrink-0 transition-transform duration-200 ${
+                                  expandedThinking.has(msg.id) ? "rotate-180" : ""
+                                }`}
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                              </svg>
+                            )}
+                          </button>
+                          {msg.thinkingText && expandedThinking.has(msg.id) && (
+                            <div className="mt-2 ml-5 border-l-2 border-muted pl-3 py-1">
+                              <p className="text-[12px] leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                                {msg.thinkingText}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                    {msg.role === "assistant" && ((msg.progress && msg.progress.length > 0) || (msg.executionTrace && msg.executionTrace.length > 0)) && (
                       <div className="mt-3 rounded-lg border bg-muted/30 px-3 py-2">
                         <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
                           Execution trace
                         </div>
                         <div className="space-y-1.5">
-                          {msg.progress.map((step, index) => (
+                          {msg.progress?.map((step, index) => (
                             <div key={`${msg.id}-progress-${index}`} className="flex items-start gap-2 text-xs text-muted-foreground">
                               <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-primary/70 shrink-0" />
                               <span>{step}</span>
                             </div>
                           ))}
+                          {msg.executionTrace?.map((ev, index) => {
+                            if (ev.kind === "step_start") {
+                              return (
+                                <div key={`${msg.id}-trace-${index}`} className="flex items-start gap-2 text-xs text-blue-600 dark:text-blue-400">
+                                  <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />
+                                  <span className="font-mono text-[11px]">▶ {ev.tool}</span>
+                                </div>
+                              );
+                            }
+                            if (ev.kind === "step_end") {
+                              const ok = (ev.userErrorCount ?? 0) === 0;
+                              return (
+                                <div key={`${msg.id}-trace-${index}`} className={`flex items-start gap-2 text-xs ${ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+                                  <span className={`mt-0.5 h-1.5 w-1.5 rounded-full shrink-0 ${ok ? "bg-emerald-500" : "bg-amber-500"}`} />
+                                  <span className="font-mono text-[11px]">
+                                    {ok ? "✓" : "⚠"} {ev.tool} · {ev.elapsedMs}ms
+                                    {ev.warnings && ev.warnings.length > 0 ? ` · ${ev.warnings.length} warning(s)` : ""}
+                                  </span>
+                                </div>
+                              );
+                            }
+                            if (ev.kind === "reflection") {
+                              const tone =
+                                ev.decision === "stop" || ev.decision === "ask"
+                                  ? "text-rose-600 dark:text-rose-400"
+                                  : ev.decision === "retry"
+                                    ? "text-amber-600 dark:text-amber-400"
+                                    : "text-muted-foreground";
+                              return (
+                                <div key={`${msg.id}-trace-${index}`} className={`flex items-start gap-2 text-[11px] ${tone}`}>
+                                  <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-current shrink-0 opacity-60" />
+                                  <span className="italic">↪ {ev.decision}: {ev.rationale}</span>
+                                </div>
+                              );
+                            }
+                            return null;
+                          })}
                         </div>
                       </div>
                     )}
@@ -1402,23 +1948,72 @@ export default function SyncPage() {
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-muted/10">
             <div className="h-10 border-b bg-background/60 flex items-center px-4 gap-3 shrink-0">
               <span className="text-xs font-semibold text-muted-foreground">{resultsTitle}</span>
-              {resultColumns.length > 0 && (
+              {sheetViews.length > 0 && (
                 <div className="flex items-center gap-1">
-                  {SHEET_VIEWS.map((view) => (
+                  {sheetViews.map((view: SheetView) => (
                     <Button
                       key={view.key}
                       type="button"
                       size="sm"
                       variant={sheetView === view.key ? "secondary" : "ghost"}
                       className="h-7 px-2.5 text-[11px]"
-                      onClick={() => setSheetView(view.key)}
+                      onClick={() => {
+                        setSheetView(view.key);
+                        setColumnProfile(view.key);
+                      }}
                     >
                       {view.label}
                     </Button>
                   ))}
+                  {/* Entity-switch quick buttons — always accessible so the
+                      user can jump between product and taxonomy sheets without
+                      typing a full prompt. Routed through the agent so
+                      server-side policy + tracing stay consistent. */}
+                  {currentEntity === "products" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2.5 text-[11px] opacity-70 hover:opacity-100"
+                      disabled={isStreaming}
+                      onClick={() =>
+                        void runAgent(taxonomyPrompt(integration?.provider), [])
+                      }
+                      title={`Switch to the ${taxonomyLabel(integration?.provider)} sheet`}
+                    >
+                      {taxonomyLabel(integration?.provider)} →
+                    </Button>
+                  )}
+                  {currentEntity === "collections" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2.5 text-[11px] opacity-70 hover:opacity-100"
+                      disabled={isStreaming}
+                      onClick={() =>
+                        void runAgent("اعرض كل المنتجات", [])
+                      }
+                      title="Switch to the Products sheet"
+                    >
+                      Products →
+                    </Button>
+                  )}
                 </div>
               )}
               <div className="ml-auto flex items-center gap-2">
+                {remainingCount !== null && remainingCount > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2.5 text-[11px] gap-1"
+                    onClick={handleContinueLoad}
+                    disabled={isStreaming}
+                    title="Load the next page of products from the connected store"
+                  >
+                    Continue (load more)
+                  </Button>
+                )}
                 {originalSheet && resultRows.length < originalSheet.rows.length && (
                   <Button
                     size="sm"
@@ -1545,6 +2140,27 @@ export default function SyncPage() {
             </div>
             {resultRows.length > 0 && resultColumns.length > 0 ? (
               <div className="flex-1 min-h-0 overflow-auto p-4">
+                {/* Filter bar: shown when a row filter is active */}
+                {filteredRowIndexes && (
+                  <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
+                    <span className="text-primary font-medium">
+                      {filterDescription || "Filter active"} — showing {displayRows.length} of {resultRows.length} rows
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-[11px] text-primary hover:text-primary/80"
+                      onClick={() => {
+                        setFilteredRowIndexes(null);
+                        setFilterDescription(null);
+                        setCurrentPage(1);
+                      }}
+                    >
+                      Clear filter
+                    </Button>
+                  </div>
+                )}
                 <div className="rounded-xl border bg-background overflow-hidden">
                   <Table>
                     <TableHeader>
@@ -1569,10 +2185,10 @@ export default function SyncPage() {
                     </TableBody>
                   </Table>
                 </div>
-                {resultRows.length > PAGE_SIZE && (
+                {displayRows.length > PAGE_SIZE && (
                   <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border bg-background px-3 py-2 text-xs text-muted-foreground">
                     <span>
-                      Showing {(safeCurrentPage - 1) * PAGE_SIZE + 1}-{Math.min(safeCurrentPage * PAGE_SIZE, resultRows.length)} of {resultRows.length} rows
+                      Showing {(safeCurrentPage - 1) * PAGE_SIZE + 1}-{Math.min(safeCurrentPage * PAGE_SIZE, displayRows.length)} of {displayRows.length} rows
                     </span>
                     <div className="flex items-center gap-2">
                       <Button
@@ -1638,6 +2254,7 @@ export default function SyncPage() {
 
   return (
     <div className="flex-1 min-h-0 overflow-auto">
+      {liveProgressWidget}
       <div className="min-h-full flex flex-col items-center justify-center px-6 py-10">
         <div className="w-full max-w-4xl flex flex-col items-center">
           <div className="text-center space-y-4 mb-10 max-w-xl">

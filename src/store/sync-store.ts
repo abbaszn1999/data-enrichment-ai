@@ -1,28 +1,19 @@
 import { create } from "zustand";
+import {
+  EMPTY_SYNC_WORKING_MEMORY_V2,
+  type ColumnProfileKey,
+  type SyncWorkingMemoryV2,
+} from "@/lib/sync/core/types";
 
 export type SyncMode = "fast" | "pro";
 
-export type SyncWorkingMemory = {
-  lastCreatedRowIndexes: number[];
-  lastTargetedRowIndexes: number[];
-  lastExplicitEntityLabel: string | null;
-  lastResearchSummary: string | null;
-  lastResearchSubject: string | null;
-  lastTouchedColumns: string[];
-  lastActionType: "append_row" | "target_rows" | "write_column" | "research_web" | "load_sheet" | null;
-  updatedAt: number | null;
-};
+/** Gemini 3 thinkingLevel — controls reasoning depth vs latency/cost.
+ *  Maps 1:1 to the @google/genai ThinkingLevel enum (LOW/MEDIUM/HIGH). */
+export type SyncThinkingLevel = "low" | "medium" | "high";
 
-export const EMPTY_SYNC_WORKING_MEMORY: SyncWorkingMemory = {
-  lastCreatedRowIndexes: [],
-  lastTargetedRowIndexes: [],
-  lastExplicitEntityLabel: null,
-  lastResearchSummary: null,
-  lastResearchSubject: null,
-  lastTouchedColumns: [],
-  lastActionType: null,
-  updatedAt: null,
-};
+// v2 memory re-exported for UI convenience
+export type SyncWorkingMemory = SyncWorkingMemoryV2;
+export const EMPTY_SYNC_WORKING_MEMORY = EMPTY_SYNC_WORKING_MEMORY_V2;
 
 export interface SyncAttachment {
   id: string;
@@ -39,6 +30,31 @@ export type SyncActionReceipt = {
   warnings: string[];
 };
 
+/** Per-step trace event surfaced to the chat UI. */
+export type SyncTraceEvent =
+  | {
+      kind: "step_start";
+      index: number;
+      tool: string;
+      args?: unknown;
+      startedAt: number;
+    }
+  | {
+      kind: "step_end";
+      index: number;
+      tool: string;
+      elapsedMs: number;
+      warnings?: string[];
+      userErrorCount?: number;
+      output?: unknown;
+    }
+  | {
+      kind: "reflection";
+      stepIndex: number;
+      decision: string;
+      rationale: string;
+    };
+
 export interface SyncMessage {
   id: string;
   role: "user" | "assistant";
@@ -48,6 +64,10 @@ export interface SyncMessage {
   progress?: string[];
   sessionSummary?: string;
   actionReceipt?: SyncActionReceipt;
+  executionTrace?: SyncTraceEvent[];
+  /** Concatenated thought-summary text from Gemini thinking turns.
+   *  Appended per turn; cleared when a new user message starts. */
+  thinkingText?: string;
 }
 
 export type SyncSheetSnapshot = {
@@ -63,19 +83,28 @@ interface SyncState {
   messages: SyncMessage[];
   isStreaming: boolean;
   mode: SyncMode;
+  thinkingLevel: SyncThinkingLevel;
   webEnabled: boolean;
   pendingAttachments: File[];
   workingMemory: SyncWorkingMemory;
   sheetHistory: SyncSheetSnapshot[];
   redoHistory: SyncSheetSnapshot[];
+  // v3 UI state driven by the agent
+  currentColumnProfile: ColumnProfileKey | null;
+  currentEntity: "products" | "collections" | null;
+  relevantProfiles: ColumnProfileKey[] | null;
+  remainingCount: number | null;
+  currentRunId: string | null;
 }
 
 interface SyncActions {
   setFocusMode: (focused: boolean) => void;
   setMode: (mode: SyncMode) => void;
+  setThinkingLevel: (level: SyncThinkingLevel) => void;
   toggleWebEnabled: () => void;
   addMessage: (message: SyncMessage) => void;
   updateLastAssistantMessage: (content: string) => void;
+  updateLastAssistantThinking: (text: string, inline?: boolean) => void;
   updateLastAssistantProgress: (progress: string[]) => void;
   updateLastAssistantSessionSummary: (sessionSummary: string) => void;
   setStreaming: (streaming: boolean) => void;
@@ -84,12 +113,18 @@ interface SyncActions {
   clearPendingAttachments: () => void;
   setWorkingMemory: (workingMemory: SyncWorkingMemory) => void;
   updateLastAssistantActionReceipt: (receipt: SyncActionReceipt) => void;
+  appendAssistantTraceEvent: (event: SyncTraceEvent) => void;
   pushSheetSnapshot: (sheet: SyncSheetSnapshot) => void;
   pushRedoSnapshot: (sheet: SyncSheetSnapshot) => void;
   undoSheet: () => SyncSheetSnapshot | null;
   redoSheet: () => SyncSheetSnapshot | null;
   clearSheetHistory: () => void;
   clearRedoHistory: () => void;
+  setColumnProfile: (profile: ColumnProfileKey | null) => void;
+  setEntity: (entity: "products" | "collections" | null) => void;
+  setRelevantProfiles: (profiles: ColumnProfileKey[] | null) => void;
+  setRemainingCount: (count: number | null) => void;
+  setCurrentRunId: (runId: string | null) => void;
   resetChat: () => void;
 }
 
@@ -98,15 +133,22 @@ export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
   messages: [],
   isStreaming: false,
   mode: "fast",
+  thinkingLevel: "low",
   webEnabled: false,
   pendingAttachments: [],
   workingMemory: EMPTY_SYNC_WORKING_MEMORY,
   sheetHistory: [],
   redoHistory: [],
+  currentColumnProfile: null,
+  currentEntity: null,
+  relevantProfiles: null,
+  remainingCount: null,
+  currentRunId: null,
 
   setFocusMode: (focused) =>
     set((s) => (s.isFocusMode === focused ? s : { ...s, isFocusMode: focused })),
   setMode: (mode) => set({ mode }),
+  setThinkingLevel: (thinkingLevel) => set({ thinkingLevel }),
   toggleWebEnabled: () => set((s) => ({ webEnabled: !s.webEnabled })),
   addMessage: (message) => set((s) => ({ messages: [...s.messages, message] })),
   updateLastAssistantMessage: (content) =>
@@ -115,6 +157,27 @@ export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
       for (let i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i].role === "assistant") {
           msgs[i] = { ...msgs[i], content };
+          break;
+        }
+      }
+      return { messages: msgs };
+    }),
+  updateLastAssistantThinking: (text, inline) =>
+    set((s) => {
+      const msgs = [...s.messages];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "assistant") {
+          const prev = msgs[i].thinkingText ?? "";
+          // inline=true → streaming chunk, append directly (no separator)
+          // inline=false/undefined → new thought block, separate with blank line
+          msgs[i] = {
+            ...msgs[i],
+            thinkingText: prev
+              ? inline
+                ? prev + text
+                : `${prev}\n\n${text}`
+              : text,
+          };
           break;
         }
       }
@@ -162,6 +225,18 @@ export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
       }
       return { messages: msgs };
     }),
+  appendAssistantTraceEvent: (event) =>
+    set((s) => {
+      const msgs = [...s.messages];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "assistant") {
+          const prev = msgs[i].executionTrace ?? [];
+          msgs[i] = { ...msgs[i], executionTrace: [...prev, event] };
+          break;
+        }
+      }
+      return { messages: msgs };
+    }),
   pushSheetSnapshot: (sheet) =>
     set((s) => ({
       sheetHistory: [...s.sheetHistory, sheet].slice(-MAX_SHEET_HISTORY),
@@ -187,6 +262,11 @@ export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
   },
   clearSheetHistory: () => set({ sheetHistory: [] }),
   clearRedoHistory: () => set({ redoHistory: [] }),
+  setColumnProfile: (profile) => set({ currentColumnProfile: profile }),
+  setEntity: (entity) => set({ currentEntity: entity }),
+  setRelevantProfiles: (profiles) => set({ relevantProfiles: profiles }),
+  setRemainingCount: (count) => set({ remainingCount: count }),
+  setCurrentRunId: (runId) => set({ currentRunId: runId }),
   resetChat: () =>
     set({
       messages: [],
@@ -196,5 +276,10 @@ export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
       workingMemory: EMPTY_SYNC_WORKING_MEMORY,
       sheetHistory: [],
       redoHistory: [],
+      currentColumnProfile: null,
+      currentEntity: null,
+      relevantProfiles: null,
+      remainingCount: null,
+      currentRunId: null,
     }),
 }));

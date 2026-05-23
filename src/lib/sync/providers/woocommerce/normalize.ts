@@ -34,7 +34,7 @@ function collectVariationStats(variations: any[]) {
     compare_at_price: salePrices[0] || "",
     inventory_total: inventoryTotal,
     primary_sku: toText(primary?.sku),
-    barcode: toText(primary?.barcode),
+    global_unique_id: toText(primary?.global_unique_id),
     variant_count: variations.length,
   };
 }
@@ -47,7 +47,7 @@ export function normalizeWooCommerceProductRow(product: any, variations: any[] =
   let comparePrice = toText(product?.sale_price);
   let inventoryTotal = toNumber(product?.stock_quantity);
   let primarySku = toText(product?.sku);
-  let barcode = "";
+  let globalUniqueId = toText(product?.global_unique_id);
   let variantCount = 0;
   let variationId = "";
 
@@ -57,7 +57,7 @@ export function normalizeWooCommerceProductRow(product: any, variations: any[] =
     comparePrice = stats.compare_at_price || comparePrice;
     inventoryTotal = stats.inventory_total;
     primarySku = stats.primary_sku || primarySku;
-    barcode = stats.barcode;
+    globalUniqueId = stats.global_unique_id || globalUniqueId;
     variantCount = stats.variant_count;
     variationId = stats.variation_id;
   }
@@ -65,6 +65,9 @@ export function normalizeWooCommerceProductRow(product: any, variations: any[] =
   const categories = Array.isArray(product?.categories)
     ? product.categories.map((c: any) => toText(c?.name)).filter(Boolean).join(", ")
     : "";
+  const categoryIds = Array.isArray(product?.categories)
+    ? product.categories.map((c: any) => toText(c?.id)).filter(Boolean)
+    : [];
   const tags = Array.isArray(product?.tags)
     ? product.tags.map((t: any) => toText(t?.name)).filter(Boolean).join(", ")
     : "";
@@ -79,11 +82,13 @@ export function normalizeWooCommerceProductRow(product: any, variations: any[] =
     product_type: toText(product?.type),
     tags,
     categories,
+    categories_ids: categoryIds,
     price,
     compare_at_price: comparePrice,
     inventory_total: inventoryTotal,
     primary_sku: primarySku,
-    barcode,
+    barcode: globalUniqueId,
+    global_unique_id: globalUniqueId,
     manage_stock: Boolean(product?.manage_stock),
     stock_status: toText(product?.stock_status),
     variant_count: variantCount,

@@ -87,6 +87,73 @@ export async function loadProjectJson(workspaceId: string, sessionId: string): P
   return loadJsonFromStorage<ProjectJson>(path);
 }
 
+// ─── Image Classification ────────────────────────────────
+
+export interface ImageClassificationGroup {
+  id: string;
+  label: string;
+  description?: string;
+  imageIds: string[];
+}
+
+export interface ImageClassificationItem {
+  id: string;
+  filename: string;
+  storagePath: string;
+  /** Long-lived signed URL (10y) generated at classification time so the
+   *  exported sheet has stable, ready-to-use links to share externally. */
+  url: string;
+  groupId: string;
+  groupLabel: string;
+  confidence?: number;
+  notes?: string;
+}
+
+export interface ImageClassificationJson {
+  sessionId: string;
+  model: string;
+  thinkingLevel?: string;
+  createdAt: string;
+  totalImages: number;
+  groups: ImageClassificationGroup[];
+  items: ImageClassificationItem[];
+  usage: {
+    promptTokens: number;
+    candidatesTokens: number;
+    totalTokens: number;
+    totalCost: number;
+    totalCredits: number;
+  };
+}
+
+export function getImageClassificationResultPath(workspaceId: string, sessionId: string): string {
+  return `${workspaceId}/image-classification/${sessionId}/result.json`;
+}
+
+export function getImageClassificationImagesPrefix(workspaceId: string, sessionId: string): string {
+  return `${workspaceId}/image-classification/${sessionId}/images`;
+}
+
+export function getImageClassificationImagePath(workspaceId: string, sessionId: string, imageId: string, ext: string): string {
+  return `${getImageClassificationImagesPrefix(workspaceId, sessionId)}/${imageId}.${ext}`;
+}
+
+export async function uploadImageToStorage(storagePath: string, blob: Blob): Promise<void> {
+  const supabase = createClient();
+  await supabase.storage.from(BUCKET).remove([storagePath]);
+  const { error } = await supabase.storage
+    .from(BUCKET)
+    .upload(storagePath, blob, { cacheControl: "3600", upsert: true, contentType: blob.type || "image/jpeg" });
+  if (error) throw error;
+}
+
+export async function getImageSignedUrl(storagePath: string, expiresInSec = 3600): Promise<string | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(storagePath, expiresInSec);
+  if (error) return null;
+  return data?.signedUrl ?? null;
+}
+
 // ─── Master Products JSON ────────────────────────────────
 
 export interface MasterProductJson {
