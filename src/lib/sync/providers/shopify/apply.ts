@@ -347,11 +347,8 @@ async function applyBulkPath(
     filename: `product-set-${Date.now()}.jsonl`,
   });
 
-  // We don't poll here — the caller (agent route) can:
-  //   (a) record the bulk op id in sync_bulk_operations,
-  //   (b) return a pending result to the user,
-  //   (c) let the webhook or a follow-up poll finalize counts.
-  //
+  // We don't poll here — the caller (agent route) returns a pending result
+  // and can query Shopify's `bulkOperation(id:)` later for final counts.
   // For the synchronous API response we return optimistic "submitted" counts.
   return {
     createdCount: 0,

@@ -43,7 +43,6 @@ import {
   resolveCollectionByName,
   applyShopifyCollectionUpdates,
 } from "@/lib/sync/providers/shopify/collections";
-import { applyShopifyChanges } from "@/lib/sync/providers/shopify/apply";
 import { createWooCommerceCategory, fetchWooCommerceCategories } from "@/lib/sync/providers/woocommerce/categories";
 import { getProvider } from "@/lib/sync/core/registry";
 
@@ -327,25 +326,6 @@ async function handleProductsLoad(
   }
 
   if (mode === "bulk_query") {
-    // Ensure BULK_OPERATIONS_FINISH webhook is registered before the bulk op
-    // starts — otherwise we'd never get notified of completion. Idempotent.
-    if (ctx.admin && ctx.workspaceId) {
-      try {
-        const { ensureBulkFinishWebhook } = await import(
-          "@/lib/sync/providers/shopify/webhooks"
-        );
-        await ensureBulkFinishWebhook({
-          admin: ctx.admin,
-          workspaceId: ctx.workspaceId,
-          integration,
-        });
-      } catch (err) {
-        // Non-fatal — webhook is for completion notification convenience only.
-        ctx.onProgress?.(
-          `Webhook registration warning: ${(err as Error).message}`
-        );
-      }
-    }
     ctx.onProgress?.("Submitting Shopify bulk query…");
     const bulkResult = await fetchShopifyProductsBulk({
       integration,
@@ -370,22 +350,6 @@ async function handleProductsLoad(
       );
     }
 
-    // Persist a sync_bulk_operations row so the webhook handler can match it
-    // by shopify_bulk_id when the FINISH event arrives.
-    if (ctx.admin && ctx.workspaceId && bulkOperationId) {
-      await ctx.admin
-        .from("sync_bulk_operations")
-        .upsert(
-          {
-            workspace_id: ctx.workspaceId,
-            kind: "query",
-            shopify_bulk_id: bulkOperationId,
-            status: "running",
-            metadata: { serverFilter, clientPredicates: predicates },
-          },
-          { onConflict: "shopify_bulk_id" }
-        );
-    }
     ctx.sheet = sheet;
     ctx.originalSheet = sheet;
     ctx.workingMemory.lastServerFilter = serverFilter;
@@ -1199,6 +1163,73 @@ async function handleApplyToShopify(
     if (id) origMap.set(id, row);
   }
 
+  if (integration.provider !== "shopify") {
+    if (ctx.workingMemory.lastEntity === "collections") {
+      const provider = getProvider(integration.provider);
+      return {
+        assistantMessage: `Applying taxonomy/category sheet edits back to ${provider.label} is not supported yet. Product changes can be applied, and new WooCommerce categories should be created with the create taxonomy group tool.`,
+      };
+    }
+
+    const provider = getProvider(integration.provider);
+    const productCreates: SyncSheetRow[] = [];
+    const productUpdates: ApplyUpdate[] = [];
+
+    for (const row of ctx.sheet.rows) {
+      const id = String(row.id ?? "").trim();
+      const orig = id ? origMap.get(id) : null;
+
+      if (!orig) {
+        productCreates.push(row);
+        continue;
+      }
+
+      const changedColumns = ctx.sheet.columns.filter(
+        (col) => String(row[col] ?? "") !== String(orig[col] ?? "")
+      );
+      if (changedColumns.length > 0) {
+        productUpdates.push({ productId: id, row, changedColumns });
+      }
+    }
+
+    const totalPending = productCreates.length + productUpdates.length;
+    if (totalPending === 0) {
+      return { assistantMessage: "No pending changes to apply." };
+    }
+
+    ctx.onProgress?.(`Applying ${totalPending} change(s) to ${provider.label}…`);
+
+    const productResult = await provider.applyChanges({
+      integration,
+      creates: productCreates,
+      updates: productUpdates,
+    });
+    const allErrors = productResult.errors;
+
+    ctx.workingMemory.lastApplyStats = {
+      created: productResult.createdCount,
+      updated: productResult.updatedCount,
+      failed: allErrors.length,
+    };
+    ctx.workingMemory.lastErrorRows = allErrors.map((reason, i) => ({ rowIndex: i, reason }));
+    ctx.workingMemory.lastActionType = "apply_to_shopify";
+
+    const errSuffix =
+      allErrors.length > 0 ? ` — ${allErrors.length} error(s): ${allErrors.slice(0, 3).join("; ")}` : "";
+
+    return {
+      assistantMessage:
+        `Applied to ${provider.label}: ${productResult.createdCount} created, ${productResult.updatedCount} updated, ${productResult.skippedCount} skipped${errSuffix}.`,
+      rowsAffected: productResult.createdCount + productResult.updatedCount,
+      userErrorCount: allErrors.length,
+      userErrorCodes: [],
+      output: {
+        provider: integration.provider,
+        products: productResult,
+      },
+    };
+  }
+
   // Split rows by entity. A row is a Shopify collection if its id is a
   // Collection GID; everything else is treated as a product. This is the
   // only place we make that distinction — apply.ts only knows about
@@ -1260,7 +1291,7 @@ async function handleApplyToShopify(
       creates: productCreates,
       updates: productUpdates,
     };
-    productResult = await applyShopifyChanges(input);
+    productResult = await getProvider("shopify").applyChanges(input);
   }
 
   // ── Collections path ───────────────────────────────────────────────────

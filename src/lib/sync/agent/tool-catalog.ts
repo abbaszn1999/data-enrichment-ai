@@ -337,7 +337,7 @@ export const TOOL_METADATA: Record<ToolName, ToolMetadata> = {
     name: "sync_apply_to_shopify",
     strategy: "apply_to_shopify",
     description:
-      "Push pending sheet changes back to Shopify via productSet mutation (bulk when >25 changes).",
+      "Push pending sheet changes back to the connected platform. Shopify uses productSet/bulk operations; WooCommerce uses REST batch product/variation updates.",
     destructive: true,
   },
   sync_reply_only: {

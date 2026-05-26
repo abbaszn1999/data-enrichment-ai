@@ -56,6 +56,8 @@ Search for this exact product and find:
 4. Product category and subcategory
 5. Any marketing descriptions from official sources or retailers
 
+If you cannot find reliable information for any requested detail, say "Not found" for that detail. Do not leave it blank and do not invent information.
+
 Return your findings as a detailed summary. Include all technical specs, features, and marketing angles you find. Be thorough and accurate.`;
 
   return { text, images };
@@ -176,6 +178,11 @@ Important rules:
 ${languageInstruction}
 ${toneInstruction}
 - Be specific with technical specs (watts, dimensions, materials, etc.)
+- Never leave a requested output field blank
+- If the information is unavailable, uncertain, unsupported by the provided data, or cannot be verified through reliable sources, return exactly "Not found" for that field
+- Do not guess, fabricate, or infer unsupported details
+- For array fields, return ["Not found"] if no reliable items are found
+- For categories, only assign a category if it clearly matches the product. If none of the available categories are suitable, return "Not found". Do not force weak or uncertain category matches
 - For array fields, return a JSON array of strings
 - For string fields, return a plain string
 - Return ONLY valid JSON, no markdown code blocks, no extra text`;

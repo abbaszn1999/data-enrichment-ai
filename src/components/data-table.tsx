@@ -100,6 +100,264 @@ function StatusCell({ status, errorMessage }: { status: ProductRow["status"]; er
   );
 }
 
+function extractUrls(value: string): string[] {
+  const matches = value.match(/(?:https?:\/\/|data:image\/)[^\s"'<>]+/gi) ?? [];
+  return Array.from(
+    new Set(matches.map((url) => url.replace(/[),.;\]]+$/g, "")))
+  );
+}
+
+function hasImageColumnHint(column: string): boolean {
+  return /\b(img|image|images|photo|photos|picture|thumbnail|media)\b/i.test(
+    column.replace(/[_-]+/g, " ")
+  );
+}
+
+function isProbablyImageUrl(url: string): boolean {
+  if (url.startsWith("data:image/")) return true;
+  try {
+    const parsed = new URL(url);
+    const decodedPath = decodeURIComponent(parsed.pathname).toLowerCase();
+    const decodedUrl = decodeURIComponent(url).toLowerCase();
+    return (
+      /\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|tiff?|webp)(?:$|[?#])/i.test(decodedUrl) ||
+      /\/storage\/v1\/object\/(public|sign)\//i.test(decodedPath) && /image|img|photo|picture|thumbnail/i.test(decodedPath)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getImagePreviewUrls(value: string, column: string): string[] {
+  const urls = extractUrls(value);
+  if (urls.length === 0) return [];
+  const likely = urls.filter(isProbablyImageUrl);
+  if (likely.length > 0) return likely;
+  return hasImageColumnHint(column) ? urls : [];
+}
+
+function SmartImageThumb({ url, alt }: { url: string; alt: string }) {
+  const [src, setSrc] = useState(url);
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="h-10 min-w-16 max-w-28 px-2 rounded border border-border/40 flex items-center justify-center text-[10px] text-blue-500 hover:underline bg-muted/20"
+        onClick={(e) => e.stopPropagation()}
+      >
+        Image link
+      </a>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block shrink-0 group/img"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <img
+            src={src}
+            data-original-url={url}
+            alt={alt}
+            className="h-10 w-10 object-cover rounded border border-border/40 bg-white group-hover/img:ring-2 group-hover/img:ring-primary/40 transition-all"
+            onError={() => {
+              if (src !== proxyImgSrc(url)) {
+                setSrc(proxyImgSrc(url));
+              } else {
+                setFailed(true);
+              }
+            }}
+          />
+        </a>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="p-1">
+        <img
+          src={src}
+          alt={alt}
+          className="max-h-64 max-w-64 object-contain rounded bg-white"
+        />
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function SmartImageUrlCell({
+  urls,
+  value,
+  rowId,
+  column,
+  isEditable,
+}: {
+  urls: string[];
+  value: string;
+  rowId: string;
+  column: string;
+  isEditable: boolean;
+}) {
+  const { updateCellValue } = useSheetStore();
+  const [open, setOpen] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [draft, setDraft] = useState<string[]>([]);
+
+  const startEdit = () => {
+    if (!isEditable) return;
+    setDraft(urls);
+    setEditMode(true);
+    setOpen(true);
+  };
+
+  const saveEdit = () => {
+    const cleaned = draft.map((url) => url.trim()).filter(Boolean);
+    const nextValue = cleaned.join("\n");
+    updateCellValue(rowId, column, nextValue);
+    setEditMode(false);
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <div
+        onClick={isEditable ? startEdit : undefined}
+        className={`w-full group ${isEditable ? "cursor-pointer" : "cursor-default"}`}
+      >
+        <div className="flex gap-1.5 flex-wrap items-center">
+          {urls.slice(0, 3).map((url, i) => (
+            <SmartImageThumb key={`${url}-${i}`} url={url} alt={column || "Image"} />
+          ))}
+          {urls.length > 3 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(true);
+              }}
+              className="h-10 w-10 rounded border border-dashed border-border/40 flex items-center justify-center text-[10px] text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors"
+            >
+              +{urls.length - 3}
+            </button>
+          )}
+          {isEditable && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                startEdit();
+              }}
+              className="h-10 w-10 rounded border border-dashed border-border/40 flex items-center justify-center text-[10px] text-primary/0 group-hover:text-primary/50 group-hover:border-primary/30 transition-all"
+            >
+              Edit
+            </button>
+          )}
+        </div>
+        {urls.length === 0 && <span className="sr-only">{value}</span>}
+      </div>
+
+      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditMode(false); }}>
+        <DialogContent showCloseButton={false} className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between text-sm">
+              <span>{editMode ? "Edit Images" : `All Images (${urls.length})`}</span>
+              {isEditable && !editMode && (
+                <button
+                  onClick={startEdit}
+                  className="text-[11px] text-primary hover:underline font-normal"
+                >
+                  Edit
+                </button>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          {editMode ? (
+            <div className="flex flex-col gap-2 mt-2">
+              {draft.map((url, i) => (
+                <div key={i} className="flex items-start gap-2 p-2 rounded-md border bg-muted/20">
+                  {url && (
+                    <img
+                      src={url}
+                      alt={`Image ${i + 1}`}
+                      className="h-14 w-14 object-contain rounded border bg-white shrink-0"
+                      onError={(e) => {
+                        const img = e.target as HTMLImageElement;
+                        if (!img.src.includes("/api/image-proxy")) {
+                          img.src = proxyImgSrc(url);
+                        } else {
+                          img.style.display = "none";
+                        }
+                      }}
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <input
+                      value={url}
+                      onChange={(e) => {
+                        const next = [...draft];
+                        next[i] = e.target.value;
+                        setDraft(next);
+                      }}
+                      placeholder="Image URL"
+                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
+                    />
+                  </div>
+                  <button
+                    onClick={() => setDraft(draft.filter((_, idx) => idx !== i))}
+                    className="text-muted-foreground/40 hover:text-destructive shrink-0 mt-1"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() => setDraft([...draft, ""])}
+                className="text-[11px] text-primary/70 hover:text-primary transition-colors text-left"
+              >
+                + Add image
+              </button>
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <button onClick={() => { setEditMode(false); setOpen(false); }} className="text-xs text-muted-foreground hover:text-foreground px-3 py-1.5 rounded">
+                  Cancel
+                </button>
+                <button onClick={saveEdit} className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 font-medium">
+                  Save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              {urls.map((url, i) => (
+                <a
+                  key={i}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block rounded-lg border overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all group/card"
+                >
+                  <img
+                    src={url}
+                    data-original-url={url}
+                    alt={`Image ${i + 1}`}
+                    className="w-full h-40 object-contain bg-white p-2"
+                    onError={handleImgError}
+                  />
+                  <div className="p-2 bg-muted/30 border-t">
+                    <p className="text-[11px] font-medium truncate">Image {i + 1}</p>
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 // --- Editable Cell ---
 function EditableCell({
   value,
@@ -189,6 +447,19 @@ function EditableCell({
   }
 
   const str = String(value);
+  const previewUrls = getImagePreviewUrls(str, column);
+  if (previewUrls.length > 0) {
+    return (
+      <SmartImageUrlCell
+        urls={previewUrls}
+        value={str}
+        rowId={rowId}
+        column={column}
+        isEditable={isEditable}
+      />
+    );
+  }
+
   return (
     <div
       onClick={handleDoubleClick}
