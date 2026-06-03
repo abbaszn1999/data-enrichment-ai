@@ -118,18 +118,23 @@ export default function TeamPage() {
     if (!workspace) return;
     async function load() {
       try {
-        const m = await getWorkspaceMembers(workspace!.id);
+        const [m, i] = await Promise.all([
+          getWorkspaceMembers(workspace!.id).catch((err) => {
+            console.error("Failed to load members:", err);
+            return [] as WorkspaceMember[];
+          }),
+          getWorkspaceInvites(workspace!.id).catch((err) => {
+            console.error("Failed to load invites:", err);
+            return [] as any[];
+          }),
+        ]);
         setMembers(m);
-      } catch (err: any) {
-        console.error("Failed to load members:", err?.message || err?.code || JSON.stringify(err));
-      }
-      try {
-        const i = await getWorkspaceInvites(workspace!.id);
         setInvites(i);
       } catch (err: any) {
-        console.error("Failed to load invites:", err?.message || err?.code || JSON.stringify(err));
+        console.error("Failed to load team data:", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
     load();
   }, [workspace]);
