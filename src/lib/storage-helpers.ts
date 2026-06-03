@@ -105,6 +105,7 @@ export interface ImageClassificationItem {
   url: string;
   groupId: string;
   groupLabel: string;
+  sku?: string;
   confidence?: number;
   notes?: string;
 }

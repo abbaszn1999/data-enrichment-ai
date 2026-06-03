@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { calculateCallCost, costToCredits } from "@/lib/ai-pricing";
 import { createClient } from "@/lib/supabase-server";
-import { getOwnerSubscription, calculateCreditBalance, isSubscriptionActive } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
+import {
+  getWorkspaceContext,
+  isContextSubscriptionActive,
+  updateCachedCredits,
+} from "@/lib/workspace-context";
 
 async function getAI() {
   const { GoogleGenAI } = await import("@google/genai");
@@ -29,17 +33,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
     // Check credits before calling AI (per-user model)
+    let ctxHeaders: Record<string, string> | undefined;
+    let ctx: Awaited<ReturnType<typeof getWorkspaceContext>> | null = null;
     if (workspaceId) {
-      const ownerSub = await getOwnerSubscription(workspaceId);
-      if (ownerSub) {
-        if (!isSubscriptionActive(ownerSub.subscription.status)) {
-          return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402 });
-        }
-        const bal = calculateCreditBalance(ownerSub.subscription);
-        if (bal.total <= 0) {
-          return NextResponse.json({ error: "NO_CREDITS" }, { status: 402 });
-        }
+      if (!user) {
+        return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+      }
+      ctx = await getWorkspaceContext({ workspaceId, userId: user.id });
+      ctxHeaders = {
+        "X-Context-Source": ctx.source,
+        "Server-Timing": `ctx;dur=${ctx.durationMs.toFixed(1)}`,
+      };
+      if (!ctx.membershipRole || ctx.membershipRole === "viewer") {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403, headers: ctxHeaders });
+      }
+      if (!ctx.subscription || !isContextSubscriptionActive(ctx)) {
+        return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402, headers: ctxHeaders });
+      }
+      if ((ctx.credits?.total ?? 0) <= 0) {
+        return NextResponse.json({ error: "NO_CREDITS" }, { status: 402, headers: ctxHeaders });
       }
     }
 
@@ -146,22 +164,19 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
 
     // Deduct credits (per-user model)
     const credits = costToCredits(cost.totalCost);
-    if (workspaceId && credits > 0) {
+    if (workspaceId && credits > 0 && user && ctx) {
       try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        const ownerSub = await getOwnerSubscription(workspaceId);
-        if (ownerSub && isSubscriptionActive(ownerSub.subscription?.status)) {
-          const admin = createAdminClient();
-          await admin.rpc("deduct_user_credits", {
-            p_user_id: ownerSub.ownerId,
-            p_amount: credits,
-            p_workspace_id: workspaceId,
-            p_operation: "ai_function",
-            p_uid: user?.id,
-            p_details: { command: command.slice(0, 200) },
-          });
-        }
+        const admin = createAdminClient();
+        await admin.rpc("deduct_user_credits", {
+          p_user_id: ctx.subscription?.user_id ?? ctx.ownerId ?? user.id,
+          p_amount: credits,
+          p_workspace_id: workspaceId,
+          p_operation: "ai_function",
+          p_uid: user.id,
+          p_details: { command: command.slice(0, 200) },
+        });
+        const remaining = Math.max(0, (ctx.credits?.total ?? 0) - credits);
+        updateCachedCredits(workspaceId, remaining);
       } catch (err: any) {
         console.warn(`[AI Function] Credit deduction failed: ${err?.message}`);
       }
@@ -174,7 +189,8 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
         totalCredits: credits,
         totalTokens: cost.usage.totalTokens,
       },
-    });
+    },
+    { headers: ctxHeaders });
   } catch (err: any) {
     console.error("[AI Function] Error:", err);
     return NextResponse.json({ error: err?.message || "Failed to process command" }, { status: 500 });

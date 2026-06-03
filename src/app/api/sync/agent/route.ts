@@ -16,14 +16,13 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import {
-  calculateCreditBalance,
-  getOwnerSubscription,
-  isSubscriptionActive,
-} from "@/lib/stripe";
+  getWorkspaceContext,
+  isContextSubscriptionActive,
+  updateCachedCredits,
+} from "@/lib/workspace-context";
 
 import type {
   AgentPlanV2,
-  IntegrationRecord,
   SyncSheet,
   SyncWorkingMemoryV2,
 } from "@/lib/sync/core/types";
@@ -212,31 +211,6 @@ function normalizeWorkingMemory(
   };
 }
 
-async function requireWorkspaceMember(workspaceId: string, userId: string) {
-  const admin = createAdminClient();
-  const { data: member, error } = await admin
-    .from("workspace_members")
-    .select("role")
-    .eq("workspace_id", workspaceId)
-    .eq("user_id", userId)
-    .single();
-  if (error || !member) throw new Error("Forbidden");
-  return admin;
-}
-
-async function loadIntegration(
-  admin: ReturnType<typeof createAdminClient>,
-  workspaceId: string
-): Promise<IntegrationRecord | null> {
-  const { data, error } = await admin
-    .from("workspace_integrations")
-    .select("provider, integration_name, base_url, config")
-    .eq("workspace_id", workspaceId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  return data ? (data as unknown as IntegrationRecord) : null;
-}
-
 function createNdjsonStream(
   executor: (push: (event: StreamEvent) => void) => Promise<void>
 ): ReadableStream<Uint8Array> {
@@ -329,29 +303,31 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Subscription + credits gate
-  const ownerSub = await getOwnerSubscription(workspaceId);
-  if (!ownerSub || !ownerSub.subscription) {
-    return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402 });
+  const ctx = await getWorkspaceContext({ workspaceId, userId: user.id });
+  const headers: Record<string, string> = {
+    "X-Context-Source": ctx.source,
+    "Server-Timing": `ctx;dur=${ctx.durationMs.toFixed(1)}`,
+  };
+
+  // Membership gate
+  if (!ctx.membershipRole) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403, headers });
   }
-  if (!isSubscriptionActive(ownerSub.subscription.status)) {
-    return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402 });
-  }
-  const balance = calculateCreditBalance(ownerSub.subscription);
-  if (balance.total <= 0) {
-    return NextResponse.json({ error: "NO_CREDITS" }, { status: 402 });
+  if (ctx.membershipRole === "viewer") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403, headers });
   }
 
-  // Workspace membership + integration load
-  let admin: ReturnType<typeof createAdminClient>;
-  let integration: IntegrationRecord | null = null;
-  try {
-    admin = await requireWorkspaceMember(workspaceId, user.id);
-    integration = await loadIntegration(admin, workspaceId);
-  } catch (err) {
-    const msg = (err as Error).message || "Forbidden";
-    return NextResponse.json({ error: msg }, { status: msg === "Forbidden" ? 403 : 500 });
+  // Subscription + credits gate
+  if (!ctx.subscription || !isContextSubscriptionActive(ctx)) {
+    return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402, headers });
   }
+  if ((ctx.credits?.total ?? 0) <= 0) {
+    return NextResponse.json({ error: "NO_CREDITS" }, { status: 402, headers });
+  }
+
+  // Admin client for downstream calls/tracing
+  const admin = createAdminClient();
+  const integration = ctx.integration;
 
   const sheet: SyncSheet | null =
     currentSheet && Array.isArray(currentSheet.columns) && Array.isArray(currentSheet.rows)
@@ -602,7 +578,7 @@ export async function POST(request: NextRequest) {
       const creditsToDeduct = Math.max(0, billingTracker.totalCredits);
       if (creditsToDeduct > 0) {
         await admin.rpc("deduct_user_credits", {
-          p_user_id: ownerSub.subscription.user_id,
+          p_user_id: ctx.subscription.user_id,
           p_amount: creditsToDeduct,
           p_workspace_id: workspaceId,
           p_operation: "ai_function",
@@ -611,6 +587,8 @@ export async function POST(request: NextRequest) {
           p_entity_id: null,
           p_details: { runId, mode, steps: executedToolNames },
         });
+        const remaining = Math.max(0, (ctx.credits?.total ?? 0) - creditsToDeduct);
+        updateCachedCredits(workspaceId, remaining);
       }
     } catch (err) {
       console.warn("[sync agent] credit deduction failed:", (err as Error).message);
@@ -629,6 +607,7 @@ export async function POST(request: NextRequest) {
       "X-Accel-Buffering": "no",
       Connection: "keep-alive",
       "X-Run-Id": runId,
+      ...headers,
     },
   });
 }

@@ -242,120 +242,169 @@ export function Sidebar() {
       };
 
       let completedCount = 0;
+      let rowIndex = 0;
+      let stopAll = false;
 
-      for (const r of enrichableRows) {
-        // Check if user stopped enrichment
-        if (controller.signal.aborted) break;
+      // Define concurrent worker to pull and process tasks from the queue
+      const runWorker = async () => {
+        while (!stopAll && !controller.signal.aborted) {
+          const currentIdx = rowIndex++;
+          if (currentIdx >= enrichableRows.length) break;
 
-        const MAX_FIELD_CHARS = 800;
-        const filteredData: Record<string, string> = {};
-        for (const col of sourceColumns) {
-          if (enrichedColIds.has(col)) {
-            const val = r.enrichedData?.[col];
-            if (val !== undefined && val !== null && val !== "") {
-              if (Array.isArray(val)) {
-                filteredData[col] = val
-                  .map((item) =>
-                    typeof item === "object" && item !== null
-                      ? (item.uri || item.imageUrl || item.pageUrl || item.title || JSON.stringify(item))
-                      : String(item)
-                  )
-                  .join(", ");
-              } else {
-                filteredData[col] = String(val);
+          const r = enrichableRows[currentIdx];
+          setRowStatus(r.id, "processing");
+
+          try {
+            const MAX_FIELD_CHARS = 800;
+            const filteredData: Record<string, string> = {};
+            for (const col of sourceColumns) {
+              if (enrichedColIds.has(col)) {
+                const val = r.enrichedData?.[col];
+                if (val !== undefined && val !== null && val !== "") {
+                  if (Array.isArray(val)) {
+                    filteredData[col] = val
+                      .map((item) =>
+                        typeof item === "object" && item !== null
+                          ? (item.uri || item.imageUrl || item.pageUrl || item.title || JSON.stringify(item))
+                          : String(item)
+                      )
+                      .join(", ");
+                  } else {
+                    filteredData[col] = String(val);
+                  }
+                }
+              } else if (r.originalData[col] !== undefined) {
+                filteredData[col] = r.originalData[col];
+              }
+              if (filteredData[col] && filteredData[col].length > MAX_FIELD_CHARS) {
+                filteredData[col] = filteredData[col].slice(0, MAX_FIELD_CHARS);
               }
             }
-          } else if (r.originalData[col] !== undefined) {
-            filteredData[col] = r.originalData[col];
-          }
-          if (filteredData[col] && filteredData[col].length > MAX_FIELD_CHARS) {
-            filteredData[col] = filteredData[col].slice(0, MAX_FIELD_CHARS);
-          }
-        }
 
-        const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich`, {
-          method: "POST",
-          headers: enrichHeaders,
-          signal: controller.signal,
-          body: JSON.stringify({
-            row: { id: r.id, rowIndex: r.rowIndex, originalData: filteredData },
-            ...commonPayload,
-            userId,
-          }),
-        });
-
-        if (response.status === 402) {
-          let errorCode = "NO_CREDITS";
-          try {
-            const errorBody = await response.json();
-            if (typeof errorBody?.error === "string" && errorBody.error) {
-              errorCode = errorBody.error;
-            }
-          } catch {}
-
-          setIsEnriching(false);
-          setLastError(errorCode);
-
-          if (errorCode === "INACTIVE_SUBSCRIPTION") {
-            toast.error("Subscription inactive", {
-              description: "Your subscription is not active. Renew or reactivate your subscription to use AI credits.",
-              duration: 8000,
+            const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich`, {
+              method: "POST",
+              headers: enrichHeaders,
+              signal: controller.signal,
+              body: JSON.stringify({
+                row: { id: r.id, rowIndex: r.rowIndex, originalData: filteredData },
+                ...commonPayload,
+                userId,
+              }),
             });
-          } else {
-            toast.error("No credits remaining", {
-              description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
-              duration: 8000,
-            });
-          }
-          return;
-        }
 
-        completedCount++;
-
-        if (!response.ok) {
-          let errorMsg = `API error: ${response.status}`;
-          try {
-            const errBody = await response.json();
-            if (typeof errBody?.error === "string" && errBody.error) {
-              errorMsg = errBody.error;
+            if (controller.signal.aborted || stopAll) {
+              setRowStatus(r.id, "pending");
+              break;
             }
-          } catch {}
-          setRowStatus(r.id, "error", errorMsg);
-          setEnrichProgress(completedCount, enrichableRows.length);
-          incrementError();
-          if (response.status >= 500) setLastError(errorMsg);
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          continue;
-        }
 
-        const result = await response.json();
+            if (response.status === 402) {
+              stopAll = true; // Stop all other workers immediately
+              let errorCode = "NO_CREDITS";
+              try {
+                const errorBody = await response.json();
+                if (typeof errorBody?.error === "string" && errorBody.error) {
+                  errorCode = errorBody.error;
+                }
+              } catch {}
 
-        if (result.status === "done" && result.data) {
-          const enrichedResult: Record<string, any> = {};
-          for (const [key, value] of Object.entries(result.data as Record<string, any>)) {
-            if (key.startsWith("existing__")) {
-              const colName = key.replace("existing__", "");
-              updateCellValue(r.id, colName, String(value ?? ""));
+              setIsEnriching(false);
+              setLastError(errorCode);
+
+              if (errorCode === "INACTIVE_SUBSCRIPTION") {
+                toast.error("Subscription inactive", {
+                  description: "Your subscription is not active. Renew or reactivate your subscription to use AI credits.",
+                  duration: 8000,
+                });
+              } else {
+                toast.error("No credits remaining", {
+                  description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
+                  duration: 8000,
+                });
+              }
+              break;
+            }
+
+            completedCount++;
+
+            if (!response.ok) {
+              let errorMsg = `API error: ${response.status}`;
+              try {
+                const errBody = await response.json();
+                if (typeof errBody?.error === "string" && errBody.error) {
+                  errorMsg = errBody.error;
+                }
+              } catch {}
+              setRowStatus(r.id, "error", errorMsg);
+              setEnrichProgress(completedCount, enrichableRows.length);
+              incrementError();
+              if (response.status >= 500) setLastError(errorMsg);
+              
+              // Worker cooldown on error
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+              continue;
+            }
+
+            const result = await response.json();
+
+            if (controller.signal.aborted || stopAll) {
+              setRowStatus(r.id, "pending");
+              break;
+            }
+
+            if (result.status === "done" && result.data) {
+              const enrichedResult: Record<string, any> = {};
+              for (const [key, value] of Object.entries(result.data as Record<string, any>)) {
+                if (key.startsWith("existing__")) {
+                  const colName = key.replace("existing__", "");
+                  updateCellValue(r.id, colName, String(value ?? ""));
+                } else {
+                  enrichedResult[key] = value;
+                }
+              }
+              if (Object.keys(enrichedResult).length > 0) {
+                setRowEnrichedData(r.id, enrichedResult);
+              } else {
+                setRowStatus(r.id, "done");
+              }
+              setEnrichProgress(completedCount, enrichableRows.length);
+              invalidateCredits();
             } else {
-              enrichedResult[key] = value;
+              setRowStatus(r.id, "error", result.error || "Unknown error");
+              setEnrichProgress(completedCount, enrichableRows.length);
+              incrementError();
+              if (result.error) setLastError(result.error);
             }
-          }
-          if (Object.keys(enrichedResult).length > 0) {
-            setRowEnrichedData(r.id, enrichedResult);
-          } else {
-            setRowStatus(r.id, "done");
-          }
-          setEnrichProgress(completedCount, enrichableRows.length);
-          invalidateCredits();
-        } else {
-          setRowStatus(r.id, "error", result.error || "Unknown error");
-          setEnrichProgress(completedCount, enrichableRows.length);
-          incrementError();
-          if (result.error) setLastError(result.error);
-        }
 
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+            // Small worker cooldown to prevent rate limiting
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          } catch (err: any) {
+            if (err instanceof DOMException && err.name === "AbortError") {
+              setRowStatus(r.id, "pending");
+              break;
+            }
+            completedCount++;
+            setRowStatus(r.id, "error", err?.message || "Enrichment request failed");
+            setEnrichProgress(completedCount, enrichableRows.length);
+            incrementError();
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
+        }
+      };
+
+      // Run up to 5 concurrent workers
+      const CONCURRENCY_LIMIT = 5;
+      const workers: Promise<void>[] = [];
+      const numWorkers = Math.min(CONCURRENCY_LIMIT, enrichableRows.length);
+
+      for (let i = 0; i < numWorkers; i++) {
+        // Slightly stagger worker startup to avoid instant rate limiting spikes
+        if (i > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        workers.push(runWorker());
       }
+
+      await Promise.all(workers);
 
       setIsEnriching(false);
       setEnrichingContext(null, []);

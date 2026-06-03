@@ -44,7 +44,7 @@ function exportToCsv(
   result: ImageClassificationJson,
   fallbackUrls: Record<string, string>
 ): string {
-  const header = ["group_id", "url image"];
+  const header = ["Group Name", "SKU", "Image URL"];
   const rows = [header.join(",")];
 
   const escape = (raw: unknown) => {
@@ -53,12 +53,15 @@ function exportToCsv(
   };
 
   for (const g of result.groups) {
-    const urls = result.items
-      .filter((it) => it.groupId === g.id)
-      .map((it) => it.url || fallbackUrls[it.id])
-      .filter((u): u is string => !!u && u.length > 0)
-      .join("\n\n");
-    rows.push([escape(g.label), escape(urls)].join(","));
+    const items = result.items.filter((it) => it.groupId === g.id);
+    const urls = items.map((it) => it.url || fallbackUrls[it.id] || "").filter(Boolean);
+    const skus = Array.from(new Set(items.map((it) => it.sku).filter(Boolean)));
+
+    rows.push([
+      escape(g.label),
+      escape(skus.join("\n\n")),
+      escape(urls.join("\n\n"))
+    ].join(","));
   }
   return rows.join("\n");
 }
@@ -75,6 +78,51 @@ export default function ImageClassifyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  // Smooth real-time progress bar simulation
+  useEffect(() => {
+    if (session?.status !== "processing" && session?.status !== "pending") {
+      if (session?.status === "completed") {
+        setProgress(100);
+      }
+      return;
+    }
+
+    // Reset progress if it was completed or not started
+    setProgress((prev) => (prev >= 100 ? 5 : prev || 5));
+
+    const interval = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 95) return prev; // Hold at 95% until complete
+        if (prev < 30) return prev + Math.random() * 8 + 4; // Fast start (0% - 30%)
+        if (prev < 65) return prev + Math.random() * 4 + 2; // Medium pace (30% - 65%)
+        if (prev < 85) return prev + Math.random() * 1.5 + 0.5; // Slow down (65% - 85%)
+        return prev + Math.random() * 0.4 + 0.1; // Extremely slow close to the end (85% - 95%)
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [session?.status]);
+
+  const progressMessage = useMemo(() => {
+    if (session?.status === "pending" || progress < 12) {
+      return "Initializing classification session...";
+    }
+    if (progress < 35) {
+      return "Downloading images and preparing AI model payload...";
+    }
+    if (progress < 60) {
+      return "Analyzing visual features and extracting SKU codes...";
+    }
+    if (progress < 85) {
+      return "AI is grouping matching products and identifying variants...";
+    }
+    if (progress < 95) {
+      return "Structuring catalog details and compiling final metadata...";
+    }
+    return "Finishing up and saving results to database...";
+  }, [progress, session?.status]);
 
   // Initial + polling load
   useEffect(() => {
@@ -174,6 +222,58 @@ export default function ImageClassifyDetailPage() {
     );
   }
 
+  if (session.status === "pending" || session.status === "processing") {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[85vh] px-4">
+        <div className="flex flex-col items-center justify-center py-16 px-4 max-w-lg mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full">
+          <Card className="w-full p-8 border border-primary/10 bg-card/60 backdrop-blur-md shadow-2xl rounded-2xl flex flex-col items-center text-center space-y-6 relative overflow-hidden">
+            {/* Glowing decorative background elements */}
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-primary/10 rounded-full blur-3xl -z-10" />
+
+            {/* Pulsing AI Circle */}
+            <div className="relative flex items-center justify-center h-24 w-24">
+              <div className="absolute inset-0 rounded-full bg-primary/5 animate-ping opacity-75 duration-1000" />
+              <div className="absolute inset-2 rounded-full bg-primary/10 animate-pulse duration-1000" />
+              <div className="relative h-16 w-16 rounded-full bg-gradient-to-tr from-primary via-blue-500 to-indigo-600 flex items-center justify-center text-primary-foreground shadow-xl">
+                <Cpu className="h-8 w-8 animate-pulse" />
+              </div>
+            </div>
+
+            <div className="space-y-2 w-full">
+              <h3 className="text-xl font-bold tracking-tight bg-gradient-to-r from-foreground via-foreground/90 to-muted-foreground bg-clip-text">
+                Analyzing Product Images
+              </h3>
+              <p className="text-xs text-muted-foreground leading-relaxed h-10 flex items-center justify-center font-medium max-w-sm mx-auto">
+                {progressMessage}
+              </p>
+            </div>
+
+            {/* Progress Bar Container */}
+            <div className="w-full space-y-3 px-2">
+              <div className="flex justify-between items-center text-xs font-semibold px-1">
+                <span className="text-primary font-mono text-sm bg-primary/10 px-2 py-0.5 rounded-full">{Math.round(progress)}%</span>
+                <span className="text-muted-foreground font-medium animate-pulse">Running AI Agent...</span>
+              </div>
+              <div className="w-full h-3 bg-muted rounded-full overflow-hidden border border-muted/50 p-[1px]">
+                <div
+                  className="h-full bg-gradient-to-r from-primary via-blue-500 to-indigo-600 rounded-full transition-all duration-1000 ease-out shadow-inner"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Bottom Info */}
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground/80 bg-muted/40 px-4 py-2 rounded-full border border-muted/50 font-medium">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+              <span>This page will update automatically</span>
+              {polling && <span className="text-[10px] text-muted-foreground/60">· polling</span>}
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
@@ -208,18 +308,6 @@ export default function ImageClassifyDetailPage() {
           </div>
         )}
       </div>
-
-      {(session.status === "pending" || session.status === "processing") && (
-        <Card className="p-4 flex items-center gap-3 border-blue-200 bg-blue-50/40 dark:bg-blue-950/20">
-          <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-          <div className="text-xs">
-            {session.status === "pending"
-              ? "Waiting to start…"
-              : "Classifying images with AI. This page refreshes automatically."}
-            {polling && <span className="text-muted-foreground ml-1">(polling)</span>}
-          </div>
-        </Card>
-      )}
 
       {session.status === "failed" && (
         <Card className="p-4 flex items-start gap-3 border-red-200 bg-red-50/40 dark:bg-red-950/20">
@@ -280,52 +368,68 @@ export default function ImageClassifyDetailPage() {
           </div>
 
           <div className="space-y-5">
-            {groupedItems.map(({ group, items }) => (
-              <Card key={group.id} className="p-5 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-sm font-semibold flex items-center gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-                      {group.label}
-                    </h2>
-                    {group.description && (
-                      <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {group.description}
-                      </p>
-                    )}
+            {groupedItems.map(({ group, items }) => {
+              const uniqueSkus = Array.from(new Set(items.map((it) => it.sku).filter(Boolean)));
+              return (
+                <Card key={group.id} className="p-5 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-semibold flex items-center gap-2">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                        {group.label}
+                      </h2>
+                      {group.description && (
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          {group.description}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {uniqueSkus.map((sku) => (
+                        <Badge key={sku} variant="outline" className="text-[10px] bg-muted/40 font-mono text-primary font-semibold border-primary/20">
+                          SKU: {sku}
+                        </Badge>
+                      ))}
+                      <Badge variant="secondary" className="text-[10px]">
+                        {items.length} image{items.length === 1 ? "" : "s"}
+                      </Badge>
+                    </div>
                   </div>
-                  <Badge variant="secondary" className="text-[10px]">
-                    {items.length} image{items.length === 1 ? "" : "s"}
-                  </Badge>
-                </div>
                 <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 gap-2">
                   {items.map((it) => (
-                    <div
-                      key={it.id}
-                      className="relative aspect-square rounded-md overflow-hidden bg-muted"
-                      title={`${it.filename}${
-                        it.confidence != null
-                          ? ` (${(it.confidence * 100).toFixed(0)}%)`
-                          : ""
-                      }`}
-                    >
-                      {thumbUrls[it.id] ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={thumbUrls[it.id]}
-                          alt={it.filename}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-muted-foreground/40">
-                          <ImageIcon className="h-4 w-4" />
-                        </div>
-                      )}
+                    <div key={it.id} className="flex flex-col gap-1 min-w-0">
+                      <div
+                        className="relative aspect-square rounded-md overflow-hidden bg-muted w-full"
+                        title={`${it.filename}${
+                          it.confidence != null
+                            ? ` (${(it.confidence * 100).toFixed(0)}%)`
+                            : ""
+                        }`}
+                      >
+                        {thumbUrls[it.id] ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={thumbUrls[it.id]}
+                            alt={it.filename}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-muted-foreground/40">
+                            <ImageIcon className="h-4 w-4" />
+                          </div>
+                        )}
+                      </div>
+                      <span
+                        className="text-[9px] text-muted-foreground text-center truncate font-mono bg-muted/40 py-0.5 px-1 rounded border border-muted/50"
+                        title={it.sku || "No SKU"}
+                      >
+                        {it.sku || "—"}
+                      </span>
                     </div>
                   ))}
                 </div>
               </Card>
-            ))}
+            )})}
           </div>
         </>
       )}

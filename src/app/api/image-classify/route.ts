@@ -16,10 +16,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import {
-  calculateCreditBalance,
-  getOwnerSubscription,
-  isSubscriptionActive,
-} from "@/lib/stripe";
+  getWorkspaceContext,
+  isContextSubscriptionActive,
+} from "@/lib/workspace-context";
 import {
   calculateCallCost,
   costToCredits,
@@ -65,6 +64,7 @@ type GeminiResult = {
   items: Array<{
     id: string;
     groupId: string;
+    sku?: string;
     confidence?: number;
     notes?: string;
   }>;
@@ -79,6 +79,8 @@ function buildSystemInstruction(): string {
     "When uncertain between merging and splitting, choose splitting. Over-splitting is better than mixing unrelated products.",
     "Every image MUST be assigned to exactly one group.",
     "Return JSON only, matching the provided schema. Do not invent image ids; use only the ids that appear in the user prompt.",
+    "For each image, you must also extract the SKU code from the image filename. If the customer's custom instruction explains where the SKU is located in the filename, follow it exactly. If there is no custom instruction about the SKU, identify the most plausible part of the filename that represents an SKU (e.g. model numbers, alphanumeric strings, or patterns like COSH261032-RAIN-11, HK5000030_584, cw637) and output it as the 'sku' field for the item. If no SKU can be identified, output an empty string.",
+    "CRITICAL RULE: If multiple images share the exact same extracted SKU code, they MUST be assigned to the exact same product group, as they represent the same product or variant. Use the SKU as a strong constraint for grouping."
   ].join(" ");
 }
 
@@ -190,6 +192,10 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
             type: "string",
             description: "The id of the precise product group this image belongs to.",
           },
+          sku: {
+            type: "string",
+            description: "The SKU code extracted from the image filename, following the customer's instruction if provided, or otherwise identifying the most plausible SKU code in the filename.",
+          },
           confidence: {
             type: "number",
             description: "Confidence from 0 to 1 for this image's group assignment.",
@@ -258,33 +264,25 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const ctx = await getWorkspaceContext({ workspaceId, userId: user.id });
+  const headers: Record<string, string> = {
+    "X-Context-Source": ctx.source,
+    "Server-Timing": `ctx;dur=${ctx.durationMs.toFixed(1)}`,
+  };
+
   // Subscription + credits gate (mirrors /api/sync/agent)
-  const ownerSub = await getOwnerSubscription(workspaceId);
-  if (!ownerSub || !ownerSub.subscription) {
-    return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402 });
+  if (!ctx.subscription || !isContextSubscriptionActive(ctx)) {
+    return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402, headers });
   }
-  if (!isSubscriptionActive(ownerSub.subscription.status)) {
-    return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402 });
-  }
-  const balance = calculateCreditBalance(ownerSub.subscription);
-  if (balance.total <= 0) {
-    return NextResponse.json({ error: "NO_CREDITS" }, { status: 402 });
+  if ((ctx.credits?.total ?? 0) <= 0) {
+    return NextResponse.json({ error: "NO_CREDITS" }, { status: 402, headers });
   }
 
   // Workspace membership
+  if (!ctx.membershipRole || ctx.membershipRole === "viewer") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403, headers });
+  }
   const admin = createAdminClient();
-  const { data: member, error: memberErr } = await admin
-    .from("workspace_members")
-    .select("role")
-    .eq("workspace_id", workspaceId)
-    .eq("user_id", user.id)
-    .single();
-  if (memberErr || !member) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  if (member.role === "viewer") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   // Verify session exists and belongs to workspace
   const { data: sessionRow, error: sessionErr } = await admin
@@ -293,7 +291,7 @@ export async function POST(request: NextRequest) {
     .eq("id", sessionId)
     .single();
   if (sessionErr || !sessionRow || sessionRow.workspace_id !== workspaceId) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    return NextResponse.json({ error: "Session not found" }, { status: 404, headers });
   }
 
   // Mark processing
@@ -391,12 +389,13 @@ export async function POST(request: NextRequest) {
 
     const itemByImageId = new Map<
       string,
-      { groupId: string; confidence?: number; notes?: string }
+      { groupId: string; sku?: string; confidence?: number; notes?: string }
     >();
     for (const it of parsed.items || []) {
       if (it && typeof it.id === "string") {
         itemByImageId.set(it.id, {
           groupId: it.groupId,
+          sku: it.sku,
           confidence: it.confidence,
           notes: it.notes,
         });
@@ -449,6 +448,7 @@ export async function POST(request: NextRequest) {
         url: urlByPath.get(img.storagePath) ?? "",
         groupId,
         groupLabel: group.label,
+        sku: it?.sku ?? "",
         confidence: it?.confidence,
         notes: it?.notes,
       });
@@ -491,7 +491,7 @@ export async function POST(request: NextRequest) {
     if (credits > 0) {
       try {
         await admin.rpc("deduct_user_credits", {
-          p_user_id: ownerSub.subscription.user_id,
+          p_user_id: ctx.subscription?.user_id ?? ctx.ownerId ?? user.id,
           p_amount: credits,
           p_workspace_id: workspaceId,
           p_operation: "image_classification",
@@ -512,13 +512,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ result });
+    return NextResponse.json({ result }, { headers });
   } catch (err) {
     const message = (err as Error).message || "Classification failed";
     await admin
       .from("image_classification_sessions")
       .update({ status: "failed", error_message: message })
       .eq("id", sessionId);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500, headers });
   }
 }

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
-import { getOwnerSubscription, isSubscriptionActive, invalidateSubscriptionCache } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
+import {
+  getWorkspaceContext,
+  isContextSubscriptionActive,
+  updateCachedCredits,
+} from "@/lib/workspace-context";
 
 export async function POST(request: Request) {
   try {
@@ -18,20 +22,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    // Get workspace owner's subscription
-    const ownerSub = await getOwnerSubscription(workspaceId);
-    if (!ownerSub) {
-      return NextResponse.json({ error: "No subscription found" }, { status: 404 });
+    const ctx = await getWorkspaceContext({ workspaceId, userId: user.id });
+    const headers: Record<string, string> = {
+      "X-Context-Source": ctx.source,
+      "Server-Timing": `ctx;dur=${ctx.durationMs.toFixed(1)}`,
+    };
+
+    if (!ctx.membershipRole || ctx.membershipRole === "viewer") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403, headers });
     }
 
-    if (!isSubscriptionActive(ownerSub.subscription?.status)) {
-      return NextResponse.json({ error: "An active subscription is required to use credits" }, { status: 402 });
+    if (!ctx.subscription || !isContextSubscriptionActive(ctx)) {
+      return NextResponse.json({ error: "An active subscription is required to use credits" }, { status: 402, headers });
     }
 
     // Use atomic RPC to deduct credits
     const admin = createAdminClient();
     const { data: result, error } = await admin.rpc("deduct_user_credits", {
-      p_user_id: ownerSub.ownerId,
+      p_user_id: ctx.subscription.user_id,
       p_amount: amount,
       p_workspace_id: workspaceId,
       p_operation: operation,
@@ -42,7 +50,7 @@ export async function POST(request: Request) {
     });
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: error.message }, { status: 500, headers });
     }
 
     if (!result?.success) {
@@ -50,17 +58,17 @@ export async function POST(request: Request) {
         error: result?.error || "Deduction failed",
         remaining: result?.remaining ?? 0,
         required: amount,
-      }, { status: 402 });
+      }, { status: 402, headers });
     }
 
-    // Invalidate cached subscription data so next balance check reflects the deduction
-    invalidateSubscriptionCache(workspaceId);
+    // Update cache with remaining credits
+    updateCachedCredits(workspaceId, result.remaining ?? 0);
 
     return NextResponse.json({
       success: true,
       creditsUsed: amount,
       remaining: result.remaining,
-    });
+    }, { headers });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || "Internal server error" }, { status: 500 });
   }

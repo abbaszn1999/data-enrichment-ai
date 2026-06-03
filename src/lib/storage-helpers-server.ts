@@ -46,12 +46,46 @@ export async function saveProjectJsonServer(workspaceId: string, sessionId: stri
   await saveJsonToStorageServer(getProjectStoragePath(workspaceId, sessionId), data);
 }
 
+// ─── Server-side Caching of Counts (prevents downloading massive JSONs repeatedly) ───
+const countsCache = new Map<string, { count: number; ts: number }>();
+const COUNTS_TTL_MS = 3 * 60 * 1000; // 3 minutes
+
+export function invalidateCachedCounts(workspaceId: string) {
+  countsCache.delete(`products:${workspaceId}`);
+  countsCache.delete(`categories:${workspaceId}`);
+}
+
+export async function getCachedProductsCountServer(workspaceId: string): Promise<number> {
+  const key = `products:${workspaceId}`;
+  const cached = countsCache.get(key);
+  if (cached && Date.now() - cached.ts < COUNTS_TTL_MS) {
+    return cached.count;
+  }
+  const products = await loadProductsJsonServer(workspaceId);
+  const count = products.length;
+  countsCache.set(key, { count, ts: Date.now() });
+  return count;
+}
+
+export async function getCachedCategoriesCountServer(workspaceId: string): Promise<number> {
+  const key = `categories:${workspaceId}`;
+  const cached = countsCache.get(key);
+  if (cached && Date.now() - cached.ts < COUNTS_TTL_MS) {
+    return cached.count;
+  }
+  const categories = await loadCategoriesJsonServer(workspaceId);
+  const count = categories.length;
+  countsCache.set(key, { count, ts: Date.now() });
+  return count;
+}
+
 export async function loadProductsJsonServer(workspaceId: string): Promise<MasterProductJson[]> {
   const data = await loadJsonFromStorageServer<MasterProductJson[]>(getProductsStoragePath(workspaceId));
   return data ?? [];
 }
 
 export async function saveProductsJsonServer(workspaceId: string, products: MasterProductJson[]): Promise<void> {
+  invalidateCachedCounts(workspaceId);
   await saveJsonToStorageServer(getProductsStoragePath(workspaceId), products);
 }
 

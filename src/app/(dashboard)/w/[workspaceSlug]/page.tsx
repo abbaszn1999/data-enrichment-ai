@@ -18,8 +18,6 @@ import {
 import { useWorkspaceContext } from "./layout";
 import { useRole } from "@/hooks/use-role";
 import { useCredits } from "@/hooks/use-credits";
-import { createClient } from "@/lib/supabase-browser";
-import { loadProductsJson, loadCategoriesJson } from "@/lib/storage-helpers";
 import { formatCredits } from "@/lib/format-credits";
 
 // ─── Animated Counter Hook ───
@@ -165,36 +163,20 @@ export default function WorkspaceDashboardPage() {
     if (wsLoading) return;
     if (!workspace) { setLoading(false); return; }
 
-    const supabase = createClient();
     let cancelled = false;
 
     async function loadStats() {
       try {
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-
-        const [products, categories, sessionsRes, membersRes, txRes, importSessionsRes] = await Promise.all([
-          loadProductsJson(workspace!.id),
-          loadCategoriesJson(workspace!.id),
-          supabase.from("import_sessions").select("id", { count: "exact", head: true }).eq("workspace_id", workspace!.id),
-          supabase.from("workspace_members").select("id", { count: "exact", head: true }).eq("workspace_id", workspace!.id),
-          supabase.from("credit_transactions").select("credits_used, operation, created_at").eq("workspace_id", workspace!.id).gte("created_at", thirtyDaysAgo.toISOString()).order("created_at", { ascending: true }),
-          supabase.from("import_sessions").select("id, created_at").eq("workspace_id", workspace!.id).gte("created_at", thirtyDaysAgo.toISOString()).order("created_at", { ascending: true }),
-        ]);
+        const res = await fetch(`/api/dashboard/summary?workspaceId=${workspace!.id}`);
+        if (!res.ok) throw new Error("Failed to load dashboard summary");
+        const data = await res.json();
 
         if (cancelled) return;
 
-        setStats({
-          totalProducts: products.length,
-          totalCategories: categories.length,
-          recentImports: sessionsRes.count ?? 0,
-          teamMembers: membersRes.count ?? 0,
-        });
+        setStats(data.stats);
 
         // Build 7-day credit usage chart data
-        const txData = txRes.data ?? [];
+        const txData = data.creditTransactions ?? [];
         const dailyMap = new Map<string, number>();
         for (let i = 0; i < 7; i++) {
           const d = new Date();
@@ -218,7 +200,7 @@ export default function WorkspaceDashboardPage() {
         setOperationBreakdown(Array.from(opMap.entries()).map(([operation, total]) => ({ operation, total })).sort((a, b) => b.total - a.total).slice(0, 5));
 
         // Build 30-day import sessions histogram
-        const impData = importSessionsRes.data ?? [];
+        const impData = data.importSessions ?? [];
         const weekMap = new Map<string, number>();
         for (let i = 0; i < 4; i++) {
           const wStart = new Date();
