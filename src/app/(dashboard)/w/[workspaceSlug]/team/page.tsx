@@ -39,6 +39,7 @@ import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
 import { useAuth } from "@/hooks/use-auth";
 import { useSubscription } from "@/hooks/use-subscription";
+import { useTeam } from "@/hooks/use-team";
 import {
   getWorkspaceMembers,
   getWorkspaceInvites,
@@ -62,9 +63,9 @@ export default function TeamPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { subscription, plan, isActive, isLoading: subscriptionLoading } = useSubscription(workspace?.id ?? null);
-  const [members, setMembers] = useState<WorkspaceMember[]>([]);
-  const [invites, setInvites] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  const { members, invites, isLoading: teamLoading, refresh: refreshTeam } = useTeam(workspace?.id ?? null);
+
   const [showInvite, setShowInvite] = useState(false);
   const [limitDialogOpen, setLimitDialogOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -107,37 +108,13 @@ export default function TeamPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to resend");
       alert(data.emailSent ? "Invite email resent successfully!" : "Could not send email. Share the invite link manually.");
+      refreshTeam();
     } catch (err: any) {
       alert(err?.message || "Failed to resend invite");
     } finally {
       setResendingInvite(null);
     }
   };
-
-  useEffect(() => {
-    if (!workspace) return;
-    async function load() {
-      try {
-        const [m, i] = await Promise.all([
-          getWorkspaceMembers(workspace!.id).catch((err) => {
-            console.error("Failed to load members:", err);
-            return [] as WorkspaceMember[];
-          }),
-          getWorkspaceInvites(workspace!.id).catch((err) => {
-            console.error("Failed to load invites:", err);
-            return [] as any[];
-          }),
-        ]);
-        setMembers(m);
-        setInvites(i);
-      } catch (err: any) {
-        console.error("Failed to load team data:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [workspace]);
 
   const handleInvite = async () => {
     if (!workspace || !inviteEmail) return;
@@ -155,8 +132,7 @@ export default function TeamPage() {
       setInviteEmail("");
       setInviteLink(data.inviteUrl);
       setInviteEmailSent(!!data.emailSent);
-      const i = await getWorkspaceInvites(workspace.id);
-      setInvites(i);
+      refreshTeam();
       setTimeout(() => { setInviteSuccess(false); setInviteLink(""); setInviteEmailSent(false); }, 15000);
     } catch (err: any) {
       setInviteError(err?.message || "Failed to send invite");
@@ -169,7 +145,7 @@ export default function TeamPage() {
     if (!confirm("Cancel this invite?")) return;
     try {
       await cancelInvite(inviteId);
-      setInvites((prev) => prev.filter((inv) => inv.id !== inviteId));
+      refreshTeam();
     } catch (err: any) {
       alert(err?.message || "Failed to cancel invite");
     }
@@ -182,7 +158,7 @@ export default function TeamPage() {
   const handleRemove = async (memberId: string) => {
     try {
       await removeMember(memberId);
-      setMembers((prev) => prev.filter((m) => m.id !== memberId));
+      refreshTeam();
     } catch (err: any) {
       alert(err?.message || "Failed to remove member");
     } finally {
@@ -193,15 +169,15 @@ export default function TeamPage() {
   const handleRoleChange = async (memberId: string, newRole: Role) => {
     try {
       await updateMemberRole(memberId, newRole);
-      setMembers((prev) =>
-        prev.map((m) => (m.id === memberId ? { ...m, role: newRole } : m))
-      );
+      refreshTeam();
     } catch (err: any) {
       alert(err?.message || "Failed to update role");
     }
   };
 
-  if (loading) {
+  const loading = subscriptionLoading || teamLoading;
+
+  if (loading && members.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />

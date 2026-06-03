@@ -18,6 +18,7 @@ import {
 import { useWorkspaceContext } from "./layout";
 import { useRole } from "@/hooks/use-role";
 import { useCredits } from "@/hooks/use-credits";
+import { useDashboardSummary } from "@/hooks/use-dashboard";
 import { formatCredits } from "@/lib/format-credits";
 
 // ─── Animated Counter Hook ───
@@ -147,87 +148,70 @@ export default function WorkspaceDashboardPage() {
   const { workspace, role, wsLoading } = useWorkspaceContext();
   const permissions = useRole(role);
   const credits = useCredits(workspace?.id ?? null);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [creditHistory, setCreditHistory] = useState<{ date: string; credits: number }[]>([]);
-  const [operationBreakdown, setOperationBreakdown] = useState<{ operation: string; total: number }[]>([]);
-  const [importHistory, setImportHistory] = useState<{ date: string; count: number }[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  const { data, isLoading: summaryLoading } = useDashboardSummary(workspace?.id ?? null);
+
+  const stats = data?.stats ?? null;
+
+  const creditHistory = useMemo(() => {
+    if (!data) return [];
+    const txData = data.creditTransactions ?? [];
+    const dailyMap = new Map<string, number>();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - (6 - i));
+      dailyMap.set(d.toISOString().split("T")[0], 0);
+    }
+    txData.forEach((tx: any) => {
+      const day = tx.created_at?.split("T")[0];
+      if (day && dailyMap.has(day)) {
+        dailyMap.set(day, (dailyMap.get(day) || 0) + (tx.credits_used || 0));
+      }
+    });
+    return Array.from(dailyMap.entries()).map(([date, credits]) => ({ date, credits }));
+  }, [data]);
+
+  const operationBreakdown = useMemo(() => {
+    if (!data) return [];
+    const txData = data.creditTransactions ?? [];
+    const opMap = new Map<string, number>();
+    txData.forEach((tx: any) => {
+      const op = tx.operation || "other";
+      opMap.set(op, (opMap.get(op) || 0) + (tx.credits_used || 0));
+    });
+    return Array.from(opMap.entries()).map(([operation, total]) => ({ operation, total })).sort((a, b) => b.total - a.total).slice(0, 5);
+  }, [data]);
+
+  const importHistory = useMemo(() => {
+    if (!data) return [];
+    const impData = data.importSessions ?? [];
+    const weekMap = new Map<string, number>();
+    for (let i = 0; i < 4; i++) {
+      const wStart = new Date();
+      wStart.setDate(wStart.getDate() - (3 - i) * 7);
+      const label = wStart.toLocaleDateString([], { month: "short", day: "numeric" });
+      weekMap.set(label, 0);
+    }
+    const weekLabels = Array.from(weekMap.keys());
+    impData.forEach((s: any) => {
+      const d = new Date(s.created_at);
+      const daysAgo = Math.floor((Date.now() - d.getTime()) / 86400000);
+      const weekIdx = Math.max(0, 3 - Math.floor(daysAgo / 7));
+      if (weekIdx < weekLabels.length) {
+        const lbl = weekLabels[weekIdx];
+        weekMap.set(lbl, (weekMap.get(lbl) || 0) + 1);
+      }
+    });
+    return Array.from(weekMap.entries()).map(([date, count]) => ({ date, count }));
+  }, [data]);
+
+  const loading = wsLoading || summaryLoading;
   const [greeting, setGreeting] = useState("");
 
   useEffect(() => {
     const h = new Date().getHours();
     setGreeting(h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening");
   }, []);
-
-  useEffect(() => {
-    if (wsLoading) return;
-    if (!workspace) { setLoading(false); return; }
-
-    let cancelled = false;
-
-    async function loadStats() {
-      try {
-        const res = await fetch(`/api/dashboard/summary?workspaceId=${workspace!.id}`);
-        if (!res.ok) throw new Error("Failed to load dashboard summary");
-        const data = await res.json();
-
-        if (cancelled) return;
-
-        setStats(data.stats);
-
-        // Build 7-day credit usage chart data
-        const txData = data.creditTransactions ?? [];
-        const dailyMap = new Map<string, number>();
-        for (let i = 0; i < 7; i++) {
-          const d = new Date();
-          d.setDate(d.getDate() - (6 - i));
-          dailyMap.set(d.toISOString().split("T")[0], 0);
-        }
-        txData.forEach((tx: any) => {
-          const day = tx.created_at?.split("T")[0];
-          if (day && dailyMap.has(day)) {
-            dailyMap.set(day, (dailyMap.get(day) || 0) + (tx.credits_used || 0));
-          }
-        });
-        setCreditHistory(Array.from(dailyMap.entries()).map(([date, credits]) => ({ date, credits })));
-
-        // Build operation breakdown for donut chart
-        const opMap = new Map<string, number>();
-        txData.forEach((tx: any) => {
-          const op = tx.operation || "other";
-          opMap.set(op, (opMap.get(op) || 0) + (tx.credits_used || 0));
-        });
-        setOperationBreakdown(Array.from(opMap.entries()).map(([operation, total]) => ({ operation, total })).sort((a, b) => b.total - a.total).slice(0, 5));
-
-        // Build 30-day import sessions histogram
-        const impData = data.importSessions ?? [];
-        const weekMap = new Map<string, number>();
-        for (let i = 0; i < 4; i++) {
-          const wStart = new Date();
-          wStart.setDate(wStart.getDate() - (3 - i) * 7);
-          const label = wStart.toLocaleDateString([], { month: "short", day: "numeric" });
-          weekMap.set(label, 0);
-        }
-        const weekLabels = Array.from(weekMap.keys());
-        impData.forEach((s: any) => {
-          const d = new Date(s.created_at);
-          const daysAgo = Math.floor((Date.now() - d.getTime()) / 86400000);
-          const weekIdx = Math.max(0, 3 - Math.floor(daysAgo / 7));
-          if (weekIdx < weekLabels.length) {
-            const lbl = weekLabels[weekIdx];
-            weekMap.set(lbl, (weekMap.get(lbl) || 0) + 1);
-          }
-        });
-        setImportHistory(Array.from(weekMap.entries()).map(([date, count]) => ({ date, count })));
-      } catch (err) {
-        console.error("[Dashboard] loadStats error:", err);
-      }
-      if (!cancelled) setLoading(false);
-    }
-
-    loadStats();
-    return () => { cancelled = true; };
-  }, [workspace, wsLoading]);
 
   const basePath = `/w/${slug}`;
 

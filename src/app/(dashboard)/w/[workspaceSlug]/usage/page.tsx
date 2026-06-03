@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useWorkspaceContext } from "../layout";
+import { useUsage } from "@/hooks/use-usage";
 import { formatCredits } from "@/lib/format-credits";
 
 const OP_LABELS: Record<string, { label: string; icon: any; color: string }> = {
@@ -43,33 +44,17 @@ export default function UsagePage() {
   const params = useParams();
   const slug = params.workspaceSlug as string;
 
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading: usageLoading } = useUsage(workspace?.id ?? null);
   const [filterUser, setFilterUser] = useState<string>("all");
   const [filterOpen, setFilterOpen] = useState(false);
-
-  useEffect(() => {
-    if (!workspace) return;
-    setLoading(true);
-    fetch(`/api/credits?workspaceId=${workspace.id}&limit=200`, { cache: "no-store" })
-      .then(async (r) => {
-        const json = await r.json();
-        if (!r.ok) throw new Error(json?.error || "Failed to load credits");
-        return json;
-      })
-      .then((d) => setData(d))
-      .catch((err) => {
-        console.error(err);
-        setData(null);
-      })
-      .finally(() => setLoading(false));
-  }, [workspace]);
 
   const transactions = data?.transactions ?? [];
   const members = data?.members ?? [];
   const balance = data?.balance ?? { used: 0, total: 0, remaining: 0, bonus: 0 };
   const plan = data?.plan;
   const subscription = data?.subscription;
+
+  const loading = usageLoading;
 
   const filteredTransactions = useMemo(() => {
     if (filterUser === "all") return transactions;
