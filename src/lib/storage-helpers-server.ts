@@ -47,8 +47,41 @@ export async function saveProjectJsonServer(workspaceId: string, sessionId: stri
 }
 
 // ─── Server-side Caching of Counts (prevents downloading massive JSONs repeatedly) ───
+//
+// Counting used to download + parse the ENTIRE products.json / categories.json
+// (multiple MB) just to read `.length`. That was the dominant cost of the
+// dashboard. We now persist a tiny "count sidecar" file next to each dataset
+// and read THAT instead. The in-memory cache is a first-level (per-instance)
+// hit; the sidecar is the cross-invocation source of truth; a full load is the
+// last-resort fallback (and it backfills the sidecar so it's a one-time cost).
 const countsCache = new Map<string, { count: number; ts: number }>();
 const COUNTS_TTL_MS = 3 * 60 * 1000; // 3 minutes
+
+function getProductsCountSidecarPath(workspaceId: string): string {
+  return `${workspaceId}/master/products.count.json`;
+}
+
+function getCategoriesCountSidecarPath(workspaceId: string): string {
+  return `${workspaceId}/categories.count.json`;
+}
+
+async function readCountSidecar(path: string): Promise<number | null> {
+  try {
+    const data = await loadJsonFromStorageServer<{ count: number }>(path);
+    if (data && typeof data.count === "number") return data.count;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCountSidecar(path: string, count: number): Promise<void> {
+  try {
+    await saveJsonToStorageServer(path, { count, ts: Date.now() });
+  } catch (err) {
+    console.warn("[storage] failed to write count sidecar:", (err as Error).message);
+  }
+}
 
 export function invalidateCachedCounts(workspaceId: string) {
   countsCache.delete(`products:${workspaceId}`);
@@ -61,9 +94,17 @@ export async function getCachedProductsCountServer(workspaceId: string): Promise
   if (cached && Date.now() - cached.ts < COUNTS_TTL_MS) {
     return cached.count;
   }
+  // Cheap path: read the tiny sidecar instead of the full products.json.
+  const sidecar = await readCountSidecar(getProductsCountSidecarPath(workspaceId));
+  if (sidecar !== null) {
+    countsCache.set(key, { count: sidecar, ts: Date.now() });
+    return sidecar;
+  }
+  // Fallback: full load (then backfill the sidecar for next time).
   const products = await loadProductsJsonServer(workspaceId);
   const count = products.length;
   countsCache.set(key, { count, ts: Date.now() });
+  void writeCountSidecar(getProductsCountSidecarPath(workspaceId), count);
   return count;
 }
 
@@ -73,9 +114,15 @@ export async function getCachedCategoriesCountServer(workspaceId: string): Promi
   if (cached && Date.now() - cached.ts < COUNTS_TTL_MS) {
     return cached.count;
   }
+  const sidecar = await readCountSidecar(getCategoriesCountSidecarPath(workspaceId));
+  if (sidecar !== null) {
+    countsCache.set(key, { count: sidecar, ts: Date.now() });
+    return sidecar;
+  }
   const categories = await loadCategoriesJsonServer(workspaceId);
   const count = categories.length;
   countsCache.set(key, { count, ts: Date.now() });
+  void writeCountSidecar(getCategoriesCountSidecarPath(workspaceId), count);
   return count;
 }
 
@@ -87,6 +134,10 @@ export async function loadProductsJsonServer(workspaceId: string): Promise<Maste
 export async function saveProductsJsonServer(workspaceId: string, products: MasterProductJson[]): Promise<void> {
   invalidateCachedCounts(workspaceId);
   await saveJsonToStorageServer(getProductsStoragePath(workspaceId), products);
+  // Keep the count sidecar in sync so the dashboard never has to re-download
+  // the full products.json just to count it.
+  await writeCountSidecar(getProductsCountSidecarPath(workspaceId), products.length);
+  countsCache.set(`products:${workspaceId}`, { count: products.length, ts: Date.now() });
 }
 
 export async function loadCategoriesJsonServer(workspaceId: string): Promise<CategoryJson[]> {

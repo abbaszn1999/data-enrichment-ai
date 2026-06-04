@@ -40,7 +40,6 @@ import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useSyncStore } from "@/store/sync-store";
-import { getWorkspaceIntegration } from "@/lib/supabase";
 import { SubscriptionGate, SubscriptionBanner } from "@/components/subscription-gate";
 
 interface WorkspaceContextType {
@@ -69,7 +68,7 @@ export default function WorkspaceLayout({
   const slug = params.workspaceSlug as string;
 
   const { user, profile, sessionReady } = useAuth();
-  const { workspace, role, isLoading: wsLoading, error } = useWorkspace(slug, user);
+  const { workspace, role, hasIntegration, isLoading: wsLoading, error } = useWorkspace(slug, user);
   const permissions = useRole(role);
 
   const credits = useCredits(workspace?.id ?? null);
@@ -77,16 +76,10 @@ export default function WorkspaceLayout({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [hasIntegration, setHasIntegration] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // Check if workspace has an active integration (for Sync nav gating)
-  useEffect(() => {
-    if (!workspace?.id) return;
-    getWorkspaceIntegration(workspace.id)
-      .then((i) => { setHasIntegration(!!i); })
-      .catch(() => { setHasIntegration(false); });
-  }, [workspace?.id]);
+  // `hasIntegration` (for Sync nav gating) now comes from the single
+  // workspace-bootstrap request via useWorkspace — no separate fetch needed.
 
   // Sync focus mode — hides header + sidebar when chat is active
   const { isFocusMode: syncFocusMode } = useSyncStore();

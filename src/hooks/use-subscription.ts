@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { readBootstrap } from "@/lib/workspace-bootstrap-cache";
 
 interface SubscriptionState {
   subscription: any | null;
@@ -40,8 +41,23 @@ async function dedupedFetch(url: string, forceRefresh = false) {
 
 export function useSubscription(workspaceId: string | null) {
   const [state, setState] = useState<SubscriptionState>(() => {
-    // Synchronously check if cached data is available to populate initial state instantly
+    // Synchronously check if cached data is available to populate initial state instantly.
+    // Prefer the shared bootstrap cache (seeded by the layout's single bootstrap
+    // request) so we avoid an extra /api/subscription round-trip entirely.
     if (workspaceId) {
+      const boot = readBootstrap(workspaceId);
+      if (boot?.subscription) {
+        const s = boot.subscription;
+        return {
+          subscription: s.subscription,
+          plan: s.currentPlan,
+          availablePlans: (s.availablePlans as any[]) || [],
+          creditPacks: (s.creditPacks as any[]) || [],
+          credits: (s.credits as any) || null,
+          isActive: s.isActive || false,
+          isLoading: false,
+        };
+      }
       const cached = cacheStore.get(`/api/subscription?workspaceId=${workspaceId}`);
       if (cached) {
         return {
@@ -68,6 +84,23 @@ export function useSubscription(workspaceId: string | null) {
 
   const refresh = useCallback(async (force = false) => {
     if (!workspaceId) return;
+    // Fast path: a fresh bootstrap seed satisfies non-forced reads with no fetch.
+    if (!force) {
+      const boot = readBootstrap(workspaceId);
+      if (boot?.subscription) {
+        const s = boot.subscription;
+        setState({
+          subscription: s.subscription,
+          plan: s.currentPlan,
+          availablePlans: (s.availablePlans as any[]) || [],
+          creditPacks: (s.creditPacks as any[]) || [],
+          credits: (s.credits as any) || null,
+          isActive: s.isActive || false,
+          isLoading: false,
+        });
+        return;
+      }
+    }
     try {
       const url = `/api/subscription?workspaceId=${workspaceId}`;
       const data = await dedupedFetch(url, force);

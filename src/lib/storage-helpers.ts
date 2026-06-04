@@ -173,6 +173,11 @@ export function getProductsStoragePath(workspaceId: string): string {
 export async function saveProductsJson(workspaceId: string, products: MasterProductJson[]): Promise<string> {
   const path = getProductsStoragePath(workspaceId);
   await saveJsonToStorage(path, products);
+  // Keep the count sidecar (read by the dashboard) accurate after a client-side
+  // write so it never falls back to downloading the full products.json.
+  try {
+    await saveJsonToStorage(`${workspaceId}/master/products.count.json`, { count: products.length, ts: Date.now() });
+  } catch { /* non-fatal */ }
   return path;
 }
 
@@ -203,6 +208,10 @@ export function getCategoriesStoragePath(workspaceId: string): string {
 export async function saveCategoriesJson(workspaceId: string, categories: CategoryJson[]): Promise<string> {
   const path = getCategoriesStoragePath(workspaceId);
   await saveJsonToStorage(path, categories);
+  // Keep the count sidecar (read by the dashboard) accurate after a client-side write.
+  try {
+    await saveJsonToStorage(`${workspaceId}/categories.count.json`, { count: categories.length, ts: Date.now() });
+  } catch { /* non-fatal */ }
   return path;
 }
 
