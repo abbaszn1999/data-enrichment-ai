@@ -226,6 +226,125 @@ function profilesAroundFocus(focus: ColumnProfileKey): ColumnProfileKey[] {
 
 // ─── Individual handlers ─────────────────────────────────────────────────────
 
+/**
+ * Serverless-safe replacement for Shopify `bulk_query`.
+ *
+ * Instead of submitting a Bulk Operation and polling it (20-30s+, which busts
+ * the Netlify/Lambda execution cap), we fetch successive `products` pages of
+ * 250 within a strict wall-clock budget. We stop as soon as ANY of these hit:
+ *   - no more pages (`hasNextPage` is false)
+ *   - the time budget is exhausted (default ~18s, comfortably under the cap)
+ *   - a hard page ceiling (safety against pathological loops)
+ *
+ * We persist `lastCursor` so the UI's "Continue (load more)" keeps fetching the
+ * rest one budgeted batch at a time. Client predicates are applied per page by
+ * `fetchShopifyProductsPage`, so filters still work (scanning the pages we were
+ * able to pull within budget).
+ */
+async function fetchProductsBudgetedPages(
+  args: {
+    serverFilter: ShopifyServerFilter | null;
+    predicates: ClientPredicate[] | null;
+    columnProfile?: ColumnProfileKey;
+    limit?: number;
+  },
+  ctx: HandlerContext
+): Promise<HandlerResult> {
+  const integration = requireIntegration(ctx);
+  const BUDGET_MS = 18_000;
+  const MAX_PAGES = 40; // 40 * 250 = 10k products hard ceiling per request
+  const PAGE_SIZE = 250;
+  const startedAt = Date.now();
+
+  ctx.onProgress?.("Loading products in fast paginated batches (serverless-safe)…");
+
+  const accumulated: SyncSheetRow[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = ctx.workingMemory.lastCursor ?? null;
+  let columns: string[] = [];
+  let title = "";
+  let hasNextPage = false;
+  let pages = 0;
+
+  do {
+    if (ctx.signal?.aborted) break;
+    const page = await fetchShopifyProductsPage({
+      integration,
+      serverFilter: args.serverFilter,
+      clientPredicates: args.predicates,
+      cursor,
+      limit: PAGE_SIZE,
+    });
+    pages += 1;
+    if (!columns.length) columns = page.sheet.columns;
+    if (!title) title = page.sheet.title;
+
+    for (const row of page.sheet.rows) {
+      const id = (row as Record<string, unknown>).id;
+      if (typeof id === "string" && id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      accumulated.push(row);
+    }
+
+    cursor = page.endCursor;
+    hasNextPage = page.hasNextPage;
+    ctx.onProgress?.(`Loaded ${accumulated.length} products so far…`);
+
+    if (typeof args.limit === "number" && args.limit > 0 && accumulated.length >= args.limit) {
+      break;
+    }
+  } while (
+    hasNextPage &&
+    cursor &&
+    pages < MAX_PAGES &&
+    Date.now() - startedAt < BUDGET_MS
+  );
+
+  let rows = accumulated;
+  if (typeof args.limit === "number" && args.limit > 0 && rows.length > args.limit) {
+    rows = rows.slice(0, args.limit);
+  }
+
+  const sheet: SyncSheet = {
+    title: title || `Products · ${integration.integration_name}`,
+    columns,
+    rows,
+  };
+
+  ctx.sheet = sheet;
+  ctx.originalSheet = sheet;
+  ctx.workingMemory.lastServerFilter = args.serverFilter;
+  ctx.workingMemory.lastClientPredicates = args.predicates;
+  ctx.workingMemory.lastCursor = hasNextPage ? cursor : null;
+  ctx.workingMemory.lastActionType = "load_sheet";
+  ctx.workingMemory.totalMatchCount = sheet.rows.length;
+  // remainingCount > 0 tells the UI to surface "Continue (load more)".
+  ctx.workingMemory.remainingCount = hasNextPage ? 1 : 0;
+  ctx.workingMemory.lastColumnProfile = args.columnProfile ?? "core";
+  ctx.workingMemory.lastEntity = "products";
+  ctx.workingMemory.lastRelevantProfiles = pickProductsRelevantProfiles(ctx, args.columnProfile);
+
+  if (hasNextPage) {
+    ctx.onProgress?.(
+      `Loaded ${sheet.rows.length} products. There are more — click "Continue" to load the next batch.`
+    );
+  }
+
+  return {
+    sheet,
+    rowsAffected: sheet.rows.length,
+    output: {
+      rowCount: sheet.rows.length,
+      mode: "budgeted_pages",
+      pagesFetched: pages,
+      hasNextPage,
+      endCursor: cursor,
+    },
+  };
+}
+
 async function handleProductsLoad(
   args: {
     serverFilter?: ShopifyServerFilter;
@@ -274,6 +393,19 @@ async function handleProductsLoad(
     };
   }
 
+  // Are we running inside a short-lived serverless function (Netlify/AWS
+  // Lambda)? Shopify Bulk Operations submit a job, then we poll every 5s while
+  // Shopify queues + runs it — on a real catalog this easily takes 20-30s.
+  // Locally (a long-lived dev server) that's fine, but a serverless function
+  // gets killed at its execution-time cap, which (a) breaks the NDJSON stream
+  // the client is reading and (b) leaves a bulk op RUNNING on Shopify, so the
+  // very next submit fails fast with "a bulk query is already in progress".
+  // On serverless we therefore NEVER use bulk_query: we fall back to a
+  // time-budgeted multi-page fetch (see below) that stays well within the
+  // function timeout and lets the user click "Continue" to load more.
+  const isServerless =
+    process.env.NETLIFY === "true" || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+
   // Mode inference — the planner is instructed to OMIT `mode` whenever the
   // user wants the full match set ("all/كل/جميع", any unknown-size load, or any
   // intent that needs client-side predicates). In those cases we default to
@@ -296,6 +428,15 @@ async function handleProductsLoad(
     mode = "bulk_query";
     ctx.onProgress?.(
       "Loading all products via Shopify Bulk Operations…"
+    );
+  }
+
+  // Serverless guard: downgrade any bulk_query (whether inferred above or
+  // explicitly requested by the planner) to a time-budgeted paginated fetch.
+  if (mode === "bulk_query" && isServerless) {
+    return fetchProductsBudgetedPages(
+      { serverFilter, predicates, columnProfile: args.columnProfile, limit: args.limit },
+      ctx
     );
   }
 
