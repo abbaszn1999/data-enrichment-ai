@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { FileSpreadsheet, Sun, Moon, Monitor, Undo2, Redo2, ArrowLeft, Cloud, CloudOff, Loader2 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Badge } from "@/components/ui/badge";
@@ -52,10 +53,17 @@ export function Header() {
           )}
 
           <div className="flex items-center gap-2">
-            <div className="p-1 rounded-md bg-primary">
-              <FileSpreadsheet className="h-4 w-4 text-primary-foreground" />
+            <div className="relative w-6 h-6 rounded-md overflow-hidden bg-white flex items-center justify-center border border-border/40">
+              <Image
+                src="/autommerce.png"
+                alt="Autommerce Logo"
+                fill
+                sizes="24px"
+                className="object-contain p-0.5"
+                priority
+              />
             </div>
-            <h1 className="font-bold text-sm tracking-tight">DataSheet AI</h1>
+            <h1 className="font-bold text-sm tracking-tight text-foreground">Autommerce Data Entry</h1>
           </div>
 
           {fileName && (

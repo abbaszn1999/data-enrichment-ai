@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DataSheet AI — Product Data Enrichment",
+  title: "Autommerce Data Entry — Product Data Enrichment",
   description:
     "AI-powered smart spreadsheet for e-commerce product data enrichment. Upload Excel, enrich with AI, export results.",
 };

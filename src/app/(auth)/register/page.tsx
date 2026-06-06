@@ -83,7 +83,7 @@ function RegisterForm() {
       <div className="text-center space-y-1">
         <h1 className="text-xl font-bold">Create your account</h1>
         <p className="text-sm text-muted-foreground">
-          Get started with DataSheet AI
+          Get started with Autommerce
         </p>
       </div>
 

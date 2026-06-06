@@ -2,6 +2,7 @@
 
 import { useState, useEffect, createContext, useContext } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useParams, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
@@ -196,11 +197,18 @@ export default function WorkspaceLayout({
           <div className="flex items-center justify-between h-12 px-4">
             {/* Left: Logo + Workspace Name */}
             <div className="flex items-center gap-3">
-              <Link href="/workspaces" className="flex items-center gap-2">
-                <div className="p-1 rounded-md bg-primary">
-                  <FileSpreadsheet className="h-4 w-4 text-primary-foreground" />
+              <Link href={basePath} className="flex items-center gap-2">
+                <div className="relative w-6 h-6 rounded-md overflow-hidden bg-white flex items-center justify-center border border-border/40">
+                  <Image
+                    src="/autommerce.png"
+                    alt="Autommerce Logo"
+                    fill
+                    sizes="24px"
+                    className="object-contain p-0.5"
+                    priority
+                  />
                 </div>
-                <span className="font-bold text-sm tracking-tight">DataSheet AI</span>
+                <span className="font-bold text-sm tracking-tight text-foreground">Data Entry</span>
               </Link>
 
               <span className="text-muted-foreground/30">|</span>
