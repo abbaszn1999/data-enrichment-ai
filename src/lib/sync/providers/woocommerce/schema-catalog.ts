@@ -5,6 +5,30 @@ export const WOOCOMMERCE_LIMITS = {
   perPageMax: 100,
 } as const;
 
+/**
+ * Server-side filter keys honored when loading WooCommerce products.
+ * Currently empty: the fetch path loads pages then filters client-side. As
+ * native `/products` query params (search, category, sku, status, …) get wired
+ * in, list them here so the agent knows it can push them to the API.
+ */
+export const WOOCOMMERCE_SERVER_FILTER_KEYS = [] as const;
+
+/**
+ * Client-side predicates applied after fetch. These operate on the canonical
+ * column vocabulary, so the same kinds Shopify uses apply to WooCommerce rows.
+ */
+export const WOOCOMMERCE_CLIENT_PREDICATE_KINDS = [
+  "missing_image",
+  "image_count_lt",
+  "description_shorter_than",
+  "missing_seo_title",
+  "missing_seo_description",
+  "missing_alt_text",
+  "title_matches",
+  "no_collections",
+  "body_html_empty",
+] as const;
+
 export const WOOCOMMERCE_WRITABLE_COLUMNS = [
   "title",
   "handle",

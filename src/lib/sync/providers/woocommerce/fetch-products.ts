@@ -5,18 +5,31 @@ import { buildWooCommerceCoreProductsSheet } from "./normalize";
 
 const PER_PAGE = 100; // WooCommerce hard max
 
+// Guards for the "load all" path so a large catalog can't blow the serverless
+// execution window. Mirrors the budgeted-pages approach used for Shopify.
+const FETCH_BUDGET_MS = 20_000;
+const MAX_PRODUCTS_WHEN_ALL = 2000;
+const MAX_VARIATION_PAGES = 50;
+
 export async function fetchWooCommerceProductsSheet(
   integration: IntegrationRecord,
   options: FetchProductsOptions = {}
 ): Promise<SyncSheet> {
   const client = createWooClient(integration);
+  const startedAt = Date.now();
   const limit = options.limit ?? 50;
   const shouldLoadAll = limit <= 0;
-  const targetCount = shouldLoadAll ? Number.POSITIVE_INFINITY : limit;
+  // Even on "load all" we cap to a sane ceiling to stay within the budget.
+  const targetCount = shouldLoadAll ? MAX_PRODUCTS_WHEN_ALL : limit;
 
   const allProducts: any[] = [];
   let page = 1;
+  let truncated = false;
   while (allProducts.length < targetCount) {
+    if (Date.now() - startedAt > FETCH_BUDGET_MS) {
+      truncated = true;
+      break;
+    }
     const remaining = targetCount - allProducts.length;
     const perPage = Math.min(PER_PAGE, Number.isFinite(remaining) ? remaining : PER_PAGE);
     const response = await client.requestRaw("/products", {
@@ -30,7 +43,12 @@ export async function fetchWooCommerceProductsSheet(
     const totalPagesHeader = response.headers.get("x-wp-totalpages") || response.headers.get("X-WP-TotalPages");
     const totalPages = totalPagesHeader ? Number(totalPagesHeader) : null;
     if (products.length < perPage) break;
-    if (totalPages && page >= totalPages) break;
+    if (totalPages && page >= totalPages) {
+      break;
+    } else if (totalPages && page < totalPages && allProducts.length >= targetCount) {
+      // Hit the ceiling before exhausting the catalog.
+      truncated = true;
+    }
     page += 1;
   }
 
@@ -41,7 +59,7 @@ export async function fetchWooCommerceProductsSheet(
     async (product) => {
       const variations: any[] = [];
       let varPage = 1;
-      while (true) {
+      while (varPage <= MAX_VARIATION_PAGES) {
         const resp = await client.requestRaw(`/products/${product.id}/variations`, {
           method: "GET",
           query: { per_page: PER_PAGE, page: varPage },
@@ -62,11 +80,13 @@ export async function fetchWooCommerceProductsSheet(
     variationMap.set(r.productId, r.variations);
   }
 
-  return buildWooCommerceCoreProductsSheet({
+  const sheet = buildWooCommerceCoreProductsSheet({
     integrationName: integration.integration_name,
     products: allProducts.map((product) => ({
       product,
       variations: variationMap.get(product.id) ?? [],
     })),
   });
+  if (truncated) sheet.truncated = true;
+  return sheet;
 }

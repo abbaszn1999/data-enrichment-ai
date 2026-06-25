@@ -7,6 +7,8 @@ export type SyncSheet = {
   title: string;
   columns: string[];
   rows: SyncSheetRow[];
+  /** Set when a fetch stopped early (budget/ceiling) and more rows exist. */
+  truncated?: boolean;
 };
 
 export type SyncProviderId = "shopify" | "woocommerce" | string;
@@ -65,10 +67,70 @@ export type ProviderConfigField = {
   helpText?: string;
 };
 
+/**
+ * Provider-specific vocabulary that the agent loop, tool catalog, and UI must
+ * read from the *connected* provider rather than hardcoding Shopify constants.
+ *
+ * This is the contract that lets a new CMS plug in without touching the agent
+ * or the UI: each provider declares its own writable columns, column profiles
+ * (UI tabs), server-side filter keys, and client-side predicate kinds.
+ */
+export type ProviderSchema = {
+  /** Canonical column names this provider returns by default. */
+  coreColumns: readonly string[];
+  /** Columns the AI is allowed to write into via sync_columns_write_with_ai. */
+  writableColumns: readonly string[];
+  /** UI tab → column list. Keys should be a subset of ColumnProfileKey. */
+  columnProfiles: Record<string, string[]>;
+  /** Keys the provider can filter server-side. Empty array = no API filtering. */
+  serverFilterKeys: readonly string[];
+  /** Predicate kinds applied client-side after fetch. */
+  clientPredicateKinds: readonly string[];
+  /** Human label for the taxonomy entity ("Collections" | "Categories" | …). */
+  taxonomyLabel: string;
+};
+
+/** A resolved taxonomy group (Shopify collection / WooCommerce category / …). */
+export type ResolvedTaxonomy = {
+  id: string;
+  handle?: string;
+  title?: string;
+};
+
+/**
+ * Provider-agnostic taxonomy operations. A provider implements only what it
+ * supports; the agent gates each tool on the presence of the method, surfacing
+ * a clear "not supported on {provider}" message otherwise instead of silently
+ * doing the wrong thing.
+ */
+export interface ProviderTaxonomy {
+  /** Find a taxonomy group by name/handle. Returns null if none match. */
+  resolve(input: {
+    integration: IntegrationRecord;
+    name: string;
+  }): Promise<ResolvedTaxonomy | null>;
+  /** Add products to a taxonomy group (additive — never removes existing). */
+  assign(input: {
+    integration: IntegrationRecord;
+    taxonomyId: string;
+    productIds: string[];
+  }): Promise<{ assignedCount: number; newTotal?: number }>;
+  /** Permanently delete taxonomy groups by id. Aggregates per-id outcomes. */
+  delete(input: {
+    integration: IntegrationRecord;
+    ids: string[];
+  }): Promise<{ deletedIds: string[]; failed: Array<{ id: string; error: string }> }>;
+}
+
 export interface SyncProvider {
   id: SyncProviderId;
   label: string;
   capabilities: ProviderCapabilities;
+  /** Provider-specific column/filter/profile vocabulary. Drives the agent
+   *  prompt, tool validation, and UI tabs without Shopify-hardcoding. */
+  schema: ProviderSchema;
+  /** Optional taxonomy CRUD. Absent methods → tool reports "not supported". */
+  taxonomy?: ProviderTaxonomy;
   /** Fields the user enters when connecting this provider. */
   configFields: ProviderConfigField[];
   /** Save: returns `{ baseUrl, config }` to persist after a successful test. */

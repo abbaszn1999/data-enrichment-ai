@@ -21,7 +21,7 @@ import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
 import { loadProductsJson, saveProductsJson, type MasterProductJson } from "@/lib/storage-helpers";
 
-const PAGE_SIZES = [25, 50, 100];
+const PAGE_SIZES = [10, 20, 50, 100];
 
 export default function ProductsPage() {
   const params = useParams();
@@ -35,7 +35,7 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(10);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
@@ -84,7 +84,13 @@ export default function ProductsPage() {
       );
     }
     setTotal(filtered.length);
-    const start = (page - 1) * pageSize;
+    const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    const safePage = Math.min(page, pages);
+    if (safePage !== page) {
+      setPage(safePage);
+      return;
+    }
+    const start = (safePage - 1) * pageSize;
     setProducts(filtered.slice(start, start + pageSize));
   }, [allProducts, search, page, pageSize]);
 

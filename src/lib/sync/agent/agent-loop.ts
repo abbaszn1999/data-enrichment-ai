@@ -52,11 +52,8 @@ import {
   sanitizeUserMessage,
 } from "./injection-guards";
 import type { SyncInlineAttachment } from "./ai-helpers";
-import {
-  SERVER_FILTER_KEYS,
-  CLIENT_PREDICATE_KINDS,
-  COLUMN_PROFILES,
-} from "@/lib/sync/providers/shopify/schema-catalog";
+import { getProviderSchema } from "@/lib/sync/core/registry";
+import type { ProviderSchema } from "@/lib/sync/core/types";
 
 // ─── Public event surface ────────────────────────────────────────────────────
 
@@ -296,10 +293,21 @@ function buildFunctionDeclarations(options: {
 
 // ─── System instruction (clean — capabilities + invariants, no routing) ──────
 
-function buildSystemInstruction(options: { webEnabled: boolean; provider?: string | null }): string {
-  const profileKeys = Object.keys(COLUMN_PROFILES).join(", ");
+function buildSystemInstruction(options: {
+  webEnabled: boolean;
+  provider?: string | null;
+  schema: ProviderSchema;
+}): string {
+  const { schema } = options;
+  const profileKeys = Object.keys(schema.columnProfiles).join(", ");
   const provider = options.provider ?? "connected ecommerce platform";
-  return `You are the Sync agent — a tool-using assistant that operates on a tabular product sheet and a connected ${provider} store.
+  const taxonomy = schema.taxonomyLabel;
+  const writableCols = schema.writableColumns.join(", ");
+  const serverFilterLine =
+    schema.serverFilterKeys.length > 0
+      ? `Server-side filter keys this platform supports (use ONLY these in serverFilter): ${schema.serverFilterKeys.join(", ")}`
+      : `This platform does NOT support server-side product filtering — do NOT pass serverFilter. To narrow results, load products first, then use clientPredicates / sync_products_filter_client / sync_sheet_program.`;
+  return `You are the Sync agent — a tool-using assistant that operates on a tabular product sheet and a connected ${provider} store. On this platform, taxonomy groups are called "${taxonomy}".
 
 Operate as an autonomous loop:
 1. Read the user's message, the current sheet sample, working memory, and conversation.
@@ -308,10 +316,9 @@ Operate as an autonomous loop:
 4. Continue until the user's goal is satisfied. Multi-step tasks (e.g. load → write → apply) happen across iterations of this loop, not as a pre-built plan.
 
 Capabilities you have:
-- Load products (by filter, by IDs, or in bulk for "all"/predicate-driven queries where supported) and taxonomy groups.
-- For Shopify, taxonomy groups are collections. For WooCommerce, taxonomy groups are product categories.
-- Use sync_collections_load for both Shopify collections and WooCommerce product categories; the runtime dispatches by connected provider.
-- Resolve, create, assign, and PERMANENTLY DELETE Shopify collections where supported.
+- Load products (by filter, by IDs, or in bulk for "all"/predicate-driven queries where supported) and taxonomy groups ("${taxonomy}" on this platform).
+- Use sync_collections_load to load the connected platform's ${taxonomy}; the runtime dispatches to the right provider automatically.
+- Resolve, create, assign, and PERMANENTLY DELETE ${taxonomy} where supported by the connected platform.
 - Fill any sheet column with AI-generated text (descriptions, SEO titles, alt text, translations, classifications, …).
 - Search the web for product images and attach them to rows.
 - Analyze user-uploaded images or PDFs (when attached).
@@ -320,7 +327,7 @@ Capabilities you have:
 - Delete columns from the sheet.
 
 Delete vs Filter — CRITICAL distinction:
-- If the user says "delete / remove / erase / حذف / امسح / ازل / احذف" a collection or product → use a destructive write tool (sync_collections_delete for collections). This permanently removes it from Shopify.
+- If the user says "delete / remove / erase / حذف / امسح / ازل / احذف" a ${taxonomy} group or product → use a destructive write tool (sync_collections_delete for ${taxonomy}). This permanently removes it from the connected ${provider} store.
 - If the user says "filter / hide / show only / exclude from view / فلتر / اخفي / اظهر فقط" → use sync_products_filter_client or sync_sheet_program. This only changes the local view.
 - NEVER silently substitute filter for delete. If the user asked to delete but you only have a filter tool available for that entity, say so explicitly and ask before filtering.
 - Reply with text only when the user wants conversation or a clarifying question is genuinely necessary.
@@ -363,9 +370,11 @@ Invariants (must obey):
 
 Sheet column profiles available (UI-tab keys you can pass where relevant): ${profileKeys}
 
-Shopify server-filter keys (only these): ${SERVER_FILTER_KEYS.join(", ")}
+Columns you may write into on this platform (sync_columns_write_with_ai targetColumn): ${writableCols}
 
-Client predicates (for things Shopify can't filter natively): ${CLIENT_PREDICATE_KINDS.join(", ")}
+${serverFilterLine}
+
+Client predicates (applied after fetch — for things the platform can't filter natively): ${schema.clientPredicateKinds.join(", ")}
 
 Web tool: ${options.webEnabled ? "enabled this turn" : "disabled this turn"}.`;
 }
@@ -389,9 +398,11 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
     hasAttachments: params.attachments.length > 0,
   });
 
+  const providerSchema = getProviderSchema(params.integration?.provider);
   const systemInstruction = buildSystemInstruction({
     webEnabled: params.webEnabled,
     provider: params.integration?.provider,
+    schema: providerSchema,
   });
 
   // Resolve thinkingLevel once per loop run — the SDK enum is loaded lazily.

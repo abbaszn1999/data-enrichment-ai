@@ -24,3 +24,19 @@ export class RateLimitError extends SyncError {
     this.retryAfterMs = opts?.retryAfterMs;
   }
 }
+
+/** 4xx (other than 401/403/429) — bad input. Never retry. */
+export class ValidationError extends SyncError {
+  constructor(message: string, opts?: { status?: number; provider?: string }) {
+    super(message, { status: opts?.status ?? 400, provider: opts?.provider });
+    this.name = "ValidationError";
+  }
+}
+
+/** Transient server / network failure (5xx, timeouts). Safe to retry. */
+export class TransientError extends SyncError {
+  constructor(message: string, opts?: { status?: number; provider?: string }) {
+    super(message, { status: opts?.status, provider: opts?.provider });
+    this.name = "TransientError";
+  }
+}

@@ -36,14 +36,15 @@ import {
 } from "@/lib/sync/providers/shopify/fetch-products";
 import { applyClientPredicates } from "@/lib/sync/providers/shopify/filter-builder";
 import {
-  assignProductsToCollection,
   createShopifyCollection,
-  deleteShopifyCollection,
   fetchShopifyCollections,
-  resolveCollectionByName,
   applyShopifyCollectionUpdates,
 } from "@/lib/sync/providers/shopify/collections";
-import { createWooCommerceCategory, fetchWooCommerceCategories } from "@/lib/sync/providers/woocommerce/categories";
+import {
+  createWooCommerceCategory,
+  fetchWooCommerceCategories,
+  updateWooCommerceCategories,
+} from "@/lib/sync/providers/woocommerce/categories";
 import { getProvider } from "@/lib/sync/core/registry";
 
 export type HandlerContext = {
@@ -386,10 +387,21 @@ async function handleProductsLoad(
     ctx.workingMemory.lastRelevantProfiles = pickProductsRelevantProfiles(ctx, args.columnProfile);
     ctx.workingMemory.totalMatchCount = sheet.rows.length;
     ctx.workingMemory.remainingCount = null;
+    const warnings = loaded.truncated
+      ? [
+          `Loaded the first ${sheet.rows.length} product(s) — the catalog is large so the load was capped to stay within the request budget. Narrow the request (by category, status, or a search term) or load a specific count to see more.`,
+        ]
+      : undefined;
     return {
       sheet,
       rowsAffected: sheet.rows.length,
-      output: { rowCount: sheet.rows.length, mode: "provider_fetch", provider: "woocommerce" },
+      warnings,
+      output: {
+        rowCount: sheet.rows.length,
+        mode: "provider_fetch",
+        provider: "woocommerce",
+        truncated: !!loaded.truncated,
+      },
     };
   }
 
@@ -637,17 +649,24 @@ async function handleCollectionsResolve(
   ctx: HandlerContext
 ): Promise<HandlerResult> {
   const integration = requireIntegration(ctx);
-  const resolved = await resolveCollectionByName({ integration, name: args.name });
+  const provider = getProvider(integration.provider);
+  if (!provider.taxonomy?.resolve) {
+    return {
+      assistantMessage: `Resolving ${provider.schema.taxonomyLabel.toLowerCase()} by name is not supported on ${provider.label} yet.`,
+    };
+  }
+  const label = provider.schema.taxonomyLabel.replace(/s$/i, "").toLowerCase();
+  const resolved = await provider.taxonomy.resolve({ integration, name: args.name });
   if (resolved) {
     ctx.workingMemory.collectionsByName[args.name.toLowerCase()] = {
       id: resolved.id,
-      handle: resolved.handle,
+      handle: resolved.handle ?? "",
     };
   }
   return {
     assistantMessage: resolved
-      ? `Resolved "${args.name}" → collection ${resolved.handle}`
-      : `No collection matches "${args.name}".`,
+      ? `Resolved "${args.name}" → ${label} ${resolved.handle ?? resolved.id}`
+      : `No ${label} matches "${args.name}".`,
     output: resolved,
   };
 }
@@ -804,19 +823,26 @@ async function handleCollectionsAssign(
 ): Promise<HandlerResult> {
   const integration = requireIntegration(ctx);
   if (!ctx.sheet) throw new Error("No sheet loaded.");
+  const provider = getProvider(integration.provider);
+  const label = provider.schema.taxonomyLabel.replace(/s$/i, "").toLowerCase();
+  if (!provider.taxonomy?.assign) {
+    return {
+      assistantMessage: `Assigning products to a ${label} is not supported on ${provider.label} yet.`,
+    };
+  }
   const productIds = args.rowIndexes
     .map((i) => ctx.sheet!.rows[i])
     .map((row) => String(row?.id ?? "").trim())
     .filter(Boolean);
   if (productIds.length === 0) return { assistantMessage: "No valid product IDs selected." };
-  const { assignedCount, newTotal } = await assignProductsToCollection({
+  const { assignedCount, newTotal } = await provider.taxonomy.assign({
     integration,
-    collectionId: args.collectionId,
+    taxonomyId: args.collectionId,
     productIds,
   });
   return {
     rowsAffected: assignedCount,
-    assistantMessage: `Assigned ${assignedCount} products${newTotal != null ? ` (collection now has ${newTotal})` : ""}.`,
+    assistantMessage: `Assigned ${assignedCount} products${newTotal != null ? ` (${label} now has ${newTotal})` : ""}.`,
     output: { assignedCount, newTotal },
   };
 }
@@ -844,33 +870,38 @@ async function handleCollectionsDelete(
     }
   }
 
-  if (ids.size === 0) {
+  const provider = getProvider(integration.provider);
+  const label = provider.schema.taxonomyLabel.replace(/s$/i, "").toLowerCase();
+
+  if (!provider.taxonomy?.delete) {
     return {
-      assistantMessage:
-        "No collection IDs to delete. Pass either `collectionIds` (GIDs) or `rowIndexes` into the current collections sheet.",
+      assistantMessage: `Deleting a ${label} is not supported on ${provider.label} yet.`,
     };
   }
 
-  // Validate all GIDs upfront so a typo doesn't silently delete a different
-  // resource type.
-  for (const id of ids) {
-    if (!id.startsWith("gid://shopify/Collection/")) {
-      return {
-        assistantMessage: `Invalid collection GID: "${id}". Must start with gid://shopify/Collection/`,
-      };
+  if (ids.size === 0) {
+    return {
+      assistantMessage: `No ${label} IDs to delete. Pass either \`collectionIds\` or \`rowIndexes\` into the current ${provider.schema.taxonomyLabel.toLowerCase()} sheet.`,
+    };
+  }
+
+  // Shopify uses opaque GIDs — validate the prefix so a typo doesn't delete a
+  // different resource type. Other providers (e.g. WooCommerce numeric IDs)
+  // validate inside their own adapter.
+  if (integration.provider === "shopify") {
+    for (const id of ids) {
+      if (!id.startsWith("gid://shopify/Collection/")) {
+        return {
+          assistantMessage: `Invalid collection GID: "${id}". Must start with gid://shopify/Collection/`,
+        };
+      }
     }
   }
 
-  const deleted: string[] = [];
-  const failed: Array<{ id: string; error: string }> = [];
-  for (const id of ids) {
-    try {
-      const { deletedId } = await deleteShopifyCollection({ integration, collectionId: id });
-      deleted.push(deletedId);
-    } catch (err) {
-      failed.push({ id, error: (err as Error).message || "delete failed" });
-    }
-  }
+  const { deletedIds: deleted, failed } = await provider.taxonomy.delete({
+    integration,
+    ids: Array.from(ids),
+  });
 
   // Drop the deleted rows from the current sheet so the UI reflects reality
   // without a manual reload. Match by `id` column.
@@ -898,8 +929,8 @@ async function handleCollectionsDelete(
     rowsAffected: droppedFromSheet,
     assistantMessage:
       deleted.length > 0
-        ? `Permanently deleted ${deleted.length} collection${deleted.length === 1 ? "" : "s"} from Shopify${failedSuffix}.`
-        : `No collections were deleted.${failedSuffix}`,
+        ? `Permanently deleted ${deleted.length} ${label}${deleted.length === 1 ? "" : "s"} from ${provider.label}${failedSuffix}.`
+        : `No ${label}s were deleted.${failedSuffix}`,
     warnings,
     output: { deletedIds: deleted, failed, droppedFromSheet },
   };
@@ -1305,14 +1336,71 @@ async function handleApplyToShopify(
   }
 
   if (integration.provider !== "shopify") {
+    const provider = getProvider(integration.provider);
+
     if (ctx.workingMemory.lastEntity === "collections") {
-      const provider = getProvider(integration.provider);
+      if (integration.provider !== "woocommerce") {
+        return {
+          assistantMessage: `Applying ${provider.schema.taxonomyLabel.toLowerCase()} sheet edits back to ${provider.label} is not supported yet. Product changes can be applied, and new groups can be created with the create taxonomy group tool.`,
+        };
+      }
+
+      // WooCommerce: push edited category rows via the batch endpoint. New rows
+      // (no original / no id) must be created with the dedicated create tool,
+      // so they're surfaced rather than silently dropped.
+      const categoryUpdates: Array<{ id: string; row: SyncSheetRow; changedColumns: string[] }> = [];
+      let newRowsIgnored = 0;
+      for (const row of ctx.sheet.rows) {
+        const id = String(row.id ?? "").trim();
+        const orig = id ? origMap.get(id) : null;
+        if (!orig) {
+          newRowsIgnored += 1;
+          continue;
+        }
+        const changedColumns = ctx.sheet.columns.filter(
+          (col) => String(row[col] ?? "") !== String(orig[col] ?? "")
+        );
+        if (changedColumns.length > 0) categoryUpdates.push({ id, row, changedColumns });
+      }
+
+      if (categoryUpdates.length === 0) {
+        return {
+          assistantMessage:
+            newRowsIgnored > 0
+              ? `No edits to existing ${provider.schema.taxonomyLabel.toLowerCase()} to apply. ${newRowsIgnored} new row(s) were skipped — create new categories with the create taxonomy group tool.`
+              : "No pending changes to apply.",
+        };
+      }
+
+      ctx.onProgress?.(
+        `Applying ${categoryUpdates.length} ${provider.schema.taxonomyLabel.toLowerCase()} edit(s) to ${provider.label}…`
+      );
+      const catResult = await updateWooCommerceCategories({ integration, updates: categoryUpdates });
+      ctx.workingMemory.lastApplyStats = {
+        created: 0,
+        updated: catResult.updatedCount,
+        failed: catResult.errors.length,
+      };
+      ctx.workingMemory.lastErrorRows = catResult.errors.map((reason, i) => ({ rowIndex: i, reason }));
+      ctx.workingMemory.lastActionType = "apply_to_shopify";
+
+      const errSuffix =
+        catResult.errors.length > 0
+          ? ` — ${catResult.errors.length} error(s): ${catResult.errors.slice(0, 3).join("; ")}`
+          : "";
+      const newRowsNote =
+        newRowsIgnored > 0
+          ? ` ${newRowsIgnored} new row(s) skipped — use the create taxonomy group tool for those.`
+          : "";
       return {
-        assistantMessage: `Applying taxonomy/category sheet edits back to ${provider.label} is not supported yet. Product changes can be applied, and new WooCommerce categories should be created with the create taxonomy group tool.`,
+        assistantMessage: `Applied to ${provider.label}: ${catResult.updatedCount} ${provider.schema.taxonomyLabel.toLowerCase()} updated${errSuffix}.${newRowsNote}`,
+        rowsAffected: catResult.updatedCount,
+        userErrorCount: catResult.errors.length,
+        userErrorCodes: [],
+        output: { provider: integration.provider, categories: catResult },
       };
     }
 
-    const provider = getProvider(integration.provider);
     const productCreates: SyncSheetRow[] = [];
     const productUpdates: ApplyUpdate[] = [];
 

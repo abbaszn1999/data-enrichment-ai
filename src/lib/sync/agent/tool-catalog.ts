@@ -6,12 +6,22 @@ import { z } from "zod";
 import {
   SERVER_FILTER_KEYS,
   CLIENT_PREDICATE_KINDS,
-  COLUMN_PROFILES,
   COLLECTION_RULE_COLUMNS,
   COLLECTION_RULE_RELATIONS,
-  WRITABLE_COLUMNS,
 } from "@/lib/sync/providers/shopify/schema-catalog";
+import { getAllWritableColumns, getAllColumnProfileKeys } from "@/lib/sync/core/registry";
 import type { AgentStrategy } from "@/lib/sync/core/types";
+
+// Union of writable columns across ALL registered providers. The agent loop's
+// per-provider system instruction steers the model to the correct subset for
+// the connected platform; this enum only needs to be permissive enough that a
+// column valid on the connected provider passes validation. Adding a provider
+// automatically widens this set — no edit here required.
+const WRITABLE_COLUMNS = getAllWritableColumns() as [string, ...string[]];
+
+// Union of column-profile keys (UI tabs) across ALL registered providers, for
+// the same reason as WRITABLE_COLUMNS above. Adding a provider widens this set.
+const COLUMN_PROFILE_KEYS = getAllColumnProfileKeys() as [string, ...string[]];
 
 // ─── Reusable sub-schemas ────────────────────────────────────────────────────
 
@@ -59,9 +69,7 @@ const ClientPredicateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("body_html_empty") }),
 ]);
 
-const ColumnProfileKeySchema = z.enum(
-  Object.keys(COLUMN_PROFILES) as [string, ...string[]]
-);
+const ColumnProfileKeySchema = z.enum(COLUMN_PROFILE_KEYS);
 
 // ─── Individual tool schemas ─────────────────────────────────────────────────
 
@@ -271,14 +279,14 @@ export const TOOL_METADATA: Record<ToolName, ToolMetadata> = {
     name: "sync_collections_assign",
     strategy: "medium_write",
     description:
-      "Assign the given rows (products) to a collection. Uses productSet collections field.",
+      "Assign the given rows (products) to a taxonomy group on the connected platform. For Shopify this adds products to a collection; for WooCommerce it appends the product category (existing categories are preserved). Pass the taxonomy group id as `collectionId` and the product `rowIndexes`.",
     destructive: false,
   },
   sync_collections_delete: {
     name: "sync_collections_delete",
     strategy: "delete",
     description:
-      "PERMANENTLY DELETE one or more Shopify collections from the store via collectionDelete mutation. Use this ONLY when the user explicitly asks to delete/remove/erase a collection (Arabic: حذف/امسح/ازل). DO NOT use this for filter/hide/view-only requests — use sync_products_filter_client or sync_sheet_program for those. Accepts either `collectionIds` (GIDs) or `rowIndexes` into the current collections sheet. The deleted rows are removed from the sheet automatically.",
+      "PERMANENTLY DELETE one or more taxonomy groups from the connected platform (Shopify collections via collectionDelete; WooCommerce product categories via DELETE force=true). Use this ONLY when the user explicitly asks to delete/remove/erase a collection/category (Arabic: حذف/امسح/ازل). DO NOT use this for filter/hide/view-only requests — use sync_products_filter_client or sync_sheet_program for those. Accepts either `collectionIds` (Shopify GIDs or WooCommerce numeric IDs) or `rowIndexes` into the current taxonomy sheet. The deleted rows are removed from the sheet automatically.",
     destructive: true,
   },
   sync_columns_write_with_ai: {
@@ -390,5 +398,5 @@ Client-side predicates (applied after fetch — use for things Shopify cannot fi
 ${CLIENT_PREDICATE_KINDS.join(", ")}
 
 Column profiles you MUST pick from:
-${Object.keys(COLUMN_PROFILES).join(", ")}`;
+${COLUMN_PROFILE_KEYS.join(", ")}`;
 }

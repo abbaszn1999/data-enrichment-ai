@@ -13,7 +13,15 @@ export type {
   ProviderTestResult,
   ProviderConfigField,
   ProviderCapabilities,
+  ProviderSchema,
 } from "./core/types";
 
-export { getProvider, listProviders, isProviderSupported, PROVIDERS } from "./core/registry";
-export { SyncError, AuthError, RateLimitError } from "./core/errors";
+export {
+  getProvider,
+  listProviders,
+  isProviderSupported,
+  getProviderSchema,
+  getAllWritableColumns,
+  PROVIDERS,
+} from "./core/registry";
+export { SyncError, AuthError, RateLimitError, ValidationError, TransientError } from "./core/errors";

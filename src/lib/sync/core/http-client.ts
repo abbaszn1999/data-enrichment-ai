@@ -1,4 +1,10 @@
-import { AuthError, RateLimitError, SyncError } from "./errors";
+import { AuthError, RateLimitError, SyncError, TransientError, ValidationError } from "./errors";
+
+/** Exponential backoff with full jitter — prevents synchronized retry storms. */
+function backoffWithJitter(baseMs: number, attempt: number): number {
+  const exp = baseMs * Math.pow(2, attempt);
+  return exp + Math.floor(Math.random() * 250);
+}
 
 export type HttpClientOptions = {
   baseUrl: string;
@@ -66,30 +72,45 @@ export class HttpClient {
         if (response.status === 429 || response.status === 503 || response.status >= 500) {
           if (attempt < this.maxRetries) {
             const retryAfterHeader = response.headers.get("retry-after");
-            const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : this.retryDelayMs * Math.pow(2, attempt);
+            const retryAfterMs = retryAfterHeader
+              ? Number(retryAfterHeader) * 1000
+              : backoffWithJitter(this.retryDelayMs, attempt);
             await sleep(Number.isFinite(retryAfterMs) ? retryAfterMs : this.retryDelayMs);
             continue;
           }
+          const text = await response.text().catch(() => "");
           if (response.status === 429) {
             throw new RateLimitError(`Rate limited (${response.status}) after ${this.maxRetries} retries`, { provider: this.provider });
           }
+          throw new TransientError(
+            `Server error (${response.status}) after ${this.maxRetries} retries${text ? `: ${text.slice(0, 200)}` : ""}`,
+            { status: response.status, provider: this.provider }
+          );
         }
 
+        // Remaining 4xx (e.g. 400, 404, 422) — bad request, never retry.
         const text = await response.text().catch(() => "");
-        throw new SyncError(`Request failed (${response.status})${text ? `: ${text.slice(0, 300)}` : ""}`, {
+        throw new ValidationError(`Request failed (${response.status})${text ? `: ${text.slice(0, 300)}` : ""}`, {
           status: response.status,
           provider: this.provider,
         });
       } catch (err) {
         lastError = err;
-        if (err instanceof AuthError || err instanceof SyncError) throw err;
+        // Typed/classified errors are terminal — don't retry them.
+        if (err instanceof SyncError) throw err;
+        // Untyped errors are network/transport failures — retry with backoff.
         if (attempt < this.maxRetries) {
-          await sleep(this.retryDelayMs * Math.pow(2, attempt));
+          await sleep(backoffWithJitter(this.retryDelayMs, attempt));
           continue;
         }
       }
     }
-    throw lastError ?? new SyncError("Unknown HTTP error", { provider: this.provider });
+    throw lastError instanceof SyncError
+      ? lastError
+      : new TransientError(
+          `Network error${lastError?.message ? `: ${String(lastError.message).slice(0, 200)}` : ""}`,
+          { provider: this.provider }
+        );
   }
 
   async request<T = any>(path: string, opts: RequestOptions = {}): Promise<T> {

@@ -2,6 +2,18 @@ import type { SyncProvider } from "../../core/types";
 import { testWooCommerceConnection, normalizeWooCommerceStoreUrl } from "./auth";
 import { fetchWooCommerceProductsSheet } from "./fetch-products";
 import { applyWooCommerceChanges } from "./apply";
+import {
+  resolveWooCategoryByName,
+  assignProductsToWooCategory,
+  deleteWooCategories,
+} from "./categories";
+import { WOOCOMMERCE_CORE_PRODUCT_COLUMNS } from "./columns";
+import {
+  WOOCOMMERCE_WRITABLE_COLUMNS,
+  WOOCOMMERCE_COLUMN_PROFILES,
+  WOOCOMMERCE_SERVER_FILTER_KEYS,
+  WOOCOMMERCE_CLIENT_PREDICATE_KINDS,
+} from "./schema-catalog";
 
 export const WooCommerceProvider: SyncProvider = {
   id: "woocommerce",
@@ -12,6 +24,20 @@ export const WooCommerceProvider: SyncProvider = {
     supportsBatch: true,
     batchLimit: 100,
     supportsBidirectionalSync: false,
+  },
+  schema: {
+    coreColumns: WOOCOMMERCE_CORE_PRODUCT_COLUMNS,
+    writableColumns: WOOCOMMERCE_WRITABLE_COLUMNS,
+    columnProfiles: WOOCOMMERCE_COLUMN_PROFILES,
+    serverFilterKeys: WOOCOMMERCE_SERVER_FILTER_KEYS,
+    clientPredicateKinds: WOOCOMMERCE_CLIENT_PREDICATE_KINDS,
+    taxonomyLabel: "Categories",
+  },
+  taxonomy: {
+    resolve: ({ integration, name }) => resolveWooCategoryByName({ integration, name }),
+    assign: ({ integration, taxonomyId, productIds }) =>
+      assignProductsToWooCategory({ integration, categoryId: taxonomyId, productIds }),
+    delete: ({ integration, ids }) => deleteWooCategories({ integration, ids }),
   },
   configFields: [
     {

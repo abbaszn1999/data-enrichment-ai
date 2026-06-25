@@ -69,7 +69,8 @@ import { useWorkspaceContext } from "../layout";
 import { useSyncStore, type SyncMessage, type SyncMode, type SyncWorkingMemory, type SyncActionReceipt } from "@/store/sync-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { getWorkspaceIntegration, type WorkspaceIntegration } from "@/lib/supabase";
-import { COLUMN_PROFILES } from "@/lib/sync/providers/shopify/schema-catalog";
+import { getClientProviderSchema } from "@/lib/sync/client-schema";
+import { SyncExportButton } from "@/components/sync/sync-export-button";
 import type { ColumnProfileKey } from "@/lib/sync/core/types";
 
 type SyncSheetRow = Record<string, any>;
@@ -243,6 +244,7 @@ function buildSheetViews(
   availableColumns: string[],
   entity: "products" | "collections" | null,
   relevantProfiles: ColumnProfileKey[] | null,
+  profiles: Record<string, string[]>,
   labels: Record<ColumnProfileKey, string> = PROFILE_LABELS
 ): SheetView[] {
   if (!entity || availableColumns.length === 0) return [];
@@ -251,7 +253,7 @@ function buildSheetViews(
   const toView = (key: ColumnProfileKey): SheetView => ({
     key,
     label: labels[key] ?? key,
-    columns: key === "all" ? [] : COLUMN_PROFILES[key] ?? [],
+    columns: key === "all" ? [] : profiles[key] ?? [],
   });
 
   if (entity === "collections") {
@@ -272,7 +274,7 @@ function buildSheetViews(
   const ordered: ColumnProfileKey[] = [];
   for (const k of requested) {
     if (seen.has(k)) continue;
-    if (!COLUMN_PROFILES[k]) continue;
+    if (k !== "all" && k !== "core" && !profiles[k]) continue;
     seen.add(k);
     ordered.push(k);
   }
@@ -603,9 +605,14 @@ export default function SyncPage() {
     [integration?.provider]
   );
 
+  const providerSchema = useMemo(
+    () => getClientProviderSchema(integration?.provider),
+    [integration?.provider]
+  );
+
   const sheetViews = useMemo(
-    () => buildSheetViews(resultColumns, currentEntity, relevantProfiles, profileLabels),
-    [resultColumns, currentEntity, relevantProfiles, profileLabels]
+    () => buildSheetViews(resultColumns, currentEntity, relevantProfiles, providerSchema.columnProfiles, profileLabels),
+    [resultColumns, currentEntity, relevantProfiles, providerSchema, profileLabels]
   );
   const [currentPage, setCurrentPage] = useState(1);
   const [chatBlockedReason, setChatBlockedReason] = useState<"NO_CREDITS" | "NO_SUBSCRIPTION" | null>(null);
@@ -2049,6 +2056,12 @@ export default function SyncPage() {
                     Redo
                   </Button>
                 )}
+                <SyncExportButton
+                  columns={resultColumns}
+                  rows={resultRows}
+                  entity={currentEntity}
+                  disabled={isStreaming || isApplying}
+                />
                 <Badge variant={pendingChangeCount > 0 ? "default" : "secondary"} className="text-[10px]">
                   {pendingChangeCount > 0 ? `${pendingChangeCount} pending change${pendingChangeCount === 1 ? "" : "s"}` : "No pending changes"}
                 </Badge>
