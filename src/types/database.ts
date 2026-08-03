@@ -179,6 +179,67 @@ export interface Database {
         };
       };
       // NOTE: import_rows stored in Storage JSON (projects/{sessionId}.json)
+      gallery_sessions: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          name: string;
+          status: "draft" | "ready" | "processing" | "completed" | "failed";
+          source_file_name: string;
+          storage_path: string | null;
+          images_prefix: string | null;
+          total_rows: number;
+          ready_rows: number;
+          failed_rows: number;
+          total_cost: number;
+          total_credits: number;
+          error_message: string | null;
+          cancel_requested: boolean;
+          worksheet_revision: number;
+          settings: Json;
+          settings_revision: number;
+          created_by: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          name: string;
+          created_by: string;
+          status?: "draft" | "ready" | "processing" | "completed" | "failed";
+          source_file_name?: string;
+          storage_path?: string | null;
+          images_prefix?: string | null;
+          total_rows?: number;
+          ready_rows?: number;
+          failed_rows?: number;
+          total_cost?: number;
+          total_credits?: number;
+          error_message?: string | null;
+          cancel_requested?: boolean;
+          worksheet_revision?: number;
+          settings?: Json;
+          settings_revision?: number;
+        };
+        Update: {
+          name?: string;
+          status?: "draft" | "ready" | "processing" | "completed" | "failed";
+          source_file_name?: string;
+          storage_path?: string | null;
+          images_prefix?: string | null;
+          total_rows?: number;
+          ready_rows?: number;
+          failed_rows?: number;
+          total_cost?: number;
+          total_credits?: number;
+          error_message?: string | null;
+          cancel_requested?: boolean;
+          worksheet_revision?: number;
+          settings?: Json;
+          settings_revision?: number;
+          updated_at?: string;
+        };
+      };
       activity_log: {
         Row: {
           id: string;
@@ -364,7 +425,7 @@ export interface Database {
           id: string;
           workspace_id: string;
           user_id: string;
-          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "credit_topup" | "monthly_reset";
+          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
           credits_used: number;
           entity_type: string | null;
           entity_id: string | null;
@@ -374,7 +435,7 @@ export interface Database {
         Insert: {
           workspace_id: string;
           user_id: string;
-          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "credit_topup" | "monthly_reset";
+          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
           credits_used?: number;
           entity_type?: string | null;
           entity_id?: string | null;

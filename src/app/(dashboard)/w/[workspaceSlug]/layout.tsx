@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, createContext, useContext } from "react";
+import { useState, useEffect, createContext, useContext, type ComponentType } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname, useParams, useRouter } from "next/navigation";
+import { usePathname, useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   LayoutDashboard,
   Package,
@@ -13,6 +13,7 @@ import {
   Users,
   Settings,
   ChevronDown,
+  ChevronRight,
   LogOut,
   User,
   PanelLeftClose,
@@ -28,6 +29,9 @@ import {
   Crown,
   RefreshCw,
   Image as ImageIcon,
+  Images,
+  LayoutGrid,
+  Boxes,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/hooks/use-auth";
@@ -64,6 +68,7 @@ export default function WorkspaceLayout({
 }) {
   const params = useParams();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const { theme, setTheme } = useTheme();
   const slug = params.workspaceSlug as string;
@@ -76,6 +81,7 @@ export default function WorkspaceLayout({
   const { subscription, isActive, isLoading: subLoading } = useSubscription(workspace?.id ?? null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -97,7 +103,10 @@ export default function WorkspaceLayout({
   // Hide main sidebar + header on enrichment tool page (it has its own UI)
   const isEnrichPage = pathname.includes("/enrich");
   const isSyncPage = pathname.includes("/sync");
-  const hideWorkspaceSidebar = isEnrichPage || (isSyncPage && syncFocusMode);
+  const isProductsGalleryPage = pathname.includes("/products-gallery");
+  const isProductsGalleryProject = isProductsGalleryPage && searchParams.has("project");
+  const hideWorkspaceSidebar =
+    isEnrichPage || isProductsGalleryProject || (isSyncPage && syncFocusMode);
   // Full immersive mode: hides header + sidebar only for dedicated full-screen pages
   const isImmersive = isEnrichPage;
   // Subscription page should be accessible without an active subscription
@@ -107,12 +116,28 @@ export default function WorkspaceLayout({
   const requiresAdminAccess = isTeamPage || isSettingsPage;
   const canAccessAdminPages = role === "owner" || role === "admin";
 
-  const sidebarLinks = [
+  const mediaChildren = [
+    { href: `${basePath}/image-classify`, label: "AI Classify", icon: ImageIcon },
+    { href: `${basePath}/products-gallery`, label: "Products Gallery", icon: LayoutGrid },
+    { href: `${basePath}/products-visualizer`, label: "Products Visualizer", icon: Boxes },
+  ];
+
+  const isMediaActive = mediaChildren.some(
+    (child) => pathname === child.href || pathname.startsWith(child.href + "/")
+  );
+
+  useEffect(() => {
+    if (isMediaActive) setMediaOpen(true);
+  }, [isMediaActive]);
+
+  const sidebarLinksBeforeMedia = [
     { href: `${basePath}`, label: "Dashboard", icon: LayoutDashboard },
     { href: `${basePath}/products`, label: "Products", icon: Package },
     { href: `${basePath}/categories`, label: "Categories", icon: FolderTree },
     { href: `${basePath}/import`, label: "Import", icon: Upload },
-    { href: `${basePath}/image-classify`, label: "AI Classify", icon: ImageIcon },
+  ];
+
+  const sidebarLinksAfterMedia = [
     { href: hasIntegration ? `${basePath}/sync` : "", label: "Sync", icon: RefreshCw, disabled: !hasIntegration },
     { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
     ...(permissions.canAdmin
@@ -125,6 +150,49 @@ export default function WorkspaceLayout({
       ? [{ href: `${basePath}/subscription`, label: "Subscription", icon: Crown }]
       : []),
   ];
+
+  const renderNavLink = (link: {
+    href: string;
+    label: string;
+    icon: ComponentType<{ className?: string }>;
+    disabled?: boolean;
+  }, opts?: { nested?: boolean }) => {
+    if (link.disabled) {
+      return (
+        <div
+          key={link.label}
+          className={`flex items-center gap-2.5 rounded-lg text-xs font-medium cursor-not-allowed text-muted-foreground/40 select-none ${
+            opts?.nested ? "px-2.5 py-1.5 pl-8" : "px-2.5 py-2"
+          }`}
+          title={sidebarCollapsed ? link.label : undefined}
+        >
+          <link.icon className="h-4 w-4 shrink-0" />
+          {!sidebarCollapsed && <span>{link.label}</span>}
+        </div>
+      );
+    }
+    const isActive =
+      pathname === link.href ||
+      (link.href !== basePath && pathname.startsWith(link.href + "/")) ||
+      (link.href === basePath && pathname === basePath);
+    return (
+      <Link
+        key={link.href}
+        href={link.href}
+        className={`flex items-center gap-2.5 rounded-lg text-xs font-medium transition-colors ${
+          opts?.nested ? "px-2.5 py-1.5 pl-8" : "px-2.5 py-2"
+        } ${
+          isActive
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        }`}
+        title={sidebarCollapsed ? link.label : undefined}
+      >
+        <link.icon className="h-4 w-4 shrink-0" />
+        {!sidebarCollapsed && <span>{link.label}</span>}
+      </Link>
+    );
+  };
 
   // Auto-redirect if user is not a member (e.g. removed from workspace)
   useEffect(() => {
@@ -339,39 +407,51 @@ export default function WorkspaceLayout({
             }`}
           >
             <nav className="flex-1 py-2 px-2 space-y-0.5">
-              {sidebarLinks.map((link) => {
-                if ((link as any).disabled) {
-                  return (
-                    <div
-                      key={link.label}
-                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium cursor-not-allowed text-muted-foreground/40 select-none"
-                      title={sidebarCollapsed ? link.label : undefined}
-                    >
-                      <link.icon className="h-4 w-4 shrink-0" />
-                      {!sidebarCollapsed && <span>{link.label}</span>}
-                    </div>
-                  );
-                }
-                const isActive =
-                  pathname === link.href ||
-                  (link.href !== basePath && pathname.startsWith(link.href + "/")) ||
-                  (link.href === basePath && pathname === basePath);
-                return (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors ${
-                      isActive
-                        ? "bg-primary/10 text-primary"
+              {sidebarLinksBeforeMedia.map((link) => renderNavLink(link))}
+
+              {/* Media group */}
+              {sidebarCollapsed ? (
+                <button
+                  onClick={() => {
+                    setSidebarCollapsed(false);
+                    setMediaOpen(true);
+                  }}
+                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors ${
+                    isMediaActive
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                  title="Media"
+                >
+                  <Images className="h-4 w-4 shrink-0" />
+                </button>
+              ) : (
+                <div>
+                  <button
+                    onClick={() => setMediaOpen(!mediaOpen)}
+                    className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors ${
+                      isMediaActive
+                        ? "text-primary"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     }`}
-                    title={sidebarCollapsed ? link.label : undefined}
                   >
-                    <link.icon className="h-4 w-4 shrink-0" />
-                    {!sidebarCollapsed && <span>{link.label}</span>}
-                  </Link>
-                );
-              })}
+                    <Images className="h-4 w-4 shrink-0" />
+                    <span className="flex-1 text-left">Media</span>
+                    <ChevronRight
+                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${
+                        mediaOpen ? "rotate-90" : ""
+                      }`}
+                    />
+                  </button>
+                  {mediaOpen && (
+                    <div className="mt-0.5 space-y-0.5">
+                      {mediaChildren.map((child) => renderNavLink(child, { nested: true }))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {sidebarLinksAfterMedia.map((link) => renderNavLink(link))}
             </nav>
 
             <div className="p-2 border-t">

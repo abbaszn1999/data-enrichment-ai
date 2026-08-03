@@ -8,8 +8,8 @@ import { getWorkspaceContext, isContextSubscriptionActive } from "@/lib/workspac
 // previous 4-level client fetch waterfall into a single round-trip. Server-side
 // this is cheap: getWorkspaceContext resolves everything via a single cached RPC.
 
-let _plansCache: { data: any[] | null; ts: number } = { data: null, ts: 0 };
-let _packsCache: { data: any[] | null; ts: number } = { data: null, ts: 0 };
+let _plansCache: { data: unknown[] | null; ts: number } = { data: null, ts: 0 };
+let _packsCache: { data: unknown[] | null; ts: number } = { data: null, ts: 0 };
 const REF_CACHE_TTL = 10 * 60 * 1000;
 
 async function getCachedPlans() {
@@ -40,8 +40,10 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = await createClient();
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
@@ -53,7 +55,7 @@ export async function GET(request: NextRequest) {
     }
 
     const [ctx, plans, packs] = await Promise.all([
-      getWorkspaceContext({ workspaceId: workspace.id, userId: session.user.id }),
+      getWorkspaceContext({ workspaceId: workspace.id, userId: user.id }),
       getCachedPlans(),
       getCachedPacks(),
     ]);
@@ -93,7 +95,10 @@ export async function GET(request: NextRequest) {
         isActive: isContextSubscriptionActive(ctx),
       },
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error?.message || "Internal error" }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Internal error" },
+      { status: 500 }
+    );
   }
 }

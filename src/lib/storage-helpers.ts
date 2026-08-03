@@ -4,6 +4,10 @@
  * metadata (session name, status, storage_path, etc.).
  */
 import { createClient } from "@/lib/supabase-browser";
+import {
+  getGalleryWorksheetPath,
+} from "@/lib/gallery/storage-paths";
+import type { GalleryWorksheetJson } from "@/lib/gallery/types";
 
 const BUCKET = "workspace-files";
 
@@ -137,6 +141,42 @@ export function getImageClassificationImagesPrefix(workspaceId: string, sessionI
 
 export function getImageClassificationImagePath(workspaceId: string, sessionId: string, imageId: string, ext: string): string {
   return `${getImageClassificationImagesPrefix(workspaceId, sessionId)}/${imageId}.${ext}`;
+}
+
+// ─── Products Gallery (paths + worksheet JSON) ───────────
+
+export {
+  getGalleryPrefix,
+  getGalleryWorksheetPath,
+  getGallerySourcePath,
+  getGalleryRowImagePath,
+  getGalleryExportPath,
+} from "@/lib/gallery/storage-paths";
+
+export type {
+  GalleryWorksheetJson,
+  GalleryRow,
+  GallerySession,
+  GalleryActiveRun,
+} from "@/lib/gallery/types";
+
+export async function saveGalleryWorksheet(
+  workspaceId: string,
+  sessionId: string,
+  data: GalleryWorksheetJson
+): Promise<string> {
+  const path = getGalleryWorksheetPath(workspaceId, sessionId);
+  await saveJsonToStorage(path, data);
+  return path;
+}
+
+export async function loadGalleryWorksheet(
+  workspaceId: string,
+  sessionId: string
+): Promise<GalleryWorksheetJson | null> {
+  return loadJsonFromStorage<GalleryWorksheetJson>(
+    getGalleryWorksheetPath(workspaceId, sessionId)
+  );
 }
 
 export async function uploadImageToStorage(storagePath: string, blob: Blob): Promise<void> {
