@@ -10,6 +10,42 @@ import sharp from "sharp";
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+
+/** Content-Type is a singleton; Fetch joins duplicate headers with ", ". */
+export function normalizeDeclaredContentType(raw: string | null): string {
+  if (!raw) return "";
+  return raw.split(",")[0].split(";")[0].trim().toLowerCase();
+}
+
+function isSoftAllowedContentType(declaredType: string): boolean {
+  return (
+    !declaredType ||
+    declaredType === "application/octet-stream" ||
+    declaredType === "binary/octet-stream" ||
+    /^image\/(jpeg|jpg|png|webp|gif|avif)$/.test(declaredType)
+  );
+}
+
+function isRetryableDownloadError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "AbortError") return false;
+  const msg = error.message.toLowerCase();
+  return (
+    msg.includes("fetch failed") ||
+    msg.includes("network") ||
+    msg.includes("econnreset") ||
+    msg.includes("econnrefused") ||
+    msg.includes("etimedout") ||
+    msg.includes("socket") ||
+    msg.includes("tls") ||
+    msg.includes("undici")
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 type SerperRawImage = {
   imageUrl?: string;
@@ -450,7 +486,11 @@ export async function downloadImageBytes(
     return null;
   };
 
-  try {
+  const attemptDownload = async (): Promise<{
+    buffer: Buffer;
+    contentType: string;
+    ext: string;
+  } | null> => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     try {
@@ -500,23 +540,19 @@ export async function downloadImageBytes(
         });
         return null;
       }
-      const declaredType = (res.headers.get("content-type") || "")
-        .split(";")[0]
-        .trim()
-        .toLowerCase();
-      // Many CDNs omit type or use octet-stream; trust magic bytes later.
-      const softTypeOk =
-        !declaredType ||
-        declaredType === "application/octet-stream" ||
-        declaredType === "binary/octet-stream" ||
-        /^image\/(jpeg|jpg|png|webp|gif|avif)$/.test(declaredType);
-      if (!softTypeOk) {
-        galleryWarn("download", "Image content-type rejected", {
-          reasonCode: "content_type_rejected",
+
+      const rawDeclaredType = res.headers.get("content-type");
+      const declaredType = normalizeDeclaredContentType(rawDeclaredType);
+      // CDNs often omit type, use octet-stream, or send duplicate Content-Type
+      // headers (Fetch joins them as "image/png, image/png"). Never hard-reject
+      // on header alone — magic bytes below are authoritative.
+      if (!isSoftAllowedContentType(declaredType)) {
+        galleryWarn("download", "Image content-type suspicious; trusting magic bytes", {
+          reasonCode: "content_type_suspicious",
           imageUrl: imageUrl.slice(0, 200),
           declaredType,
+          rawDeclaredType: rawDeclaredType?.slice(0, 120) ?? null,
         });
-        return null;
       }
 
       const reader = res.body.getReader();
@@ -601,12 +637,36 @@ export async function downloadImageBytes(
     } finally {
       clearTimeout(timeout);
     }
-  } catch (error) {
-    galleryWarn("download", "Image download threw", {
-      reasonCode: "download_error",
-      imageUrl: imageUrl.slice(0, 200),
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
+  };
+
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      return await attemptDownload();
+    } catch (error) {
+      lastError = error;
+      if (
+        !isRetryableDownloadError(error) ||
+        attempt === MAX_DOWNLOAD_ATTEMPTS
+      ) {
+        break;
+      }
+      galleryWarn("download", "Image download retrying after network error", {
+        reasonCode: "download_retry",
+        imageUrl: imageUrl.slice(0, 200),
+        attempt,
+        maxAttempts: MAX_DOWNLOAD_ATTEMPTS,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(250 * attempt);
+    }
   }
+
+  galleryWarn("download", "Image download threw", {
+    reasonCode: "download_error",
+    imageUrl: imageUrl.slice(0, 200),
+    error:
+      lastError instanceof Error ? lastError.message : String(lastError ?? "unknown"),
+  });
+  return null;
 }
