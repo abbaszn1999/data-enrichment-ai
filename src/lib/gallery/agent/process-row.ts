@@ -1,5 +1,4 @@
 import { createAdminClient } from "@/lib/supabase-admin";
-import sharp from "sharp";
 import {
   sumCosts,
   type AiCallCost,
@@ -7,13 +6,8 @@ import {
 import { updateCachedCredits } from "@/lib/workspace-context";
 import { searchScrapingMainImages } from "@/lib/gallery/agents/scraping-main-agent";
 import { searchScrapingGalleryImages } from "@/lib/gallery/agents/scraping-gallery-agent";
-import { downloadImageBytes } from "@/lib/gallery/providers/serper-images";
 import { removeGalleryAssets } from "@/lib/gallery/storage-assets";
-import {
-  downloadGalleryBytesAdmin,
-  uploadGalleryBytesAdmin,
-} from "@/lib/gallery/storage-admin";
-import { getGalleryRowImagePath } from "@/lib/gallery/storage-paths";
+import { downloadGalleryBytesAdmin } from "@/lib/gallery/storage-admin";
 import {
   getRowMainImagePaths,
   resolveGalleryRunPhase,
@@ -45,23 +39,8 @@ async function removeStoragePaths(admin: Admin, paths: string[]): Promise<void> 
   await removeGalleryAssets(admin, paths);
 }
 
-async function normalizePersistedMainImage(image: {
-  buffer: Buffer;
-  contentType: string;
-  ext: string;
-}) {
-  if (
-    image.contentType === "image/jpeg" ||
-    image.contentType === "image/png" ||
-    image.contentType === "image/webp"
-  ) {
-    return image;
-  }
-  return {
-    buffer: await sharp(image.buffer, { animated: false }).webp().toBuffer(),
-    contentType: "image/webp",
-    ext: "webp",
-  };
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
 }
 
 export async function deductGalleryCredits(params: {
@@ -246,49 +225,29 @@ export async function processScrapingRow(params: {
 
   if (runMain) {
     if (worksheet.originalImageColumn && !hasUsableOriginal) {
-      return fail(
-        "The selected original image is not a valid downloadable URL"
-      );
+      return fail("The selected original image is not a valid image URL");
     }
 
     if (hasUsableOriginal) {
       ensureTime(5_000, "original reference");
-      trace.stage("main", "Saving original external image(s) as Main");
+      trace.stage("main", "Keeping original image URL(s) as Main");
       await params.onCheckpoint?.({ generationStage: "main" });
 
+      // Scraping stores public URLs only — OpenAI/Gemini fetch them later.
       for (const originalUrl of originalImageUrls) {
-        const sourceImage = await downloadImageBytes(originalUrl);
-        if (!sourceImage) {
-          galleryWarn("row", "Skipping undownloadable original image", {
+        if (!isHttpUrl(originalUrl)) {
+          galleryWarn("row", "Skipping non-HTTP original image URL", {
             rowId: row.id,
             originalUrl,
           });
           continue;
         }
-        const downloaded = await normalizePersistedMainImage(sourceImage);
-        const storedPath = getGalleryRowImagePath(
-          workspaceId,
-          sessionId,
-          row.id,
-          "main",
-          downloaded.ext
-        );
-        await uploadGalleryBytesAdmin(
-          storedPath,
-          downloaded.buffer,
-          downloaded.contentType
-        );
-        newlyStoredMainPaths.push(storedPath);
-        mainPaths.push(storedPath);
-        mainAttachments.push({
-          url: storedPath,
-          buffer: downloaded.buffer,
-          contentType: downloaded.contentType,
-        });
+        mainPaths.push(originalUrl);
+        mainAttachments.push({ url: originalUrl });
         sourceMetaImages.push({
-          ref: storedPath,
-          url: storedPath,
-          persistence: "internal",
+          ref: originalUrl,
+          url: originalUrl,
+          persistence: "external",
           sourceUrl: originalUrl,
           pageUrl: originalUrl,
           title: "original",
@@ -304,7 +263,7 @@ export async function processScrapingRow(params: {
 
       mainPath = mainPaths[0] ?? null;
       if (!mainPath) {
-        return fail("The selected original image could not be downloaded");
+        return fail("The selected original image is not a valid image URL");
       }
       await params.onCheckpoint?.({
         mainImagePaths: mainPaths,
@@ -336,38 +295,19 @@ export async function processScrapingRow(params: {
         await params.onCheckpoint?.({ generationStage: "main" });
         const mainPicks = mainSearch.mainCandidates.slice(0, mainCount);
         for (const candidate of mainPicks) {
-          const sourceImage = await downloadImageBytes(candidate.imageUrl);
-          if (!sourceImage) {
-            galleryWarn("row", "Skipping undownloadable Main image", {
+          if (!isHttpUrl(candidate.imageUrl)) {
+            galleryWarn("row", "Skipping non-HTTP Main image URL", {
               rowId: row.id,
               sourceDomain: candidate.sourceDomain,
             });
             continue;
           }
-          const downloaded = await normalizePersistedMainImage(sourceImage);
-          const storedPath = getGalleryRowImagePath(
-            workspaceId,
-            sessionId,
-            row.id,
-            "main",
-            downloaded.ext
-          );
-          await uploadGalleryBytesAdmin(
-            storedPath,
-            downloaded.buffer,
-            downloaded.contentType
-          );
-          newlyStoredMainPaths.push(storedPath);
-          mainPaths.push(storedPath);
-          mainAttachments.push({
-            url: storedPath,
-            buffer: downloaded.buffer,
-            contentType: downloaded.contentType,
-          });
+          mainPaths.push(candidate.imageUrl);
+          mainAttachments.push({ url: candidate.imageUrl });
           sourceMetaImages.push({
-            ref: storedPath,
-            url: storedPath,
-            persistence: "internal",
+            ref: candidate.imageUrl,
+            url: candidate.imageUrl,
+            persistence: "external",
             sourceUrl: candidate.imageUrl,
             pageUrl: candidate.pageUrl,
             title: candidate.title,
@@ -387,7 +327,7 @@ export async function processScrapingRow(params: {
         }
         mainPath = mainPaths[0] ?? null;
         if (!mainPath) {
-          return fail("No selected Main image could be downloaded", {
+          return fail("No suitable Main image URL was selected", {
             stage: "main",
           });
         }
@@ -423,23 +363,17 @@ export async function processScrapingRow(params: {
     trace.stage("gallery-scrape", "Selecting exact Gallery images with OpenAI");
     await params.onCheckpoint?.({ generationStage: "gallery" });
 
-    // Ensure every Main image is attached with bytes. Passing only remote URLs
-    // often fails when OpenAI's fetchers time out or are blocked by CDNs.
+    // Scraping attaches Main as public HTTPS URLs for OpenAI input_image.image_url.
+    // Legacy internal storage paths are loaded as bytes → data URL instead.
     const galleryMainImages: MainAttachment[] =
       mainAttachments.length > 0
         ? [...mainAttachments]
         : mainPaths.map((url) => ({ url }));
 
     for (const attachment of galleryMainImages) {
-      if (attachment.buffer) continue;
+      if (attachment.buffer || isHttpUrl(attachment.url)) continue;
       try {
-        if (/^https?:\/\//i.test(attachment.url)) {
-          const downloaded = await downloadImageBytes(attachment.url);
-          if (downloaded) {
-            attachment.buffer = downloaded.buffer;
-            attachment.contentType = downloaded.contentType;
-          }
-        } else if (attachment.url) {
+        if (attachment.url) {
           const stored = await downloadGalleryBytesAdmin(attachment.url);
           if (stored) {
             attachment.buffer = stored.buffer;
@@ -447,7 +381,7 @@ export async function processScrapingRow(params: {
           }
         }
       } catch (error) {
-        galleryWarn("row", "Could not prefetch Main image for gallery search", {
+        galleryWarn("row", "Could not load stored Main image for gallery search", {
           rowId: row.id,
           mainUrl: attachment.url,
           error: error instanceof Error ? error.message : String(error),
@@ -456,11 +390,11 @@ export async function processScrapingRow(params: {
     }
 
     const usableMainImages = galleryMainImages.filter(
-      (attachment) => !!attachment.buffer
+      (attachment) => !!attachment.buffer || isHttpUrl(attachment.url)
     );
     if (usableMainImages.length === 0) {
       return fail(
-        "Could not download the Main image for gallery search. Try another Main image or retry.",
+        "No usable Main image URL for gallery search. Find Main images first or retry.",
         { stage: "gallery", mainUrl: mainPaths[0] ?? "" }
       );
     }

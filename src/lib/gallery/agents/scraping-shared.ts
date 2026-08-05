@@ -237,13 +237,19 @@ export async function runOpenAiWebImageSearch(params: {
     { type: "input_text", text: params.prompt },
   ];
   // Attach Main images first (all of them) so the model can visually compare.
+  // OpenAI Responses vision input (docs):
+  //   { type: "input_image", image_url: "https://..." | "data:image/...;base64,...", detail }
   for (let index = mainAttachments.length - 1; index >= 0; index -= 1) {
     const attachment = mainAttachments[index]!;
+    const imageUrl = attachment.buffer
+      ? `data:${attachment.contentType || "image/jpeg"};base64,${attachment.buffer.toString("base64")}`
+      : /^https?:\/\//i.test(attachment.url)
+        ? attachment.url
+        : null;
+    if (!imageUrl) continue;
     content.unshift({
       type: "input_image",
-      image_url: attachment.buffer
-        ? `data:${attachment.contentType || "image/jpeg"};base64,${attachment.buffer.toString("base64")}`
-        : attachment.url,
+      image_url: imageUrl,
       detail: "high",
     });
   }

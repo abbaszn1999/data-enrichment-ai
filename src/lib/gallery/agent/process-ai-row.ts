@@ -22,6 +22,7 @@ import {
 import { deductGalleryCredits } from "@/lib/gallery/agent/process-row";
 import {
   extensionForMime,
+  mimeTypeFromImageUrl,
   normalizeMimeType,
   type AiImageModel,
   type AiReferenceImage,
@@ -111,13 +112,13 @@ export async function processAiRow(params: {
     path: string,
     label: string
   ): Promise<AiReferenceImage | null> => {
+    // Scraped / external mains: pass the public HTTPS URL to Gemini
+    // (Interactions ImageContent.uri) so we do not re-download here.
     if (/^https?:\/\//i.test(path)) {
-      const original = await downloadImageBytes(path);
-      if (!original) return null;
       return {
         label,
-        buffer: original.buffer,
-        contentType: normalizeMimeType(original.contentType),
+        uri: path,
+        contentType: mimeTypeFromImageUrl(path),
       };
     }
     try {

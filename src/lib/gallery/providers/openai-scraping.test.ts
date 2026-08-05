@@ -218,6 +218,53 @@ describe("Scraping Gallery agent", () => {
     ]);
   });
 
+  it("attaches Main as a public HTTPS image_url per OpenAI vision docs", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    productIdentity: "Brand SKU",
+                    galleryImageUrls: ["https://cdn.example/g.jpg"],
+                    notes: "ok",
+                  }),
+                },
+              ],
+            },
+          ],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await searchScrapingGalleryImages({
+      rowData: { SKU: "SKU" },
+      selectedColumns: ["SKU"],
+      settings: {
+        ...DEFAULT_SCRAPING_SETTINGS,
+        imagesPerRow: 1,
+      },
+      requestedGalleryImages: 1,
+      mainImages: [{ url: "https://cdn.example/main.jpg" }],
+    });
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request.input[0].content[0]).toEqual({
+      type: "input_image",
+      image_url: "https://cdn.example/main.jpg",
+      detail: "high",
+    });
+  });
+
   it("attaches every Main image and blocks all of their URLs", async () => {
     process.env.OPENAI_API_KEY = "test-key";
     const fetchMock = vi.fn().mockResolvedValue(

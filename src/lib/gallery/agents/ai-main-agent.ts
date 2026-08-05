@@ -13,6 +13,7 @@ import {
   referenceFlags,
   sceneInstruction,
   styleInstruction,
+  referenceToGeminiImagePart,
   type AiImageModel,
   type AiReferenceImage,
 } from "@/lib/gallery/agents/ai-shared";
@@ -125,11 +126,9 @@ export async function generateAiMainImage(params: {
   const responseFormat = buildAiImageResponseFormat(settings);
   const input: Array<Record<string, unknown>> = [
     { type: "text", text: prompt },
-    ...params.references.map((reference) => ({
-      type: "image",
-      data: reference.buffer.toString("base64"),
-      mime_type: reference.contentType,
-    })),
+    ...params.references.map((reference) =>
+      referenceToGeminiImagePart(reference)
+    ),
   ];
 
   galleryLog("ai-main:request", "Generating AI Main image", {

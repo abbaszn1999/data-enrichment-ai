@@ -1,9 +1,17 @@
 import type { GalleryAiSettings, GalleryRow, GalleryWorksheetJson } from "@/lib/gallery/types";
 
+/**
+ * Reference image for Gemini Interactions API.
+ * Docs: either inline `data`+`mime_type`, or public `uri`+`mime_type`
+ * (https://ai.google.dev/gemini-api/docs/image-understanding).
+ */
 export type AiReferenceImage = {
   label: string;
-  buffer: Buffer;
   contentType: string;
+  /** Inline bytes (preferred for generated / private storage assets). */
+  buffer?: Buffer;
+  /** Public HTTPS URL fetched by Gemini (`ImageContent.uri`). */
+  uri?: string;
 };
 
 export type AiImageModel = "gemini-3.1-flash-image" | "gemini-3-pro-image";
@@ -13,6 +21,42 @@ export function normalizeMimeType(
 ): "image/jpeg" | "image/png" | "image/webp" {
   if (value === "image/png" || value === "image/webp") return value;
   return "image/jpeg";
+}
+
+/** Guess MIME for Gemini `mime_type` when attaching a public image URL. */
+export function mimeTypeFromImageUrl(
+  url: string
+): "image/jpeg" | "image/png" | "image/webp" {
+  const lower = url.toLowerCase();
+  if (/\.png(\?|#|$)/i.test(lower)) return "image/png";
+  if (/\.webp(\?|#|$)/i.test(lower)) return "image/webp";
+  return "image/jpeg";
+}
+
+/**
+ * Build a Gemini Interactions `ImageContent` part from a reference.
+ * Official shapes:
+ * - `{ type: "image", data: base64, mime_type }`
+ * - `{ type: "image", uri: "https://...", mime_type }`
+ */
+export function referenceToGeminiImagePart(
+  reference: AiReferenceImage
+): Record<string, unknown> {
+  if (reference.uri && /^https?:\/\//i.test(reference.uri)) {
+    return {
+      type: "image",
+      uri: reference.uri,
+      mime_type: reference.contentType,
+    };
+  }
+  if (reference.buffer && reference.buffer.length > 0) {
+    return {
+      type: "image",
+      data: reference.buffer.toString("base64"),
+      mime_type: reference.contentType,
+    };
+  }
+  throw new Error("AI reference image requires buffer or public uri");
 }
 
 export function extensionForMime(value: string): string {

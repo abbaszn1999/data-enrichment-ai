@@ -158,15 +158,12 @@ describe("two-stage scraping row", () => {
       })
     );
     expect(result.row.status).toBe("ready");
-    expect(result.row.mainImagePaths).toEqual([
-      expect.stringMatching(
-        /^workspace\/gallery\/session-1\/rows\/row-1\/main-.+\.png$/
-      ),
-    ]);
-    expect(result.row.mainImagePath).toBe(result.row.mainImagePaths?.[0]);
+    expect(result.row.mainImagePaths).toEqual(["https://cdn.example/main.png"]);
+    expect(result.row.mainImagePath).toBe("https://cdn.example/main.png");
     expect(result.row.galleryImagePaths).toEqual([]);
     expect(result.row.errorMessage).toBeUndefined();
-    expect(mocks.upload).toHaveBeenCalledTimes(1);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
   });
 
   it("runs Gallery only after Main exists", async () => {
@@ -216,12 +213,11 @@ describe("two-stage scraping row", () => {
         mainImages: [
           expect.objectContaining({
             url: "https://cdn.example/main.png",
-            buffer: expect.any(Buffer),
-            contentType: "image/png",
           }),
         ],
       })
     );
+    expect(mocks.download).not.toHaveBeenCalled();
     expect(result.row.mainImagePaths).toEqual(["https://cdn.example/main.png"]);
     expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
     expect(result.row.sourceMeta?.images).toEqual(
@@ -272,16 +268,24 @@ describe("two-stage scraping row", () => {
         mainImages: [
           expect.objectContaining({
             url: "https://cdn.example/main.png",
-            buffer: expect.any(Buffer),
           }),
         ],
       })
     );
+    expect(mocks.download).not.toHaveBeenCalled();
     expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
   });
 
-  it("fails Gallery when Main image cannot be downloaded", async () => {
-    mocks.download.mockResolvedValue(null);
+  it("passes HTTPS Main URLs to Gallery without downloading", async () => {
+    const galleryCandidate = {
+      imageUrl: "https://cdn.example/gallery.png",
+      pageUrl: "https://example.com/product",
+      title: "Brand EXACT-123 side",
+      width: 0,
+      height: 0,
+      sourceDomain: "example.com",
+    };
+    mocks.searchGallery.mockResolvedValue(searchGalleryResult([galleryCandidate]));
     const existing = row();
     existing.mainImagePath = "https://cdn.example/main.png";
     existing.mainImagePaths = ["https://cdn.example/main.png"];
@@ -298,10 +302,14 @@ describe("two-stage scraping row", () => {
       runPhase: "gallery",
     });
 
-    expect(mocks.searchGallery).not.toHaveBeenCalled();
-    expect(result.row.status).toBe("failed");
-    expect(result.error).toMatch(/Could not download the Main image/i);
-    expect(result.row.mainImagePaths).toEqual(["https://cdn.example/main.png"]);
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.searchGallery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mainImages: [expect.objectContaining({ url: "https://cdn.example/main.png" })],
+      })
+    );
+    expect(result.row.status).toBe("ready");
+    expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
   });
 
   it("reports when no suitable Main image is found", async () => {
@@ -371,22 +379,18 @@ describe("two-stage scraping row", () => {
         requestedGalleryImages: 1,
         mainImages: [
           expect.objectContaining({
-            url: expect.stringMatching(
-              /^workspace\/gallery\/session-1\/rows\/row-1\/main-.+\.png$/
-            ),
-            buffer: expect.any(Buffer),
+            url: "https://images.example/main.png",
           }),
         ],
       })
     );
     expect(result.row.mainImagePaths).toEqual([
-      expect.stringMatching(
-        /^workspace\/gallery\/session-1\/rows\/row-1\/main-.+\.png$/
-      ),
+      "https://images.example/main.png",
     ]);
     expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
     expect(result.row.errorMessage).toBeUndefined();
-    expect(mocks.upload).toHaveBeenCalledTimes(1);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
   });
 
   it("copies every original image URL into Main and sends all of them to Gallery", async () => {
@@ -418,15 +422,20 @@ describe("two-stage scraping row", () => {
     });
 
     expect(mocks.searchMain).not.toHaveBeenCalled();
-    expect(mocks.upload).toHaveBeenCalledTimes(3);
-    expect(result.row.mainImagePaths).toHaveLength(3);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(result.row.mainImagePaths).toEqual([
+      "https://images.example/front.png",
+      "https://images.example/back.png",
+      "https://images.example/side.png",
+    ]);
     expect(mocks.searchGallery).toHaveBeenCalledWith(
       expect.objectContaining({
         requestedGalleryImages: 2,
         mainImages: [
-          expect.objectContaining({ buffer: expect.any(Buffer) }),
-          expect.objectContaining({ buffer: expect.any(Buffer) }),
-          expect.objectContaining({ buffer: expect.any(Buffer) }),
+          expect.objectContaining({ url: "https://images.example/front.png" }),
+          expect.objectContaining({ url: "https://images.example/back.png" }),
+          expect.objectContaining({ url: "https://images.example/side.png" }),
         ],
       })
     );
@@ -467,15 +476,14 @@ describe("two-stage scraping row", () => {
         mainImages: [
           expect.objectContaining({
             url: "https://cdn.example/main-1.png",
-            buffer: expect.any(Buffer),
           }),
           expect.objectContaining({
             url: "https://cdn.example/main-2.png",
-            buffer: expect.any(Buffer),
           }),
         ],
       })
     );
+    expect(mocks.download).not.toHaveBeenCalled();
     expect(result.row.mainImagePaths).toEqual([
       "https://cdn.example/main-1.png",
       "https://cdn.example/main-2.png",
