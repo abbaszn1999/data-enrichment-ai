@@ -67,6 +67,16 @@ describe("Scraping Main agent", () => {
     expect(result.mainCandidates.map((c) => c.imageUrl)).toEqual([canonicalMain]);
     const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(request.model).toBe("gpt-5.6-terra");
+    expect(request.reasoning).toEqual({ effort: "medium" });
+    expect(request.tools[0]).toMatchObject({
+      type: "web_search",
+      search_content_types: ["image", "text"],
+      search_context_size: "medium",
+      external_web_access: true,
+      image_settings: {
+        caption: true,
+      },
+    });
     expect(request.text.format.name).toBe("product_main_selection");
     expect(request.text.format.schema.required).toEqual([
       "productIdentity",
@@ -447,5 +457,7 @@ describe("Scraping Gallery agent", () => {
 
     const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(request.model).toBe("gpt-5.6-sol");
+    expect(request.reasoning).toEqual({ effort: "high" });
+    expect(request.tools[0].search_context_size).toBe("high");
   });
 });

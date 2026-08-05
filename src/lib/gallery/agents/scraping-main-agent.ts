@@ -51,7 +51,9 @@ export function buildScrapingMainPrompt(params: {
     "Exact product match is mandatory: same model, color, variant, and packaging.",
     "Reject wrong products, similar models, wrong colors, and wrong variants.",
     "Do not invent or alter URLs. Only return image URLs that exist verbatim in the image-search results.",
-    "If exact matching is uncertain, return fewer or no images. An empty list is better than a wrong product.",
+    "When image-search results include clear exact matches, select the best ones — do not return an empty list out of caution.",
+    "Return an empty mainImageUrls list only when image-search results contain no plausible exact-product matches.",
+    "If fewer than the requested count are reliable, return the reliable subset rather than inventing or forcing weak matches.",
     mainCustom
       ? `MAIN IMAGE CUSTOM INSTRUCTIONS — treat as mandatory unless unsafe:\n${mainCustom}`
       : "",
@@ -112,6 +114,7 @@ export async function searchScrapingMainImages(params: {
       maxResults,
       searchDepth: "medium",
       model: resolveScrapingModel(params.settings.tier),
+      tier: params.settings.tier,
     });
 
   const selectedMainCandidates = selectedCandidates(
@@ -127,6 +130,7 @@ export async function searchScrapingMainImages(params: {
       ? selection.mainImageUrls.length
       : 0,
     searchCallCount,
+    notes: selection?.notes ? String(selection.notes).slice(0, 400) : null,
   });
 
   return {

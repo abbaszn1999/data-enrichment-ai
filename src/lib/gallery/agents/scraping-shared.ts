@@ -22,6 +22,33 @@ export function resolveScrapingModel(
     : GALLERY_SCRAPING_MODELS.standard;
 }
 
+/**
+ * Reasoning effort for Responses API web search.
+ * Docs: https://developers.openai.com/api/docs/guides/reasoning
+ * and web search guide (agentic search depth scales with effort).
+ * Values used: "medium" | "high" (supported on gpt-5.6 terra/sol).
+ */
+export type ScrapingReasoningEffort = "medium" | "high";
+
+/**
+ * search_context_size on web_search tool.
+ * Docs: https://developers.openai.com/api/docs/guides/tools-web-search
+ * Values: "low" | "medium" | "high"
+ */
+export type ScrapingSearchContextSize = "medium" | "high";
+
+export function resolveScrapingReasoningEffort(
+  tier: GalleryScrapingSettings["tier"] | undefined
+): ScrapingReasoningEffort {
+  return tier === "premium" ? "high" : "medium";
+}
+
+export function resolveScrapingSearchContextSize(
+  tier: GalleryScrapingSettings["tier"] | undefined
+): ScrapingSearchContextSize {
+  return tier === "premium" ? "high" : "medium";
+}
+
 /** @deprecated Prefer resolveScrapingModel(settings.tier). Defaults to Standard/Terra. */
 export const GALLERY_SCRAPING_MODEL = GALLERY_SCRAPING_MODELS.standard;
 
@@ -215,6 +242,8 @@ export async function runOpenAiWebImageSearch(params: {
   maxResults: number;
   searchDepth: GalleryScrapingSettings["searchDepth"];
   model?: ScrapingModelId;
+  /** Scraping UI tier — drives reasoning.effort + search_context_size. */
+  tier?: GalleryScrapingSettings["tier"];
   /** @deprecated Prefer `mainImages` — kept for single-image callers. */
   mainImage?: ScrapingMainImageAttachment;
   mainImages?: ScrapingMainImageAttachment[];
@@ -226,7 +255,9 @@ export async function runOpenAiWebImageSearch(params: {
   searchCallCount: number;
 }> {
   const apiKey = requireOpenAiApiKey();
-  const model = params.model || GALLERY_SCRAPING_MODEL;
+  const model = params.model || resolveScrapingModel(params.tier);
+  const reasoningEffort = resolveScrapingReasoningEffort(params.tier);
+  const searchContextSize = resolveScrapingSearchContextSize(params.tier);
   const mainAttachments =
     params.mainImages && params.mainImages.length > 0
       ? params.mainImages
@@ -259,6 +290,9 @@ export async function runOpenAiWebImageSearch(params: {
     agent: params.agent,
     maxResults: params.maxResults,
     searchDepth: params.searchDepth,
+    reasoningEffort,
+    searchContextSize,
+    tier: params.tier || "standard",
     hasMainAttachment: mainAttachments.length > 0,
     mainAttachmentCount: mainAttachments.length,
   });
@@ -271,15 +305,19 @@ export async function runOpenAiWebImageSearch(params: {
     },
     body: JSON.stringify({
       model,
-      reasoning: { effort: "low" },
+      // Docs: reasoning: { effort: "none"|"low"|"medium"|"high"|"xhigh"|"max" }
+      reasoning: { effort: reasoningEffort },
       tools: [
         {
           type: "web_search",
+          // Docs: include "image" for image results; "text" for supporting context
           search_content_types: ["image", "text"],
           image_settings: {
             max_results: params.maxResults,
             caption: true,
           },
+          // Docs: low | medium | high — how much search context the model sees
+          search_context_size: searchContextSize,
           external_web_access: true,
         },
       ],
@@ -326,11 +364,44 @@ export async function runOpenAiWebImageSearch(params: {
     searchCallCount
   );
 
+  const selectedUrlField =
+    params.agent === "scraping-main" ? "mainImageUrls" : "galleryImageUrls";
+  const selectedUrls = Array.isArray(selection?.[selectedUrlField])
+    ? (selection![selectedUrlField] as unknown[])
+    : [];
+
+  galleryLog("openai:scraping", `${params.agent} OpenAI image search finished`, {
+    model,
+    agent: params.agent,
+    reasoningEffort,
+    searchContextSize,
+    searchCallCount,
+    imageResultCount: indexedImages.candidates.length,
+    selectedUrlCount: selectedUrls.length,
+    notes:
+      selection?.notes != null
+        ? String(selection.notes).slice(0, 400)
+        : null,
+  });
+
   if (!selection) {
     galleryWarn("openai:scraping", `Could not parse ${params.agent} selection`, {
       imageResultCount: indexedImages.candidates.length,
       searchCallCount,
     });
+  } else if (
+    indexedImages.candidates.length > 0 &&
+    selectedUrls.length === 0
+  ) {
+    galleryWarn(
+      "openai:scraping",
+      `${params.agent} found image results but selected none`,
+      {
+        imageResultCount: indexedImages.candidates.length,
+        notes:
+          selection.notes != null ? String(selection.notes).slice(0, 400) : null,
+      }
+    );
   }
 
   return {

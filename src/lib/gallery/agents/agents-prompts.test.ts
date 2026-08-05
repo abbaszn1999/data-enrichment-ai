@@ -49,6 +49,8 @@ describe("separated agent prompts and schemas", () => {
     expect(prompt).toContain("Select exactly 2 Main images");
     expect(prompt).toContain("White background only");
     expect(prompt).toContain("Accept any resolution and any aspect ratio");
+    expect(prompt).toContain("do not return an empty list out of caution");
+    expect(prompt).not.toContain("An empty list is better than a wrong product");
     expect(prompt).not.toContain("Prefer official");
     expect(prompt).not.toContain("marketplace");
     expect(prompt).not.toContain("Gallery images must be meaningfully different");
@@ -71,6 +73,8 @@ describe("separated agent prompts and schemas", () => {
     expect(prompt).toContain("at least 1200px");
     expect(prompt).toContain("Prefer square Gallery images");
     expect(prompt).toContain("Prefer official");
+    expect(prompt).toContain("do not return an empty Gallery out of caution");
+    expect(prompt).not.toContain("An empty Gallery list is better than a wrong product");
     expect(prompt).not.toContain("marketplace");
     expect(prompt).not.toContain("Accept any resolution and any aspect ratio");
     expect(prompt).toContain("Gallery images must be meaningfully different");

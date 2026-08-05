@@ -65,7 +65,9 @@ export function buildScrapingGalleryPrompt(params: {
       ? `Prefer ${params.settings.aspectRatio} Gallery images.`
       : "",
     "Only return image URLs that exist verbatim in the image-search results. Never invent or alter a URL.",
-    "If exact matching is uncertain, omit the image. An empty Gallery list is better than a wrong product.",
+    "When image-search results include clear exact matches that differ from Main, select them — do not return an empty Gallery out of caution.",
+    "Omit only clearly wrong products, wrong variants, or near-duplicates of Main. Return an empty galleryImageUrls list only when no plausible exact Gallery matches exist in the results.",
+    "If fewer than the requested count are reliable, return the reliable subset.",
     sourcePolicyInstruction(params.settings),
     galleryCustom
       ? `GALLERY CUSTOM INSTRUCTIONS — treat as mandatory unless unsafe:\n${galleryCustom}`
@@ -140,6 +142,7 @@ export async function searchScrapingGalleryImages(params: {
       searchDepth: params.settings.searchDepth,
       mainImages,
       model: resolveScrapingModel(params.settings.tier),
+      tier: params.settings.tier,
     });
 
   const blockedMainUrls = new Set(
@@ -159,6 +162,7 @@ export async function searchScrapingGalleryImages(params: {
       : 0,
     mainAttachmentCount: mainImages.length,
     searchCallCount,
+    notes: selection?.notes ? String(selection.notes).slice(0, 400) : null,
   });
 
   return {
