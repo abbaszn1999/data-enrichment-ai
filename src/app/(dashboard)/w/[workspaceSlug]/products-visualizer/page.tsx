@@ -698,25 +698,23 @@ export default function ProductsVisualizerPage() {
               : fresh.session
           );
           if (fresh.worksheet) {
+            const syncedWorksheet: VisualizerWorksheetJson = {
+              ...fresh.worksheet,
+              settings: settingsRef.current,
+            };
             setWorksheet((current) =>
               current
                 ? {
                     ...current,
-                    revision: fresh.worksheet?.revision ?? current.revision,
-                    rows: fresh.worksheet.rows,
-                    columns: fresh.worksheet.columns,
+                    revision: syncedWorksheet.revision,
+                    rows: syncedWorksheet.rows,
+                    columns: syncedWorksheet.columns,
                     // Keep the user's current settings in the worksheet object.
                     settings: settingsRef.current,
                   }
-                : {
-                    ...fresh.worksheet,
-                    settings: settingsRef.current,
-                  }
+                : syncedWorksheet
             );
-            worksheetRef.current = {
-              ...fresh.worksheet,
-              settings: settingsRef.current,
-            };
+            worksheetRef.current = syncedWorksheet;
           }
           // Brief pause when storage is still catching up.
           if (/synchroniz/i.test(message)) {

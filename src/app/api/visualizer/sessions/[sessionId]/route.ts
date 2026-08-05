@@ -5,6 +5,7 @@ import {
   requireVisualizerAdmin,
 } from "@/lib/visualizer/auth";
 import {
+  loadVisualizerWorksheetMatchingRevisionAdmin,
   removeVisualizerPrefixAdmin,
   saveVisualizerWorksheetAdmin,
   signVisualizerWorksheetImages,
