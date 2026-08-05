@@ -59,14 +59,19 @@ export function brandingInstruction(params: {
   brandColors: string[];
   hasLogo: boolean;
   hasBrandGuide: boolean;
+  /** When false, skip hex palette lines (Upload image brand-guide mode). Default true. */
+  includeBrandColors?: boolean;
 }): string {
   if (!params.brandingEnabled) {
     return "Branding is disabled; do not infer branding requirements from unused assets.";
   }
-  const parts = [
-    "BRANDING IS MANDATORY for this image.",
-    `Brand palette (use these colors in commercially natural accents, props, backdrop tones, or packaging cues where appropriate): ${params.brandColors.join(", ") || "not specified"}.`,
-  ];
+  const includeBrandColors = params.includeBrandColors !== false;
+  const parts = ["BRANDING IS MANDATORY for this image."];
+  if (includeBrandColors) {
+    parts.push(
+      `Brand palette (use these colors in commercially natural accents, props, backdrop tones, or packaging cues where appropriate): ${params.brandColors.join(", ") || "not specified"}.`
+    );
+  }
   if (params.hasLogo) {
     parts.push(
       "A brand logo reference image is attached. Preserve its exact recognizable mark, proportions, and colors. Place it only where commercially natural (tag, packaging, subtle environmental branding). Never invent, redraw, or misspell logo text."
@@ -76,10 +81,9 @@ export function brandingInstruction(params: {
     parts.push(
       "A brand-guide / art-direction reference image is attached. Follow its visual language: typography mood, photography style, spacing, color usage, and overall brand feel. The output must look on-brand with that guide."
     );
-  }
-  if (!params.hasLogo && !params.hasBrandGuide) {
+  } else if (includeBrandColors) {
     parts.push(
-      "No logo or brand-guide image was attached; apply the palette subtly without inventing a logo or brand text."
+      "Apply Primary / Secondary / Accent palette colors subtly without inventing a logo or brand text unless a logo reference is attached."
     );
   }
   return parts.join(" ");

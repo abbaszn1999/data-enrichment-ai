@@ -6,8 +6,24 @@ import type { SerperImageCandidate } from "@/lib/gallery/agent/filters";
 import { galleryLog, galleryWarn } from "@/lib/gallery/log";
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
 
-/** Fixed server-side model — never exposed in the UI. */
-export const GALLERY_SCRAPING_MODEL = "gpt-5.6";
+export type ScrapingModelId = "gpt-5.6-terra" | "gpt-5.6-sol";
+
+/** Standard → Terra, Premium → Sol (official OpenAI model IDs). */
+export const GALLERY_SCRAPING_MODELS = {
+  standard: "gpt-5.6-terra",
+  premium: "gpt-5.6-sol",
+} as const satisfies Record<"standard" | "premium", ScrapingModelId>;
+
+export function resolveScrapingModel(
+  tier: GalleryScrapingSettings["tier"] | undefined
+): ScrapingModelId {
+  return tier === "premium"
+    ? GALLERY_SCRAPING_MODELS.premium
+    : GALLERY_SCRAPING_MODELS.standard;
+}
+
+/** @deprecated Prefer resolveScrapingModel(settings.tier). Defaults to Standard/Terra. */
+export const GALLERY_SCRAPING_MODEL = GALLERY_SCRAPING_MODELS.standard;
 
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
@@ -18,7 +34,6 @@ export type OpenAiImageCandidate = SerperImageCandidate & {
 
 export type IndexedImageResults = {
   candidates: OpenAiImageCandidate[];
-  byUrl: Map<string, OpenAiImageCandidate>;
 };
 
 type OpenAiImageResult = {
@@ -122,40 +137,9 @@ function hostnameOf(url: string): string {
   }
 }
 
-export function urlKey(value: string): string {
-  return value.trim().replaceAll("&amp;", "&").toLowerCase();
-}
-
-/** Host + pathname only — ignores query/hash CDN variants (&width=, ?v=, etc.). */
-export function urlPathKey(value: string): string {
-  try {
-    const url = new URL(value.trim().replaceAll("&amp;", "&"));
-    return `${url.protocol}//${url.hostname.toLowerCase()}${decodeURIComponent(url.pathname)}`.toLowerCase();
-  } catch {
-    return urlKey(value);
-  }
-}
-
-function registerUrlAliases(
-  byUrl: Map<string, OpenAiImageCandidate>,
-  alias: string,
-  candidate: OpenAiImageCandidate
-) {
-  if (!/^https:\/\//i.test(alias)) return;
-  const normalized = alias.trim().replaceAll("&amp;", "&");
-  const entry = { ...candidate, imageUrl: normalized };
-  byUrl.set(urlKey(normalized), entry);
-  const pathOnly = urlPathKey(normalized);
-  // Prefer keeping an existing exact full-URL entry; path key is a fallback index.
-  if (!byUrl.has(pathOnly)) {
-    byUrl.set(pathOnly, entry);
-  }
-}
-
 export function collectImageResults(response: OpenAiResponse): IndexedImageResults {
   const seen = new Set<string>();
   const images: OpenAiImageCandidate[] = [];
-  const byUrl = new Map<string, OpenAiImageCandidate>();
   for (const output of response.output ?? []) {
     if (output.type !== "web_search_call") continue;
     const results = output.results ?? output.action?.results ?? [];
@@ -165,11 +149,11 @@ export function collectImageResults(response: OpenAiResponse): IndexedImageResul
       const thumbnailUrl = String(result.thumbnail_url || "").trim();
       const imageUrl = canonicalUrl || thumbnailUrl;
       if (!/^https:\/\//i.test(imageUrl)) continue;
-      const key = urlKey(imageUrl);
+      const key = imageUrl.trim().toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       const pageUrl = String(result.source_website_url || "").trim();
-      const candidate = {
+      images.push({
         imageUrl,
         canonicalUrl: canonicalUrl || imageUrl,
         thumbnailUrl: /^https:\/\//i.test(thumbnailUrl) ? thumbnailUrl : undefined,
@@ -178,88 +162,50 @@ export function collectImageResults(response: OpenAiResponse): IndexedImageResul
         width: 0,
         height: 0,
         sourceDomain: hostnameOf(pageUrl || imageUrl),
-      };
-      images.push(candidate);
-      for (const alias of [canonicalUrl, thumbnailUrl]) {
-        registerUrlAliases(byUrl, alias, candidate);
-      }
+      });
     }
   }
-  return { candidates: images, byUrl };
+  return { candidates: images };
 }
 
-export function resolveSelectedImageUrl(
-  rawUrl: string,
-  byUrl: Map<string, OpenAiImageCandidate>,
-  allCandidates: OpenAiImageCandidate[] = []
-): OpenAiImageCandidate | null {
-  const normalized = String(rawUrl || "").trim().replaceAll("&amp;", "&");
-  if (!normalized) return null;
-  const exact = byUrl.get(urlKey(normalized));
-  if (exact) {
-    // Prefer the model-selected URL when it is only a query-string variant of a
-    // verified search hit (common CDN params like width= / v=).
-    if (urlPathKey(exact.imageUrl) === urlPathKey(normalized)) {
-      return { ...exact, imageUrl: normalized };
-    }
-    return exact;
-  }
-  const byPath = byUrl.get(urlPathKey(normalized));
-  if (byPath) {
-    return {
-      ...byPath,
-      imageUrl: /^https:\/\//i.test(normalized) ? normalized : byPath.imageUrl,
-    };
-  }
-  // Last resort: same host as a verified image-search hit. Models often rewrite
-  // CDN query params or pick a sibling asset URL on the same shop CDN.
-  if (!/^https:\/\//i.test(normalized)) return null;
-  let selectedHost = "";
-  try {
-    selectedHost = new URL(normalized).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-  const hostMatch = allCandidates.find((candidate) => {
-    const hosts = [
-      hostnameOf(candidate.imageUrl),
-      hostnameOf(candidate.canonicalUrl),
-      hostnameOf(candidate.thumbnailUrl || ""),
-      candidate.sourceDomain,
-    ];
-    return hosts.includes(selectedHost);
-  });
-  if (!hostMatch) return null;
-  return {
-    ...hostMatch,
-    imageUrl: normalized,
-    canonicalUrl: normalized,
-  };
-}
-
+/**
+ * Trust the model's selected URLs directly (no verification against the raw
+ * search-result list). The model sees the attached Main image and its own
+ * search results, so its picks are used as-is; only basic cleanup (trim,
+ * https-only, de-dupe) is applied here.
+ */
 export function selectedCandidates(
   urls: unknown,
-  byUrl: Map<string, OpenAiImageCandidate>,
-  limit: number,
-  allCandidates: OpenAiImageCandidate[] = []
+  limit: number
 ): OpenAiImageCandidate[] {
   if (limit <= 0 || !Array.isArray(urls)) return [];
   const selected: OpenAiImageCandidate[] = [];
   const seen = new Set<string>();
   for (const raw of urls) {
-    const candidate = resolveSelectedImageUrl(
-      String(raw || ""),
-      byUrl,
-      allCandidates
-    );
-    const candidateKey = candidate ? urlPathKey(candidate.imageUrl) : "";
-    if (!candidate || seen.has(candidateKey)) continue;
-    seen.add(candidateKey);
-    selected.push(candidate);
+    const imageUrl = String(raw || "").trim().replaceAll("&amp;", "&");
+    if (!/^https:\/\//i.test(imageUrl)) continue;
+    const key = imageUrl.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push({
+      imageUrl,
+      canonicalUrl: imageUrl,
+      pageUrl: imageUrl,
+      title: "Product image",
+      width: 0,
+      height: 0,
+      sourceDomain: hostnameOf(imageUrl),
+    });
     if (selected.length >= limit) break;
   }
   return selected;
 }
+
+export type ScrapingMainImageAttachment = {
+  buffer?: Buffer;
+  contentType?: string;
+  url: string;
+};
 
 export async function runOpenAiWebImageSearch(params: {
   agent: "scraping-main" | "scraping-gallery";
@@ -268,7 +214,10 @@ export async function runOpenAiWebImageSearch(params: {
   schema: Record<string, unknown>;
   maxResults: number;
   searchDepth: GalleryScrapingSettings["searchDepth"];
-  mainImage?: { buffer?: Buffer; contentType?: string; url: string };
+  model?: ScrapingModelId;
+  /** @deprecated Prefer `mainImages` — kept for single-image callers. */
+  mainImage?: ScrapingMainImageAttachment;
+  mainImages?: ScrapingMainImageAttachment[];
 }): Promise<{
   selection: Record<string, unknown> | null;
   indexedImages: IndexedImageResults;
@@ -277,25 +226,35 @@ export async function runOpenAiWebImageSearch(params: {
   searchCallCount: number;
 }> {
   const apiKey = requireOpenAiApiKey();
+  const model = params.model || GALLERY_SCRAPING_MODEL;
+  const mainAttachments =
+    params.mainImages && params.mainImages.length > 0
+      ? params.mainImages
+      : params.mainImage
+        ? [params.mainImage]
+        : [];
   const content: Array<Record<string, unknown>> = [
     { type: "input_text", text: params.prompt },
   ];
-  if (params.mainImage) {
+  // Attach Main images first (all of them) so the model can visually compare.
+  for (let index = mainAttachments.length - 1; index >= 0; index -= 1) {
+    const attachment = mainAttachments[index]!;
     content.unshift({
       type: "input_image",
-      image_url: params.mainImage.buffer
-        ? `data:${params.mainImage.contentType || "image/jpeg"};base64,${params.mainImage.buffer.toString("base64")}`
-        : params.mainImage.url,
+      image_url: attachment.buffer
+        ? `data:${attachment.contentType || "image/jpeg"};base64,${attachment.buffer.toString("base64")}`
+        : attachment.url,
       detail: "high",
     });
   }
 
   galleryLog("openai:scraping", `Starting ${params.agent} OpenAI image search`, {
-    model: GALLERY_SCRAPING_MODEL,
+    model,
     agent: params.agent,
     maxResults: params.maxResults,
     searchDepth: params.searchDepth,
-    hasMainAttachment: !!params.mainImage,
+    hasMainAttachment: mainAttachments.length > 0,
+    mainAttachmentCount: mainAttachments.length,
   });
 
   const response = await fetch(OPENAI_RESPONSES_URL, {
@@ -305,7 +264,7 @@ export async function runOpenAiWebImageSearch(params: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: GALLERY_SCRAPING_MODEL,
+      model,
       reasoning: { effort: "low" },
       tools: [
         {
@@ -356,7 +315,7 @@ export async function runOpenAiWebImageSearch(params: {
     (item) => item.type === "web_search_call"
   ).length;
   const cost = calculateOpenAiWebSearchCost(
-    GALLERY_SCRAPING_MODEL,
+    model,
     body.usage,
     searchCallCount
   );

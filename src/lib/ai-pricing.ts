@@ -1,6 +1,11 @@
 // ─── AI API Pricing (Official, per 1M tokens in USD) ─────────────────
-// Source: https://ai.google.dev/gemini-api/docs/pricing
-// Last updated: 2026-04-02
+// Gemini source: https://ai.google.dev/gemini-api/docs/pricing
+// OpenAI source: https://developers.openai.com/api/docs/pricing
+// OpenAI GPT-5.6 Sol/Terra verified against official table (2026-08-04):
+//   Short context | Long context (>272K input tokens, full-request uplift)
+//   Model           Input  Cached  Cache writes  Output | Input  Cached  Cache writes  Output
+//   gpt-5.6-sol     $5.00  $0.50   $6.25         $30.00 | $10.00 $1.00   $12.50        $45.00
+//   gpt-5.6-terra   $2.00  $0.20   $2.50         $12.00 | $4.00  $0.40   $5.00         $18.00
 //
 // ─── Serper.dev Pricing ──────────────────────────────────────────────
 // Source: https://serper.dev/ (top-up model, no subscription)
@@ -16,76 +21,129 @@ export const SERPER_COST_PER_QUERY = 0.001; // $0.001 per search query
 // Volume plans drop toward ~$0.009–$0.015; we keep Starter so preflight never underquotes.
 export const SERPAPI_COST_PER_SEARCH = 0.025;
 
+/** OpenAI GPT-5.6 long-context threshold (input tokens). */
+export const OPENAI_LONG_CONTEXT_INPUT_TOKENS = 272_000;
+
 export interface ModelPricing {
   inputPerMillion: number;
   outputPerMillion: number;
   cachedInputPerMillion: number;
+  /** Prompt-cache writes (1.25× uncached input for GPT-5.6). */
+  cacheWritePerMillion?: number;
+  /** When set, requests whose input tokens exceed this use the long-* rates. */
+  longContextThresholdTokens?: number;
+  longInputPerMillion?: number;
+  longOutputPerMillion?: number;
+  longCachedInputPerMillion?: number;
+  longCacheWritePerMillion?: number;
   searchPerQuery: number;
   freeSearchQuota: number;
 }
 
+function openAiGpt56Pricing(params: {
+  input: number;
+  cached: number;
+  cacheWrite: number;
+  output: number;
+  longInput: number;
+  longCached: number;
+  longCacheWrite: number;
+  longOutput: number;
+}): ModelPricing {
+  return {
+    inputPerMillion: params.input,
+    cachedInputPerMillion: params.cached,
+    cacheWritePerMillion: params.cacheWrite,
+    outputPerMillion: params.output,
+    longContextThresholdTokens: OPENAI_LONG_CONTEXT_INPUT_TOKENS,
+    longInputPerMillion: params.longInput,
+    longCachedInputPerMillion: params.longCached,
+    longCacheWritePerMillion: params.longCacheWrite,
+    longOutputPerMillion: params.longOutput,
+    // Hosted web/image search: $10 / 1k calls = $0.01 per call
+    searchPerQuery: 0.01,
+    freeSearchQuota: 0,
+  };
+}
+
 export const MODEL_PRICING: Record<string, ModelPricing> = {
-  // OpenAI GPT-5.6 Sol alias. Web/image search is $10 / 1k calls.
-  "gpt-5.6": {
-    inputPerMillion: 5.00,
-    outputPerMillion: 30.00,
-    cachedInputPerMillion: 0.50,
-    searchPerQuery: 0.01,
-    freeSearchQuota: 0,
-  },
-  "gpt-5.6-sol": {
-    inputPerMillion: 5.00,
-    outputPerMillion: 30.00,
-    cachedInputPerMillion: 0.50,
-    searchPerQuery: 0.01,
-    freeSearchQuota: 0,
-  },
+  // gpt-5.6 alias routes to Sol per OpenAI docs.
+  "gpt-5.6": openAiGpt56Pricing({
+    input: 5.0,
+    cached: 0.5,
+    cacheWrite: 6.25,
+    output: 30.0,
+    longInput: 10.0,
+    longCached: 1.0,
+    longCacheWrite: 12.5,
+    longOutput: 45.0,
+  }),
+  "gpt-5.6-sol": openAiGpt56Pricing({
+    input: 5.0,
+    cached: 0.5,
+    cacheWrite: 6.25,
+    output: 30.0,
+    longInput: 10.0,
+    longCached: 1.0,
+    longCacheWrite: 12.5,
+    longOutput: 45.0,
+  }),
+  "gpt-5.6-terra": openAiGpt56Pricing({
+    input: 2.0,
+    cached: 0.2,
+    cacheWrite: 2.5,
+    output: 12.0,
+    longInput: 4.0,
+    longCached: 0.4,
+    longCacheWrite: 5.0,
+    longOutput: 18.0,
+  }),
   "gemini-3.1-flash-image": {
-    inputPerMillion: 0.50,
-    outputPerMillion: 3.00,
+    inputPerMillion: 0.5,
+    outputPerMillion: 3.0,
     cachedInputPerMillion: 0,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
   "gemini-3-pro-image": {
-    inputPerMillion: 2.00,
-    outputPerMillion: 12.00,
+    inputPerMillion: 2.0,
+    outputPerMillion: 12.0,
     cachedInputPerMillion: 0,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
   "gemini-3.1-pro-preview": {
-    inputPerMillion: 2.00,
-    outputPerMillion: 12.00,
-    cachedInputPerMillion: 0.20,
+    inputPerMillion: 2.0,
+    outputPerMillion: 12.0,
+    cachedInputPerMillion: 0.2,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
   "gemini-3.1-flash-lite-preview": {
     inputPerMillion: 0.25,
-    outputPerMillion: 1.50,
+    outputPerMillion: 1.5,
     cachedInputPerMillion: 0.025,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
   "gemini-3-flash-preview": {
     inputPerMillion: 0.25,
-    outputPerMillion: 1.50,
+    outputPerMillion: 1.5,
     cachedInputPerMillion: 0.025,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
   "gemini-3.5-flash": {
-    inputPerMillion: 1.50,
-    outputPerMillion: 9.00,
+    inputPerMillion: 1.5,
+    outputPerMillion: 9.0,
     cachedInputPerMillion: 0.15,
     searchPerQuery: 0.014,
     freeSearchQuota: 0,
   },
   // Official paid-tier pricing (verified 2026-07-29).
   "gemini-3.6-flash": {
-    inputPerMillion: 1.50,
-    outputPerMillion: 7.50,
+    inputPerMillion: 1.5,
+    outputPerMillion: 7.5,
     cachedInputPerMillion: 0.15,
     searchPerQuery: 0.014,
     freeSearchQuota: 0,
@@ -93,9 +151,9 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
 };
 
 const DEFAULT_PRICING: ModelPricing = {
-  inputPerMillion: 2.00,
-  outputPerMillion: 12.00,
-  cachedInputPerMillion: 0.20,
+  inputPerMillion: 2.0,
+  outputPerMillion: 12.0,
+  cachedInputPerMillion: 0.2,
   searchPerQuery: 0.014,
   freeSearchQuota: 5000,
 };
@@ -111,6 +169,7 @@ export interface TokenUsage {
   candidatesTokens: number;
   thoughtsTokens: number;
   cachedTokens: number;
+  cacheWriteTokens: number;
   totalTokens: number;
 }
 
@@ -120,11 +179,23 @@ export interface AiCallCost {
   usedGoogleSearch: boolean;
   inputCost: number;
   cachedInputCost: number;
+  cacheWriteCost: number;
   outputCost: number;
   searchCost: number;
   serperCost: number;
   serpApiCost: number;
   totalCost: number;
+}
+
+function readUsageNumber(
+  usage: Record<string, number | undefined>,
+  ...keys: string[]
+): number {
+  for (const key of keys) {
+    const value = usage[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return 0;
 }
 
 /**
@@ -144,6 +215,8 @@ export function calculateCallCost(
 
 /**
  * Token cost plus N Grounding-with-Google-Search queries (Gemini 3 billing).
+ * Also used for OpenAI Responses: supports cache reads/writes and long-context
+ * uplift when the model pricing defines long-* rates.
  */
 export function calculateGroundedCallCost(
   model: string,
@@ -156,49 +229,96 @@ export function calculateGroundedCallCost(
       ? (usageMetadata as Record<string, number | undefined>)
       : {};
 
-  // generateContent returns camelCase while Interactions returns snake_case.
-  const promptTokens =
-    usage.promptTokenCount ??
-    usage.total_input_tokens ??
-    usage.input_tokens ??
-    0;
-  const candidatesTokens =
-    usage.candidatesTokenCount ??
-    usage.total_output_tokens ??
-    usage.output_tokens ??
-    0;
-  const thoughtsTokens =
-    usage.thoughtsTokenCount ??
-    usage.total_thought_tokens ??
-    usage.thought_tokens ??
-    0;
-  const cachedTokens =
-    usage.cachedContentTokenCount ??
-    usage.total_cached_tokens ??
-    usage.cached_tokens ??
-    0;
+  // generateContent returns camelCase while Interactions/OpenAI return snake_case.
+  const promptTokens = readUsageNumber(
+    usage,
+    "promptTokenCount",
+    "total_input_tokens",
+    "input_tokens"
+  );
+  const candidatesTokens = readUsageNumber(
+    usage,
+    "candidatesTokenCount",
+    "total_output_tokens",
+    "output_tokens"
+  );
+  const thoughtsTokens = readUsageNumber(
+    usage,
+    "thoughtsTokenCount",
+    "total_thought_tokens",
+    "thought_tokens"
+  );
+  const cachedTokens = readUsageNumber(
+    usage,
+    "cachedContentTokenCount",
+    "total_cached_tokens",
+    "cached_tokens"
+  );
+  const cacheWriteTokens = readUsageNumber(
+    usage,
+    "cacheWriteTokenCount",
+    "cache_write_tokens",
+    "cache_creation_tokens",
+    "cache_creation_input_tokens"
+  );
   const totalTokens =
-    usage.totalTokenCount ??
-    usage.total_tokens ??
+    readUsageNumber(usage, "totalTokenCount", "total_tokens") ||
     promptTokens + candidatesTokens + thoughtsTokens;
 
-  const nonCachedInput = Math.max(0, promptTokens - cachedTokens);
+  const threshold = pricing.longContextThresholdTokens;
+  const useLongContext =
+    typeof threshold === "number" &&
+    threshold > 0 &&
+    promptTokens > threshold &&
+    typeof pricing.longInputPerMillion === "number";
 
-  const inputCost = (nonCachedInput / 1_000_000) * pricing.inputPerMillion;
-  const cachedInputCost = (cachedTokens / 1_000_000) * pricing.cachedInputPerMillion;
+  const inputRate = useLongContext
+    ? pricing.longInputPerMillion!
+    : pricing.inputPerMillion;
+  const cachedRate = useLongContext
+    ? (pricing.longCachedInputPerMillion ?? pricing.cachedInputPerMillion)
+    : pricing.cachedInputPerMillion;
+  const cacheWriteRate = useLongContext
+    ? (pricing.longCacheWritePerMillion ??
+      pricing.cacheWritePerMillion ??
+      inputRate * 1.25)
+    : (pricing.cacheWritePerMillion ?? inputRate * 1.25);
+  const outputRate = useLongContext
+    ? (pricing.longOutputPerMillion ?? pricing.outputPerMillion)
+    : pricing.outputPerMillion;
+
+  const safeCached = Math.min(Math.max(0, cachedTokens), Math.max(0, promptTokens));
+  const safeCacheWrite = Math.min(
+    Math.max(0, cacheWriteTokens),
+    Math.max(0, promptTokens - safeCached)
+  );
+  const nonCachedInput = Math.max(0, promptTokens - safeCached - safeCacheWrite);
+
+  const inputCost = (nonCachedInput / 1_000_000) * inputRate;
+  const cachedInputCost = (safeCached / 1_000_000) * cachedRate;
+  const cacheWriteCost = (safeCacheWrite / 1_000_000) * cacheWriteRate;
   const outputTokensTotal = candidatesTokens + thoughtsTokens;
-  const outputCost = (outputTokensTotal / 1_000_000) * pricing.outputPerMillion;
+  const outputCost = (outputTokensTotal / 1_000_000) * outputRate;
   const queries = Math.max(0, Math.floor(searchQueryCount));
   const searchCost = queries * pricing.searchPerQuery;
 
-  const totalCost = inputCost + cachedInputCost + outputCost + searchCost;
+  const totalCost =
+    inputCost + cachedInputCost + cacheWriteCost + outputCost + searchCost;
 
   return {
     model,
-    usage: { promptTokens, candidatesTokens, thoughtsTokens, cachedTokens, totalTokens },
+    usage: {
+      promptTokens,
+      candidatesTokens,
+      thoughtsTokens,
+      cachedTokens: safeCached,
+      cacheWriteTokens: safeCacheWrite,
+      totalTokens,
+    },
     usedGoogleSearch: queries > 0,
     inputCost,
     cachedInputCost,
+    cacheWriteCost,
     outputCost,
     searchCost,
     serperCost: 0,
@@ -233,6 +353,14 @@ export function calculateOpenAiWebSearchCost(
                 : typeof details.cached_tokens === "number"
                   ? details.cached_tokens
                   : 0,
+            cache_write_tokens:
+              typeof source.cache_write_tokens === "number"
+                ? source.cache_write_tokens
+                : typeof details.cache_write_tokens === "number"
+                  ? details.cache_write_tokens
+                  : typeof details.cache_creation_tokens === "number"
+                    ? details.cache_creation_tokens
+                    : 0,
           };
         })()
       : usage;
@@ -288,6 +416,7 @@ export function createImageGenerationCost(
     totalCost:
       measured.inputCost +
       measured.cachedInputCost +
+      measured.cacheWriteCost +
       imageCost +
       thinkingCost +
       searchCost,
@@ -311,10 +440,18 @@ export function createSerperCost(queryCount: number = 1): AiCallCost {
   const cost = queryCount * SERPER_COST_PER_QUERY;
   return {
     model: "serper-image-search",
-    usage: { promptTokens: 0, candidatesTokens: 0, thoughtsTokens: 0, cachedTokens: 0, totalTokens: 0 },
+    usage: {
+      promptTokens: 0,
+      candidatesTokens: 0,
+      thoughtsTokens: 0,
+      cachedTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+    },
     usedGoogleSearch: false,
     inputCost: 0,
     cachedInputCost: 0,
+    cacheWriteCost: 0,
     outputCost: 0,
     searchCost: 0,
     serperCost: cost,
@@ -335,11 +472,13 @@ export function createSerpApiCost(searchCount: number = 1): AiCallCost {
       candidatesTokens: 0,
       thoughtsTokens: 0,
       cachedTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 0,
     },
     usedGoogleSearch: false,
     inputCost: 0,
     cachedInputCost: 0,
+    cacheWriteCost: 0,
     outputCost: 0,
     searchCost: 0,
     serperCost: 0,
@@ -371,6 +510,7 @@ export function sumCosts(costs: AiCallCost[]): {
   breakdown: {
     inputCost: number;
     cachedInputCost: number;
+    cacheWriteCost: number;
     outputCost: number;
     searchCost: number;
     serperCost: number;
@@ -380,6 +520,7 @@ export function sumCosts(costs: AiCallCost[]): {
   let totalTokens = 0;
   let inputCost = 0;
   let cachedInputCost = 0;
+  let cacheWriteCost = 0;
   let outputCost = 0;
   let searchCost = 0;
   let serperCost = 0;
@@ -389,6 +530,7 @@ export function sumCosts(costs: AiCallCost[]): {
     totalTokens += c.usage.totalTokens;
     inputCost += c.inputCost;
     cachedInputCost += c.cachedInputCost;
+    cacheWriteCost += c.cacheWriteCost ?? 0;
     outputCost += c.outputCost;
     searchCost += c.searchCost;
     serperCost += c.serperCost;
@@ -396,7 +538,13 @@ export function sumCosts(costs: AiCallCost[]): {
   }
 
   const totalCost =
-    inputCost + cachedInputCost + outputCost + searchCost + serperCost + serpApiCost;
+    inputCost +
+    cachedInputCost +
+    cacheWriteCost +
+    outputCost +
+    searchCost +
+    serperCost +
+    serpApiCost;
 
   return {
     totalTokens,
@@ -405,6 +553,7 @@ export function sumCosts(costs: AiCallCost[]): {
     breakdown: {
       inputCost,
       cachedInputCost,
+      cacheWriteCost,
       outputCost,
       searchCost,
       serperCost,

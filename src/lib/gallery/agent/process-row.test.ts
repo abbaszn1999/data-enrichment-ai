@@ -147,6 +147,7 @@ describe("two-stage scraping row", () => {
       ownerUserId: "owner",
       actorUserId: "actor",
       runId: "run-1",
+      runPhase: "main",
     });
 
     expect(mocks.searchMain).toHaveBeenCalledTimes(1);
@@ -212,11 +213,13 @@ describe("two-stage scraping row", () => {
     expect(mocks.searchGallery).toHaveBeenCalledWith(
       expect.objectContaining({
         requestedGalleryImages: 1,
-        mainImage: expect.objectContaining({
-          url: "https://cdn.example/main.png",
-          buffer: expect.any(Buffer),
-          contentType: "image/png",
-        }),
+        mainImages: [
+          expect.objectContaining({
+            url: "https://cdn.example/main.png",
+            buffer: expect.any(Buffer),
+            contentType: "image/png",
+          }),
+        ],
       })
     );
     expect(result.row.mainImagePaths).toEqual(["https://cdn.example/main.png"]);
@@ -266,10 +269,12 @@ describe("two-stage scraping row", () => {
     expect(mocks.searchGallery).toHaveBeenCalledWith(
       expect.objectContaining({
         requestedGalleryImages: 2,
-        mainImage: expect.objectContaining({
-          url: "https://cdn.example/main.png",
-          buffer: expect.any(Buffer),
-        }),
+        mainImages: [
+          expect.objectContaining({
+            url: "https://cdn.example/main.png",
+            buffer: expect.any(Buffer),
+          }),
+        ],
       })
     );
     expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
@@ -364,12 +369,14 @@ describe("two-stage scraping row", () => {
     expect(mocks.searchGallery).toHaveBeenCalledWith(
       expect.objectContaining({
         requestedGalleryImages: 1,
-        mainImage: expect.objectContaining({
-          url: expect.stringMatching(
-            /^workspace\/gallery\/session-1\/rows\/row-1\/main-.+\.png$/
-          ),
-          buffer: expect.any(Buffer),
-        }),
+        mainImages: [
+          expect.objectContaining({
+            url: expect.stringMatching(
+              /^workspace\/gallery\/session-1\/rows\/row-1\/main-.+\.png$/
+            ),
+            buffer: expect.any(Buffer),
+          }),
+        ],
       })
     );
     expect(result.row.mainImagePaths).toEqual([
@@ -380,5 +387,99 @@ describe("two-stage scraping row", () => {
     expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
     expect(result.row.errorMessage).toBeUndefined();
     expect(mocks.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it("copies every original image URL into Main and sends all of them to Gallery", async () => {
+    const galleryCandidate = {
+      imageUrl: "https://cdn.example/gallery-multi.png",
+      pageUrl: "https://example.com/product",
+      title: "Brand EXACT-123 detail",
+      width: 0,
+      height: 0,
+      sourceDomain: "example.com",
+    };
+    mocks.searchGallery.mockResolvedValue(searchGalleryResult([galleryCandidate]));
+    const multi = row();
+    multi.originalData = {
+      SKU: "EXACT-123",
+      Image:
+        "https://images.example/front.png https://images.example/back.png https://images.example/side.png",
+    };
+
+    const result = await processScrapingRow({
+      admin: {} as never,
+      workspaceId: "workspace",
+      sessionId: "session-1",
+      worksheet: worksheet("Image", 2),
+      row: multi,
+      ownerUserId: "owner",
+      actorUserId: "actor",
+      runId: "run-multi-original",
+    });
+
+    expect(mocks.searchMain).not.toHaveBeenCalled();
+    expect(mocks.upload).toHaveBeenCalledTimes(3);
+    expect(result.row.mainImagePaths).toHaveLength(3);
+    expect(mocks.searchGallery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedGalleryImages: 2,
+        mainImages: [
+          expect.objectContaining({ buffer: expect.any(Buffer) }),
+          expect.objectContaining({ buffer: expect.any(Buffer) }),
+          expect.objectContaining({ buffer: expect.any(Buffer) }),
+        ],
+      })
+    );
+    expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
+  });
+
+  it("sends every existing Main image to the Gallery agent", async () => {
+    const galleryCandidate = {
+      imageUrl: "https://cdn.example/gallery-from-mains.png",
+      pageUrl: "https://example.com/product",
+      title: "Brand EXACT-123 lifestyle",
+      width: 0,
+      height: 0,
+      sourceDomain: "example.com",
+    };
+    mocks.searchGallery.mockResolvedValue(searchGalleryResult([galleryCandidate]));
+    const existing = row();
+    existing.mainImagePaths = [
+      "https://cdn.example/main-1.png",
+      "https://cdn.example/main-2.png",
+    ];
+    existing.mainImagePath = existing.mainImagePaths[0] ?? null;
+
+    const result = await processScrapingRow({
+      admin: {} as never,
+      workspaceId: "workspace",
+      sessionId: "session-1",
+      worksheet: worksheet(null, 1),
+      row: existing,
+      ownerUserId: "owner",
+      actorUserId: "actor",
+      runId: "run-multi-main-gallery",
+      runPhase: "gallery",
+    });
+
+    expect(mocks.searchGallery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mainImages: [
+          expect.objectContaining({
+            url: "https://cdn.example/main-1.png",
+            buffer: expect.any(Buffer),
+          }),
+          expect.objectContaining({
+            url: "https://cdn.example/main-2.png",
+            buffer: expect.any(Buffer),
+          }),
+        ],
+      })
+    );
+    expect(result.row.mainImagePaths).toEqual([
+      "https://cdn.example/main-1.png",
+      "https://cdn.example/main-2.png",
+    ]);
+    expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
   });
 });

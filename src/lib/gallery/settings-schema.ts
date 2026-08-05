@@ -12,6 +12,7 @@ export const GalleryScrapingSettingsSchema = z.object({
     imagesPerRow: 1,
     instructions: "",
   }),
+  tier: z.enum(["standard", "premium"]).default("standard"),
   imagesPerRow: z.coerce.number().int().min(1).max(12).default(4),
   instructions: z.string().trim().max(2_000).default(""),
   searchDepth: GallerySearchDepthSchema.default("medium"),
@@ -44,6 +45,7 @@ export const GalleryAiSettingsSchema = z.object({
   instructions: z.string().trim().max(2_000).default(""),
   groundWithSearch: z.boolean().default(false),
   brandingEnabled: z.boolean().default(false),
+  brandGuideMode: z.enum(["image", "colors"]).optional(),
   brandColors: z
     .array(z.string().regex(/^#[0-9a-f]{6}$/i))
     .max(3)
@@ -61,15 +63,6 @@ export const GalleryAiSettingsSchema = z.object({
   }
 });
 
-export const GalleryProjectSettingsSchema = z.object({
-  provider: z.enum(["scraping", "ai"]).default("scraping"),
-  originalImageColumn: z.string().nullable().default(null),
-  originalImageSelectionExplicit: z.boolean().default(false),
-  selectedColumns: z.array(z.string()).max(500).default([]),
-  scraping: GalleryScrapingSettingsSchema,
-  ai: GalleryAiSettingsSchema,
-});
-
 export function parseScrapingSettings(input: unknown) {
   const source =
     input && typeof input === "object"
@@ -83,11 +76,31 @@ export function parseScrapingSettings(input: unknown) {
 }
 
 export function parseAiSettings(input: unknown) {
-  return GalleryAiSettingsSchema.parse(input);
+  const parsed = GalleryAiSettingsSchema.parse(input);
+  const brandGuideMode =
+    parsed.brandGuideMode ??
+    (parsed.brandGuidePath ? ("image" as const) : ("colors" as const));
+  return {
+    ...parsed,
+    brandGuideMode,
+  };
 }
 
+export const GalleryProjectSettingsSchema = z.object({
+  provider: z.enum(["scraping", "ai"]).default("scraping"),
+  originalImageColumn: z.string().nullable().default(null),
+  originalImageSelectionExplicit: z.boolean().default(false),
+  selectedColumns: z.array(z.string()).max(500).default([]),
+  scraping: GalleryScrapingSettingsSchema,
+  ai: GalleryAiSettingsSchema,
+});
+
 export function parseGalleryProjectSettings(input: unknown) {
-  return GalleryProjectSettingsSchema.parse(input);
+  const parsed = GalleryProjectSettingsSchema.parse(input);
+  return {
+    ...parsed,
+    ai: parseAiSettings(parsed.ai),
+  };
 }
 
 export function shouldApplySubmittedResponse(

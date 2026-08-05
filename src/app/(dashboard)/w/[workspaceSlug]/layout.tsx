@@ -105,8 +105,14 @@ export default function WorkspaceLayout({
   const isSyncPage = pathname.includes("/sync");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
   const isProductsGalleryProject = isProductsGalleryPage && searchParams.has("project");
+  const isProductsVisualizerPage = pathname.includes("/products-visualizer");
+  const isProductsVisualizerProject =
+    isProductsVisualizerPage && searchParams.has("project");
   const hideWorkspaceSidebar =
-    isEnrichPage || isProductsGalleryProject || (isSyncPage && syncFocusMode);
+    isEnrichPage ||
+    isProductsGalleryProject ||
+    isProductsVisualizerProject ||
+    (isSyncPage && syncFocusMode);
   // Full immersive mode: hides header + sidebar only for dedicated full-screen pages
   const isImmersive = isEnrichPage;
   // Subscription page should be accessible without an active subscription

@@ -1,12 +1,13 @@
 import type { AiCallCost } from "@/lib/ai-pricing";
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
-import { galleryLog, galleryWarn } from "@/lib/gallery/log";
+import { galleryLog } from "@/lib/gallery/log";
 import {
   buildFocusedRow,
   candidatePoolSize,
   runOpenAiWebImageSearch,
   selectedCandidates,
   type OpenAiImageCandidate,
+  resolveScrapingModel,
 } from "@/lib/gallery/agents/scraping-shared";
 
 /** JSON schema for the Scraping Main agent only — no Gallery fields. */
@@ -102,7 +103,7 @@ export async function searchScrapingMainImages(params: {
   };
   const maxResults = candidatePoolSize(mainSearchSettings, mainCount);
 
-  const { selection, indexedImages, allImageResults, cost, searchCallCount } =
+  const { selection, allImageResults, cost, searchCallCount } =
     await runOpenAiWebImageSearch({
       agent: "scraping-main",
       prompt,
@@ -110,33 +111,21 @@ export async function searchScrapingMainImages(params: {
       schema: buildScrapingMainSchema(mainCount),
       maxResults,
       searchDepth: "medium",
+      model: resolveScrapingModel(params.settings.tier),
     });
 
   const selectedMainCandidates = selectedCandidates(
     selection?.mainImageUrls,
-    indexedImages.byUrl,
-    mainCount,
-    allImageResults
+    mainCount
   );
-  const selectedMainUrlCount = Array.isArray(selection?.mainImageUrls)
-    ? selection.mainImageUrls.length
-    : 0;
-  if (selectedMainUrlCount > 0 && selectedMainCandidates.length === 0) {
-    galleryWarn(
-      "scraping-main",
-      "Model-selected Main URLs did not match raw image-search results",
-      {
-        selectedMainUrlCount,
-        matchedMainCount: selectedMainCandidates.length,
-      }
-    );
-  }
 
   galleryLog("scraping-main:done", "Scraping Main agent completed", {
     productIdentity: selection?.productIdentity || "",
     imageResultCount: allImageResults.length,
     mainCandidateCount: selectedMainCandidates.length,
-    selectedMainUrlCount,
+    selectedMainUrlCount: Array.isArray(selection?.mainImageUrls)
+      ? selection.mainImageUrls.length
+      : 0,
     searchCallCount,
   });
 

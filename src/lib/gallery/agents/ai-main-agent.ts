@@ -77,6 +77,8 @@ export function buildAiMainPrompt(params: {
       brandColors: settings.brandColors || [],
       hasLogo,
       hasBrandGuide,
+      includeBrandColors:
+        settings.brandingEnabled && settings.brandGuideMode === "colors",
     }),
     shot,
     diversityRules,

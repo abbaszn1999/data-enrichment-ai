@@ -111,7 +111,7 @@ export async function deductGalleryCredits(params: {
 /**
  * OpenAI-only Scraping row:
  * - Main and Gallery are separate run phases when finding new Main images.
- * - Both keep verified external URLs; Scraping never stores images.
+ * - Main is copied into private Storage; Gallery keeps verified source URLs.
  * - With an original column, one full run copies Main then finds Gallery.
  */
 export async function processScrapingRow(params: {
@@ -167,22 +167,23 @@ export async function processScrapingRow(params: {
   const previousMainPaths = getRowMainImagePaths(row);
 
   const originalImageUrls = worksheet.originalImageColumn
-    ? parseImageUrls(row.originalData[worksheet.originalImageColumn]).slice(0, 1)
+    ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
     : [];
-  const originalValue = originalImageUrls[0] ?? "";
-  const originalIsHttpUrl = /^https?:\/\//i.test(originalValue);
   const hasUsableOriginal =
-    !!worksheet.originalImageColumn && originalIsHttpUrl;
+    !!worksheet.originalImageColumn && originalImageUrls.length > 0;
 
-  const needMain = !worksheet.originalImageColumn;
+  const needMain = !hasUsableOriginal;
   const mainCount = Math.min(6, Math.max(1, settings.main?.imagesPerRow || 1));
   const galleryCount = runGallery ? Math.max(1, settings.imagesPerRow || 4) : 0;
 
   let mainPaths: string[] = [];
   let mainPath: string | null = null;
-  let mainPublicUrl = "";
-  let mainBuffer: Buffer | undefined;
-  let mainContentType: string | undefined;
+  type MainAttachment = {
+    url: string;
+    buffer?: Buffer;
+    contentType?: string;
+  };
+  const mainAttachments: MainAttachment[] = [];
   let productIdentity = "";
   let searchQueryCount = 0;
   const newlyStoredMainPaths: string[] = [];
@@ -246,49 +247,65 @@ export async function processScrapingRow(params: {
   if (runMain) {
     if (worksheet.originalImageColumn && !hasUsableOriginal) {
       return fail(
-        originalValue
-          ? "The selected original image is not a valid downloadable URL"
-          : "The selected original image cell is empty"
+        "The selected original image is not a valid downloadable URL"
       );
     }
 
     if (hasUsableOriginal) {
       ensureTime(5_000, "original reference");
-      trace.stage("main", "Saving original external image as Main");
+      trace.stage("main", "Saving original external image(s) as Main");
       await params.onCheckpoint?.({ generationStage: "main" });
-      const sourceImage = await downloadImageBytes(originalValue);
-      if (!sourceImage) {
+
+      for (const originalUrl of originalImageUrls) {
+        const sourceImage = await downloadImageBytes(originalUrl);
+        if (!sourceImage) {
+          galleryWarn("row", "Skipping undownloadable original image", {
+            rowId: row.id,
+            originalUrl,
+          });
+          continue;
+        }
+        const downloaded = await normalizePersistedMainImage(sourceImage);
+        const storedPath = getGalleryRowImagePath(
+          workspaceId,
+          sessionId,
+          row.id,
+          "main",
+          downloaded.ext
+        );
+        await uploadGalleryBytesAdmin(
+          storedPath,
+          downloaded.buffer,
+          downloaded.contentType
+        );
+        newlyStoredMainPaths.push(storedPath);
+        mainPaths.push(storedPath);
+        mainAttachments.push({
+          url: storedPath,
+          buffer: downloaded.buffer,
+          contentType: downloaded.contentType,
+        });
+        sourceMetaImages.push({
+          ref: storedPath,
+          url: storedPath,
+          persistence: "internal",
+          sourceUrl: originalUrl,
+          pageUrl: originalUrl,
+          title: "original",
+          role: "main",
+          fallbackUrl: originalUrl,
+        });
+        await params.onCheckpoint?.({
+          mainImagePaths: [...mainPaths],
+          mainImagePath: mainPaths[0] ?? null,
+          generationStage: "main",
+        });
+      }
+
+      mainPath = mainPaths[0] ?? null;
+      if (!mainPath) {
         return fail("The selected original image could not be downloaded");
       }
-      const downloaded = await normalizePersistedMainImage(sourceImage);
-      const storedPath = getGalleryRowImagePath(
-        workspaceId,
-        sessionId,
-        row.id,
-        "main",
-        downloaded.ext
-      );
-      await uploadGalleryBytesAdmin(
-        storedPath,
-        downloaded.buffer,
-        downloaded.contentType
-      );
-      newlyStoredMainPaths.push(storedPath);
-      mainPaths = [storedPath];
-      mainPath = storedPath;
-      mainPublicUrl = storedPath;
-      mainBuffer = downloaded.buffer;
-      mainContentType = downloaded.contentType;
-      sourceMetaImages.push({
-        ref: storedPath,
-        url: storedPath,
-        persistence: "internal",
-        sourceUrl: originalValue,
-        pageUrl: originalValue,
-        title: "original",
-        role: "main",
-        fallbackUrl: originalValue,
-      });
       await params.onCheckpoint?.({
         mainImagePaths: mainPaths,
         mainImagePath: mainPath,
@@ -342,10 +359,11 @@ export async function processScrapingRow(params: {
           );
           newlyStoredMainPaths.push(storedPath);
           mainPaths.push(storedPath);
-          if (!mainBuffer) {
-            mainBuffer = downloaded.buffer;
-            mainContentType = downloaded.contentType;
-          }
+          mainAttachments.push({
+            url: storedPath,
+            buffer: downloaded.buffer,
+            contentType: downloaded.contentType,
+          });
           sourceMetaImages.push({
             ref: storedPath,
             url: storedPath,
@@ -356,9 +374,18 @@ export async function processScrapingRow(params: {
             role: "main",
             fallbackUrl: candidate.imageUrl,
           });
+          await params.onCheckpoint?.({
+            mainImagePaths: [...mainPaths],
+            mainImagePath: mainPaths[0] ?? null,
+            generationStage: "main",
+            sourceMeta: {
+              ...(row.sourceMeta ?? {}),
+              provider: "scraping",
+              images: [...sourceMetaImages],
+            },
+          });
         }
         mainPath = mainPaths[0] ?? null;
-        mainPublicUrl = mainPath ?? "";
         if (!mainPath) {
           return fail("No selected Main image could be downloaded", {
             stage: "main",
@@ -383,7 +410,6 @@ export async function processScrapingRow(params: {
   } else {
     mainPaths = previousMainPaths;
     mainPath = mainPaths[0] ?? null;
-    mainPublicUrl = mainPath ?? "";
     if (!mainPath) {
       return fail("Find main images first before generating the gallery");
     }
@@ -397,41 +423,45 @@ export async function processScrapingRow(params: {
     trace.stage("gallery-scrape", "Selecting exact Gallery images with OpenAI");
     await params.onCheckpoint?.({ generationStage: "gallery" });
 
-    // Download Main ourselves and send bytes to OpenAI. Passing only a remote
-    // URL often fails when OpenAI's fetchers time out or are blocked by CDNs.
-    const mainImagePayload: {
-      url: string;
-      buffer?: Buffer;
-      contentType?: string;
-    } = {
-      url: mainPublicUrl,
-      buffer: mainBuffer,
-      contentType: mainContentType,
-    };
-    try {
-      if (!mainImagePayload.buffer && /^https?:\/\//i.test(mainPublicUrl)) {
-        const downloaded = await downloadImageBytes(mainPublicUrl);
-        if (downloaded) {
-          mainImagePayload.buffer = downloaded.buffer;
-          mainImagePayload.contentType = downloaded.contentType;
+    // Ensure every Main image is attached with bytes. Passing only remote URLs
+    // often fails when OpenAI's fetchers time out or are blocked by CDNs.
+    const galleryMainImages: MainAttachment[] =
+      mainAttachments.length > 0
+        ? [...mainAttachments]
+        : mainPaths.map((url) => ({ url }));
+
+    for (const attachment of galleryMainImages) {
+      if (attachment.buffer) continue;
+      try {
+        if (/^https?:\/\//i.test(attachment.url)) {
+          const downloaded = await downloadImageBytes(attachment.url);
+          if (downloaded) {
+            attachment.buffer = downloaded.buffer;
+            attachment.contentType = downloaded.contentType;
+          }
+        } else if (attachment.url) {
+          const stored = await downloadGalleryBytesAdmin(attachment.url);
+          if (stored) {
+            attachment.buffer = stored.buffer;
+            attachment.contentType = stored.contentType;
+          }
         }
-      } else if (!mainImagePayload.buffer && mainPublicUrl) {
-        const stored = await downloadGalleryBytesAdmin(mainPublicUrl);
-        if (stored) {
-          mainImagePayload.buffer = stored.buffer;
-          mainImagePayload.contentType = stored.contentType;
-        }
+      } catch (error) {
+        galleryWarn("row", "Could not prefetch Main image for gallery search", {
+          rowId: row.id,
+          mainUrl: attachment.url,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
-    } catch (error) {
-      galleryWarn("row", "Could not prefetch Main image for gallery search", {
-        rowId: row.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
-    if (!mainImagePayload.buffer) {
+
+    const usableMainImages = galleryMainImages.filter(
+      (attachment) => !!attachment.buffer
+    );
+    if (usableMainImages.length === 0) {
       return fail(
         "Could not download the Main image for gallery search. Try another Main image or retry.",
-        { stage: "gallery", mainUrl: mainPublicUrl }
+        { stage: "gallery", mainUrl: mainPaths[0] ?? "" }
       );
     }
 
@@ -441,7 +471,7 @@ export async function processScrapingRow(params: {
         selectedColumns: selected,
         settings,
         requestedGalleryImages: galleryCount,
-        mainImage: mainImagePayload,
+        mainImages: usableMainImages,
       });
       await recordUsage("openai-gallery-search", gallerySearch.cost);
       searchQueryCount += gallerySearch.searchCallCount;

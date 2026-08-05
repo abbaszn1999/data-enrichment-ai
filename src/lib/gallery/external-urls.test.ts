@@ -60,7 +60,7 @@ describe("external gallery URLs", () => {
       "https://signed.example/workspace/main.webp"
     );
     expect(row.getCell(2).value).toBe(
-      "https://cdn.example/side.jpg https://signed.example/workspace/gallery.webp"
+      "https://cdn.example/side.jpg,\nhttps://signed.example/workspace/gallery.webp"
     );
     expect(sign).toHaveBeenCalledTimes(2);
     expect(sign).not.toHaveBeenCalledWith("https://cdn.example/side.jpg");

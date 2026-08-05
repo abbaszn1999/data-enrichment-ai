@@ -5,14 +5,18 @@ import {
 } from "@/lib/gallery/types";
 
 describe("resolveGalleryRunPhase", () => {
-  it("uses full when an original image column is set", () => {
+  it("honors an explicit phase even when an original column is set", () => {
     expect(
       resolveGalleryRunPhase({
         originalImageColumn: "Image",
-        row: { mainImagePath: null, mainImagePaths: [] },
+        row: {
+          mainImagePath: null,
+          mainImagePaths: [],
+          originalData: { Image: "https://cdn.example/original.png" },
+        },
         requested: "main",
       })
-    ).toBe("full");
+    ).toBe("main");
   });
 
   it("honors an explicit requested phase", () => {
@@ -40,13 +44,68 @@ describe("resolveGalleryRunPhase", () => {
     ).toBe("gallery");
   });
 
-  it("auto-selects main when no Main exists", () => {
+  it("auto-selects main only when no Main exists and no original image is set", () => {
     expect(
       resolveGalleryRunPhase({
         originalImageColumn: null,
         row: { mainImagePath: null, mainImagePaths: [] },
       })
     ).toBe("main");
+  });
+
+  it("auto-selects main only (not full) when the original column has no usable URL", () => {
+    expect(
+      resolveGalleryRunPhase({
+        originalImageColumn: "Image",
+        row: {
+          mainImagePath: null,
+          mainImagePaths: [],
+          originalData: { Image: "" },
+        },
+      })
+    ).toBe("main");
+  });
+
+  it("auto-selects full (Gallery only, Main resolved from column) when the original column has a URL", () => {
+    expect(
+      resolveGalleryRunPhase({
+        originalImageColumn: "Image",
+        row: {
+          mainImagePath: null,
+          mainImagePaths: [],
+          originalData: { Image: "https://cdn.example/original.png" },
+        },
+      })
+    ).toBe("full");
+  });
+
+  it("auto-selects full when the original column has multiple URLs", () => {
+    expect(
+      resolveGalleryRunPhase({
+        originalImageColumn: "Image",
+        row: {
+          mainImagePath: null,
+          mainImagePaths: [],
+          originalData: {
+            Image:
+              "https://cdn.example/front.png https://cdn.example/back.png",
+          },
+        },
+      })
+    ).toBe("full");
+  });
+
+  it("uses existing Main when the selected original cell is empty", () => {
+    expect(
+      resolveGalleryRunPhase({
+        originalImageColumn: "Image",
+        row: {
+          mainImagePath: "stored/main.png",
+          mainImagePaths: ["stored/main.png"],
+          originalData: { Image: "" },
+        },
+      })
+    ).toBe("gallery");
   });
 });
 

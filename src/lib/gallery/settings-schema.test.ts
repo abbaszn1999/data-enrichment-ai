@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseAiSettings,
   parseGalleryProjectSettings,
   parseScrapingSettings,
   shouldApplySubmittedResponse,
@@ -74,5 +75,23 @@ describe("gallery settings", () => {
       ai: DEFAULT_AI_SETTINGS,
     });
     expect(parsed.originalImageSelectionExplicit).toBe(true);
+  });
+
+  it("defaults brandGuideMode from an existing guide path", () => {
+    const parsed = parseAiSettings({
+      ...DEFAULT_AI_SETTINGS,
+      brandGuideMode: undefined,
+      brandGuidePath: "workspace/gallery/s/settings/ai-assets/brand-guide.png",
+    });
+    expect(parsed.brandGuideMode).toBe("image");
+  });
+
+  it("defaults brandGuideMode to colors when no guide path exists", () => {
+    const parsed = parseAiSettings({
+      ...DEFAULT_AI_SETTINGS,
+      brandGuideMode: undefined,
+      brandGuidePath: null,
+    });
+    expect(parsed.brandGuideMode).toBe("colors");
   });
 });

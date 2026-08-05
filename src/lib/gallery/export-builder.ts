@@ -76,7 +76,8 @@ export async function buildGalleryExportBuffer(
           urls.push(part);
         }
       }
-      cell.value = urls.join(" ");
+      cell.value = urls.join(",\n");
+      cell.alignment = { wrapText: true, vertical: "top" };
     }
   }
 

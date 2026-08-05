@@ -3,11 +3,12 @@ import {
   calculateGroundedCallCost,
   getImageOutputCost,
 } from "@/lib/ai-pricing";
-import { GALLERY_SCRAPING_MODEL } from "@/lib/gallery/providers/openai-scraping";
+import { resolveScrapingModel } from "@/lib/gallery/agents/scraping-shared";
 import type {
   GalleryAiSettings,
   GalleryProvider,
   GallerySearchDepth,
+  GalleryScrapingSettings,
 } from "@/lib/gallery/types";
 
 const SCRAPE_ESTIMATE_INPUT_TOKENS = 12_000;
@@ -30,6 +31,7 @@ export function estimateScrapingCreditRange(options: {
   rowsWithOriginal?: number;
   observedMedianQueries?: number;
   observedP90Queries?: number;
+  tier?: GalleryScrapingSettings["tier"];
 }): GalleryCreditEstimateRange {
   const rowCount = Math.max(0, options.rowCount);
   if (rowCount === 0) {
@@ -51,6 +53,7 @@ export function estimateScrapingCreditRange(options: {
     expectedQueriesPerStage,
     Math.ceil(options.observedP90Queries || configured * 2)
   );
+  const model = resolveScrapingModel(options.tier);
   const usage = (factor: number) => ({
     promptTokenCount: Math.round(SCRAPE_ESTIMATE_INPUT_TOKENS * stages * factor),
     candidatesTokenCount: Math.round(
@@ -64,14 +67,14 @@ export function estimateScrapingCreditRange(options: {
   });
   const minimum = costToCredits(
     calculateGroundedCallCost(
-      GALLERY_SCRAPING_MODEL,
+      model,
       usage(0.75),
       expectedQueriesPerStage * stages
     ).totalCost
   );
   const maximum = costToCredits(
     calculateGroundedCallCost(
-      GALLERY_SCRAPING_MODEL,
+      model,
       usage(1.5),
       highQueriesPerStage * stages
     ).totalCost
@@ -91,12 +94,14 @@ export function estimateScrapingCreditRange(options: {
 export function estimateScrapingCredits(
   rowCount: number,
   searchDepth: GallerySearchDepth = "medium",
-  rowsWithOriginal = 0
+  rowsWithOriginal = 0,
+  tier: GalleryScrapingSettings["tier"] = "standard"
 ): number {
   return estimateScrapingCreditRange({
     rowCount,
     searchDepth,
     rowsWithOriginal,
+    tier,
   }).max;
 }
 
@@ -113,6 +118,7 @@ export function estimateGalleryCredits(
     generateMainPerRow?: boolean;
     searchDepth?: GallerySearchDepth;
     rowsWithOriginal?: number;
+    tier?: GalleryScrapingSettings["tier"];
   }
 ): number {
   if (provider === "ai") {
@@ -148,6 +154,7 @@ export function estimateGalleryCredits(
   return estimateScrapingCredits(
     rowCount,
     options?.searchDepth || "medium",
-    options?.rowsWithOriginal ?? 0
+    options?.rowsWithOriginal ?? 0,
+    options?.tier || "standard"
   );
 }

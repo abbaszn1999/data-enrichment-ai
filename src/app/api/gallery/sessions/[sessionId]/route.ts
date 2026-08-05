@@ -299,17 +299,22 @@ export async function PATCH(request: NextRequest, context: Ctx) {
       { status: 400, headers: auth.headers }
     );
   }
-  if (mutatesWorksheet) {
-    if (
-      session.status === "processing" ||
-      worksheet.activeRun?.status === "running" ||
-      worksheet.activeRun?.status === "queued"
-    ) {
+
+  const generationIsActive =
+    session.status === "processing" ||
+    worksheet.activeRun?.status === "running" ||
+    worksheet.activeRun?.status === "queued";
+
+  // Fine-grained lock: image deletes are safe during generation (merged via
+  // revision + generation reconcile). Structural edits stay blocked.
+  if (generationIsActive) {
+    if (body.worksheet || body.deleteRows) {
       return NextResponse.json(
         { error: "Worksheet cannot be edited while generation is active" },
         { status: 409, headers: auth.headers }
       );
     }
+    // deleteGalleryImage is allowed through.
   }
 
   const deletedStoragePaths: string[] = [];
@@ -421,12 +426,13 @@ export async function PATCH(request: NextRequest, context: Ctx) {
           if (!fresh || fresh.rows.length !== expectedRows) {
             throw new Error("Worksheet is synchronizing; retry shortly");
           }
-          if (
+          const runIsActive =
             fresh.activeRun?.status === "running" ||
-            fresh.activeRun?.status === "queued"
-          ) {
+            fresh.activeRun?.status === "queued";
+          if (runIsActive && (body.worksheet || body.deleteRows)) {
             throw new Error("Worksheet cannot be edited while generation is active");
           }
+          // deleteGalleryImage remains allowed while a run is active.
 
           if (body.worksheet) {
             const patch = body.worksheet;

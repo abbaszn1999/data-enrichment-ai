@@ -2,6 +2,7 @@ import {
   parseAiSettings,
   parseScrapingSettings,
 } from "@/lib/gallery/settings-schema";
+import { parseImageUrls } from "@/lib/gallery/image-urls";
 
 export type GallerySessionStatus =
   | "draft"
@@ -28,23 +29,31 @@ export type GalleryProvider = "scraping" | "ai";
 
 /**
  * Explicit generation phase for two-step Find-main → Gallery workflows.
- * - main: source/create Main images only
- * - gallery: source/create Gallery using existing Main
- * - full: Main from original column + Gallery in one run
+ * - main: source/create Main images only, then stop (Gallery runs later)
+ * - gallery: source/create Gallery using an existing Main image
+ * - full: Main is already resolved from the original image column, so only
+ *   Gallery actually runs (kept as a distinct phase for credits/logging, but
+ *   it never generates Main and Gallery back-to-back for the same row)
  */
 export type GalleryRunPhase = "main" | "gallery" | "full";
 
 /**
  * Decide which generation phase to run for a row.
- * Original-image column always runs Main+Gallery together (`full`).
- * Otherwise: explicit request wins; if omitted, existing Main → gallery, else main.
+ * Explicit request wins. Otherwise:
+ * - a usable original image column value means Main is already resolved, so
+ *   only Gallery needs to run ("full" here means "Gallery using the original
+ *   image as Main", never "Main immediately followed by Gallery");
+ * - an existing Main image (from a prior run, upload, or the original column)
+ *   means only Gallery should run next;
+ * - no Main and no usable original image means only Main should run — the
+ *   row must stop there and wait for a separate Gallery run afterwards.
  */
 export function resolveGalleryRunPhase(params: {
   originalImageColumn?: string | null;
-  row: Pick<GalleryRow, "mainImagePath" | "mainImagePaths">;
+  row: Pick<GalleryRow, "mainImagePath" | "mainImagePaths"> &
+    Partial<Pick<GalleryRow, "originalData">>;
   requested?: GalleryRunPhase | null;
 }): GalleryRunPhase {
-  if (params.originalImageColumn) return "full";
   if (
     params.requested === "main" ||
     params.requested === "gallery" ||
@@ -52,6 +61,10 @@ export function resolveGalleryRunPhase(params: {
   ) {
     return params.requested;
   }
+  const originalUrls = params.originalImageColumn
+    ? parseImageUrls(params.row.originalData?.[params.originalImageColumn])
+    : [];
+  if (originalUrls.length > 0) return "full";
   return getRowMainImagePaths(params.row).length > 0 ? "gallery" : "main";
 }
 
@@ -60,22 +73,31 @@ export function resolveGalleryRunPhase(params: {
  */
 export function resolveSelectionRunPhase(params: {
   originalImageColumn?: string | null;
-  rows: Array<Pick<GalleryRow, "mainImagePath" | "mainImagePaths">>;
+  rows: Array<
+    Pick<GalleryRow, "mainImagePath" | "mainImagePaths"> &
+      Partial<Pick<GalleryRow, "originalData">>
+  >;
 }): { phase: GalleryRunPhase | "mixed"; label: string } {
-  if (params.originalImageColumn) {
-    return { phase: "full", label: "Generate" };
-  }
   if (params.rows.length === 0) {
-    return { phase: "main", label: "Generate main" };
+    return { phase: "full", label: "Generate images" };
   }
-  const withMain = params.rows.filter(
-    (row) => getRowMainImagePaths(row).length > 0
-  ).length;
-  if (withMain === params.rows.length) {
-    return { phase: "gallery", label: "Generate gallery" };
-  }
-  if (withMain === 0) {
-    return { phase: "main", label: "Generate main" };
+  const phases = new Set(
+    params.rows.map((row) =>
+      resolveGalleryRunPhase({
+        originalImageColumn: params.originalImageColumn,
+        row,
+      })
+    )
+  );
+  if (phases.size === 1) {
+    const phase = [...phases][0]!;
+    const label =
+      phase === "gallery"
+        ? "Generate gallery"
+        : phase === "main"
+          ? "Generate main"
+          : "Generate images";
+    return { phase, label };
   }
   return { phase: "mixed", label: "Generate selected" };
 }
@@ -97,6 +119,8 @@ export interface GalleryMainSettings {
 export interface GalleryScrapingSettings {
   /** Main-image sourcing settings; independent from Gallery images. */
   main: GalleryMainSettings;
+  /** Standard = gpt-5.6-terra, Premium = gpt-5.6-sol. Applies to Main + Gallery agents. */
+  tier: "standard" | "premium";
   imagesPerRow: number;
   /** Mandatory free-text instructions for search + selection behavior. */
   instructions: string;
@@ -135,6 +159,8 @@ export interface GalleryAiSettings {
   instructions: string;
   groundWithSearch: boolean;
   brandingEnabled: boolean;
+  /** Upload image brand-guide vs manual hex palette (Visualizer parity). */
+  brandGuideMode: "image" | "colors";
   brandColors: string[];
   logoPath: string | null;
   brandGuidePath: string | null;
@@ -180,6 +206,7 @@ export interface GalleryRow {
   rowIndex: number;
   status: GalleryRowStatus;
   generationStage?: GalleryGenerationStage;
+  generationTarget?: GalleryRunPhase;
   errorMessage?: string;
   originalData: Record<string, string>;
   /** All Main images. `mainImagePath` mirrors the first item for compatibility. */
@@ -264,6 +291,7 @@ export const DEFAULT_SCRAPING_SETTINGS: GalleryScrapingSettings = {
     imagesPerRow: 1,
     instructions: "",
   },
+  tier: "standard",
   imagesPerRow: 4,
   instructions: "",
   searchDepth: "medium",
@@ -299,6 +327,7 @@ export const DEFAULT_AI_SETTINGS: GalleryAiSettings = {
   instructions: "",
   groundWithSearch: false,
   brandingEnabled: false,
+  brandGuideMode: "colors",
   brandColors: ["#111827", "#2563EB", "#F59E0B"],
   logoPath: null,
   brandGuidePath: null,

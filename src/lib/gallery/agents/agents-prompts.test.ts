@@ -65,7 +65,7 @@ describe("separated agent prompts and schemas", () => {
         aspectRatio: "square",
         sourcePolicy: "prefer-official",
       },
-      mainImageUrl: "https://cdn.example/main.png",
+      mainImageUrls: ["https://cdn.example/main.png"],
     });
     expect(prompt).toContain("Return 4 Gallery images");
     expect(prompt).toContain("at least 1200px");
@@ -147,5 +147,68 @@ describe("separated agent prompts and schemas", () => {
     expect(galleryPrompt).toContain("Gallery ecommerce image");
     expect(galleryPrompt).toContain("Show packaging");
     expect(galleryPrompt).not.toContain("Studio hero only");
+  });
+
+  it("sends manual brand colors only in colors mode", () => {
+    const worksheet = {
+      sessionId: "s",
+      columns: ["SKU"],
+      originalImageColumn: null,
+      selectedColumns: ["SKU"],
+      settings: {
+        provider: "ai" as const,
+        scraping: DEFAULT_SCRAPING_SETTINGS,
+        ai: {
+          ...DEFAULT_AI_SETTINGS,
+          brandingEnabled: true,
+          brandGuideMode: "colors" as const,
+          brandColors: ["#111111", "#222222", "#333333"],
+        },
+      },
+      activeRun: null,
+      rows: [],
+    };
+    const row = {
+      id: "r1",
+      rowIndex: 0,
+      status: "not_started" as const,
+      originalData: { SKU: "ABC" },
+      mainImagePath: null,
+      galleryImagePaths: [],
+    };
+    const colorsPrompt = buildAiMainPrompt({
+      worksheet,
+      row,
+      referenceImages: [],
+      mainIndex: 0,
+      mainTotal: 1,
+    });
+    expect(colorsPrompt).toContain("Brand palette");
+    expect(colorsPrompt).toContain("#111111");
+
+    const imageModePrompt = buildAiMainPrompt({
+      worksheet: {
+        ...worksheet,
+        settings: {
+          ...worksheet.settings,
+          ai: {
+            ...worksheet.settings.ai,
+            brandGuideMode: "image",
+          },
+        },
+      },
+      row,
+      referenceImages: [
+        {
+          label: "visual brand guide and art-direction reference",
+          buffer: Buffer.from("x"),
+          contentType: "image/png",
+        },
+      ],
+      mainIndex: 0,
+      mainTotal: 1,
+    });
+    expect(imageModePrompt).not.toContain("Brand palette");
+    expect(imageModePrompt).toContain("brand-guide");
   });
 });

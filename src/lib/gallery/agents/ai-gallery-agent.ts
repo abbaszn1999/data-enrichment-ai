@@ -62,6 +62,8 @@ export function buildAiGalleryPrompt(params: {
       brandColors: settings.brandColors || [],
       hasLogo,
       hasBrandGuide,
+      includeBrandColors:
+        settings.brandingEnabled && settings.brandGuideMode === "colors",
     }),
     shot,
     "Match the attached Main / canonical product exactly: preserve shape, construction, color, materials, markings, proportions, and distinctive details.",

@@ -103,6 +103,7 @@ export async function processAiRow(params: {
   const costs: AiCallCost[] = [];
   let mainPath: string | null = null;
   let canonicalProduct: AiReferenceImage | null = null;
+  const mainProductReferences: AiReferenceImage[] = [];
 
   galleryLog("ai-image:row", `Processing row ${row.id} via AI`, { runPhase });
 
@@ -133,40 +134,50 @@ export async function processAiRow(params: {
   };
 
   if (runMain) {
-    const originalUrl = worksheet.originalImageColumn
-      ? parseImageUrls(row.originalData[worksheet.originalImageColumn])[0]
-      : undefined;
-    if (originalUrl && /^https?:\/\//i.test(originalUrl)) {
+    const originalUrls = worksheet.originalImageColumn
+      ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
+      : [];
+    for (const originalUrl of originalUrls) {
+      if (!/^https?:\/\//i.test(originalUrl)) continue;
       const original = await downloadImageBytes(originalUrl);
-      if (original) {
-        canonicalProduct = {
-          label:
-            "trusted original product; preserve this exact product with high fidelity",
-          buffer: original.buffer,
-          contentType: normalizeMimeType(original.contentType),
-        };
-        const path = getGalleryRowImagePath(
-          workspaceId,
-          sessionId,
-          row.id,
-          "main",
-          original.ext
-        );
-        await uploadGalleryBytesAdmin(
-          path,
-          original.buffer,
-          original.contentType
-        );
-        newlyStoredPaths.push(path);
-        mainPaths.push(path);
-        mainPath = path;
-        await params.onCheckpoint?.({
-          mainImagePaths: [...mainPaths],
-          mainImagePath: path,
-          galleryImagePaths: runGallery ? [] : oldGalleryPaths,
-          generationStage: "main",
+      if (!original) {
+        galleryWarn("ai-image:row", "Skipping undownloadable original image", {
+          rowId: row.id,
+          originalUrl,
         });
+        continue;
       }
+      const path = getGalleryRowImagePath(
+        workspaceId,
+        sessionId,
+        row.id,
+        "main",
+        original.ext
+      );
+      await uploadGalleryBytesAdmin(
+        path,
+        original.buffer,
+        original.contentType
+      );
+      newlyStoredPaths.push(path);
+      mainPaths.push(path);
+      mainPath = mainPaths[0] ?? path;
+      const reference: AiReferenceImage = {
+        label:
+          mainProductReferences.length === 0
+            ? "trusted original product; preserve this exact product with high fidelity"
+            : `additional original product image ${mainProductReferences.length + 1}; preserve this exact product with high fidelity`,
+        buffer: original.buffer,
+        contentType: normalizeMimeType(original.contentType),
+      };
+      mainProductReferences.push(reference);
+      if (!canonicalProduct) canonicalProduct = reference;
+      await params.onCheckpoint?.({
+        mainImagePaths: [...mainPaths],
+        mainImagePath: mainPaths[0] ?? null,
+        galleryImagePaths: runGallery ? [] : oldGalleryPaths,
+        generationStage: "main",
+      });
     }
   } else {
     mainPaths.push(...oldMainPaths);
@@ -187,10 +198,16 @@ export async function processAiRow(params: {
         error: "Find main images first before generating the gallery",
       };
     }
-    canonicalProduct = await loadCanonicalFromPath(
-      mainPath,
-      "canonical main product image; preserve this exact product identity"
-    );
+    for (const path of mainPaths) {
+      const loaded = await loadCanonicalFromPath(
+        path,
+        mainProductReferences.length === 0
+          ? "canonical main product image; preserve this exact product identity"
+          : `additional main product image ${mainProductReferences.length + 1}; preserve this exact product identity`
+      );
+      if (loaded) mainProductReferences.push(loaded);
+    }
+    canonicalProduct = mainProductReferences[0] ?? null;
     if (!canonicalProduct) {
       return {
         row: {
@@ -231,14 +248,16 @@ export async function processAiRow(params: {
     });
     settings.logoPath = null;
   }
-  const brandGuideReference = settings.brandingEnabled
-    ? await loadStoredReference(
-        settings.brandGuidePath,
-        "visual brand guide and art-direction reference"
-      )
-    : null;
+  const brandGuideReference =
+    settings.brandingEnabled && settings.brandGuideMode === "image"
+      ? await loadStoredReference(
+          settings.brandGuidePath,
+          "visual brand guide and art-direction reference"
+        )
+      : null;
   if (
     settings.brandingEnabled &&
+    settings.brandGuideMode === "image" &&
     settings.brandGuidePath &&
     !brandGuideReference
   ) {
@@ -258,9 +277,9 @@ export async function processAiRow(params: {
     : 0;
   const mainTarget = Math.min(Math.max(settings.main?.imagesPerRow || 1, 1), 6);
   const needGeneratedMain = runMain && !canonicalProduct;
-  const originalUrl = worksheet.originalImageColumn
-    ? parseImageUrls(row.originalData[worksheet.originalImageColumn])[0]
-    : undefined;
+  const originalUrls = worksheet.originalImageColumn
+    ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
+    : [];
   galleryLog("ai-image:plan", "AI row image plan", {
     rowId: row.id,
     runPhase,
@@ -270,6 +289,8 @@ export async function processAiRow(params: {
     mainTarget: needGeneratedMain ? mainTarget : mainPaths.length || 1,
     needGeneratedMain,
     hasOriginalColumn: !!worksheet.originalImageColumn,
+    originalImageCount: originalUrls.length,
+    mainReferenceCount: mainProductReferences.length,
     sceneReferencePath: settings.sceneReferencePath,
     supportingReferenceCount: supportingReferences.length,
     supportingReferenceLabels: supportingReferences.map((item) => item.label),
@@ -281,7 +302,7 @@ export async function processAiRow(params: {
       ensureTime(35_000);
       try {
         const references = [
-          ...(canonicalProduct ? [canonicalProduct] : []),
+          ...mainProductReferences,
           ...supportingReferences,
         ].slice(0, model === "gemini-3-pro-image" ? 6 : 10);
         const generated = await generateAiMainImage({
@@ -307,14 +328,16 @@ export async function processAiRow(params: {
         aiGeneratedPaths.push(path);
         mainPaths.push(path);
         mainPath = mainPaths[0];
-        if (!canonicalProduct) {
-          canonicalProduct = {
-            label:
-              "canonical generated main product image; preserve this exact product identity",
-            buffer: generated.buffer,
-            contentType: generated.contentType,
-          };
-        }
+        const generatedReference: AiReferenceImage = {
+          label:
+            mainProductReferences.length === 0
+              ? "canonical generated main product image; preserve this exact product identity"
+              : `additional generated main product image ${mainProductReferences.length + 1}; preserve this exact product identity`,
+          buffer: generated.buffer,
+          contentType: generated.contentType,
+        };
+        mainProductReferences.push(generatedReference);
+        if (!canonicalProduct) canonicalProduct = generatedReference;
         await params.onCheckpoint?.({
           mainImagePaths: [...mainPaths],
           mainImagePath: mainPath,
@@ -329,12 +352,18 @@ export async function processAiRow(params: {
   }
 
   if (runGallery) {
+    await params.onCheckpoint?.({
+      mainImagePaths: [...mainPaths],
+      mainImagePath: mainPath,
+      galleryImagePaths: [...galleryPaths],
+      generationStage: "gallery",
+    });
     for (let galleryIndex = 0; galleryIndex < galleryTarget; galleryIndex += 1) {
       ensureTime(35_000);
-      if (!canonicalProduct) break;
+      if (mainProductReferences.length === 0) break;
       try {
         const references = [
-          canonicalProduct,
+          ...mainProductReferences,
           ...supportingReferences,
         ].slice(0, model === "gemini-3-pro-image" ? 6 : 10);
         const generated = await generateAiGalleryImage({
@@ -422,7 +451,7 @@ export async function processAiRow(params: {
         generatedImages: aiGeneratedPaths.length,
         galleryImages: finalGalleryPaths.length,
         generatedMain: needGeneratedMain && !!mainPath,
-        usedOriginalImage: !!originalUrl,
+        usedOriginalImage: originalUrls.length > 0,
         usedSceneReference: !!sceneReference,
         brandingEnabled: settings.brandingEnabled,
         dollarCost: totals.totalCost,
@@ -496,7 +525,7 @@ export async function processAiRow(params: {
         provider: "ai",
         model,
         runPhase,
-        usedOriginalImage: !!originalUrl,
+        usedOriginalImage: originalUrls.length > 0,
         usedSceneReference: !!sceneReference,
         brandingEnabled: settings.brandingEnabled,
         partialWarning,

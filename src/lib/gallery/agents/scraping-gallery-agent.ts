@@ -1,14 +1,15 @@
 import type { AiCallCost } from "@/lib/ai-pricing";
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
-import { galleryLog, galleryWarn } from "@/lib/gallery/log";
+import { galleryLog } from "@/lib/gallery/log";
 import {
   buildFocusedRow,
   candidatePoolSize,
   runOpenAiWebImageSearch,
   selectedCandidates,
   sourcePolicyInstruction,
-  urlKey,
   type OpenAiImageCandidate,
+  type ScrapingMainImageAttachment,
+  resolveScrapingModel,
 } from "@/lib/gallery/agents/scraping-shared";
 
 /** JSON schema for the Scraping Gallery agent only — no Main selection fields. */
@@ -39,15 +40,23 @@ export function buildScrapingGalleryPrompt(params: {
   focusedRow: Record<string, string>;
   galleryCount: number;
   settings: GalleryScrapingSettings;
-  mainImageUrl?: string;
+  mainImageUrls?: string[];
 }): string {
   const galleryCustom = params.settings.instructions.trim();
+  const mainUrls = (params.mainImageUrls || [])
+    .map((url) => String(url || "").trim())
+    .filter(Boolean);
+  const mainCount = mainUrls.length;
   return [
     "Find Gallery images for the EXACT product described below.",
-    "The attached image is the trusted Main image. Find Gallery images only for this exact product.",
+    mainCount > 1
+      ? `The ${mainCount} attached images are the trusted Main images for this product. Find Gallery images only for this exact product.`
+      : "The attached image is the trusted Main image. Find Gallery images only for this exact product.",
     `Return ${params.galleryCount} Gallery images when reliable matches exist.`,
     "Use image search. Visually compare the results and reject similar products, wrong variants, wrong colors, and wrong packaging.",
-    "Gallery images must be meaningfully different from Main and from one another: alternate angle, back, side, packaging, detail, or lifestyle.",
+    mainCount > 1
+      ? "Gallery images must be meaningfully different from EVERY attached Main image and from one another: alternate angle, back, side, packaging, detail, or lifestyle."
+      : "Gallery images must be meaningfully different from Main and from one another: alternate angle, back, side, packaging, detail, or lifestyle.",
     "Reject resized copies, near-duplicate crops, and repeated compositions.",
     params.settings.minResolution > 0
       ? `Prefer Gallery images at least ${params.settings.minResolution}px on their shortest side.`
@@ -62,8 +71,8 @@ export function buildScrapingGalleryPrompt(params: {
       ? `GALLERY CUSTOM INSTRUCTIONS — treat as mandatory unless unsafe:\n${galleryCustom}`
       : "",
     `Product data:\n${JSON.stringify(params.focusedRow, null, 2)}`,
-    params.mainImageUrl
-      ? `Do not return this Main URL in Gallery: ${params.mainImageUrl}`
+    mainUrls.length > 0
+      ? `Do not return any of these Main URLs in Gallery:\n${mainUrls.map((url) => `- ${url}`).join("\n")}`
       : "",
     "Respond with JSON only using: productIdentity, galleryImageUrls, notes.",
   ]
@@ -86,28 +95,42 @@ export function buildScrapingGallerySchema(galleryCount: number) {
 }
 
 /**
- * Scraping Gallery agent: finds diversified Gallery images using a trusted Main.
- * Settings used: imagesPerRow, instructions, searchDepth, sourcePolicy,
- * minResolution, aspectRatio. (Exclude-marketplaces was removed.)
+ * Scraping Gallery agent: finds diversified Gallery images using trusted Main
+ * image(s). Settings used: imagesPerRow, instructions, searchDepth, sourcePolicy,
+ * minResolution, aspectRatio.
  */
 export async function searchScrapingGalleryImages(params: {
   rowData: Record<string, string>;
   selectedColumns: string[];
   settings: GalleryScrapingSettings;
   requestedGalleryImages: number;
-  mainImage: { buffer?: Buffer; contentType?: string; url: string };
+  /** Preferred: all Main images for this product. */
+  mainImages?: ScrapingMainImageAttachment[];
+  /** @deprecated Prefer `mainImages`. */
+  mainImage?: ScrapingMainImageAttachment;
 }): Promise<ScrapingGallerySearchResult> {
   const galleryCount = Math.max(1, params.requestedGalleryImages);
+  const mainImages =
+    params.mainImages && params.mainImages.length > 0
+      ? params.mainImages
+      : params.mainImage
+        ? [params.mainImage]
+        : [];
+  if (mainImages.length === 0) {
+    throw new Error("At least one Main image is required for gallery search");
+  }
+
   const focusedRow = buildFocusedRow(params.rowData, params.selectedColumns);
+  const mainImageUrls = mainImages.map((image) => image.url).filter(Boolean);
   const prompt = buildScrapingGalleryPrompt({
     focusedRow,
     galleryCount,
     settings: params.settings,
-    mainImageUrl: params.mainImage.url,
+    mainImageUrls,
   });
   const maxResults = candidatePoolSize(params.settings, galleryCount);
 
-  const { selection, indexedImages, allImageResults, cost, searchCallCount } =
+  const { selection, allImageResults, cost, searchCallCount } =
     await runOpenAiWebImageSearch({
       agent: "scraping-gallery",
       prompt,
@@ -115,38 +138,26 @@ export async function searchScrapingGalleryImages(params: {
       schema: buildScrapingGallerySchema(galleryCount),
       maxResults,
       searchDepth: params.settings.searchDepth,
-      mainImage: params.mainImage,
+      mainImages,
+      model: resolveScrapingModel(params.settings.tier),
     });
 
   const blockedMainUrls = new Set(
-    [params.mainImage.url].filter(Boolean).map((url) => urlKey(String(url)))
+    mainImageUrls.map((url) => url.trim().toLowerCase()).filter(Boolean)
   );
   const selectedGalleryCandidates = selectedCandidates(
     selection?.galleryImageUrls,
-    indexedImages.byUrl,
-    galleryCount,
-    allImageResults
-  ).filter((candidate) => !blockedMainUrls.has(urlKey(candidate.imageUrl)));
-
-  const selectedGalleryUrlCount = Array.isArray(selection?.galleryImageUrls)
-    ? selection.galleryImageUrls.length
-    : 0;
-  if (selectedGalleryUrlCount > 0 && selectedGalleryCandidates.length === 0) {
-    galleryWarn(
-      "scraping-gallery",
-      "Model-selected Gallery URLs did not match raw image-search results",
-      {
-        selectedGalleryUrlCount,
-        matchedGalleryCount: selectedGalleryCandidates.length,
-      }
-    );
-  }
+    galleryCount
+  ).filter((candidate) => !blockedMainUrls.has(candidate.imageUrl.toLowerCase()));
 
   galleryLog("scraping-gallery:done", "Scraping Gallery agent completed", {
     productIdentity: selection?.productIdentity || "",
     imageResultCount: allImageResults.length,
     galleryCandidateCount: selectedGalleryCandidates.length,
-    selectedGalleryUrlCount,
+    selectedGalleryUrlCount: Array.isArray(selection?.galleryImageUrls)
+      ? selection.galleryImageUrls.length
+      : 0,
+    mainAttachmentCount: mainImages.length,
     searchCallCount,
   });
 

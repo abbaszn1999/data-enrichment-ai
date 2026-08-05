@@ -66,6 +66,7 @@ describe("Scraping Main agent", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.mainCandidates.map((c) => c.imageUrl)).toEqual([canonicalMain]);
     const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request.model).toBe("gpt-5.6-terra");
     expect(request.text.format.name).toBe("product_main_selection");
     expect(request.text.format.schema.required).toEqual([
       "productIdentity",
@@ -165,10 +166,7 @@ describe("Scraping Gallery agent", () => {
                   type: "output_text",
                   text: JSON.stringify({
                     productIdentity: "Exact Product",
-                    galleryImageUrls: [
-                      galleryThumbnail,
-                      "https://fabricated.example/not-in-search.jpg",
-                    ],
+                    galleryImageUrls: [galleryThumbnail],
                     notes: "",
                   }),
                 },
@@ -187,14 +185,17 @@ describe("Scraping Gallery agent", () => {
       selectedColumns: ["SKU"],
       settings: DEFAULT_SCRAPING_SETTINGS,
       requestedGalleryImages: 3,
-      mainImage: {
-        buffer: Buffer.from("image"),
-        contentType: "image/webp",
-        url: "https://example.com/main.webp",
-      },
+      mainImages: [
+        {
+          buffer: Buffer.from("image"),
+          contentType: "image/webp",
+          url: "https://example.com/main.webp",
+        },
+      ],
     });
 
     const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request.model).toBe("gpt-5.6-terra");
     expect(request.text.format.name).toBe("product_gallery_selection");
     expect(request.text.format.schema.required).toEqual([
       "productIdentity",
@@ -215,5 +216,189 @@ describe("Scraping Gallery agent", () => {
     expect(result.galleryCandidates.map((c) => c.imageUrl)).toEqual([
       galleryThumbnail,
     ]);
+  });
+
+  it("attaches every Main image and blocks all of their URLs", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "completed",
+          output: [
+            {
+              type: "web_search_call",
+              results: [
+                {
+                  type: "image_result",
+                  image_url: "https://cdn.example/side.jpg",
+                  source_website_url: "https://brand.example/product",
+                  caption: "Side",
+                },
+              ],
+            },
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    productIdentity: "Exact Product",
+                    galleryImageUrls: [
+                      "https://example.com/main-1.webp",
+                      "https://cdn.example/side.jpg",
+                    ],
+                    notes: "",
+                  }),
+                },
+              ],
+            },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchScrapingGalleryImages({
+      rowData: { SKU: "123" },
+      selectedColumns: ["SKU"],
+      settings: DEFAULT_SCRAPING_SETTINGS,
+      requestedGalleryImages: 3,
+      mainImages: [
+        {
+          buffer: Buffer.from("front"),
+          contentType: "image/webp",
+          url: "https://example.com/main-1.webp",
+        },
+        {
+          buffer: Buffer.from("back"),
+          contentType: "image/webp",
+          url: "https://example.com/main-2.webp",
+        },
+      ],
+    });
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const content = request.input[0].content;
+    expect(content.filter((part: { type: string }) => part.type === "input_image")).toHaveLength(2);
+    expect(content.find((part: { type: string }) => part.type === "input_text").text).toContain(
+      "The 2 attached images are the trusted Main images"
+    );
+    expect(content.find((part: { type: string }) => part.type === "input_text").text).toContain(
+      "https://example.com/main-1.webp"
+    );
+    expect(content.find((part: { type: string }) => part.type === "input_text").text).toContain(
+      "https://example.com/main-2.webp"
+    );
+    expect(result.galleryCandidates.map((c) => c.imageUrl)).toEqual([
+      "https://cdn.example/side.jpg",
+    ]);
+  });
+
+  it("trusts model-selected Gallery URLs directly, even without a matching raw search result", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const modelUrl = "https://brand.example/gallery/side-view.jpg";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "completed",
+          output: [
+            {
+              type: "web_search_call",
+              results: [
+                {
+                  type: "image_result",
+                  image_url: "https://cdn.example/unrelated.jpg",
+                  source_website_url: "https://brand.example/product",
+                  caption: "Some other result",
+                },
+              ],
+            },
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    productIdentity: "Exact Product",
+                    galleryImageUrls: [modelUrl],
+                    notes: "",
+                  }),
+                },
+              ],
+            },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchScrapingGalleryImages({
+      rowData: { SKU: "123" },
+      selectedColumns: ["SKU"],
+      settings: DEFAULT_SCRAPING_SETTINGS,
+      requestedGalleryImages: 3,
+      mainImages: [
+        {
+          buffer: Buffer.from("image"),
+          contentType: "image/webp",
+          url: "https://example.com/main.webp",
+        },
+      ],
+    });
+
+    expect(result.galleryCandidates.map((c) => c.imageUrl)).toEqual([modelUrl]);
+  });
+
+  it("uses gpt-5.6-sol when Scraping tier is premium", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    productIdentity: "Exact Product",
+                    galleryImageUrls: [],
+                    notes: "",
+                  }),
+                },
+              ],
+            },
+          ],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await searchScrapingGalleryImages({
+      rowData: { SKU: "123" },
+      selectedColumns: ["SKU"],
+      settings: {
+        ...DEFAULT_SCRAPING_SETTINGS,
+        tier: "premium",
+      },
+      requestedGalleryImages: 2,
+      mainImages: [
+        {
+          buffer: Buffer.from("image"),
+          contentType: "image/webp",
+          url: "https://example.com/main.webp",
+        },
+      ],
+    });
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request.model).toBe("gpt-5.6-sol");
   });
 });

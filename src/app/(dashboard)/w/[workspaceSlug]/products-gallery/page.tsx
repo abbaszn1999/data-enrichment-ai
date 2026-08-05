@@ -87,8 +87,12 @@ import {
   DEFAULT_SCRAPING_SETTINGS,
   resolveSelectionRunPhase,
 } from "@/lib/gallery/types";
-import { parseImageUrls } from "@/lib/gallery/image-urls";
+import { parseImageUrls, listColumnsWithHttpUrls } from "@/lib/gallery/image-urls";
 import { imageRefsMatch } from "@/lib/gallery/image-refs";
+import {
+  pendingImageDeleteKey,
+  stripPendingImageDeletes as stripPendingDeletesFromWorksheet,
+} from "@/lib/gallery/pending-image-deletes";
 
 type ImageUploadPreview = {
   name: string;
@@ -223,12 +227,14 @@ export default function ProductsGalleryPage() {
     "gallery"
   );
   const [imagePreviewPath, setImagePreviewPath] = useState<string | null>(null);
-  const [deletingImagePaths, setDeletingImagePaths] = useState<Set<string>>(
+  /** Set of pendingImageDeleteKey(rowId, path) — never path-only. */
+  const [pendingImageDeletes, setPendingImageDeletes] = useState<Set<string>>(
     () => new Set()
   );
-  const deletingImagePathsRef = useRef<Set<string>>(new Set());
+  const pendingImageDeletesRef = useRef<Set<string>>(new Set());
   const [showDeleteRows, setShowDeleteRows] = useState(false);
   const [deletingRows, setDeletingRows] = useState(false);
+  const [showLeaveWithoutSaving, setShowLeaveWithoutSaving] = useState(false);
 
   const [activeTab, setActiveTab] = useState<"scraping" | "ai">("scraping");
   const [showMore, setShowMore] = useState(false);
@@ -243,6 +249,7 @@ export default function ProductsGalleryPage() {
   const [aiMainInstructions, setAiMainInstructions] = useState("");
   const [scrapingImages, setScrapingImages] = useState("4");
   const [scrapingInstructions, setScrapingInstructions] = useState("");
+  const [scrapingModel, setScrapingModel] = useState<"standard" | "pro">("standard");
   const [scrapingSearchDepth, setScrapingSearchDepth] = useState("medium");
   const [scrapingSourcePolicy, setScrapingSourcePolicy] = useState("prefer-official");
   const [scrapingResolution, setScrapingResolution] = useState("1200");
@@ -256,6 +263,9 @@ export default function ProductsGalleryPage() {
   const [aiInstructions, setAiInstructions] = useState("");
   const [aiGroundWithSearch, setAiGroundWithSearch] = useState(false);
   const [brandingEnabled, setBrandingEnabled] = useState(false);
+  const [brandGuideMode, setBrandGuideMode] = useState<"image" | "colors">(
+    "colors"
+  );
   const [aiAssetBusy, setAiAssetBusy] = useState<GalleryAiAssetKind | null>(null);
   const [sceneReference, setSceneReference] = useState<ImageUploadPreview | null>(null);
   const [brandLogo, setBrandLogo] = useState<ImageUploadPreview | null>(null);
@@ -371,7 +381,18 @@ export default function ProductsGalleryPage() {
     setOriginalImageColumn(
       ws.originalImageSelectionExplicit ? ws.originalImageColumn ?? "none" : "none"
     );
-    setSelectedColumns(new Set(ws.selectedColumns.length ? ws.selectedColumns : ws.columns));
+    const imageColumn =
+      ws.originalImageSelectionExplicit && ws.originalImageColumn
+        ? ws.originalImageColumn
+        : null;
+    const initialSelected = ws.selectedColumns.length
+      ? ws.selectedColumns
+      : ws.columns;
+    setSelectedColumns(
+      new Set(
+        initialSelected.filter((column) => column !== imageColumn)
+      )
+    );
     setActiveTab(ws.settings.provider === "ai" ? "ai" : "scraping");
 
     const g = ws.settings.scraping ?? DEFAULT_SCRAPING_SETTINGS;
@@ -379,6 +400,7 @@ export default function ProductsGalleryPage() {
     setScrapingMainInstructions(g.main?.instructions || "");
     setScrapingImages(String(g.imagesPerRow ?? 4));
     setScrapingInstructions(g.instructions || "");
+    setScrapingModel(g.tier === "premium" ? "pro" : "standard");
     setScrapingSearchDepth(g.searchDepth || "medium");
     setScrapingSourcePolicy(g.sourcePolicy || "prefer-official");
     setScrapingResolution(String(g.minResolution ?? 1200));
@@ -396,6 +418,9 @@ export default function ProductsGalleryPage() {
     setAiInstructions(a.instructions || "");
     setAiGroundWithSearch(a.groundWithSearch ?? false);
     setBrandingEnabled(a.brandingEnabled ?? false);
+    setBrandGuideMode(
+      a.brandGuideMode ?? (a.brandGuidePath ? "image" : "colors")
+    );
     setBrandColors(
       a.brandColors?.length ? a.brandColors : [...DEFAULT_AI_SETTINGS.brandColors]
     );
@@ -433,30 +458,8 @@ export default function ProductsGalleryPage() {
   }, []);
 
   const stripPendingImageDeletes = useCallback(
-    (ws: GalleryWorksheetJson): GalleryWorksheetJson => {
-      const pending = deletingImagePathsRef.current;
-      if (!pending.size) return ws;
-      return {
-        ...ws,
-        rows: ws.rows.map((row) => {
-          const mainPaths = (
-            Array.isArray(row.mainImagePaths)
-              ? row.mainImagePaths
-              : row.mainImagePath
-                ? [row.mainImagePath]
-                : []
-          ).filter((item) => !pending.has(item));
-          return {
-            ...row,
-            mainImagePaths: mainPaths,
-            mainImagePath: mainPaths[0] ?? null,
-            galleryImagePaths: row.galleryImagePaths.filter(
-              (item) => !pending.has(item)
-            ),
-          };
-        }),
-      };
-    },
+    (ws: GalleryWorksheetJson): GalleryWorksheetJson =>
+      stripPendingDeletesFromWorksheet(ws, pendingImageDeletesRef.current),
     []
   );
 
@@ -501,6 +504,7 @@ export default function ProductsGalleryPage() {
         imagesPerRow: Number(scrapingMainImages) || 1,
         instructions: scrapingMainInstructions.slice(0, 2_000),
       },
+      tier: scrapingModel === "pro" ? "premium" : "standard",
       imagesPerRow: Number(scrapingImages) || 4,
       instructions: scrapingInstructions.slice(0, 2_000),
       searchDepth:
@@ -528,6 +532,7 @@ export default function ProductsGalleryPage() {
       instructions: aiInstructions,
       groundWithSearch: aiGroundWithSearch,
       brandingEnabled,
+      brandGuideMode,
       brandColors: brandColors
         .map((c) => normalizeHexColor(c) ?? c)
         .filter(Boolean),
@@ -548,7 +553,10 @@ export default function ProductsGalleryPage() {
       provider: activeTab,
       originalImageColumn: originalImageColumn === "none" ? null : originalImageColumn,
       originalImageSelectionExplicit,
-      selectedColumns: Array.from(selectedColumns),
+      selectedColumns: Array.from(selectedColumns).filter(
+        (column) =>
+          !(originalImageColumn !== "none" && column === originalImageColumn)
+      ),
       scraping,
       ai,
     };
@@ -566,11 +574,13 @@ export default function ProductsGalleryPage() {
     aiGroundWithSearch,
     brandColors,
     brandingEnabled,
+    brandGuideMode,
     scrapingMainImages,
     scrapingMainInstructions,
     scrapingAspectRatio,
     scrapingImages,
     scrapingInstructions,
+    scrapingModel,
     scrapingResolution,
     scrapingSearchDepth,
     scrapingSourcePolicy,
@@ -594,13 +604,16 @@ export default function ProductsGalleryPage() {
     []
   );
 
-  const persistSettings = useCallback(async () => {
-    if (!workspace || !projectId || !canEdit || !worksheet) return null;
+  const persistSettings = useCallback(async (
+    worksheetOverride?: NonNullable<typeof worksheet>
+  ) => {
+    const worksheetToSave = worksheetOverride ?? worksheet;
+    if (!workspace || !projectId || !canEdit || !worksheetToSave) return null;
     const settings = buildSettingsPatch();
     const signature = JSON.stringify(settings);
     if (signature === lastSavedSettingsSignatureRef.current) {
       setSaveStatus("saved");
-      return worksheet;
+      return worksheetToSave;
     }
     setSaveStatus("saving");
     try {
@@ -611,7 +624,7 @@ export default function ProductsGalleryPage() {
           expectedRevision: settingsRevisionRef.current,
           expectedWorksheetRevision: worksheetRevisionRef.current,
           settings,
-          worksheet,
+          worksheet: worksheetToSave,
         })
       );
       settingsRevisionRef.current = Number(result.session.settings_revision);
@@ -729,9 +742,14 @@ export default function ProductsGalleryPage() {
         throw new Error("Reference image was uploaded but no storage path was saved");
       }
       // Pin the uploaded kind explicitly in case worksheet merge is briefly stale.
-      if (kind === "logo") aiAssetPathsRef.current.logoPath = path;
-      else if (kind === "brandGuide") aiAssetPathsRef.current.brandGuidePath = path;
-      else aiAssetPathsRef.current.sceneReferencePath = path;
+      if (kind === "logo") {
+        aiAssetPathsRef.current.logoPath = path;
+        setBrandingEnabled(true);
+      } else if (kind === "brandGuide") {
+        aiAssetPathsRef.current.brandGuidePath = path;
+        setBrandGuideMode("image");
+        setBrandingEnabled(true);
+      } else aiAssetPathsRef.current.sceneReferencePath = path;
       setAiAssetPreview(kind, {
         name: file.name,
         previewUrl: result.signedUrls[path] || previewUrl,
@@ -817,7 +835,42 @@ export default function ProductsGalleryPage() {
     }
   };
 
+  const productColumns = useMemo(
+    () =>
+      worksheetColumns.filter(
+        (column) =>
+          !(hasOriginalImageColumn && column === originalImageColumn)
+      ),
+    [hasOriginalImageColumn, originalImageColumn, worksheetColumns]
+  );
+
+  /** Original-image picker: only columns whose values are primarily http(s) URLs. */
+  const originalImageCandidateColumns = useMemo(() => {
+    const detected = listColumnsWithHttpUrls({
+      columns: worksheetColumns,
+      rows: worksheet?.rows ?? [],
+      sampleSize: 40,
+      minUrlShare: 0.25,
+    });
+    // Keep a previously saved choice visible even if the sample is sparse.
+    if (
+      hasOriginalImageColumn &&
+      originalImageColumn !== "none" &&
+      worksheetColumns.includes(originalImageColumn) &&
+      !detected.includes(originalImageColumn)
+    ) {
+      return [originalImageColumn, ...detected];
+    }
+    return detected;
+  }, [
+    hasOriginalImageColumn,
+    originalImageColumn,
+    worksheet?.rows,
+    worksheetColumns,
+  ]);
+
   const toggleColumn = (columnId: string) => {
+    if (hasOriginalImageColumn && columnId === originalImageColumn) return;
     setSelectedColumns((current) => {
       const next = new Set(current);
       if (next.has(columnId)) next.delete(columnId);
@@ -829,8 +882,9 @@ export default function ProductsGalleryPage() {
   const toggleAllColumns = () => {
     setSelectedColumns((current) => {
       const allSelected =
-        worksheetColumns.length > 0 && worksheetColumns.every((column) => current.has(column));
-      return allSelected ? new Set() : new Set(worksheetColumns);
+        productColumns.length > 0 &&
+        productColumns.every((column) => current.has(column));
+      return allSelected ? new Set() : new Set(productColumns);
     });
   };
 
@@ -941,21 +995,92 @@ export default function ProductsGalleryPage() {
     };
   }, [workspace?.id, projectId, hasWorksheet]);
 
+  const shouldPollGeneration = isGenerating || generationRun !== null;
+  useEffect(() => {
+    if (!workspace?.id || !projectId || !shouldPollGeneration) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const pollProgress = async () => {
+      try {
+        const fresh = await getGallerySession(workspace.id, projectId, {
+          includeSignedUrls: false,
+        });
+        if (cancelled) return;
+        if (!fresh.worksheet) return;
+        const freshWorksheet = fresh.worksheet;
+        worksheetRevisionRef.current = Number(
+          fresh.session.worksheet_revision ?? worksheetRevisionRef.current
+        );
+        setActiveSession(fresh.session);
+        setSessions((current) =>
+          current.map((session) =>
+            session.id === fresh.session.id ? fresh.session : session
+          )
+        );
+        const mergedFresh = stripPendingDeletesFromWorksheet(
+          freshWorksheet,
+          pendingImageDeletesRef.current
+        );
+        setWorksheet((current) =>
+          current
+            ? {
+                ...current,
+                rows: mergedFresh.rows,
+                activeRun: mergedFresh.activeRun,
+                revision: mergedFresh.revision,
+              }
+            : mergedFresh
+        );
+        const run = mergedFresh.activeRun;
+        if (run && (run.status === "running" || run.status === "queued")) {
+          setGenerationRun({
+            total: run.total,
+            completed: run.completed + run.failed,
+            runId: run.id,
+          });
+          if (fresh.session.cancel_requested) {
+            setIsStoppingGeneration(true);
+          }
+        } else if (!isGenerating) {
+          setGenerationRun(null);
+          setIsStoppingGeneration(false);
+        }
+      } catch {
+        // The next poll or the final generate response will recover.
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(pollProgress, 750);
+        }
+      }
+    };
+
+    timer = setTimeout(pollProgress, 250);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [isGenerating, projectId, shouldPollGeneration, workspace?.id]);
+
   const displayColumns = useMemo(() => {
     const selectedImageColumn =
       hasOriginalImageColumn && worksheetColumns.includes(originalImageColumn)
         ? originalImageColumn
         : null;
-    const dataCols = worksheetColumns.filter(
-      (column) => column !== selectedImageColumn
-    );
+    // Keep the original-image column visible in the sheet; only hide it from
+    // the Worksheet columns picker (productColumns).
     return [
       ...(selectedImageColumn ? [selectedImageColumn] : []),
       RESULT_MAIN,
       RESULT_GALLERY,
-      ...dataCols,
+      ...productColumns,
     ];
-  }, [hasOriginalImageColumn, originalImageColumn, worksheetColumns]);
+  }, [
+    hasOriginalImageColumn,
+    originalImageColumn,
+    productColumns,
+    worksheetColumns,
+  ]);
 
   const tableMinWidthPx = useMemo(
     () => Math.max(900, 56 + displayColumns.length * 160 + 80),
@@ -1129,6 +1254,7 @@ export default function ProductsGalleryPage() {
           brandLogo &&
           !(aiSettings?.logoPath || aiAssetPathsRef.current.logoPath)) ||
         (brandingEnabled &&
+          brandGuideMode === "image" &&
           brandGuide &&
           !(
             aiSettings?.brandGuidePath ||
@@ -1169,7 +1295,12 @@ export default function ProductsGalleryPage() {
         );
         return;
       }
-      if (brandingEnabled && brandGuide && !brandGuidePath) {
+      if (
+        brandingEnabled &&
+        brandGuideMode === "image" &&
+        brandGuide &&
+        !brandGuidePath
+      ) {
         toast.error(
           "Brand guide is not saved yet. Re-upload it and wait for “Reference image saved”."
         );
@@ -1446,13 +1577,34 @@ export default function ProductsGalleryPage() {
   };
 
   const closeProjectSafely = async () => {
-    if (
-      (saveStatus === "dirty" || rowDraft) &&
-      !window.confirm("Leave without saving your changes?")
-    ) {
+    if (saveStatus === "dirty" || rowDraft) {
+      setShowLeaveWithoutSaving(true);
       return;
     }
     closeProject();
+  };
+
+  const confirmLeaveWithoutSaving = () => {
+    setShowLeaveWithoutSaving(false);
+    closeProject();
+  };
+
+  const saveAndLeave = async () => {
+    try {
+      let latestWorksheet = worksheet;
+      if (rowDraft) {
+        latestWorksheet = (await persistRowDraft(rowDraft)) ?? latestWorksheet;
+        setEditingRowId(null);
+        setRowDraft(null);
+      }
+      await persistSettings(latestWorksheet ?? undefined);
+      setShowLeaveWithoutSaving(false);
+      closeProject();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Save failed"
+      );
+    }
   };
 
   const handleExport = async () => {
@@ -1530,13 +1682,12 @@ export default function ProductsGalleryPage() {
       !projectId ||
       !worksheet ||
       !canEdit ||
-      generationRun ||
-      isGenerating ||
-      deletingImagePaths.has(path)
+      pendingImageDeletes.has(pendingImageDeleteKey(rowId, path))
     ) return;
-    setDeletingImagePaths((current) => {
-      const next = new Set(current).add(path);
-      deletingImagePathsRef.current = next;
+    const deleteKey = pendingImageDeleteKey(rowId, path);
+    setPendingImageDeletes((current) => {
+      const next = new Set(current).add(deleteKey);
+      pendingImageDeletesRef.current = next;
       return next;
     });
     setSaveStatus("saving");
@@ -1570,49 +1721,61 @@ export default function ProductsGalleryPage() {
     );
     try {
       const result = await enqueueMutation(async () => {
-        try {
-          return await deleteGalleryImage({
+        const attemptDelete = (revision: number) =>
+          deleteGalleryImage({
             workspaceId: workspace.id,
             sessionId: projectId,
             rowId,
             path,
-            revision: worksheetRevisionRef.current,
+            revision,
           });
+        try {
+          return await attemptDelete(worksheetRevisionRef.current);
         } catch (error) {
           if (!(error instanceof GalleryApiError) || error.status !== 409) {
             throw error;
           }
-          // Another save won the revision race — reload and retry once.
+          // Revision race or transient sync — reload and retry once.
           const fresh = await getGallerySession(workspace.id, projectId, {
             includeSignedUrls: false,
           });
           worksheetRevisionRef.current = Number(
             fresh.session.worksheet_revision ?? 0
           );
-          return await deleteGalleryImage({
-            workspaceId: workspace.id,
-            sessionId: projectId,
-            rowId,
-            path,
-            revision: worksheetRevisionRef.current,
-          });
+          if (fresh.worksheet) {
+            setWorksheet(
+              stripPendingDeletesFromWorksheet(
+                fresh.worksheet,
+                pendingImageDeletesRef.current
+              )
+            );
+          }
+          setActiveSession(fresh.session);
+          return await attemptDelete(worksheetRevisionRef.current);
         }
       });
       worksheetRevisionRef.current = Number(
         result.session.worksheet_revision ?? worksheetRevisionRef.current
       );
-      // Clear this path from pending BEFORE applying the server worksheet so a
+      // Clear this row+path from pending BEFORE applying the server worksheet so a
       // failed server-side delete is not masked by stripPendingImageDeletes.
-      setDeletingImagePaths((current) => {
+      setPendingImageDeletes((current) => {
         const next = new Set(current);
-        next.delete(path);
-        deletingImagePathsRef.current = next;
+        next.delete(deleteKey);
+        pendingImageDeletesRef.current = next;
         return next;
       });
       const merged = stripPendingImageDeletes(result.worksheet);
       setWorksheet(merged);
       setActiveSession(result.session);
       setSignedUrls((current) => {
+        const stillUsedElsewhere = merged.rows.some(
+          (row) =>
+            row.id !== rowId &&
+            (getRowMainPaths(row).some((item) => imageRefsMatch(item, path)) ||
+              row.galleryImagePaths.some((item) => imageRefsMatch(item, path)))
+        );
+        if (stillUsedElsewhere || !(path in current)) return current;
         const next = { ...current };
         delete next[path];
         return next;
@@ -1662,10 +1825,10 @@ export default function ProductsGalleryPage() {
         error instanceof Error ? error.message : "Failed to delete image"
       );
     } finally {
-      setDeletingImagePaths((current) => {
+      setPendingImageDeletes((current) => {
         const next = new Set(current);
-        next.delete(path);
-        deletingImagePathsRef.current = next;
+        next.delete(deleteKey);
+        pendingImageDeletesRef.current = next;
         return next;
       });
     }
@@ -1936,17 +2099,32 @@ export default function ProductsGalleryPage() {
                     const next = event.target.value;
                     setOriginalImageSelectionExplicit(true);
                     setOriginalImageColumn(next);
+                    if (next !== "none") {
+                      setSelectedColumns((current) => {
+                        if (!current.has(next)) return current;
+                        const nextSelected = new Set(current);
+                        nextSelected.delete(next);
+                        return nextSelected;
+                      });
+                    }
                   }}
                   disabled={!canEdit}
                   className="h-8 w-full rounded-md border bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-ring"
                 >
                   <option value="none">Find a new main image for every product</option>
-                  {worksheetColumns.map((column) => (
+                  {originalImageCandidateColumns.map((column) => (
                     <option key={column} value={column}>
                       {column}
                     </option>
                   ))}
                 </select>
+                {originalImageCandidateColumns.length === 0 &&
+                originalImageColumn === "none" ? (
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    No URL columns detected in this sheet. Use “Find a new main
+                    image” or add a column with image/page links.
+                  </p>
+                ) : null}
                 {originalImageColumn === "none" ? (
                   <>
                     <ConfigSelect
@@ -2001,18 +2179,18 @@ export default function ProductsGalleryPage() {
                     <input
                       type="checkbox"
                       checked={
-                        worksheetColumns.length > 0 &&
-                        worksheetColumns.every((column) => selectedColumns.has(column))
+                        productColumns.length > 0 &&
+                        productColumns.every((column) => selectedColumns.has(column))
                       }
                       ref={(element) => {
                         if (!element) return;
-                        const selectedCount = worksheetColumns.filter((column) =>
+                        const selectedCount = productColumns.filter((column) =>
                           selectedColumns.has(column)
                         ).length;
                         element.indeterminate =
-                          selectedCount > 0 && selectedCount < worksheetColumns.length;
+                          selectedCount > 0 && selectedCount < productColumns.length;
                       }}
-                      disabled={!canEdit || worksheetColumns.length === 0}
+                      disabled={!canEdit || productColumns.length === 0}
                       onChange={toggleAllColumns}
                       aria-label="Select all columns"
                       className="mt-0.5 h-3.5 w-3.5 accent-primary"
@@ -2020,7 +2198,7 @@ export default function ProductsGalleryPage() {
                     <span>Column from worksheet</span>
                   </div>
                   <div className="max-h-[218px] overflow-y-auto">
-                    {worksheetColumns.map((column) => {
+                    {productColumns.map((column) => {
                       const isSelected = selectedColumns.has(column);
                       return (
                         <label
@@ -2046,7 +2224,11 @@ export default function ProductsGalleryPage() {
                   </div>
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  {selectedColumns.size} of {worksheetColumns.length} columns selected
+                  {
+                    productColumns.filter((column) => selectedColumns.has(column))
+                      .length
+                  }{" "}
+                  of {productColumns.length} columns selected
                 </p>
               </section>
 
@@ -2063,6 +2245,33 @@ export default function ProductsGalleryPage() {
                           images are found, the cell shows “No gallery images found”.
                         </InfoTip>
                       </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Powered by Standard or Premium image search.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
+                      <button
+                        type="button"
+                        onClick={() => setScrapingModel("standard")}
+                        className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
+                          scrapingModel === "standard"
+                            ? "bg-background shadow-sm"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        Standard
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setScrapingModel("pro")}
+                        className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
+                          scrapingModel === "pro"
+                            ? "bg-background shadow-sm"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        Premium
+                      </button>
                     </div>
                     <ConfigSelect
                       label="Gallery images per product"
@@ -2206,32 +2415,45 @@ export default function ProductsGalleryPage() {
                       <span className="text-[11px] font-medium text-muted-foreground">
                         Scene or model reference
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => sceneReferenceInputRef.current?.click()}
-                        disabled={aiAssetBusy === "sceneReference"}
-                        className="relative flex min-h-24 w-full flex-col items-center justify-center gap-1.5 overflow-hidden rounded-md border border-dashed bg-muted/20 text-center transition-colors hover:bg-muted/40"
-                      >
-                        {sceneReference ? (
-                          <>
+                      <div className="group relative">
+                        <button
+                          type="button"
+                          onClick={() => sceneReferenceInputRef.current?.click()}
+                          disabled={aiAssetBusy === "sceneReference"}
+                          className="relative flex min-h-24 w-full flex-col items-center justify-center gap-1.5 overflow-hidden rounded-md border border-dashed bg-muted/20 text-center transition-colors hover:bg-muted/40 disabled:opacity-60"
+                        >
+                          {sceneReference ? (
+                            // eslint-disable-next-line @next/next/no-img-element
                             <img
                               src={sceneReference.previewUrl}
                               alt={sceneReference.name}
                               className="absolute inset-0 h-full w-full object-cover"
                             />
-                            <span className="relative z-10 max-w-[90%] truncate rounded bg-background/85 px-2 py-0.5 text-[10px] font-medium backdrop-blur-sm">
-                              {sceneReference.name}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <Upload className="h-4 w-4 text-muted-foreground" />
-                            <span className="max-w-full truncate px-3 text-xs font-medium">
-                              Upload a scene or model image
-                            </span>
-                          </>
-                        )}
-                      </button>
+                          ) : (
+                            <>
+                              <Upload className="h-4 w-4 text-muted-foreground" />
+                              <span className="max-w-full truncate px-3 text-xs font-medium">
+                                Upload a scene or model image
+                              </span>
+                            </>
+                          )}
+                        </button>
+                        {sceneReference ? (
+                          <button
+                            type="button"
+                            aria-label="Remove scene or model reference"
+                            disabled={aiAssetBusy === "sceneReference"}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void removeAiAsset("sceneReference");
+                            }}
+                            className="absolute top-1.5 right-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white opacity-0 shadow transition-opacity group-hover:opacity-100 hover:bg-destructive"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                      </div>
                       <input
                         ref={sceneReferenceInputRef}
                         type="file"
@@ -2245,193 +2467,238 @@ export default function ProductsGalleryPage() {
                           event.target.value = "";
                         }}
                       />
-                      {sceneReference && (
-                        <button
-                          type="button"
-                          disabled={aiAssetBusy === "sceneReference"}
-                          onClick={() => void removeAiAsset("sceneReference")}
-                          className="flex items-center gap-1 text-[10px] text-destructive hover:underline"
-                        >
-                          <X className="h-3 w-3" />
-                          Remove scene/model reference
-                        </button>
-                      )}
                     </div>
                     <div className="space-y-3 rounded-md border bg-muted/15 p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <Palette className="h-3.5 w-3.5 text-muted-foreground" />
-                          <div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <Palette className="h-3.5 w-3.5 text-muted-foreground" />
                             <h4 className="text-xs font-semibold">Branding</h4>
+                            <InfoTip>
+                              When enabled, logo and either a brand-guide image or
+                              manual colors are sent to the image model — matching
+                              the Visualizer branding flow.
+                            </InfoTip>
                           </div>
-                          <InfoTip>
-                            When enabled, colors, logo, and brand guide are sent to the image model
-                            and enforced in its generation prompt.
-                          </InfoTip>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Apply logo, brand guide, and colors to generated visuals.
+                          </p>
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={brandingEnabled}
-                          onChange={(event) => setBrandingEnabled(event.target.checked)}
-                          className="h-3.5 w-3.5 accent-primary"
-                          aria-label="Enable branding"
-                        />
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={brandingEnabled}
+                          aria-label="Toggle branding"
+                          onClick={() => setBrandingEnabled((current) => !current)}
+                          className={`relative mt-0.5 h-6 w-10 shrink-0 rounded-full transition-colors ${
+                            brandingEnabled ? "bg-foreground" : "bg-muted"
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-background shadow-sm transition-transform ${
+                              brandingEnabled ? "translate-x-4" : "translate-x-0"
+                            }`}
+                          />
+                        </button>
                       </div>
-                      <fieldset
-                        disabled={!brandingEnabled}
-                        className="space-y-3 disabled:opacity-50"
-                      >
-                      <div className="grid grid-cols-3 gap-2">
-                        {brandColors.map((color, index) => {
-                          const normalized = normalizeHexColor(color) ?? "#000000";
-                          return (
-                            <label key={index} className="space-y-1">
-                              <span className="block text-[10px] text-muted-foreground">
-                                {["Primary", "Secondary", "Accent"][index]}
-                              </span>
-                              <span className="flex h-8 items-center gap-1 rounded-md border bg-background px-1.5">
-                                <input
-                                  type="color"
-                                  value={normalized}
-                                  onChange={(event) =>
-                                    setBrandColors((current) =>
-                                      current.map((item, itemIndex) =>
-                                        itemIndex === index
-                                          ? event.target.value.toUpperCase()
-                                          : item
-                                      )
-                                    )
+                      {brandingEnabled ? (
+                        <div className="space-y-3 rounded-md border bg-background p-2.5">
+                          <div className="space-y-1.5">
+                            <span className="text-[11px] font-medium text-muted-foreground">
+                              Brand logo
+                            </span>
+                            <div className="group relative">
+                              <button
+                                type="button"
+                                disabled={aiAssetBusy === "logo"}
+                                onClick={() => brandLogoInputRef.current?.click()}
+                                className="relative flex min-h-16 w-full items-center justify-center overflow-hidden rounded-md border border-dashed bg-muted/20 text-xs hover:bg-muted/40 disabled:opacity-60"
+                              >
+                                {brandLogo ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={brandLogo.previewUrl}
+                                    alt={brandLogo.name}
+                                    className="absolute inset-0 h-full w-full object-contain p-1"
+                                  />
+                                ) : (
+                                  <span>Upload brand logo</span>
+                                )}
+                              </button>
+                              {brandLogo ? (
+                                <button
+                                  type="button"
+                                  aria-label="Remove brand logo"
+                                  disabled={aiAssetBusy === "logo"}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void removeAiAsset("logo");
+                                  }}
+                                  className="absolute top-1.5 right-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white opacity-0 shadow transition-opacity group-hover:opacity-100 hover:bg-destructive"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              ) : null}
+                            </div>
+                            <input
+                              ref={brandLogoInputRef}
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp"
+                              className="hidden"
+                              onChange={(event) => {
+                                void uploadAiAsset(
+                                  "logo",
+                                  event.target.files?.[0]
+                                );
+                                event.target.value = "";
+                              }}
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <span className="text-[11px] font-medium text-muted-foreground">
+                              Brand guide
+                            </span>
+                            <div className="grid grid-cols-2 rounded-md bg-muted p-1">
+                              {(
+                                [
+                                  ["image", "Upload image"],
+                                  ["colors", "Manual colors"],
+                                ] as const
+                              ).map(([mode, label]) => (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  onClick={() => setBrandGuideMode(mode)}
+                                  className={`rounded-md py-1.5 text-[11px] font-medium transition-colors ${
+                                    brandGuideMode === mode
+                                      ? "bg-background shadow-sm"
+                                      : "text-muted-foreground"
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+
+                            {brandGuideMode === "image" ? (
+                              <div className="group relative">
+                                <button
+                                  type="button"
+                                  disabled={aiAssetBusy === "brandGuide"}
+                                  onClick={() =>
+                                    brandGuideInputRef.current?.click()
                                   }
-                                  className="h-4 w-4 shrink-0 cursor-pointer border-0 bg-transparent p-0"
-                                />
+                                  className="relative flex min-h-16 w-full items-center justify-center overflow-hidden rounded-md border border-dashed bg-muted/20 text-xs hover:bg-muted/40 disabled:opacity-60"
+                                >
+                                  {brandGuide ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={brandGuide.previewUrl}
+                                      alt={brandGuide.name}
+                                      className="absolute inset-0 h-full w-full object-cover"
+                                    />
+                                  ) : (
+                                    <span>Upload brand guide</span>
+                                  )}
+                                </button>
+                                {brandGuide ? (
+                                  <button
+                                    type="button"
+                                    aria-label="Remove brand guide"
+                                    disabled={aiAssetBusy === "brandGuide"}
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      void removeAiAsset("brandGuide");
+                                    }}
+                                    className="absolute top-1.5 right-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white opacity-0 shadow transition-opacity group-hover:opacity-100 hover:bg-destructive"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                ) : null}
                                 <input
-                                  type="text"
-                                  value={color}
-                                  spellCheck={false}
+                                  ref={brandGuideInputRef}
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp"
+                                  className="hidden"
                                   onChange={(event) => {
-                                    const nextValue = event.target.value;
-                                    setBrandColors((current) =>
-                                      current.map((item, itemIndex) =>
-                                        itemIndex === index ? nextValue : item
-                                      )
+                                    void uploadAiAsset(
+                                      "brandGuide",
+                                      event.target.files?.[0]
                                     );
+                                    event.target.value = "";
                                   }}
-                                  onBlur={() => {
-                                    const normalizedOnBlur = normalizeHexColor(color);
-                                    if (!normalizedOnBlur) return;
-                                    setBrandColors((current) =>
-                                      current.map((item, itemIndex) =>
-                                        itemIndex === index ? normalizedOnBlur : item
-                                      )
-                                    );
-                                  }}
-                                  className="min-w-0 flex-1 bg-transparent text-[10px] uppercase outline-none"
-                                  placeholder="#000000"
                                 />
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => brandLogoInputRef.current?.click()}
-                          disabled={aiAssetBusy === "logo"}
-                          className="relative flex min-h-14 flex-col items-center justify-center gap-1 overflow-hidden rounded-md border border-dashed bg-background text-center hover:bg-muted/40"
-                        >
-                          {brandLogo ? (
-                            <>
-                              <img
-                                src={brandLogo.previewUrl}
-                                alt={brandLogo.name}
-                                className="absolute inset-0 h-full w-full object-contain p-1"
-                              />
-                              <span className="relative z-10 max-w-[90%] truncate rounded bg-background/85 px-1.5 py-0.5 text-[9px] backdrop-blur-sm">
-                                {brandLogo.name}
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span className="max-w-full truncate px-2 text-[10px]">
-                                Upload logo
-                              </span>
-                            </>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => brandGuideInputRef.current?.click()}
-                          disabled={aiAssetBusy === "brandGuide"}
-                          className="relative flex min-h-14 flex-col items-center justify-center gap-1 overflow-hidden rounded-md border border-dashed bg-background text-center hover:bg-muted/40"
-                        >
-                          {brandGuide ? (
-                            <>
-                              <img
-                                src={brandGuide.previewUrl}
-                                alt={brandGuide.name}
-                                className="absolute inset-0 h-full w-full object-cover"
-                              />
-                              <span className="relative z-10 max-w-[90%] truncate rounded bg-background/85 px-1.5 py-0.5 text-[9px] backdrop-blur-sm">
-                                {brandGuide.name}
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span className="max-w-full truncate px-2 text-[10px]">
-                                Upload brand guide
-                              </span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                      <input
-                        ref={brandLogoInputRef}
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        className="hidden"
-                        onChange={(event) => {
-                          void uploadAiAsset("logo", event.target.files?.[0]);
-                          event.target.value = "";
-                        }}
-                      />
-                      <input
-                        ref={brandGuideInputRef}
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        className="hidden"
-                        onChange={(event) => {
-                          void uploadAiAsset("brandGuide", event.target.files?.[0]);
-                          event.target.value = "";
-                        }}
-                      />
-                      {(brandLogo || brandGuide) && (
-                        <div className="flex flex-wrap gap-3">
-                          {brandLogo && (
-                            <button
-                              type="button"
-                              disabled={aiAssetBusy === "logo"}
-                              onClick={() => void removeAiAsset("logo")}
-                              className="text-[10px] text-destructive hover:underline"
-                            >
-                              Remove logo
-                            </button>
-                          )}
-                          {brandGuide && (
-                            <button
-                              type="button"
-                              disabled={aiAssetBusy === "brandGuide"}
-                              onClick={() => void removeAiAsset("brandGuide")}
-                              className="text-[10px] text-destructive hover:underline"
-                            >
-                              Remove brand guide
-                            </button>
-                          )}
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-3 gap-2">
+                                {brandColors.map((color, index) => {
+                                  const normalized =
+                                    normalizeHexColor(color) ?? "#000000";
+                                  return (
+                                    <label key={index} className="space-y-1">
+                                      <span className="block text-[10px] text-muted-foreground">
+                                        {
+                                          ["Primary", "Secondary", "Accent"][
+                                            index
+                                          ]
+                                        }
+                                      </span>
+                                      <span className="flex h-8 items-center gap-1 rounded-md border bg-background px-1.5">
+                                        <input
+                                          type="color"
+                                          value={normalized}
+                                          onChange={(event) =>
+                                            setBrandColors((current) =>
+                                              current.map((item, itemIndex) =>
+                                                itemIndex === index
+                                                  ? event.target.value.toUpperCase()
+                                                  : item
+                                              )
+                                            )
+                                          }
+                                          className="h-4 w-4 shrink-0 cursor-pointer border-0 bg-transparent p-0"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={color}
+                                          spellCheck={false}
+                                          onChange={(event) => {
+                                            const nextValue = event.target.value;
+                                            setBrandColors((current) =>
+                                              current.map((item, itemIndex) =>
+                                                itemIndex === index
+                                                  ? nextValue
+                                                  : item
+                                              )
+                                            );
+                                          }}
+                                          onBlur={() => {
+                                            const normalizedOnBlur =
+                                              normalizeHexColor(color);
+                                            if (!normalizedOnBlur) return;
+                                            setBrandColors((current) =>
+                                              current.map((item, itemIndex) =>
+                                                itemIndex === index
+                                                  ? normalizedOnBlur
+                                                  : item
+                                              )
+                                            );
+                                          }}
+                                          className="min-w-0 flex-1 bg-transparent text-[10px] uppercase outline-none"
+                                          placeholder="#000000"
+                                        />
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      )}
-                      </fieldset>
+                      ) : null}
                     </div>
                   </div>
                 )}
@@ -2705,16 +2972,22 @@ export default function ProductsGalleryPage() {
                     ) : (
                       visibleRows.map((row) => {
                         const isEditing = editingRowId === row.id && rowDraft;
+                        const rowIsGenerating =
+                          generationIsActive && row.status === "generating";
                         const mainIsLoading =
-                          generationIsActive &&
-                          row.status === "generating" &&
-                          getRowMainPaths(row).length === 0 &&
-                          (row.generationStage === "planning" ||
+                          rowIsGenerating &&
+                          ((row.generationStage === "planning" &&
+                            (row.generationTarget === "main" ||
+                              row.generationTarget === "full")) ||
                             row.generationStage === "searching" ||
                             row.generationStage === "main" ||
-                            !row.generationStage);
+                            (!row.generationStage &&
+                              row.generationTarget !== "gallery"));
                         const galleryIsLoading =
-                          generationIsActive && row.status === "generating";
+                          rowIsGenerating &&
+                          (row.generationStage === "gallery" ||
+                            (row.generationStage === "planning" &&
+                              row.generationTarget === "gallery"));
                         return (
                           <tr
                             key={row.id}
@@ -2754,19 +3027,12 @@ export default function ProductsGalleryPage() {
                                   );
                                 return (
                                   <td key={column} className="min-w-[140px] px-3 py-3">
-                                    {mainIsLoading ? (
-                                      <div
-                                        className="flex h-12 w-12 items-center justify-center rounded border border-primary/30 bg-primary/5"
-                                        title="Finding the main product image"
-                                      >
-                                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                                      </div>
-                                    ) : mainImages.length > 0 ? (
+                                    {mainImages.length > 0 ? (
                                       <div className="flex items-center gap-1">
                                         {mainImages.map(
                                           ({ path, src, fallbackSrc }, idx) => (
                                             <div
-                                              key={path}
+                                              key={`${row.id}:main:${idx}:${path}`}
                                               className="group/image relative h-10 w-10 shrink-0 overflow-visible"
                                             >
                                               <button
@@ -2795,17 +3061,21 @@ export default function ProductsGalleryPage() {
                                                   }}
                                                 />
                                               </button>
-                                              {canEdit && !generationRun && (
+                                              {canEdit && (
                                                 <button
                                                   type="button"
                                                   onClick={() =>
                                                     void removeProductImage(row.id, path)
                                                   }
-                                                  disabled={deletingImagePaths.has(path)}
+                                                  disabled={pendingImageDeletes.has(
+                                                    pendingImageDeleteKey(row.id, path)
+                                                  )}
                                                   className="absolute -right-1.5 -top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border bg-background text-destructive opacity-0 shadow-sm transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover/image:opacity-100 focus:opacity-100 disabled:opacity-60"
                                                   aria-label={`Delete main image ${idx + 1}`}
                                                 >
-                                                  {deletingImagePaths.has(path) ? (
+                                                  {pendingImageDeletes.has(
+                                                    pendingImageDeleteKey(row.id, path)
+                                                  ) ? (
                                                     <Loader2 className="h-2.5 w-2.5 animate-spin" />
                                                   ) : (
                                                     <X className="h-2.5 w-2.5" />
@@ -2815,6 +3085,21 @@ export default function ProductsGalleryPage() {
                                             </div>
                                           )
                                         )}
+                                        {mainIsLoading && (
+                                          <div
+                                            className="ml-1 flex h-8 w-8 items-center justify-center rounded border border-primary/30 bg-primary/5"
+                                            title="Finding more main images"
+                                          >
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : mainIsLoading ? (
+                                      <div
+                                        className="flex h-12 w-12 items-center justify-center rounded border border-primary/30 bg-primary/5"
+                                        title="Finding the main product image"
+                                      >
+                                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
                                       </div>
                                     ) : row.status === "failed" ? (
                                       <div className="max-w-[180px] space-y-1.5">
@@ -2874,7 +3159,7 @@ export default function ProductsGalleryPage() {
                                       <div className="flex items-center gap-1">
                                         {galleryImages.slice(0, 3).map(({ path, src, fallbackSrc }, idx) => (
                                           <div
-                                            key={path}
+                                            key={`${row.id}:gallery:${idx}:${path}`}
                                             className="group/image relative h-10 w-10 shrink-0"
                                           >
                                             <button
@@ -2901,15 +3186,19 @@ export default function ProductsGalleryPage() {
                                                 }}
                                               />
                                             </button>
-                                            {canEdit && !generationRun && (
+                                            {canEdit && (
                                               <button
                                                 type="button"
                                                 onClick={() => void removeProductImage(row.id, path)}
-                                                disabled={deletingImagePaths.has(path)}
+                                                disabled={pendingImageDeletes.has(
+                                                  pendingImageDeleteKey(row.id, path)
+                                                )}
                                                 className="absolute -right-1.5 -top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border bg-background text-destructive opacity-0 shadow-sm transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover/image:opacity-100 focus:opacity-100 disabled:opacity-60"
                                                 aria-label={`Delete gallery image ${idx + 1}`}
                                               >
-                                                {deletingImagePaths.has(path) ? (
+                                                {pendingImageDeletes.has(
+                                                  pendingImageDeleteKey(row.id, path)
+                                                ) ? (
                                                   <Loader2 className="h-2.5 w-2.5 animate-spin" />
                                                 ) : (
                                                   <X className="h-2.5 w-2.5" />
@@ -3117,6 +3406,47 @@ export default function ProductsGalleryPage() {
           </DialogContent>
         </Dialog>
         <Dialog
+          open={showLeaveWithoutSaving}
+          onOpenChange={setShowLeaveWithoutSaving}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400">
+                <AlertCircle className="h-4 w-4" />
+              </div>
+              <DialogTitle>Leave without saving?</DialogTitle>
+              <DialogDescription>
+                You have unsaved changes in this project. If you leave now,
+                those changes will be lost.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="default"
+                disabled={saveStatus === "saving" || !!savingRowId}
+                onClick={() => void saveAndLeave()}
+                className="gap-1.5"
+              >
+                {saveStatus === "saving" || savingRowId ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Cloud className="h-3.5 w-3.5" />
+                )}
+                {saveStatus === "saving" || savingRowId ? "Saving…" : "Save"}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={saveStatus === "saving" || !!savingRowId}
+                onClick={confirmLeaveWithoutSaving}
+              >
+                Leave without saving
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog
           open={!!imageDialogRowId}
           onOpenChange={(open) => {
             if (!open) {
@@ -3191,7 +3521,7 @@ export default function ProductsGalleryPage() {
                     if (!src) return null;
                     return (
                       <div
-                        key={path}
+                        key={`${imageDialogRow.id}:${imageDialogKind}:${index}:${path}`}
                         className={`group/dialog-image relative aspect-square overflow-hidden rounded-md border-2 ${
                           activeImagePreviewPath === path
                             ? "border-primary"
@@ -3224,11 +3554,15 @@ export default function ProductsGalleryPage() {
                             onClick={() =>
                               void removeProductImage(imageDialogRow.id, path)
                             }
-                            disabled={deletingImagePaths.has(path)}
+                            disabled={pendingImageDeletes.has(
+                              pendingImageDeleteKey(imageDialogRow.id, path)
+                            )}
                             className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-background/95 text-destructive opacity-0 shadow transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover/dialog-image:opacity-100 focus:opacity-100 disabled:opacity-60"
                             aria-label={`Delete image ${index + 1}`}
                           >
-                            {deletingImagePaths.has(path) ? (
+                            {pendingImageDeletes.has(
+                              pendingImageDeleteKey(imageDialogRow.id, path)
+                            ) ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
                             ) : (
                               <Trash2 className="h-3 w-3" />

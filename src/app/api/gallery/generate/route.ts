@@ -9,6 +9,7 @@ import {
 import {
   loadGalleryWorksheetAdmin,
   loadGalleryWorksheetConsistentAdmin,
+  loadGalleryWorksheetMatchingRevisionAdmin,
   saveGalleryWorksheetAdmin,
 } from "@/lib/gallery/storage-admin";
 import { signGalleryWorksheetImages } from "@/lib/gallery/signed-urls";
@@ -18,6 +19,11 @@ import {
   galleryReferencePathsBelongToSession,
   worksheetImageRefsBelongToSession,
 } from "@/lib/gallery/worksheet-security";
+import { withGalleryWorksheetLock } from "@/lib/gallery/worksheet-lock";
+import {
+  applyGenerationRowPatch,
+  reconcileGenerationWorksheet,
+} from "@/lib/gallery/generation-worksheet-merge";
 import type {
   GalleryProjectSettings,
   GalleryProvider,
@@ -50,7 +56,10 @@ type Body = {
   originalImageColumn?: string | null;
   /**
    * Optional explicit phase. When omitted (or for mixed selections), each row
-   * is resolved with resolveGalleryRunPhase (Main first, then Gallery).
+   * independently resolves its own phase via resolveGalleryRunPhase: rows
+   * without a Main image (and no usable original image) get Main only and
+   * stop there; rows with an existing Main or a usable original image get
+   * Gallery only. A single row never runs Main and Gallery back-to-back.
    */
   runPhase?: GalleryRunPhase;
 };
@@ -158,17 +167,18 @@ async function generateSynchronously(request: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404, headers: auth.headers });
   }
 
-  let worksheet = await loadGalleryWorksheetConsistentAdmin(
+  const loadedWorksheet = await loadGalleryWorksheetConsistentAdmin(
     workspaceId,
     sessionId,
     Number(session.total_rows)
   );
-  if (!worksheet) {
+  if (!loadedWorksheet) {
     return NextResponse.json(
       { error: "Worksheet is synchronizing; retry shortly" },
       { status: 409, headers: { ...auth.headers, "Retry-After": "2" } }
     );
   }
+  let worksheet: GalleryWorksheetJson = loadedWorksheet;
   if (
     !body.worksheetSnapshot ||
     body.worksheetSnapshot.sessionId !== sessionId ||
@@ -366,6 +376,7 @@ async function generateSynchronously(request: NextRequest) {
           rowCount: targetIds.length,
           searchDepth: worksheet.settings.scraping.searchDepth,
           rowsWithOriginal,
+          tier: worksheet.settings.scraping.tier,
         })
       : null;
   const estimatedCredits =
@@ -374,6 +385,7 @@ async function generateSynchronously(request: NextRequest) {
       generateMainPerRow: provider === "ai" && !worksheet.originalImageColumn,
       searchDepth: worksheet.settings.scraping.searchDepth,
       rowsWithOriginal,
+      tier: worksheet.settings.scraping.tier,
     });
 
   if (body.estimateOnly) {
@@ -437,13 +449,49 @@ async function generateSynchronously(request: NextRequest) {
     cancelRequested: false,
     startedAt: new Date().toISOString(),
   };
+  const targetPhases = new Map<string, GalleryRunPhase>();
   for (const rowId of targetIds) {
     const row = rowsById.get(rowId)!;
+    const targetPhase = resolveGalleryRunPhase({
+      originalImageColumn: worksheet.originalImageColumn,
+      row,
+      requested: body.runPhase ?? null,
+    });
+    targetPhases.set(rowId, targetPhase);
     row.status = "queued";
     row.generationStage = "planning";
+    row.generationTarget = targetPhase;
     row.errorMessage = undefined;
   }
-  await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet);
+  await withGalleryWorksheetLock(workspaceId, sessionId, async () => {
+    const { data: revRow, error: revReadError } = await auth.admin
+      .from("gallery_sessions")
+      .select("worksheet_revision")
+      .eq("id", sessionId)
+      .eq("workspace_id", workspaceId)
+      .single();
+    if (revReadError) throw revReadError;
+    const expectedRevision = Number(revRow?.worksheet_revision ?? 0);
+    const { data: nextRevision, error: revisionError } = await auth.admin.rpc(
+      "claim_gallery_worksheet_revision",
+      {
+        p_session_id: sessionId,
+        p_workspace_id: workspaceId,
+        p_expected_revision: expectedRevision,
+      }
+    );
+    if (revisionError) throw revisionError;
+    if (nextRevision === null || nextRevision === undefined) {
+      throw new Error("WORKSHEET_REVISION_CONFLICT");
+    }
+    worksheet.revision = Number(nextRevision);
+    await saveGalleryWorksheetAdmin(
+      workspaceId,
+      sessionId,
+      worksheet,
+      Number(nextRevision)
+    );
+  });
 
   const ownerUserId = auth.ctx.subscription!.user_id as string;
   let completed = 0;
@@ -451,11 +499,102 @@ async function generateSynchronously(request: NextRequest) {
   let usedCredits = 0;
   let usedCost = 0;
 
-  const checkpoint = async (rowId: string, patch: Partial<GalleryRow>) => {
+  let worksheetWriteQueue: Promise<void> = Promise.resolve();
+  /** Storage row snapshot for the current locked commit (user deletes win). */
+  let storageRowsById = new Map<string, GalleryRow>();
+  const targetRowIdSet = new Set(targetIds);
+
+  const persistWorksheetRevision = async (expectedRevision: number) => {
+    let attemptRevision = expectedRevision;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { data: nextRevision, error: revisionError } = await auth.admin.rpc(
+        "claim_gallery_worksheet_revision",
+        {
+          p_session_id: sessionId,
+          p_workspace_id: workspaceId,
+          p_expected_revision: attemptRevision,
+        }
+      );
+      if (revisionError) throw revisionError;
+      if (nextRevision !== null && nextRevision !== undefined) {
+        const claimed = Number(nextRevision);
+        worksheet.revision = claimed;
+        await saveGalleryWorksheetAdmin(
+          workspaceId,
+          sessionId,
+          worksheet,
+          claimed
+        );
+        return claimed;
+      }
+      const { data: revRow, error: revReadError } = await auth.admin
+        .from("gallery_sessions")
+        .select("worksheet_revision")
+        .eq("id", sessionId)
+        .eq("workspace_id", workspaceId)
+        .single();
+      if (revReadError) throw revReadError;
+      attemptRevision = Number(revRow?.worksheet_revision ?? attemptRevision);
+    }
+    throw new Error("WORKSHEET_REVISION_CONFLICT");
+  };
+
+  const commitWorksheet = (
+    mutate: () => void | Promise<void>
+  ): Promise<void> => {
+    const operation = worksheetWriteQueue.then(async () => {
+      await withGalleryWorksheetLock(workspaceId, sessionId, async () => {
+        const { data: revRow, error: revReadError } = await auth.admin
+          .from("gallery_sessions")
+          .select("worksheet_revision, total_rows")
+          .eq("id", sessionId)
+          .eq("workspace_id", workspaceId)
+          .single();
+        if (revReadError) throw revReadError;
+        const dbRevision = Number(revRow?.worksheet_revision ?? 0);
+        const expectedRows = Number(revRow?.total_rows ?? worksheet.rows.length);
+        const stored = await loadGalleryWorksheetMatchingRevisionAdmin(
+          workspaceId,
+          sessionId,
+          dbRevision
+        );
+        if (stored && stored.rows.length === expectedRows) {
+          storageRowsById = new Map(stored.rows.map((row) => [row.id, row]));
+          worksheet = reconcileGenerationWorksheet({
+            memory: worksheet,
+            storage: stored,
+            targetRowIds: targetRowIdSet,
+          });
+        } else {
+          storageRowsById = new Map(
+            worksheet.rows.map((row) => [row.id, row])
+          );
+        }
+
+        await mutate();
+        await persistWorksheetRevision(dbRevision);
+      });
+    });
+    worksheetWriteQueue = operation.catch(() => undefined);
+    return operation;
+  };
+
+  const patchRowDuringRun = (rowId: string, patch: Partial<GalleryRow>) => {
     const index = worksheet.rows.findIndex((row) => row.id === rowId);
     if (index < 0) return;
-    worksheet.rows[index] = { ...worksheet.rows[index], ...patch };
-    await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet);
+    const memoryRow = worksheet.rows[index];
+    const storageRow = storageRowsById.get(rowId) ?? memoryRow;
+    worksheet.rows[index] = applyGenerationRowPatch({
+      storageRow,
+      memoryRow,
+      patch,
+    });
+  };
+
+  const checkpoint = async (rowId: string, patch: Partial<GalleryRow>) => {
+    await commitWorksheet(() => {
+      patchRowDuringRun(rowId, patch);
+    });
   };
 
   const cancellationRequested = async () => {
@@ -478,98 +617,148 @@ async function generateSynchronously(request: NextRequest) {
       if (targetIds.includes(row.id) && row.status === "queued") {
         row.status = "not_started";
         row.generationStage = undefined;
+        row.generationTarget = undefined;
       }
     }
   };
 
-  for (const rowId of targetIds) {
-    if (await cancellationRequested()) {
-      markRunCancelled();
-      break;
-    }
+  let nextTargetIndex = 0;
+  let stopObserved = false;
+  const worker = async () => {
+    while (true) {
+      if (stopObserved || (await cancellationRequested())) {
+        stopObserved = true;
+        return;
+      }
+      const targetIndex = nextTargetIndex;
+      nextTargetIndex += 1;
+      if (targetIndex >= targetIds.length) return;
+      const rowId = targetIds[targetIndex];
+      const runPhase = targetPhases.get(rowId) ?? "full";
 
-    const rowIndex = worksheet.rows.findIndex((row) => row.id === rowId);
-    if (rowIndex < 0) continue;
-    worksheet.rows[rowIndex] = {
-      ...worksheet.rows[rowIndex],
-      status: "generating",
-      generationStage: "planning",
-      errorMessage: undefined,
-    };
-    await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet);
+      await commitWorksheet(() => {
+        patchRowDuringRun(rowId, {
+          status: "generating",
+          generationStage: "planning",
+          generationTarget: runPhase,
+          errorMessage: undefined,
+        });
+      });
+      const rowIndex = worksheet.rows.findIndex((row) => row.id === rowId);
+      if (rowIndex < 0) continue;
+      const inputRow = structuredClone(worksheet.rows[rowIndex]);
 
-    const inputRow = structuredClone(worksheet.rows[rowIndex]);
-    const runPhase = resolveGalleryRunPhase({
-      originalImageColumn: worksheet.originalImageColumn,
-      row: inputRow,
-      requested: body.runPhase ?? null,
-    });
-    let result: Awaited<ReturnType<typeof processScrapingRow>>;
-    try {
-      const shared = {
-        workspaceId,
-        sessionId,
-        worksheet: structuredClone(worksheet),
-        row: inputRow,
-        ownerUserId,
-        actorUserId: auth.user.id,
-        runId,
-        runPhase,
-        onCheckpoint: (patch: Partial<GalleryRow>) => checkpoint(rowId, patch),
-      };
-      result =
-        provider === "ai"
-          ? await processAiRow(shared)
-          : await processScrapingRow({ admin: auth.admin, ...shared });
-    } catch (error) {
-      result = {
-        row: {
-          ...inputRow,
-          status: previousStatus.get(rowId) === "ready" ? "ready" : "failed",
-          generationStage: undefined,
-          errorMessage:
+      let result: Awaited<ReturnType<typeof processScrapingRow>>;
+      try {
+        const shared = {
+          workspaceId,
+          sessionId,
+          worksheet: structuredClone(worksheet),
+          row: inputRow,
+          ownerUserId,
+          actorUserId: auth.user.id,
+          runId,
+          runPhase,
+          onCheckpoint: (patch: Partial<GalleryRow>) =>
+            checkpoint(rowId, patch),
+        };
+        result =
+          provider === "ai"
+            ? await processAiRow(shared)
+            : await processScrapingRow({ admin: auth.admin, ...shared });
+      } catch (error) {
+        result = {
+          row: {
+            ...inputRow,
+            status:
+              previousStatus.get(rowId) === "ready" ? "ready" : "failed",
+            generationStage: undefined,
+            generationTarget: undefined,
+            errorMessage:
+              error instanceof Error ? error.message : "Row processing failed",
+          },
+          creditsUsed: 0,
+          cost: 0,
+          error:
             error instanceof Error ? error.message : "Row processing failed",
-        },
-        creditsUsed: 0,
-        cost: 0,
-        error: error instanceof Error ? error.message : "Row processing failed",
-      };
-    }
+        };
+      }
 
-    if (previousStatus.get(rowId) === "ready" && result.row.status === "failed") {
-      result.row.status = "ready";
-    }
-    worksheet.rows[rowIndex] = result.row;
-    usedCredits += result.creditsUsed;
-    usedCost += result.cost;
-    if (result.row.status === "ready") completed += 1;
-    else failed += 1;
-    if (worksheet.activeRun) {
-      worksheet.activeRun.completed = completed;
-      worksheet.activeRun.failed = failed;
-      worksheet.activeRun.usedCredits = usedCredits;
-    }
-    await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet);
-    // Cooperative stop: never abort the in-flight provider request. Observe the
-    // flag only after the current row has reached a stable checkpoint.
-    if (await cancellationRequested()) {
-      markRunCancelled();
-      break;
-    }
-  }
+      if (
+        previousStatus.get(rowId) === "ready" &&
+        result.row.status === "failed"
+      ) {
+        result.row.status = "ready";
+      }
+      result.row.generationTarget = undefined;
+      await commitWorksheet(() => {
+        patchRowDuringRun(rowId, {
+          status: result.row.status,
+          generationStage: result.row.generationStage,
+          generationTarget: result.row.generationTarget,
+          errorMessage: result.row.errorMessage,
+          mainImagePaths: result.row.mainImagePaths,
+          mainImagePath: result.row.mainImagePath,
+          galleryImagePaths: result.row.galleryImagePaths,
+          sourceMeta: result.row.sourceMeta,
+          creditsUsed: result.row.creditsUsed,
+        });
+        usedCredits += result.creditsUsed;
+        usedCost += result.cost;
+        if (result.row.status === "ready") completed += 1;
+        else failed += 1;
+        if (worksheet.activeRun) {
+          worksheet.activeRun.completed = completed;
+          worksheet.activeRun.failed = failed;
+          worksheet.activeRun.usedCredits = usedCredits;
+        }
+      });
 
-  if (worksheet.activeRun?.status !== "cancelled") {
+      // Cooperative stop: finish all currently active workers, but do not claim
+      // another product after the cancellation flag becomes visible.
+      if (await cancellationRequested()) {
+        stopObserved = true;
+        return;
+      }
+    }
+  };
+
+  const workerCount = Math.min(3, targetIds.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  // Drain any in-flight worksheet writes before marking the run terminal.
+  await worksheetWriteQueue.catch(() => undefined);
+
+  if (stopObserved || (await cancellationRequested())) {
+    markRunCancelled();
+  } else if (worksheet.activeRun?.status !== "cancelled") {
     worksheet.activeRun!.status = "completed";
     worksheet.activeRun!.finishedAt = new Date().toISOString();
   }
+
+  // Final reconcile + persist so activeRun cannot stay "running" in Storage.
+  await commitWorksheet(() => {
+    for (const row of worksheet.rows) {
+      if (!targetRowIdSet.has(row.id)) continue;
+      if (row.status === "queued") {
+        row.status = "not_started";
+        row.generationStage = undefined;
+        row.generationTarget = undefined;
+      } else {
+        row.generationStage = undefined;
+        row.generationTarget = undefined;
+      }
+    }
+  });
+
   const totals = counts(worksheet);
   const finalStatus =
-    totals.ready === worksheet.rows.length
-      ? "completed"
-      : totals.ready === 0 && totals.failed > 0
-        ? "failed"
-        : "ready";
-  await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet);
+    worksheet.activeRun?.status === "cancelled"
+      ? "ready"
+      : totals.ready === worksheet.rows.length
+        ? "completed"
+        : totals.ready === 0 && totals.failed > 0
+          ? "failed"
+          : "ready";
 
   const { error: usageError } = await auth.admin.rpc("add_gallery_session_usage", {
     p_session_id: sessionId,
@@ -578,7 +767,7 @@ async function generateSynchronously(request: NextRequest) {
     p_cost: usedCost,
     p_ready_rows: totals.ready,
     p_failed_rows: totals.failed,
-    p_status: worksheet.activeRun?.status === "cancelled" ? "ready" : finalStatus,
+    p_status: finalStatus,
     p_error_message:
       finalStatus === "failed" ? "All processed rows failed" : null,
   });
@@ -602,6 +791,8 @@ async function generateSynchronously(request: NextRequest) {
     failed,
     usedCredits,
     usedCost,
+    finalStatus,
+    activeRunStatus: worksheet.activeRun?.status,
   });
   return NextResponse.json(
     {

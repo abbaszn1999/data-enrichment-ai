@@ -4,7 +4,11 @@
  * - `@/lib/gallery/agents/scraping-main-agent`
  * - `@/lib/gallery/agents/scraping-gallery-agent`
  */
-export { GALLERY_SCRAPING_MODEL } from "@/lib/gallery/agents/scraping-shared";
+export {
+  GALLERY_SCRAPING_MODEL,
+  GALLERY_SCRAPING_MODELS,
+  resolveScrapingModel,
+} from "@/lib/gallery/agents/scraping-shared";
 export type { OpenAiImageCandidate } from "@/lib/gallery/agents/scraping-shared";
 export {
   searchScrapingMainImages,
@@ -41,15 +45,22 @@ export async function searchOpenAiProductGallery(params: {
   selectedColumns: string[];
   settings: GalleryScrapingSettings;
   requestedGalleryImages: number;
+  mainImages?: Array<{ buffer?: Buffer; contentType?: string; url: string }>;
   mainImage?: { buffer?: Buffer; contentType?: string; url: string };
 }): Promise<OpenAiGallerySearchResult> {
-  if (params.mainImage) {
+  const mainImages =
+    params.mainImages && params.mainImages.length > 0
+      ? params.mainImages
+      : params.mainImage
+        ? [params.mainImage]
+        : [];
+  if (mainImages.length > 0) {
     const gallery = await searchScrapingGalleryImages({
       rowData: params.rowData,
       selectedColumns: params.selectedColumns,
       settings: params.settings,
       requestedGalleryImages: params.requestedGalleryImages,
-      mainImage: params.mainImage,
+      mainImages,
     });
     return {
       productIdentity: gallery.productIdentity,

@@ -98,16 +98,17 @@ export async function loadGalleryWorksheetMatchingRevisionAdmin(
   expectedRevision: number,
   attempts = 10
 ): Promise<GalleryWorksheetJson | null> {
-  let last: GalleryWorksheetJson | null = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    last = await loadGalleryWorksheetAdmin(workspaceId, sessionId);
-    if (last) {
-      const fileRev = last.revision;
+    const worksheet = await loadGalleryWorksheetAdmin(workspaceId, sessionId);
+    if (worksheet) {
+      const fileRev = worksheet.revision;
       if (typeof fileRev === "number") {
-        if (fileRev >= expectedRevision) return last;
-      } else if (expectedRevision <= 0 || attempt >= 3) {
-        // Legacy files have no stamp; accept after a few retries.
-        return last;
+        if (fileRev >= expectedRevision) return worksheet;
+      } else if (expectedRevision <= 0) {
+        // Only an untouched legacy session (revision zero) may lack a stamp.
+        // Once DB has advanced, accepting it would let a stale worksheet revive
+        // a deleted image during a later read-modify-write operation.
+        return worksheet;
       }
     }
     if (attempt < attempts - 1) {
@@ -116,7 +117,9 @@ export async function loadGalleryWorksheetMatchingRevisionAdmin(
       );
     }
   }
-  return last;
+  // Never return a known-stale worksheet. Callers translate this to a retryable
+  // synchronization response rather than persisting stale row data.
+  return null;
 }
 
 export async function saveGalleryWorksheetAdmin(
