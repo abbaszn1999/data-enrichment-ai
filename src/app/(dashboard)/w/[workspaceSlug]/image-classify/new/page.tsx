@@ -22,7 +22,6 @@ import {
 } from "@/components/media/analyzing-products-card";
 import { useWorkspaceContext } from "../../layout";
 import { useRole } from "@/hooks/use-role";
-import { useWorkspaceStore } from "@/store/workspace-store";
 import {
   createImageClassificationSession,
   updateImageClassificationSession,
@@ -249,7 +248,6 @@ export default function NewImageClassifyPage() {
         throw new Error(j.error || `Classification failed (${res.status})`);
       }
 
-      useWorkspaceStore.getState().invalidateCredits();
       router.push(`/w/${slug}/image-classify/${session.id}`);
     } catch (err) {
       const msg = (err as Error).message || "Failed to start classification";

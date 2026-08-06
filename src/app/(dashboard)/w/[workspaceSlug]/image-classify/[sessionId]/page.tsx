@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -25,6 +25,7 @@ import {
   sanitizeSku,
 } from "@/lib/image-classify/sku";
 import { useWorkspaceContext } from "../../layout";
+import { useWorkspaceStore } from "@/store/workspace-store";
 import {
   getImageClassificationSession,
   type ImageClassificationSession,
@@ -80,6 +81,7 @@ export default function ImageClassifyDetailPage() {
   const slug = params.workspaceSlug as string;
   const sessionId = params.sessionId as string;
   const { workspace } = useWorkspaceContext();
+  const invalidateCredits = useWorkspaceStore((s) => s.invalidateCredits);
 
   const [session, setSession] = useState<ImageClassificationSession | null>(null);
   const [result, setResult] = useState<ImageClassificationJson | null>(null);
@@ -88,6 +90,7 @@ export default function ImageClassifyDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [progress, setProgress] = useState(0);
+  const wasProcessingRef = useRef(false);
 
   // Smooth real-time progress bar simulation
   useEffect(() => {
@@ -130,6 +133,16 @@ export default function ImageClassifyDetailPage() {
         const s = await getImageClassificationSession(sessionId);
         if (cancelled) return;
         setSession(s);
+        if (s?.status === "pending" || s?.status === "processing") {
+          wasProcessingRef.current = true;
+        }
+        if (
+          wasProcessingRef.current &&
+          (s?.status === "completed" || s?.status === "failed")
+        ) {
+          wasProcessingRef.current = false;
+          invalidateCredits();
+        }
         if (s?.status === "completed" && workspace) {
           const json = await loadJsonFromStorage<ImageClassificationJson>(
             s.storage_path ||
@@ -154,7 +167,7 @@ export default function ImageClassifyDetailPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [workspace, sessionId]);
+  }, [invalidateCredits, workspace, sessionId]);
 
   useEffect(() => {
     if (!result) return;

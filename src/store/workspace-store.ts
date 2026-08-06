@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Role } from "@/lib/permissions";
+import { clearBootstrap } from "@/lib/workspace-bootstrap-cache";
 
 interface Workspace {
   id: string;
@@ -32,7 +33,7 @@ interface WorkspaceStore {
   reset: () => void;
 }
 
-export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
+export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   workspace: null,
   role: null,
   members: [],
@@ -42,6 +43,17 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   setRole: (role) => set({ role }),
   setMembers: (members) => set({ members }),
   setLoading: (isLoading) => set({ isLoading }),
-  invalidateCredits: () => set((s) => ({ creditsVersion: s.creditsVersion + 1 })),
-  reset: () => set({ workspace: null, role: null, members: [], isLoading: false, creditsVersion: 0 }),
+  invalidateCredits: () => {
+    const workspaceId = get().workspace?.id;
+    if (workspaceId) clearBootstrap(workspaceId);
+    set((s) => ({ creditsVersion: s.creditsVersion + 1 }));
+  },
+  reset: () =>
+    set({
+      workspace: null,
+      role: null,
+      members: [],
+      isLoading: false,
+      creditsVersion: 0,
+    }),
 }));

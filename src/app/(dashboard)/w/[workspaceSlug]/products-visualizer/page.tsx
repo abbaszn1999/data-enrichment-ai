@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
+import { useWorkspaceStore } from "@/store/workspace-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -170,6 +171,7 @@ function rowStatusTone(status: VisualizerRow["status"]): string {
 export default function ProductsVisualizerPage() {
   const { workspace, role } = useWorkspaceContext();
   const { canEdit, canAdmin } = useRole(role);
+  const invalidateCredits = useWorkspaceStore((s) => s.invalidateCredits);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -326,6 +328,12 @@ export default function ProductsVisualizerPage() {
   }, [reviewRowId, worksheet]);
 
   const shouldPollGeneration = generating || generationRun !== null;
+  const lastCreditsProgressRef = useRef(0);
+  useEffect(() => {
+    if (!shouldPollGeneration) {
+      lastCreditsProgressRef.current = 0;
+    }
+  }, [shouldPollGeneration]);
   useEffect(() => {
     if (!workspace?.id || !projectId || !shouldPollGeneration) return;
     let cancelled = false;
@@ -342,13 +350,21 @@ export default function ProductsVisualizerPage() {
         if (fresh.signedUrls) setSignedUrls(fresh.signedUrls);
         const run = fresh.worksheet.activeRun;
         if (run && (run.status === "running" || run.status === "queued")) {
+          const done = run.completed + run.failed;
           setGenerationRun({
             total: run.total,
-            completed: run.completed + run.failed,
+            completed: done,
             runId: run.id,
           });
+          if (done > lastCreditsProgressRef.current) {
+            lastCreditsProgressRef.current = done;
+            invalidateCredits();
+          }
           if (fresh.session.cancel_requested) setStopping(true);
         } else if (!generating) {
+          if (lastCreditsProgressRef.current > 0 || run) {
+            invalidateCredits();
+          }
           setGenerationRun(null);
           setStopping(false);
         }
@@ -364,7 +380,13 @@ export default function ProductsVisualizerPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [generating, projectId, shouldPollGeneration, workspace?.id]);
+  }, [
+    generating,
+    invalidateCredits,
+    projectId,
+    shouldPollGeneration,
+    workspace?.id,
+  ]);
 
   const projectStats = useMemo(
     () => ({
@@ -1011,6 +1033,7 @@ export default function ProductsVisualizerPage() {
       setGenerating(false);
       setStopping(false);
       setGenerationRun(null);
+      invalidateCredits();
     }
   };
 
@@ -1090,6 +1113,7 @@ export default function ProductsVisualizerPage() {
       setGenerating(false);
       setStopping(false);
       setGenerationRun(null);
+      invalidateCredits();
     }
   };
 

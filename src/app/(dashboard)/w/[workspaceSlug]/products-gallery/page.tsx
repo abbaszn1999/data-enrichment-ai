@@ -65,6 +65,7 @@ import {
 } from "@/components/ui/dialog";
 import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
+import { useWorkspaceStore } from "@/store/workspace-store";
 import {
   listGallerySessions,
   createGallerySession,
@@ -212,6 +213,7 @@ export default function ProductsGalleryPage() {
   const searchParams = useSearchParams();
   const { workspace, role } = useWorkspaceContext();
   const { canEdit, canAdmin } = useRole(role);
+  const invalidateCredits = useWorkspaceStore((s) => s.invalidateCredits);
 
   const projectId = searchParams.get("project");
 
@@ -1012,6 +1014,12 @@ export default function ProductsGalleryPage() {
   }, [workspace?.id, projectId, hasWorksheet]);
 
   const shouldPollGeneration = isGenerating || generationRun !== null;
+  const lastCreditsProgressRef = useRef(0);
+  useEffect(() => {
+    if (!shouldPollGeneration) {
+      lastCreditsProgressRef.current = 0;
+    }
+  }, [shouldPollGeneration]);
   useEffect(() => {
     if (!workspace?.id || !projectId || !shouldPollGeneration) return;
     let cancelled = false;
@@ -1050,15 +1058,23 @@ export default function ProductsGalleryPage() {
         );
         const run = mergedFresh.activeRun;
         if (run && (run.status === "running" || run.status === "queued")) {
+          const done = run.completed + run.failed;
           setGenerationRun({
             total: run.total,
-            completed: run.completed + run.failed,
+            completed: done,
             runId: run.id,
           });
+          if (done > lastCreditsProgressRef.current) {
+            lastCreditsProgressRef.current = done;
+            invalidateCredits();
+          }
           if (fresh.session.cancel_requested) {
             setIsStoppingGeneration(true);
           }
         } else if (!isGenerating) {
+          if (lastCreditsProgressRef.current > 0 || run) {
+            invalidateCredits();
+          }
           setGenerationRun(null);
           setIsStoppingGeneration(false);
         }
@@ -1076,7 +1092,13 @@ export default function ProductsGalleryPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [isGenerating, projectId, shouldPollGeneration, workspace?.id]);
+  }, [
+    invalidateCredits,
+    isGenerating,
+    projectId,
+    shouldPollGeneration,
+    workspace?.id,
+  ]);
 
   const displayColumns = useMemo(() => {
     const selectedImageColumn =
@@ -1453,6 +1475,7 @@ export default function ProductsGalleryPage() {
     } finally {
       setIsGenerating(false);
       setIsStoppingGeneration(false);
+      invalidateCredits();
       if (receivedResult) {
         setGenerationRun(null);
         return;
@@ -1526,6 +1549,7 @@ export default function ProductsGalleryPage() {
       setIsGenerating(false);
       setIsStoppingGeneration(false);
       setGenerationRun(null);
+      invalidateCredits();
       if (receivedResult) return;
       try {
         const fresh = await getGallerySession(workspace.id, projectId);
