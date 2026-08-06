@@ -83,7 +83,8 @@ export async function POST(request: NextRequest) {
 
     const allProducts: unknown[] = [];
     while (nextUrl) {
-      const res = await fetch(nextUrl.toString(), {
+      const url = nextUrl.toString();
+      const res: Response = await fetch(url, {
         method: "GET",
         headers: {
           "X-Shopify-Access-Token": adminApiToken,
