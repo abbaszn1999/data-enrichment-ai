@@ -478,7 +478,13 @@ export default function WorkspaceLayout({
 
           {/* Main Content */}
           <main className={`flex-1 flex flex-col min-h-0 ${(isImmersive || isSyncPage) ? "overflow-hidden" : "overflow-auto"}`}>
-            {!isImmersive && <SubscriptionBanner subscription={subscription} isLoading={subLoading} />}
+            {!isImmersive && (
+              <SubscriptionBanner
+                subscription={subscription}
+                isLoading={subLoading}
+                role={role}
+              />
+            )}
             {isSubscriptionPage || isImmersive || isSyncPage ? (
               <div className={(isImmersive || isSyncPage) ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
             ) : (

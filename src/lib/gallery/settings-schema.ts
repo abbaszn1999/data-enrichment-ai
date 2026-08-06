@@ -15,10 +15,10 @@ export const GalleryScrapingSettingsSchema = z.object({
   tier: z.enum(["standard", "premium"]).default("standard"),
   imagesPerRow: z.coerce.number().int().min(1).max(12).default(4),
   instructions: z.string().trim().max(2_000).default(""),
-  searchDepth: GallerySearchDepthSchema.default("medium"),
+  searchDepth: GallerySearchDepthSchema.default("high"),
   sourcePolicy: z
     .enum(["any", "prefer-official", "official-only"])
-    .default("prefer-official"),
+    .default("any"),
   excludeMarketplaces: z.boolean().default(false),
   timeRange: z.string().trim().max(50).optional(),
   minResolution: z.coerce.number().int().min(0).max(5_000).default(1_200),

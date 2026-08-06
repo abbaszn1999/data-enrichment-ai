@@ -15,6 +15,7 @@ import {
   FolderOpen,
   ImageIcon,
   Loader2,
+  Maximize2,
   Plus,
   Sparkles,
   Square,
@@ -206,6 +207,8 @@ export default function ProductsVisualizerPage() {
   const [reviewTab, setReviewTab] = useState<"preview" | "html" | "briefs">(
     "preview"
   );
+  const [imageDialogRowId, setImageDialogRowId] = useState<string | null>(null);
+  const [imagePreviewKey, setImagePreviewKey] = useState<string | null>(null);
   const [layoutDialogOpen, setLayoutDialogOpen] = useState(false);
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
   const [generationRun, setGenerationRun] = useState<{
@@ -1790,28 +1793,66 @@ export default function ProductsVisualizerPage() {
                                       signedUrls[path] ||
                                       (/^https?:\/\//i.test(path) ? path : null);
                                     return src
-                                      ? { src, alt: item.alt || `Image ${item.index}` }
+                                      ? {
+                                          key: path,
+                                          src,
+                                          alt:
+                                            item.alt || `Image ${item.index}`,
+                                        }
                                       : null;
                                   })
                                   .filter(
                                     (
                                       item
-                                    ): item is { src: string; alt: string } =>
-                                      !!item
+                                    ): item is {
+                                      key: string;
+                                      src: string;
+                                      alt: string;
+                                    } => !!item
                                   );
+                                const openImageDialog = (key: string) => {
+                                  setImageDialogRowId(row.id);
+                                  setImagePreviewKey(key);
+                                };
                                 return (
-                                  <td key={column} className="px-3 py-3 align-top">
+                                  <td
+                                    key={column}
+                                    className="min-w-[180px] px-3 py-3 align-top"
+                                  >
                                     {thumbs.length > 0 ? (
-                                      <div className="flex flex-wrap gap-1.5">
-                                        {thumbs.map((thumb) => (
-                                          // eslint-disable-next-line @next/next/no-img-element
-                                          <img
-                                            key={thumb.src}
-                                            src={thumb.src}
-                                            alt={thumb.alt}
-                                            className="h-12 w-12 rounded border object-cover bg-muted/30"
-                                          />
+                                      <div className="flex items-center gap-1">
+                                        {thumbs.slice(0, 3).map((thumb, idx) => (
+                                          <button
+                                            key={`${row.id}:img:${idx}:${thumb.key}`}
+                                            type="button"
+                                            onClick={() =>
+                                              openImageDialog(thumb.key)
+                                            }
+                                            className="group/image relative h-10 w-10 shrink-0 overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                            aria-label={`Preview generated image ${idx + 1}`}
+                                          >
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img
+                                              src={thumb.src}
+                                              alt={thumb.alt}
+                                              className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
+                                            />
+                                          </button>
                                         ))}
+                                        {thumbs.length > 3 && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              openImageDialog(
+                                                thumbs[0]?.key ?? ""
+                                              )
+                                            }
+                                            className="flex h-10 items-center gap-1 rounded border bg-muted/30 px-2 text-[10px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                                          >
+                                            <Maximize2 className="h-3 w-3" />
+                                            +{thumbs.length - 3}
+                                          </button>
+                                        )}
                                       </div>
                                     ) : placeholders.length > 0 ? (
                                       <span className="text-[11px] text-muted-foreground">
@@ -2021,6 +2062,105 @@ export default function ProductsVisualizerPage() {
                             "No generated description for this product."}
                         </div>
                       )}
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              );
+            })()}
+
+            {(() => {
+              const imageDialogRow = imageDialogRowId
+                ? rows.find((row) => row.id === imageDialogRowId) ?? null
+                : null;
+              if (!imageDialogRow) return null;
+              const dialogThumbs = (imageDialogRow.imagePlaceholders ?? [])
+                .map((item) => {
+                  const path = item.storagePath;
+                  if (!path) return null;
+                  const src =
+                    signedUrls[path] ||
+                    (/^https?:\/\//i.test(path) ? path : null);
+                  return src
+                    ? {
+                        key: path,
+                        src,
+                        alt: item.alt || `Image ${item.index}`,
+                      }
+                    : null;
+                })
+                .filter(
+                  (
+                    item
+                  ): item is { key: string; src: string; alt: string } => !!item
+                );
+              const active =
+                dialogThumbs.find((item) => item.key === imagePreviewKey) ??
+                dialogThumbs[0] ??
+                null;
+
+              return (
+                <Dialog
+                  open={!!imageDialogRowId}
+                  onOpenChange={(open) => {
+                    if (!open) {
+                      setImageDialogRowId(null);
+                      setImagePreviewKey(null);
+                    }
+                  }}
+                >
+                  <DialogContent className="w-[min(96vw,1120px)] max-w-[min(96vw,1120px)] overflow-hidden p-0 sm:max-w-[min(96vw,1120px)]">
+                    <DialogHeader className="border-b px-6 py-4">
+                      <DialogTitle className="flex items-center gap-2">
+                        <ImageIcon className="h-4 w-4 text-primary" />
+                        Generated images
+                      </DialogTitle>
+                      <DialogDescription>
+                        {`${rowProductLabel(imageDialogRow, settings)} · ${dialogThumbs.length} image${dialogThumbs.length === 1 ? "" : "s"}`}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid min-h-[480px] md:grid-cols-[minmax(0,1fr)_132px]">
+                      <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
+                        {active ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={active.src}
+                            alt={active.alt}
+                            className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
+                          />
+                        ) : (
+                          <div className="text-center text-xs text-muted-foreground">
+                            <ImageIcon className="mx-auto mb-2 h-8 w-8 opacity-50" />
+                            No generated images
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-l p-3">
+                        <p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          All images
+                        </p>
+                        <div className="flex max-h-[62vh] flex-col gap-2 overflow-y-auto pr-1">
+                          {dialogThumbs.map((thumb, index) => (
+                            <button
+                              key={`${imageDialogRow.id}:dialog:${index}:${thumb.key}`}
+                              type="button"
+                              onClick={() => setImagePreviewKey(thumb.key)}
+                              className={`aspect-square w-full shrink-0 overflow-hidden rounded-md border-2 ${
+                                active?.key === thumb.key
+                                  ? "border-primary"
+                                  : "border-transparent"
+                              }`}
+                              aria-label={`View image ${index + 1}`}
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={thumb.src}
+                                alt={thumb.alt}
+                                className="h-full w-full object-cover"
+                              />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </DialogContent>
                 </Dialog>

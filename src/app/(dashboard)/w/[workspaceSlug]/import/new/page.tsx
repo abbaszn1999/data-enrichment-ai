@@ -7,23 +7,14 @@ import {
   FileSpreadsheet,
   Loader2,
   ArrowRight,
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
   StickyNote,
-  Hash,
   Zap,
   Users,
-  BarChart3,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { useWorkspaceContext } from "../../layout";
-import { useRole } from "@/hooks/use-role";
 import {
   createImportSession,
   getEnrichmentPresets,
@@ -186,247 +177,312 @@ export default function NewImportPage() {
 
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Upload className="h-5 w-5" /> New Import
-        </h1>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Upload a supplier sheet to start matching and enrichment
-        </p>
-      </div>
-
-      <ImportStepper currentStep={1} />
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Main Form */}
-        <div className="lg:col-span-2 space-y-4">
-          <Card className="p-5 space-y-5">
-            {/* Session Name */}
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">Session Name</Label>
-              <Input
-                placeholder="e.g. Samsung Q3 Shipment"
-                value={sessionName}
-                onChange={(e) => setSessionName(e.target.value)}
-                className="h-10"
-              />
+    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
+              <Upload className="h-5 w-5 text-primary" />
             </div>
-
-            {/* Supplier */}
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">Supplier</Label>
-              <select
-                value={supplier}
-                onChange={(e) => setSupplier(e.target.value)}
-                className="w-full h-10 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                <option value="">Select supplier or type new...</option>
-                {suppliers.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-                <option value="__new__">+ New Supplier</option>
-              </select>
-              {supplier === "__new__" && (
-                <Input
-                  placeholder="Enter new supplier name"
-                  value={newSupplierName}
-                  onChange={(e) => setNewSupplierName(e.target.value)}
-                  className="h-9 mt-2"
-                />
-              )}
+            <div>
+              <h1 className="text-xl font-bold tracking-tight">New import project</h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Upload a supplier worksheet to start matching and enrichment.
+              </p>
             </div>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 self-start shadow-sm sm:self-auto"
+            onClick={() => router.push(`/w/${slug}/import`)}
+          >
+            Back to projects
+          </Button>
+        </header>
 
-            {/* Notes */}
-            <div className="space-y-2">
-              <Label className="text-xs font-medium flex items-center gap-1.5">
-                <StickyNote className="h-3 w-3" /> Notes{" "}
-                <span className="text-muted-foreground font-normal">(optional)</span>
-              </Label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Add any notes about this import..."
-                rows={2}
-                className="w-full px-3 py-2 text-sm rounded-lg border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </div>
+        <section className="overflow-hidden rounded-xl border bg-card p-4 shadow-sm sm:p-5">
+          <ImportStepper currentStep={1} />
+        </section>
 
-            <div className="space-y-2">
-              <Label className="text-xs font-medium flex items-center gap-1.5">
-                <Zap className="h-3 w-3" /> AI Enrichment Settings
-              </Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedPresetId("")}
-                  className={`text-left p-3 rounded-lg border transition-colors ${
-                    selectedPresetId === "" ? "border-primary/50 bg-primary/5" : "hover:bg-muted/50"
-                  }`}
-                >
-                  <div className="text-xs font-semibold">New settings</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
-                    Start with default enrichment settings
-                  </div>
-                </button>
-                <select
-                  value={selectedPresetId}
-                  onChange={(e) => setSelectedPresetId(e.target.value)}
-                  disabled={presets.length === 0}
-                  className="w-full h-[62px] px-3 text-xs rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
-                >
-                  <option value="">
-                    {presets.length === 0 ? "No saved settings yet" : "Choose saved setting..."}
-                  </option>
-                  {presets.map((preset) => (
-                    <option key={preset.id} value={preset.id}>{preset.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* File Upload */}
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">Supplier File</Label>
-              <div
-                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleDrop}
-                onClick={() => {
-                  const input = document.createElement("input");
-                  input.type = "file";
-                  input.accept = ".xlsx,.xls,.csv";
-                  input.onchange = (e) => {
-                    const f = (e.target as HTMLInputElement).files?.[0];
-                    if (f) handleFileSelect(f);
-                  };
-                  input.click();
-                }}
-                className={`flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
-                  isDragging ? "border-primary bg-primary/5" : file ? "border-green-500/50 bg-green-50/30 dark:bg-green-950/10" : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50"
-                }`}
-              >
-                {file ? (
-                  <>
-                    <FileSpreadsheet className="h-10 w-10 text-green-600" />
-                    <span className="text-sm font-medium text-green-700 dark:text-green-400">{file.name}</span>
-                    <span className="text-[10px] text-muted-foreground">Click to change file</span>
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-10 w-10 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Drag & drop or click to browse</span>
-                    <span className="text-[10px] text-muted-foreground/60">.xlsx, .xls, .csv (max 50MB)</span>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* File Quality + Stats */}
-            {fileData && (
-              <>
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="p-2.5 rounded-lg bg-muted/30 border text-center">
-                    <div className="text-sm font-bold">{fileData.totalRows}</div>
-                    <div className="text-[9px] text-muted-foreground">Rows</div>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-muted/30 border text-center">
-                    <div className="text-sm font-bold">{fileData.columns.length}</div>
-                    <div className="text-[9px] text-muted-foreground">Columns</div>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-muted/30 border text-center">
-                    <div className="text-sm font-bold">UTF-8</div>
-                    <div className="text-[9px] text-muted-foreground">Encoding</div>
-                  </div>
-                </div>
-
-                {/* Preview Table */}
-                {fileData.rows.length > 0 && (
-                  <div className="space-y-2">
-                    <Label className="text-xs font-medium">Preview (first {fileData.rows.length} rows)</Label>
-                    <div className="overflow-x-auto rounded-lg border">
-                      <table className="w-full text-[10px]">
-                        <thead>
-                          <tr className="bg-muted/50">
-                            {fileData.columns.map((col) => (
-                              <th key={col} className="text-left px-3 py-1.5 font-semibold whitespace-nowrap">{col}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {fileData.rows.map((row, i) => (
-                            <tr key={i} className="border-t">
-                              {fileData.columns.map((col) => (
-                                <td key={col} className="px-3 py-1.5 whitespace-nowrap">{row[col] || ""}</td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            <Button
-              onClick={handleSubmit}
-              disabled={!sessionName || !file || !fileData || loading}
-              className="w-full h-10 gap-2"
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-              {loading ? "Processing file..." : "Continue to Matching Rules"}
-            </Button>
-          </Card>
-        </div>
-
-        {/* Right Sidebar */}
-        <div className="space-y-4">
-          {/* Recent Suppliers */}
-          {suppliers.length > 0 && (
-            <Card className="p-4">
-              <h3 className="text-xs font-semibold mb-3 flex items-center gap-1.5">
-                <Users className="h-3.5 w-3.5" /> Recent Suppliers
-              </h3>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {/* Main Form */}
+          <div className="space-y-4 lg:col-span-2">
+            <section className="space-y-5 rounded-xl border bg-card p-5 shadow-sm">
+              {/* Session Name */}
               <div className="space-y-2">
-                {suppliers.slice(0, 3).map((s) => (
+                <Label className="text-xs font-medium">Session Name</Label>
+                <Input
+                  placeholder="e.g. Samsung Q3 Shipment"
+                  value={sessionName}
+                  onChange={(e) => setSessionName(e.target.value)}
+                  className="h-10"
+                />
+              </div>
+
+              {/* Supplier */}
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Supplier</Label>
+                <select
+                  value={supplier}
+                  onChange={(e) => setSupplier(e.target.value)}
+                  className="h-10 w-full rounded-lg border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                >
+                  <option value="">Select supplier or type new...</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                  <option value="__new__">+ New Supplier</option>
+                </select>
+                {supplier === "__new__" && (
+                  <Input
+                    placeholder="Enter new supplier name"
+                    value={newSupplierName}
+                    onChange={(e) => setNewSupplierName(e.target.value)}
+                    className="mt-2 h-9"
+                  />
+                )}
+              </div>
+
+              {/* Notes */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-1.5 text-xs font-medium">
+                  <StickyNote className="h-3 w-3" /> Notes{" "}
+                  <span className="font-normal text-muted-foreground">(optional)</span>
+                </Label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Add any notes about this import..."
+                  rows={2}
+                  className="w-full resize-none rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="flex items-center gap-1.5 text-xs font-medium">
+                  <Zap className="h-3 w-3" /> AI Enrichment Settings
+                </Label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <button
-                    key={s.id}
-                    onClick={() => setSupplier(s.id)}
-                    className={`w-full text-left p-2.5 rounded-lg border transition-colors ${
-                      supplier === s.id ? "border-primary/40 bg-primary/5" : "hover:bg-muted/50"
+                    type="button"
+                    onClick={() => setSelectedPresetId("")}
+                    className={`rounded-lg border p-3 text-left transition-colors ${
+                      selectedPresetId === ""
+                        ? "border-primary/50 bg-primary/5"
+                        : "hover:bg-muted/50"
                     }`}
                   >
-                    <div className="text-[11px] font-medium">{s.name}</div>
-                    <div className="flex items-center gap-3 text-[9px] text-muted-foreground mt-0.5">
-                      <span>{s.import_count} imports</span>
+                    <div className="text-xs font-semibold">New settings</div>
+                    <div className="mt-0.5 text-[10px] text-muted-foreground">
+                      Start with default enrichment settings
                     </div>
                   </button>
-                ))}
+                  <select
+                    value={selectedPresetId}
+                    onChange={(e) => setSelectedPresetId(e.target.value)}
+                    disabled={presets.length === 0}
+                    className="h-[62px] w-full rounded-lg border bg-background px-3 text-xs focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
+                  >
+                    <option value="">
+                      {presets.length === 0
+                        ? "No saved settings yet"
+                        : "Choose saved setting..."}
+                    </option>
+                    {presets.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            </Card>
-          )}
 
-          {/* Quick Tips */}
-          <Card className="p-4 bg-primary/5 border-primary/20">
-            <h3 className="text-xs font-semibold mb-2 flex items-center gap-1.5">
-              <Zap className="h-3.5 w-3.5 text-primary" /> Quick Tips
-            </h3>
-            <div className="space-y-2 text-[10px] text-muted-foreground">
-              <div className="flex items-start gap-2">
-                <span className="text-primary font-bold shrink-0">1.</span>
-                <span>Include a <strong>SKU</strong> or <strong>Part Number</strong> column for best matching</span>
+              {/* File Upload */}
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Supplier File</Label>
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                  onClick={() => {
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = ".xlsx,.xls,.csv";
+                    input.onchange = (e) => {
+                      const f = (e.target as HTMLInputElement).files?.[0];
+                      if (f) handleFileSelect(f);
+                    };
+                    input.click();
+                  }}
+                  className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 transition-all ${
+                    isDragging
+                      ? "border-primary bg-primary/5"
+                      : file
+                        ? "border-green-500/50 bg-green-50/30 dark:bg-green-950/10"
+                        : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50"
+                  }`}
+                >
+                  {file ? (
+                    <>
+                      <FileSpreadsheet className="h-10 w-10 text-green-600" />
+                      <span className="text-sm font-medium text-green-700 dark:text-green-400">
+                        {file.name}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">
+                        Click to change file
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-10 w-10 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">
+                        Drag & drop or click to browse
+                      </span>
+                      <span className="text-[10px] text-muted-foreground/60">
+                        .xlsx, .xls, .csv (max 50MB)
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
-              <div className="flex items-start gap-2">
-                <span className="text-primary font-bold shrink-0">2.</span>
-                <span>Headers should be in the <strong>first row</strong></span>
+
+              {/* File Quality + Stats */}
+              {fileData && (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg border bg-muted/30 p-2.5 text-center">
+                      <div className="text-sm font-bold">{fileData.totalRows}</div>
+                      <div className="text-[9px] text-muted-foreground">Rows</div>
+                    </div>
+                    <div className="rounded-lg border bg-muted/30 p-2.5 text-center">
+                      <div className="text-sm font-bold">
+                        {fileData.columns.length}
+                      </div>
+                      <div className="text-[9px] text-muted-foreground">Columns</div>
+                    </div>
+                    <div className="rounded-lg border bg-muted/30 p-2.5 text-center">
+                      <div className="text-sm font-bold">UTF-8</div>
+                      <div className="text-[9px] text-muted-foreground">Encoding</div>
+                    </div>
+                  </div>
+
+                  {fileData.rows.length > 0 && (
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium">
+                        Preview (first {fileData.rows.length} rows)
+                      </Label>
+                      <div className="overflow-x-auto rounded-lg border">
+                        <table className="w-full text-[10px]">
+                          <thead>
+                            <tr className="bg-muted/50">
+                              {fileData.columns.map((col) => (
+                                <th
+                                  key={col}
+                                  className="whitespace-nowrap px-3 py-1.5 text-left font-semibold"
+                                >
+                                  {col}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fileData.rows.map((row, i) => (
+                              <tr key={i} className="border-t">
+                                {fileData.columns.map((col) => (
+                                  <td
+                                    key={col}
+                                    className="whitespace-nowrap px-3 py-1.5"
+                                  >
+                                    {row[col] || ""}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <Button
+                onClick={handleSubmit}
+                disabled={!sessionName || !file || !fileData || loading}
+                className="h-10 w-full gap-2"
+              >
+                {loading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ArrowRight className="h-4 w-4" />
+                )}
+                {loading ? "Processing file..." : "Continue to Matching Rules"}
+              </Button>
+            </section>
+          </div>
+
+          {/* Right Sidebar */}
+          <div className="space-y-4">
+            {suppliers.length > 0 && (
+              <section className="rounded-xl border bg-card p-4 shadow-sm">
+                <h3 className="mb-3 flex items-center gap-1.5 text-xs font-semibold">
+                  <Users className="h-3.5 w-3.5" /> Recent Suppliers
+                </h3>
+                <div className="space-y-2">
+                  {suppliers.slice(0, 3).map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setSupplier(s.id)}
+                      className={`w-full rounded-lg border p-2.5 text-left transition-colors ${
+                        supplier === s.id
+                          ? "border-primary/40 bg-primary/5"
+                          : "hover:bg-muted/50"
+                      }`}
+                    >
+                      <div className="text-[11px] font-medium">{s.name}</div>
+                      <div className="mt-0.5 flex items-center gap-3 text-[9px] text-muted-foreground">
+                        <span>{s.import_count} imports</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <section className="rounded-xl border border-primary/20 bg-primary/5 p-4 shadow-sm">
+              <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
+                <Zap className="h-3.5 w-3.5 text-primary" /> Quick Tips
+              </h3>
+              <div className="space-y-2 text-[10px] text-muted-foreground">
+                <div className="flex items-start gap-2">
+                  <span className="shrink-0 font-bold text-primary">1.</span>
+                  <span>
+                    Include a <strong>SKU</strong> or <strong>Part Number</strong>{" "}
+                    column for best matching
+                  </span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="shrink-0 font-bold text-primary">2.</span>
+                  <span>
+                    Headers should be in the <strong>first row</strong>
+                  </span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="shrink-0 font-bold text-primary">3.</span>
+                  <span>
+                    Supported: <strong>.xlsx, .xls, .csv</strong>
+                  </span>
+                </div>
               </div>
-              <div className="flex items-start gap-2">
-                <span className="text-primary font-bold shrink-0">3.</span>
-                <span>Supported: <strong>.xlsx, .xls, .csv</strong></span>
-              </div>
-            </div>
-          </Card>
+            </section>
+          </div>
         </div>
       </div>
     </div>

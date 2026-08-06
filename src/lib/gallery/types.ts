@@ -294,8 +294,8 @@ export const DEFAULT_SCRAPING_SETTINGS: GalleryScrapingSettings = {
   tier: "standard",
   imagesPerRow: 4,
   instructions: "",
-  searchDepth: "medium",
-  sourcePolicy: "prefer-official",
+  searchDepth: "high",
+  sourcePolicy: "any",
   excludeMarketplaces: false,
   minResolution: 0,
   aspectRatio: "any",
@@ -417,7 +417,7 @@ export function normalizeGalleryWorksheet(
             : legacy.candidates <= 10
               ? "low"
               : "medium"
-          : "medium")
+          : DEFAULT_SCRAPING_SETTINGS.searchDepth)
     ),
     sourcePolicy:
       current.sourcePolicy === "any" ||

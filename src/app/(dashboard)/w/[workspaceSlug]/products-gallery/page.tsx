@@ -266,8 +266,8 @@ export default function ProductsGalleryPage() {
   const [scrapingImages, setScrapingImages] = useState("4");
   const [scrapingInstructions, setScrapingInstructions] = useState("");
   const [scrapingModel, setScrapingModel] = useState<"standard" | "pro">("standard");
-  const [scrapingSearchDepth, setScrapingSearchDepth] = useState("medium");
-  const [scrapingSourcePolicy, setScrapingSourcePolicy] = useState("prefer-official");
+  const [scrapingSearchDepth, setScrapingSearchDepth] = useState("high");
+  const [scrapingSourcePolicy, setScrapingSourcePolicy] = useState("any");
   const [scrapingResolution, setScrapingResolution] = useState("1200");
   const [scrapingAspectRatio, setScrapingAspectRatio] = useState("any");
   const [aiModel, setAiModel] = useState<"standard" | "pro">("standard");
@@ -417,8 +417,8 @@ export default function ProductsGalleryPage() {
     setScrapingImages(String(g.imagesPerRow ?? 4));
     setScrapingInstructions(g.instructions || "");
     setScrapingModel(g.tier === "premium" ? "pro" : "standard");
-    setScrapingSearchDepth(g.searchDepth || "medium");
-    setScrapingSourcePolicy(g.sourcePolicy || "prefer-official");
+    setScrapingSearchDepth(g.searchDepth || "high");
+    setScrapingSourcePolicy(g.sourcePolicy || "any");
     setScrapingResolution(String(g.minResolution ?? 1200));
     setScrapingAspectRatio(g.aspectRatio || "any");
 
@@ -3506,7 +3506,7 @@ export default function ProductsGalleryPage() {
             }
           }}
         >
-          <DialogContent className="max-w-4xl overflow-hidden p-0">
+          <DialogContent className="w-[min(96vw,1120px)] max-w-[min(96vw,1120px)] overflow-hidden p-0 sm:max-w-[min(96vw,1120px)]">
             <DialogHeader className="border-b px-6 py-4">
               <DialogTitle className="flex items-center gap-2">
                 {imageDialogKind === "main" ? (
@@ -3522,14 +3522,14 @@ export default function ProductsGalleryPage() {
                   : "Preview and manage product images"}
               </DialogDescription>
             </DialogHeader>
-            <div className="grid min-h-[430px] md:grid-cols-[1fr_260px]">
-              <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 bg-muted/20 p-6">
+            <div className="grid min-h-[480px] md:grid-cols-[minmax(0,1fr)_132px]">
+              <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
                 {activeImagePreviewSrc ? (
                   <>
                     <img
                       src={activeImagePreviewSrc}
                       alt=""
-                      className="max-h-[60vh] max-w-full rounded-lg object-contain shadow-sm"
+                      className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
                       onError={(event) => {
                         if (
                           activeImageFallbackSrc &&
@@ -3560,11 +3560,11 @@ export default function ProductsGalleryPage() {
                   </div>
                 )}
               </div>
-              <div className="border-l p-4">
+              <div className="border-l p-3">
                 <p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   All images
                 </p>
-                <div className="grid max-h-[58vh] grid-cols-2 gap-2 overflow-y-auto pr-1">
+                <div className="flex max-h-[62vh] flex-col gap-2 overflow-y-auto pr-1">
                   {imageDialogPaths.map((path, index) => {
                     if (!imageDialogRow) return null;
                     const src = resolvePathUrl(path);
@@ -3573,7 +3573,7 @@ export default function ProductsGalleryPage() {
                     return (
                       <div
                         key={`${imageDialogRow.id}:${imageDialogKind}:${index}:${path}`}
-                        className={`group/dialog-image relative aspect-square overflow-hidden rounded-md border-2 ${
+                        className={`group/dialog-image relative aspect-square w-full shrink-0 overflow-hidden rounded-md border-2 ${
                           activeImagePreviewPath === path
                             ? "border-primary"
                             : "border-transparent"

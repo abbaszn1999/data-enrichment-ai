@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { Crown, ArrowRight, AlertTriangle, Clock } from "lucide-react";
+import { Crown, ArrowRight, AlertTriangle, Clock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Role } from "@/lib/permissions";
 
@@ -93,43 +94,123 @@ export function SubscriptionGate({ subscription, isActive, isLoading, role, chil
 }
 
 // Notification banner for subscription status issues (past_due, cancel_at_period_end)
-export function SubscriptionBanner({ subscription, isLoading }: { subscription: any | null; isLoading: boolean }) {
+export function SubscriptionBanner({
+  subscription,
+  isLoading,
+  role,
+}: {
+  subscription: any | null;
+  isLoading: boolean;
+  role: Role | null;
+}) {
   const params = useParams();
   const router = useRouter();
   const slug = params.workspaceSlug as string;
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
 
-  if (isLoading || !subscription) return null;
+  const canManageBilling = role === "owner" || role === "admin";
+
+  const bannerKind =
+    !isLoading && subscription
+      ? subscription.status === "past_due"
+        ? "past_due"
+        : subscription.cancelAtPeriodEnd
+          ? "cancel_at_period_end"
+          : null
+      : null;
+
+  const storageKey = bannerKind
+    ? `sub-banner:${slug}:${bannerKind}:${
+        bannerKind === "cancel_at_period_end"
+          ? String(subscription?.currentPeriodEnd ?? "")
+          : String(subscription?.status ?? "past_due")
+      }`
+    : null;
+
+  useEffect(() => {
+    if (!storageKey || typeof window === "undefined") {
+      setDismissedKey(null);
+      return;
+    }
+    setDismissedKey(
+      window.sessionStorage.getItem(storageKey) === "1" ? storageKey : null
+    );
+  }, [storageKey]);
+
+  if (!canManageBilling || !bannerKind || !storageKey) return null;
+  if (dismissedKey === storageKey) return null;
+
+  const dismiss = () => {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(storageKey, "1");
+    }
+    setDismissedKey(storageKey);
+  };
 
   // Past due warning
-  if (subscription.status === "past_due") {
+  if (bannerKind === "past_due") {
     return (
-      <div className="bg-red-500/10 border-b border-red-500/20 px-4 py-2 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
-          <AlertTriangle className="h-4 w-4" />
-          <span className="text-xs font-medium">Payment failed. Please update your billing information to avoid service interruption.</span>
+      <div className="flex items-center justify-between gap-3 border-b border-red-500/20 bg-red-500/10 px-4 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-red-600 dark:text-red-400">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span className="text-xs font-medium">
+            Payment failed. Please update your billing information to avoid
+            service interruption.
+          </span>
         </div>
-        <Button size="sm" variant="outline" className="text-xs h-7 border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10" onClick={() => router.push(`/w/${slug}/subscription`)}>
-          Update Billing
-        </Button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 border-red-500/30 text-xs text-red-600 hover:bg-red-500/10 dark:text-red-400"
+            onClick={() => router.push(`/w/${slug}/subscription`)}
+          >
+            Update Billing
+          </Button>
+          <button
+            type="button"
+            onClick={dismiss}
+            className="rounded-md p-1 text-red-600/70 transition-colors hover:bg-red-500/10 hover:text-red-600 dark:text-red-400/70 dark:hover:text-red-400"
+            aria-label="Dismiss billing warning"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     );
   }
 
   // Cancellation pending
-  if (subscription.cancelAtPeriodEnd) {
-    const endDate = subscription.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleDateString() : "soon";
-    return (
-      <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
-          <Clock className="h-4 w-4" />
-          <span className="text-xs font-medium">Your subscription will end on {endDate}. Your credits will be preserved but inaccessible until you resubscribe.</span>
-        </div>
-        <Button size="sm" variant="outline" className="text-xs h-7 border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10" onClick={() => router.push(`/w/${slug}/subscription`)}>
+  const endDate = subscription.currentPeriodEnd
+    ? new Date(subscription.currentPeriodEnd).toLocaleDateString()
+    : "soon";
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2">
+      <div className="flex min-w-0 items-center gap-2 text-amber-600 dark:text-amber-400">
+        <Clock className="h-4 w-4 shrink-0" />
+        <span className="text-xs font-medium">
+          Your subscription will end on {endDate}. Your credits will be
+          preserved but inaccessible until you resubscribe.
+        </span>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 border-amber-500/30 text-xs text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+          onClick={() => router.push(`/w/${slug}/subscription`)}
+        >
           Resubscribe
         </Button>
+        <button
+          type="button"
+          onClick={dismiss}
+          className="rounded-md p-1 text-amber-600/70 transition-colors hover:bg-amber-500/10 hover:text-amber-600 dark:text-amber-400/70 dark:hover:text-amber-400"
+          aria-label="Dismiss cancellation notice"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
-    );
-  }
-
-  return null;
+    </div>
+  );
 }
