@@ -157,7 +157,7 @@ export default function DemoSettingsPage() {
               className="w-full h-9 px-3 text-xs rounded-lg border bg-background"
             >
               <option value="gemini-3.1-pro-preview">Pro (Best Quality)</option>
-              <option value="gemini-3.1-flash-lite-preview">Flash (Fastest)</option>
+              <option value="gemini-3.5-flash-lite">Flash Lite (Fastest)</option>
             </select>
           </div>
 

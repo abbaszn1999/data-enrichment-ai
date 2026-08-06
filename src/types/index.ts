@@ -105,7 +105,17 @@ export interface EnrichmentEvent {
 
 export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turkish" | "German" | "Chinese" | "Japanese" | "custom";
 
-export type EnrichmentModel = "gemini-3.1-pro-preview" | "gemini-3-flash-preview";
+export type EnrichmentModel = "gemini-3.1-pro-preview" | "gemini-3.6-flash";
+
+/** Map legacy Fast model ids saved in presets/settings to the current Fast model. */
+export function resolveEnrichmentModel(
+  model: string | null | undefined
+): EnrichmentModel {
+  if (model === "gemini-3.1-pro-preview") return "gemini-3.1-pro-preview";
+  if (model === "gemini-3.6-flash") return "gemini-3.6-flash";
+  // Legacy Fast / unknown → current Fast
+  return "gemini-3.6-flash";
+}
 
 export type ThinkingLevelOption = "none" | "low" | "medium" | "high";
 
@@ -155,7 +165,7 @@ export const LANGUAGE_OPTIONS: { value: OutputLanguage; label: string; flag: str
 
 export const MODEL_OPTIONS: { value: EnrichmentModel; label: string; description: string; icon: string }[] = [
   { value: "gemini-3.1-pro-preview", label: "Pro", description: "Highest quality, slower", icon: "✨" },
-  { value: "gemini-3-flash-preview", label: "Fast", description: "Fastest, lower cost", icon: "⚡" },
+  { value: "gemini-3.6-flash", label: "Fast", description: "Fastest, lower cost", icon: "⚡" },
 ];
 
 export const TONE_OPTIONS: { value: WritingTone; label: string; description: string }[] = [

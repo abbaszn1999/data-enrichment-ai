@@ -11,12 +11,19 @@ import {
   Layers,
   AlertCircle,
   Coins,
-  Cpu,
   CheckCircle2,
+  Cpu,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  AnalyzingProductsCard,
+  analyzingProgressMessage,
+} from "@/components/media/analyzing-products-card";
+import {
+  imageCaption,
+  sanitizeSku,
+} from "@/lib/image-classify/sku";
 import { useWorkspaceContext } from "../../layout";
 import {
   getImageClassificationSession,
@@ -44,7 +51,7 @@ function exportToCsv(
   result: ImageClassificationJson,
   fallbackUrls: Record<string, string>
 ): string {
-  const header = ["Group Name", "SKU", "Image URL"];
+  const header = ["Group Name", "SKU", "Filename", "Image URL"];
   const rows = [header.join(",")];
 
   const escape = (raw: unknown) => {
@@ -54,14 +61,16 @@ function exportToCsv(
 
   for (const g of result.groups) {
     const items = result.items.filter((it) => it.groupId === g.id);
-    const urls = items.map((it) => it.url || fallbackUrls[it.id] || "").filter(Boolean);
-    const skus = Array.from(new Set(items.map((it) => it.sku).filter(Boolean)));
-
-    rows.push([
-      escape(g.label),
-      escape(skus.join("\n\n")),
-      escape(urls.join("\n\n"))
-    ].join(","));
+    for (const it of items) {
+      rows.push(
+        [
+          escape(g.label),
+          escape(sanitizeSku(it.sku, it.filename)),
+          escape(it.filename),
+          escape(it.url || fallbackUrls[it.id] || ""),
+        ].join(",")
+      );
+    }
   }
   return rows.join("\n");
 }
@@ -105,24 +114,10 @@ export default function ImageClassifyDetailPage() {
     return () => clearInterval(interval);
   }, [session?.status]);
 
-  const progressMessage = useMemo(() => {
-    if (session?.status === "pending" || progress < 12) {
-      return "Initializing classification session...";
-    }
-    if (progress < 35) {
-      return "Downloading images and preparing AI model payload...";
-    }
-    if (progress < 60) {
-      return "Analyzing visual features and extracting SKU codes...";
-    }
-    if (progress < 85) {
-      return "AI is grouping matching products and identifying variants...";
-    }
-    if (progress < 95) {
-      return "Structuring catalog details and compiling final metadata...";
-    }
-    return "Finishing up and saving results to database...";
-  }, [progress, session?.status]);
+  const progressMessage = useMemo(
+    () => analyzingProgressMessage(progress),
+    [progress]
+  );
 
   // Initial + polling load
   useEffect(() => {
@@ -207,232 +202,268 @@ export default function ImageClassifyDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="flex h-64 items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
   if (!session) {
     return (
-      <div className="p-6">
-        <Card className="p-8 text-center text-sm text-muted-foreground">
-          Session not found.
-        </Card>
+      <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+        <div className="mx-auto max-w-7xl p-5 sm:p-6 lg:p-8">
+          <div className="rounded-xl border bg-card px-6 py-16 text-center text-sm text-muted-foreground shadow-sm">
+            Session not found.
+          </div>
+        </div>
       </div>
     );
   }
 
   if (session.status === "pending" || session.status === "processing") {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[85vh] px-4">
-        <div className="flex flex-col items-center justify-center py-16 px-4 max-w-lg mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full">
-          <Card className="w-full p-8 border border-primary/10 bg-card/60 backdrop-blur-md shadow-2xl rounded-2xl flex flex-col items-center text-center space-y-6 relative overflow-hidden">
-            {/* Glowing decorative background elements */}
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-primary/10 rounded-full blur-3xl -z-10" />
-
-            {/* Pulsing AI Circle */}
-            <div className="relative flex items-center justify-center h-24 w-24">
-              <div className="absolute inset-0 rounded-full bg-primary/5 animate-ping opacity-75 duration-1000" />
-              <div className="absolute inset-2 rounded-full bg-primary/10 animate-pulse duration-1000" />
-              <div className="relative h-16 w-16 rounded-full bg-gradient-to-tr from-primary via-blue-500 to-indigo-600 flex items-center justify-center text-primary-foreground shadow-xl">
-                <Cpu className="h-8 w-8 animate-pulse" />
-              </div>
-            </div>
-
-            <div className="space-y-2 w-full">
-              <h3 className="text-xl font-bold tracking-tight bg-gradient-to-r from-foreground via-foreground/90 to-muted-foreground bg-clip-text">
-                Analyzing Product Images
-              </h3>
-              <p className="text-xs text-muted-foreground leading-relaxed h-10 flex items-center justify-center font-medium max-w-sm mx-auto">
-                {progressMessage}
-              </p>
-            </div>
-
-            {/* Progress Bar Container */}
-            <div className="w-full space-y-3 px-2">
-              <div className="flex justify-between items-center text-xs font-semibold px-1">
-                <span className="text-primary font-mono text-sm bg-primary/10 px-2 py-0.5 rounded-full">{Math.round(progress)}%</span>
-                <span className="text-muted-foreground font-medium animate-pulse">Running AI Agent...</span>
-              </div>
-              <div className="w-full h-3 bg-muted rounded-full overflow-hidden border border-muted/50 p-[1px]">
-                <div
-                  className="h-full bg-gradient-to-r from-primary via-blue-500 to-indigo-600 rounded-full transition-all duration-1000 ease-out shadow-inner"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Bottom Info */}
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground/80 bg-muted/40 px-4 py-2 rounded-full border border-muted/50 font-medium">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-              <span>This page will update automatically</span>
-              {polling && <span className="text-[10px] text-muted-foreground/60">· polling</span>}
-            </div>
-          </Card>
-        </div>
+      <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+        <AnalyzingProductsCard
+          progress={progress}
+          message={
+            session.status === "pending" && progress < 12
+              ? "Initializing classification session..."
+              : progressMessage
+          }
+          showPolling={polling}
+          stepLabel=""
+        />
       </div>
     );
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Link
-            href={`/w/${slug}/image-classify`}
-            className="h-8 w-8 rounded-md hover:bg-muted flex items-center justify-center"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-          <div>
-            <h1 className="text-xl font-bold">{session.name}</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <Badge variant="outline" className="text-[9px]">
-                {session.status}
-              </Badge>
-              <span className="text-[10px] text-muted-foreground">
-                {session.total_images} images · {session.group_count} groups
-              </span>
+    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-10 w-10 shrink-0 rounded-xl border bg-background shadow-sm"
+              asChild
+            >
+              <Link href={`/w/${slug}/image-classify`} aria-label="Back">
+                <ArrowLeft className="h-4 w-4" />
+              </Link>
+            </Button>
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
+                <Layers className="h-5 w-5 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="truncate text-xl font-bold tracking-tight">
+                  {session.name}
+                </h1>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={`text-[9px] ${
+                      session.status === "completed"
+                        ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-600"
+                        : session.status === "failed"
+                          ? "border-destructive/30 bg-destructive/5 text-destructive"
+                          : ""
+                    }`}
+                  >
+                    {session.status}
+                  </Badge>
+                  <span className="text-[10px] text-muted-foreground">
+                    {session.total_images} images · {session.group_count} groups
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
 
-        {result && (
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => handleExport("csv")} className="gap-1.5 text-xs">
-              <Download className="h-3.5 w-3.5" /> CSV
-            </Button>
-            <Button size="sm" onClick={() => handleExport("json")} className="gap-1.5 text-xs">
-              <Download className="h-3.5 w-3.5" /> JSON
-            </Button>
+          {result && (
+            <div className="flex items-center gap-2 self-start">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleExport("csv")}
+                className="gap-1.5 text-xs"
+              >
+                <Download className="h-3.5 w-3.5" /> CSV
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => handleExport("json")}
+                className="gap-1.5 text-xs"
+              >
+                <Download className="h-3.5 w-3.5" /> JSON
+              </Button>
+            </div>
+          )}
+        </header>
+
+        {session.status === "failed" && (
+          <div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <p className="text-xs text-destructive">
+              {session.error_message || "Classification failed."}
+            </p>
           </div>
         )}
-      </div>
 
-      {session.status === "failed" && (
-        <Card className="p-4 flex items-start gap-3 border-red-200 bg-red-50/40 dark:bg-red-950/20">
-          <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
-          <div className="text-xs text-red-700 dark:text-red-400">
-            {session.error_message || "Classification failed."}
+        {error && (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">
+            {error}
           </div>
-        </Card>
-      )}
+        )}
 
-      {error && (
-        <Card className="p-3 text-xs text-red-600 border-red-200">{error}</Card>
-      )}
-
-      {result && (
-        <>
-          <div className="grid grid-cols-4 gap-3">
-            <Card className="p-3 flex items-center gap-3">
-              <div className="h-9 w-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
-                <ImageIcon className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-lg font-bold">{result.totalImages}</div>
-                <div className="text-[10px] text-muted-foreground">Images</div>
-              </div>
-            </Card>
-            <Card className="p-3 flex items-center gap-3">
-              <div className="h-9 w-9 rounded-lg bg-blue-50 dark:bg-blue-950/30 text-blue-600 flex items-center justify-center">
-                <Layers className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-lg font-bold">{result.groups.length}</div>
-                <div className="text-[10px] text-muted-foreground">Groups</div>
-              </div>
-            </Card>
-            <Card className="p-3 flex items-center gap-3">
-              <div className="h-9 w-9 rounded-lg bg-amber-50 dark:bg-amber-950/30 text-amber-600 flex items-center justify-center">
-                <Coins className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-lg font-bold">
-                  {result.usage.totalCredits.toFixed(3)}
-                </div>
-                <div className="text-[10px] text-muted-foreground">Credits</div>
-              </div>
-            </Card>
-            <Card className="p-3 flex items-center gap-3">
-              <div className="h-9 w-9 rounded-lg bg-green-50 dark:bg-green-950/30 text-green-600 flex items-center justify-center">
-                <Cpu className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-lg font-bold">
-                  {result.usage.totalTokens.toLocaleString()}
-                </div>
-                <div className="text-[10px] text-muted-foreground">Tokens</div>
-              </div>
-            </Card>
-          </div>
-
-          <div className="space-y-5">
-            {groupedItems.map(({ group, items }) => {
-              const uniqueSkus = Array.from(new Set(items.map((it) => it.sku).filter(Boolean)));
-              return (
-                <Card key={group.id} className="p-5 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h2 className="text-sm font-semibold flex items-center gap-2">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-                        {group.label}
-                      </h2>
-                      {group.description && (
-                        <p className="text-[11px] text-muted-foreground mt-0.5">
-                          {group.description}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {uniqueSkus.map((sku) => (
-                        <Badge key={sku} variant="outline" className="text-[10px] bg-muted/40 font-mono text-primary font-semibold border-primary/20">
-                          SKU: {sku}
-                        </Badge>
-                      ))}
-                      <Badge variant="secondary" className="text-[10px]">
-                        {items.length} image{items.length === 1 ? "" : "s"}
-                      </Badge>
-                    </div>
+        {result && (
+          <>
+            <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {[
+                {
+                  label: "Images",
+                  value: result.totalImages,
+                  icon: ImageIcon,
+                  style: "bg-primary/10 text-primary",
+                },
+                {
+                  label: "Groups",
+                  value: result.groups.length,
+                  icon: Layers,
+                  style: "bg-blue-500/10 text-blue-600",
+                },
+                {
+                  label: "Credits",
+                  value: result.usage.totalCredits.toFixed(3),
+                  icon: Coins,
+                  style: "bg-amber-500/10 text-amber-600",
+                },
+                {
+                  label: "Tokens",
+                  value: result.usage.totalTokens.toLocaleString(),
+                  icon: Cpu,
+                  style: "bg-emerald-500/10 text-emerald-600",
+                },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
+                >
+                  <div
+                    className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
+                  >
+                    <stat.icon className="h-4 w-4" />
                   </div>
-                <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 gap-2">
-                  {items.map((it) => (
-                    <div key={it.id} className="flex flex-col gap-1 min-w-0">
-                      <div
-                        className="relative aspect-square rounded-md overflow-hidden bg-muted w-full"
-                        title={`${it.filename}${
-                          it.confidence != null
-                            ? ` (${(it.confidence * 100).toFixed(0)}%)`
-                            : ""
-                        }`}
-                      >
-                        {thumbUrls[it.id] ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={thumbUrls[it.id]}
-                            alt={it.filename}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-muted-foreground/40">
-                            <ImageIcon className="h-4 w-4" />
-                          </div>
-                        )}
-                      </div>
-                      <span
-                        className="text-[9px] text-muted-foreground text-center truncate font-mono bg-muted/40 py-0.5 px-1 rounded border border-muted/50"
-                        title={it.sku || "No SKU"}
-                      >
-                        {it.sku || "—"}
-                      </span>
-                    </div>
-                  ))}
+                  <div>
+                    <p className="text-lg font-bold leading-none">{stat.value}</p>
+                    <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {stat.label}
+                    </p>
+                  </div>
                 </div>
-              </Card>
-            )})}
-          </div>
-        </>
-      )}
+              ))}
+            </section>
+
+            <div className="space-y-4">
+              {groupedItems.map(({ group, items }) => {
+                const uniqueSkus = Array.from(
+                  new Set(
+                    items
+                      .map((it) => sanitizeSku(it.sku, it.filename))
+                      .filter(Boolean)
+                  )
+                );
+                return (
+                  <article
+                    key={group.id}
+                    className="overflow-hidden rounded-xl border bg-card shadow-sm"
+                  >
+                    <div className="space-y-3 border-b bg-muted/20 p-4 sm:p-5">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <h2 className="flex items-start gap-2 text-sm font-semibold">
+                            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                            <span className="break-words">{group.label}</span>
+                          </h2>
+                          {group.description ? (
+                            <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-muted-foreground">
+                              {group.description}
+                            </p>
+                          ) : null}
+                        </div>
+                        <Badge variant="secondary" className="shrink-0 text-[10px]">
+                          {items.length} image{items.length === 1 ? "" : "s"}
+                        </Badge>
+                      </div>
+                      {uniqueSkus.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {uniqueSkus.map((sku) => (
+                            <Badge
+                              key={sku}
+                              variant="outline"
+                              className="max-w-full break-all font-mono text-[10px] font-semibold text-primary"
+                            >
+                              SKU: {sku}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                      {items.map((it) => {
+                        const caption = imageCaption(it.sku, it.filename);
+                        return (
+                          <div key={it.id} className="min-w-0 space-y-1.5">
+                            <div
+                              className="relative aspect-square overflow-hidden rounded-lg border bg-muted"
+                              title={`${it.filename}${
+                                it.confidence != null
+                                  ? ` (${(it.confidence * 100).toFixed(0)}%)`
+                                  : ""
+                              }`}
+                            >
+                              {thumbUrls[it.id] ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={thumbUrls[it.id]}
+                                  alt={it.filename}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-muted-foreground/40">
+                                  <ImageIcon className="h-4 w-4" />
+                                </div>
+                              )}
+                            </div>
+                            <p
+                              className="break-words text-center text-[10px] leading-snug text-muted-foreground"
+                              title={
+                                caption.isSku
+                                  ? `SKU: ${caption.primary}`
+                                  : it.filename
+                              }
+                            >
+                              {caption.isSku ? (
+                                <span className="font-mono font-medium text-foreground">
+                                  {caption.primary}
+                                </span>
+                              ) : (
+                                caption.primary
+                              )}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

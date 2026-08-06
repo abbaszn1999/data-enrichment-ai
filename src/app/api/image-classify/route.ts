@@ -1,28 +1,17 @@
-// Image Classification API — sends ALL uploaded images to Gemini 3.5 Flash in
-// a single multimodal request and returns a structured grouping JSON. Follows
-// the same auth/subscription/credits pattern as /api/sync/agent.
-//
-// Request body:
-//   {
-//     workspaceId: string,
-//     sessionId: string,            // pre-created image_classification_sessions row
-//     images: Array<{ id, filename, storagePath, mimeType }>,
-//     instruction?: string,
-//   }
-//
-// Response: full ImageClassificationJson result (also persisted to storage).
+// Image Classification API — accepts the job immediately (202) and runs Gemini
+// 3.6 Flash in the background on the long-lived Render/Node process.
+// Pricing comes from the shared ai-pricing module (official rates, no margin).
 
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import {
   getWorkspaceContext,
   isContextSubscriptionActive,
+  updateCachedCredits,
 } from "@/lib/workspace-context";
-import {
-  calculateCallCost,
-  costToCredits,
-} from "@/lib/ai-pricing";
+import { calculateCallCost, costToCredits } from "@/lib/ai-pricing";
+import { sanitizeSku } from "@/lib/image-classify/sku";
 import {
   getImageClassificationResultPath,
   type ImageClassificationJson,
@@ -34,8 +23,9 @@ import { requireGeminiApiKey } from "@/lib/sync/agent/ai-utils";
 
 export const maxDuration = 300;
 
-const MODEL = "gemini-3.5-flash";
-const MAX_IMAGES = 200; // generous safety cap; Gemini supports up to 3,600
+const MODEL = "gemini-3.6-flash";
+const MAX_IMAGES = 200;
+const SIGNED_URL_TTL_SECONDS = 10 * 365 * 24 * 60 * 60;
 
 type RequestImage = {
   id: string;
@@ -79,8 +69,12 @@ function buildSystemInstruction(): string {
     "When uncertain between merging and splitting, choose splitting. Over-splitting is better than mixing unrelated products.",
     "Every image MUST be assigned to exactly one group.",
     "Return JSON only, matching the provided schema. Do not invent image ids; use only the ids that appear in the user prompt.",
-    "For each image, you must also extract the SKU code from the image filename. If the customer's custom instruction explains where the SKU is located in the filename, follow it exactly. If there is no custom instruction about the SKU, identify the most plausible part of the filename that represents an SKU (e.g. model numbers, alphanumeric strings, or patterns like COSH261032-RAIN-11, HK5000030_584, cw637) and output it as the 'sku' field for the item. If no SKU can be identified, output an empty string.",
-    "CRITICAL RULE: If multiple images share the exact same extracted SKU code, they MUST be assigned to the exact same product group, as they represent the same product or variant. Use the SKU as a strong constraint for grouping."
+    "For each image, extract a real SKU/code from the filename ONLY when one clearly exists.",
+    "A valid SKU looks like a product code (short alphanumeric, often with digits), for example: COSH261032-RAIN-11, HK5000030_584, cw637, SKU-88421.",
+    "NEVER copy the whole filename or a human product title into sku. Names like Ecommerce-SEO-EBOOK, Technical-SEO-Mastery-for-eCom-Brands, The-AI-Commerce-Playbook are titles, not SKUs — leave sku as an empty string.",
+    "If the customer's custom instruction explains where the SKU is in the filename, follow that instruction exactly.",
+    "If no SKU/code can be identified with confidence, output an empty string for sku.",
+    "CRITICAL RULE: If multiple images share the exact same non-empty SKU, they MUST be assigned to the same product group.",
   ].join(" ");
 }
 
@@ -136,7 +130,10 @@ function buildUserPrompt(
     "Each image is provided in order below this prompt as inlineData parts."
   );
   lines.push(
-    "Output JSON with: groups[{id,label,description,imageIds[]}] and items[{id,groupId,confidence,notes}]."
+    "Output JSON with: groups[{id,label,description,imageIds[]}] and items[{id,groupId,sku,confidence,notes}]."
+  );
+  lines.push(
+    "sku must be empty unless the filename contains a clear product code; never put the full title/filename into sku."
   );
   lines.push(
     "For each item, notes should briefly state the visual reason for its group assignment."
@@ -164,15 +161,18 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
           },
           label: {
             type: "string",
-            description: "Concise ecommerce product-group label focused on product type and distinguishing details, not brand alone.",
+            description:
+              "Concise ecommerce product-group label focused on product type and distinguishing details, not brand alone.",
           },
           description: {
             type: "string",
-            description: "Short explanation of why these images belong together and why they are separate from other groups.",
+            description:
+              "Short explanation of why these images belong together and why they are separate from other groups.",
           },
           imageIds: {
             type: "array",
-            description: "Image ids assigned to this precise product group. Do not include unrelated product types.",
+            description:
+              "Image ids assigned to this precise product group. Do not include unrelated product types.",
             items: { type: "string" },
           },
         },
@@ -190,11 +190,13 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
           },
           groupId: {
             type: "string",
-            description: "The id of the precise product group this image belongs to.",
+            description:
+              "The id of the precise product group this image belongs to.",
           },
           sku: {
             type: "string",
-            description: "The SKU code extracted from the image filename, following the customer's instruction if provided, or otherwise identifying the most plausible SKU code in the filename.",
+            description:
+              "Short product SKU/code from the filename when clearly present. Empty string when the filename is a descriptive title or no SKU exists. Never return the full filename or a multi-word product title.",
           },
           confidence: {
             type: "number",
@@ -202,7 +204,8 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
           },
           notes: {
             type: "string",
-            description: "Brief visual reason for the assignment, including product type and distinguishing details.",
+            description:
+              "Brief visual reason for the assignment, including product type and distinguishing details.",
           },
         },
       },
@@ -211,7 +214,6 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
 };
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
-  // Node Buffer is available in Next API routes
   return Buffer.from(buf).toString("base64");
 }
 
@@ -230,82 +232,84 @@ async function downloadImage(
   };
 }
 
-export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-  if (authError || !user) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-  }
-
-  let body: RequestBody;
-  try {
-    body = (await request.json()) as RequestBody;
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
-
-  const { workspaceId, sessionId, images = [], instruction, thinkingLevel } = body;
-  if (!workspaceId || !sessionId) {
-    return NextResponse.json(
-      { error: "Missing workspaceId or sessionId" },
-      { status: 400 }
-    );
-  }
-  if (!Array.isArray(images) || images.length === 0) {
-    return NextResponse.json({ error: "No images provided" }, { status: 400 });
-  }
-  if (images.length > MAX_IMAGES) {
-    return NextResponse.json(
-      { error: `Too many images (max ${MAX_IMAGES})` },
-      { status: 400 }
-    );
-  }
-
-  const ctx = await getWorkspaceContext({ workspaceId, userId: user.id });
-  const headers: Record<string, string> = {
-    "X-Context-Source": ctx.source,
-    "Server-Timing": `ctx;dur=${ctx.durationMs.toFixed(1)}`,
-  };
-
-  // Subscription + credits gate (mirrors /api/sync/agent)
-  if (!ctx.subscription || !isContextSubscriptionActive(ctx)) {
-    return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402, headers });
-  }
-  if ((ctx.credits?.total ?? 0) <= 0) {
-    return NextResponse.json({ error: "NO_CREDITS" }, { status: 402, headers });
-  }
-
-  // Workspace membership
-  if (!ctx.membershipRole || ctx.membershipRole === "viewer") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403, headers });
-  }
+async function deductCreditsStrict(params: {
+  ownerUserId: string;
+  credits: number;
+  workspaceId: string;
+  userId: string;
+  sessionId: string;
+  imageCount: number;
+  groupCount: number;
+  totalCost: number;
+  totalTokens: number;
+  thinkingLevel?: string;
+}) {
+  if (params.credits <= 0) return;
   const admin = createAdminClient();
-
-  // Verify session exists and belongs to workspace
-  const { data: sessionRow, error: sessionErr } = await admin
-    .from("image_classification_sessions")
-    .select("id, workspace_id")
-    .eq("id", sessionId)
-    .single();
-  if (sessionErr || !sessionRow || sessionRow.workspace_id !== workspaceId) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404, headers });
+  const { data: deductResult, error: deductError } = await admin.rpc(
+    "deduct_user_credits",
+    {
+      p_user_id: params.ownerUserId,
+      p_amount: params.credits,
+      p_workspace_id: params.workspaceId,
+      p_operation: "image_classification",
+      p_uid: params.userId || params.ownerUserId,
+      p_entity_type: "image_classification_session",
+      p_entity_id: params.sessionId,
+      p_details: {
+        model: MODEL,
+        imageCount: params.imageCount,
+        groupCount: params.groupCount,
+        totalCost: params.totalCost,
+        totalTokens: params.totalTokens,
+        thinkingLevel: params.thinkingLevel || "medium",
+      },
+    }
+  );
+  if (deductError) {
+    throw new Error(`Credit deduction failed: ${deductError.message}`);
   }
+  if (!deductResult?.success) {
+    throw new Error(
+      `Credit deduction rejected: ${deductResult?.error || "Insufficient credits"}`
+    );
+  }
+  const remaining = Number(deductResult.remaining);
+  if (Number.isFinite(remaining)) {
+    updateCachedCredits(params.workspaceId, remaining);
+  }
+  console.log(
+    `[image-classify] Deducted ${params.credits} credits. Remaining: ${deductResult.remaining}`
+  );
+}
 
-  // Mark processing
-  await admin
-    .from("image_classification_sessions")
-    .update({ status: "processing" })
-    .eq("id", sessionId);
+async function runClassificationJob(params: {
+  workspaceId: string;
+  sessionId: string;
+  images: RequestImage[];
+  instruction?: string;
+  thinkingLevel?: string;
+  userId: string;
+  ownerUserId: string;
+}) {
+  const admin = createAdminClient();
+  const {
+    workspaceId,
+    sessionId,
+    images,
+    instruction,
+    thinkingLevel,
+    userId,
+    ownerUserId,
+  } = params;
 
   try {
-    // Download every image from Storage and turn it into inlineData
     const downloads = await Promise.all(
       images.map((img) => downloadImage(admin, img.storagePath))
     );
-    const inlineParts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
+    const inlineParts: Array<{
+      inlineData: { mimeType: string; data: string };
+    }> = [];
     const validImages: RequestImage[] = [];
     downloads.forEach((d, i) => {
       if (d) {
@@ -325,17 +329,15 @@ export async function POST(request: NextRequest) {
     const apiKey = requireGeminiApiKey();
     const { GoogleGenAI } = await import("@google/genai");
     const ai = new GoogleGenAI({ apiKey });
-
     const userPrompt = buildUserPrompt(validImages, instruction);
 
-    // Single multimodal request with ALL images. No batching by design — we
-    // rely on Gemini 3.5 Flash's 1M-token context to retain cross-image
-    // context for accurate grouping.
-    const response = await (ai.models.generateContent as (p: unknown) => Promise<{
-      text?: string;
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      usageMetadata?: unknown;
-    }>)({
+    const response = await (
+      ai.models.generateContent as (p: unknown) => Promise<{
+        text?: string;
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        usageMetadata?: unknown;
+      }>
+    )({
       model: MODEL,
       contents: [
         {
@@ -371,14 +373,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Cost / credits
     const cost = calculateCallCost(MODEL, response.usageMetadata, false);
     const credits = costToCredits(cost.totalCost);
 
-    // Build the canonical result JSON. Use the model's groupings but
-    // back-fill any image the model forgot, into an "unclassified" group.
     const groupsById = new Map<string, ImageClassificationGroup>();
     for (const g of parsed.groups || []) {
+      if (!g?.id) continue;
       groupsById.set(g.id, {
         id: g.id,
         label: g.label,
@@ -402,11 +402,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Generate long-lived signed URLs in a single batch so the exported
-    // sheet has ready-to-use external links. 10y is well within the limit
-    // documented by Supabase staff in discussion #7626 and avoids hitting
-    // the storage API on every export.
-    const SIGNED_URL_TTL_SECONDS = 10 * 365 * 24 * 60 * 60;
     const urlByPath = new Map<string, string>();
     try {
       const paths = validImages.map((img) => img.storagePath);
@@ -448,7 +443,7 @@ export async function POST(request: NextRequest) {
         url: urlByPath.get(img.storagePath) ?? "",
         groupId,
         groupLabel: group.label,
-        sku: it?.sku ?? "",
+        sku: sanitizeSku(it?.sku, img.filename),
         confidence: it?.confidence,
         notes: it?.notes,
       });
@@ -471,6 +466,19 @@ export async function POST(request: NextRequest) {
       },
     };
 
+    await deductCreditsStrict({
+      ownerUserId,
+      credits,
+      workspaceId,
+      userId,
+      sessionId,
+      imageCount: validImages.length,
+      groupCount: result.groups.length,
+      totalCost: cost.totalCost,
+      totalTokens: cost.usage.totalTokens,
+      thinkingLevel,
+    });
+
     const storagePath = getImageClassificationResultPath(workspaceId, sessionId);
     await saveJsonToStorageServer(storagePath, result);
 
@@ -487,38 +495,112 @@ export async function POST(request: NextRequest) {
       })
       .eq("id", sessionId);
 
-    // Deduct credits (best-effort; never fail the response on this)
-    if (credits > 0) {
-      try {
-        await admin.rpc("deduct_user_credits", {
-          p_user_id: ctx.subscription?.user_id ?? ctx.ownerId ?? user.id,
-          p_amount: credits,
-          p_workspace_id: workspaceId,
-          p_operation: "image_classification",
-          p_uid: user.id,
-          p_entity_type: "image_classification_session",
-          p_entity_id: sessionId,
-          p_details: {
-            model: MODEL,
-            imageCount: validImages.length,
-            groupCount: result.groups.length,
-          },
-        });
-      } catch (err) {
-        console.warn(
-          "[image-classify] credit deduction failed:",
-          (err as Error).message
-        );
-      }
-    }
-
-    return NextResponse.json({ result }, { headers });
+    console.log(
+      `[image-classify] Session ${sessionId} completed: ${result.groups.length} groups, ${credits} credits deducted`
+    );
   } catch (err) {
     const message = (err as Error).message || "Classification failed";
     await admin
       .from("image_classification_sessions")
       .update({ status: "failed", error_message: message })
       .eq("id", sessionId);
-    return NextResponse.json({ error: message }, { status: 500, headers });
+    console.error("[image-classify] failed:", message);
   }
+}
+
+export async function POST(request: NextRequest) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  let body: RequestBody;
+  try {
+    body = (await request.json()) as RequestBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const {
+    workspaceId,
+    sessionId,
+    images = [],
+    instruction,
+    thinkingLevel,
+  } = body;
+  if (!workspaceId || !sessionId) {
+    return NextResponse.json(
+      { error: "Missing workspaceId or sessionId" },
+      { status: 400 }
+    );
+  }
+  if (!Array.isArray(images) || images.length === 0) {
+    return NextResponse.json({ error: "No images provided" }, { status: 400 });
+  }
+  if (images.length > MAX_IMAGES) {
+    return NextResponse.json(
+      { error: `Too many images (max ${MAX_IMAGES})` },
+      { status: 400 }
+    );
+  }
+
+  const ctx = await getWorkspaceContext({ workspaceId, userId: user.id });
+  const headers: Record<string, string> = {
+    "X-Context-Source": ctx.source,
+    "Server-Timing": `ctx;dur=${ctx.durationMs.toFixed(1)}`,
+  };
+
+  if (!ctx.subscription || !isContextSubscriptionActive(ctx)) {
+    return NextResponse.json(
+      { error: "NO_SUBSCRIPTION" },
+      { status: 402, headers }
+    );
+  }
+  if ((ctx.credits?.total ?? 0) <= 0) {
+    return NextResponse.json({ error: "NO_CREDITS" }, { status: 402, headers });
+  }
+  if (!ctx.membershipRole || ctx.membershipRole === "viewer") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403, headers });
+  }
+
+  const admin = createAdminClient();
+  const { data: sessionRow, error: sessionErr } = await admin
+    .from("image_classification_sessions")
+    .select("id, workspace_id")
+    .eq("id", sessionId)
+    .single();
+  if (sessionErr || !sessionRow || sessionRow.workspace_id !== workspaceId) {
+    return NextResponse.json(
+      { error: "Session not found" },
+      { status: 404, headers }
+    );
+  }
+
+  await admin
+    .from("image_classification_sessions")
+    .update({ status: "processing", error_message: null })
+    .eq("id", sessionId);
+
+  const ownerUserId = ctx.subscription.user_id ?? ctx.ownerId ?? user.id;
+
+  after(() =>
+    runClassificationJob({
+      workspaceId,
+      sessionId,
+      images,
+      instruction,
+      thinkingLevel,
+      userId: user.id,
+      ownerUserId,
+    })
+  );
+
+  return NextResponse.json(
+    { status: "accepted", sessionId },
+    { status: 202, headers }
+  );
 }

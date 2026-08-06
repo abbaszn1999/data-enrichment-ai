@@ -616,207 +616,288 @@ export default function CategoriesPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="flex h-64 items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="p-6 space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <FolderTree className="h-5 w-5" /> Categories
-          </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {categories.length} categories
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {permissions.canAdmin && categories.length > 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="gap-1.5 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
-              onClick={() => setShowDeleteAll(true)}
+    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
+              <FolderTree className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight">Categories</h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Organize your catalog tree and keep product taxonomy consistent.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 self-start">
+            {permissions.canAdmin && categories.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+                onClick={() => setShowDeleteAll(true)}
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Delete All
+              </Button>
+            )}
+            {permissions.canAdmin && hasUnsavedChanges && (
+              <Button
+                size="sm"
+                variant="outline"
+                className={`gap-1.5 text-xs ${
+                  hasUnsavedChanges
+                    ? "border-emerald-500 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 animate-pulse"
+                    : ""
+                }`}
+                onClick={() => persistToStorage()}
+                disabled={saving}
+              >
+                {saving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
+                {saving ? "Saving..." : "Save"}
+              </Button>
+            )}
+            {permissions.canAdmin && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-xs"
+                onClick={() => setShowUpload(true)}
+              >
+                <Upload className="h-3.5 w-3.5" /> Upload Sheet
+              </Button>
+            )}
+            {permissions.canAdmin && (
+              <Button
+                size="sm"
+                className="gap-1.5 text-xs shadow-sm"
+                onClick={() => openForm()}
+              >
+                <Plus className="h-3.5 w-3.5" /> New category
+              </Button>
+            )}
+          </div>
+        </header>
+
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            {
+              label: "Categories",
+              value: categories.length,
+              icon: FolderTree,
+              style: "bg-primary/10 text-primary",
+            },
+            {
+              label: "Root",
+              value: rootCount,
+              icon: FolderOpen,
+              style: "bg-amber-500/10 text-amber-600",
+            },
+            {
+              label: "With products",
+              value: 0,
+              icon: Package,
+              style: "bg-emerald-500/10 text-emerald-600",
+            },
+            {
+              label: "Max depth",
+              value: maxDepth,
+              icon: BarChart3,
+              style: "bg-blue-500/10 text-blue-600",
+            },
+          ].map((stat) => (
+            <div
+              key={stat.label}
+              className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
             >
-              <Trash2 className="h-3.5 w-3.5" /> Delete All
-            </Button>
-          )}
-          {permissions.canAdmin && hasUnsavedChanges && (
-            <Button
-              size="sm"
-              variant="outline"
-              className={`gap-1.5 text-xs ${hasUnsavedChanges ? "border-green-500 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/20 animate-pulse" : ""}`}
-              onClick={() => persistToStorage()}
-              disabled={saving}
-            >
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          )}
-          {permissions.canAdmin && (
-            <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={() => setShowUpload(true)}>
-              <Upload className="h-3.5 w-3.5" /> Upload Sheet
-            </Button>
-          )}
-          {permissions.canAdmin && (
-            <Button size="sm" className="gap-1.5 text-xs" onClick={() => openForm()}>
-              <Plus className="h-3.5 w-3.5" /> Add Category
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        <Card className="p-3 flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center">
-            <BarChart3 className="h-4 w-4 text-primary" />
-          </div>
-          <div>
-            <div className="text-lg font-bold">{categories.length}</div>
-            <div className="text-[10px] text-muted-foreground">Total</div>
-          </div>
-        </Card>
-        <Card className="p-3 flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-amber-50 dark:bg-amber-950/30 flex items-center justify-center">
-            <Folder className="h-4 w-4 text-amber-600" />
-          </div>
-          <div>
-            <div className="text-lg font-bold">{rootCount}</div>
-            <div className="text-[10px] text-muted-foreground">Root</div>
-          </div>
-        </Card>
-        <Card className="p-3 flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-green-50 dark:bg-green-950/30 flex items-center justify-center">
-            <Package className="h-4 w-4 text-green-600" />
-          </div>
-          <div>
-            <div className="text-lg font-bold">0</div>
-            <div className="text-[10px] text-muted-foreground">With Products</div>
-          </div>
-        </Card>
-        <Card className="p-3 flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center">
-            <FolderTree className="h-4 w-4 text-blue-600" />
-          </div>
-          <div>
-            <div className="text-lg font-bold">{maxDepth}</div>
-            <div className="text-[10px] text-muted-foreground">Max Depth</div>
-          </div>
-        </Card>
-      </div>
-
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
-        <Input
-          placeholder="Search categories..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-9 h-9 text-xs"
-        />
-        {search && (
-          <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2">
-            <X className="h-3 w-3 text-muted-foreground" />
-          </button>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Tree */}
-        <div className="lg:col-span-2">
-          <Card
-            className={`p-2 min-h-[300px] transition-all ${
-              dragId && dropTargetId === "__root__" ? "ring-2 ring-primary/50 bg-primary/5" : ""
-            }`}
-            onDragOver={(e) => {
-              // Only trigger root drop when dragging over empty space (not over a node)
-              if (!dragId) return;
-              e.preventDefault();
-              e.stopPropagation();
-              e.dataTransfer.dropEffect = "move";
-              setDropTargetId("__root__");
-            }}
-            onDragLeave={(e) => {
-              // Only reset if leaving the card entirely
-              if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-              if (dropTargetId === "__root__") setDropTargetId(null);
-            }}
-            onDrop={(e) => handleDrop(e, null)}
-          >
-            {filteredTree.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 gap-2">
-                <FolderTree className="h-8 w-8 text-muted-foreground/30" />
-                <p className="text-xs text-muted-foreground">
-                  {search ? "No categories match your search" : "No categories yet"}
+              <div
+                className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
+              >
+                <stat.icon className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-lg font-bold leading-none">{stat.value}</p>
+                <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {stat.label}
                 </p>
               </div>
-            ) : (
-              <>
-                {filteredTree.map((node) => renderNode(node))}
-                {/* Root drop zone hint — visible only while dragging */}
-                {dragId && (
-                  <div
-                    className={`mt-1 py-2 text-center text-[10px] rounded-lg border-2 border-dashed transition-all ${
-                      dropTargetId === "__root__"
-                        ? "border-primary text-primary bg-primary/5"
-                        : "border-muted-foreground/20 text-muted-foreground/40"
-                    }`}
-                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropTargetId("__root__"); }}
-                    onDrop={(e) => handleDrop(e, null)}
-                  >
-                    Drop here to move to root level
-                  </div>
-                )}
-              </>
-            )}
-          </Card>
-        </div>
+            </div>
+          ))}
+        </section>
 
-        {/* Detail Panel */}
-        <div>
-          {selectedCat ? (
-            <Card className="p-4 space-y-3">
-              <h3 className="text-sm font-semibold">{selectedCat.name}</h3>
-              {selectedCat.description && (
-                <p className="text-xs text-muted-foreground">{selectedCat.description}</p>
-              )}
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Slug</span>
-                  <span className="font-mono">{selectedCat.slug}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Products</span>
-                  <span>0</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Subcategories</span>
-                  <span>{categories.filter((c) => c.parent_id === selectedCat.id).length}</span>
-                </div>
+        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+          <div className="flex flex-col gap-3 border-b bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold">Category tree</h2>
+              <p className="text-[11px] text-muted-foreground">
+                Search, expand, and manage categories in one place.
+              </p>
+            </div>
+            <div className="relative w-full sm:w-64">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search categories..."
+                className="h-8 bg-background pl-8 pr-8 text-xs"
+              />
+              {search ? (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-0 lg:grid-cols-3">
+            <div className="border-b p-3 lg:col-span-2 lg:border-b-0 lg:border-r">
+              <div
+                className={`min-h-[300px] rounded-xl transition-all ${
+                  dragId && dropTargetId === "__root__"
+                    ? "ring-2 ring-primary/50 bg-primary/5"
+                    : ""
+                }`}
+                onDragOver={(e) => {
+                  if (!dragId) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.dataTransfer.dropEffect = "move";
+                  setDropTargetId("__root__");
+                }}
+                onDragLeave={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  if (dropTargetId === "__root__") setDropTargetId(null);
+                }}
+                onDrop={(e) => handleDrop(e, null)}
+              >
+                {filteredTree.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
+                    <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                      <FolderTree className="h-5 w-5" />
+                    </div>
+                    <p className="text-sm font-medium">
+                      {search
+                        ? "No categories match your search"
+                        : "No categories yet"}
+                    </p>
+                    <p className="max-w-sm text-xs text-muted-foreground">
+                      {search
+                        ? "Try a different search term."
+                        : "Add a category or upload a sheet to build your tree."}
+                    </p>
+                    {!search && permissions.canAdmin && (
+                      <Button
+                        size="sm"
+                        className="mt-3 gap-1.5"
+                        onClick={() => openForm()}
+                      >
+                        <Plus className="h-3.5 w-3.5" /> New category
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {filteredTree.map((node) => renderNode(node))}
+                    {dragId && (
+                      <div
+                        className={`mt-1 rounded-lg border-2 border-dashed py-2 text-center text-[10px] transition-all ${
+                          dropTargetId === "__root__"
+                            ? "border-primary bg-primary/5 text-primary"
+                            : "border-muted-foreground/20 text-muted-foreground/40"
+                        }`}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDropTargetId("__root__");
+                        }}
+                        onDrop={(e) => handleDrop(e, null)}
+                      >
+                        Drop here to move to root level
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
-              {permissions.canAdmin && (
-                <div className="flex gap-2 pt-2">
-                  <Button size="sm" variant="outline" className="flex-1 text-xs gap-1" onClick={() => openForm(undefined, selectedCat)}>
-                    <Pencil className="h-3 w-3" /> Edit
-                  </Button>
-                  <Button size="sm" variant="outline" className="text-xs text-destructive gap-1" onClick={() => handleDelete(selectedCat.id)}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
+            </div>
+
+            <div className="p-4">
+              {selectedCat ? (
+                <div className="space-y-3 rounded-xl border bg-background p-4">
+                  <h3 className="text-sm font-semibold break-words">
+                    {selectedCat.name}
+                  </h3>
+                  {selectedCat.description && (
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      {selectedCat.description}
+                    </p>
+                  )}
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">Slug</span>
+                      <span className="truncate font-mono">{selectedCat.slug}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">Products</span>
+                      <span>0</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">Subcategories</span>
+                      <span>
+                        {
+                          categories.filter((c) => c.parent_id === selectedCat.id)
+                            .length
+                        }
+                      </span>
+                    </div>
+                  </div>
+                  {permissions.canAdmin && (
+                    <div className="flex gap-2 pt-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="flex-1 gap-1 text-xs"
+                        onClick={() => openForm(undefined, selectedCat)}
+                      >
+                        <Pencil className="h-3 w-3" /> Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1 text-xs text-destructive"
+                        onClick={() => handleDelete(selectedCat.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed px-4 py-12 text-center">
+                  <Folder className="h-8 w-8 text-muted-foreground/30" />
+                  <p className="text-xs text-muted-foreground">
+                    Select a category to view details
+                  </p>
                 </div>
               )}
-            </Card>
-          ) : (
-            <Card className="p-6 flex flex-col items-center gap-2 text-center">
-              <Folder className="h-8 w-8 text-muted-foreground/30" />
-              <p className="text-xs text-muted-foreground">Select a category to view details</p>
-            </Card>
-          )}
-        </div>
+            </div>
+          </div>
+        </section>
       </div>
 
       {/* Add/Edit Form Dialog */}

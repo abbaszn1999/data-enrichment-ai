@@ -46,6 +46,16 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  ProjectListPagination,
+  ProjectListToolbar,
+  matchesProjectDateFilter,
+  paginateProjects,
+  sortProjectsByOption,
+  type ProjectDateFilter,
+  type ProjectSortOption,
+} from "@/components/media/project-list-controls";
+import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -220,6 +230,12 @@ export default function ProductsGalleryPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
+  const [projectStatusFilter, setProjectStatusFilter] = useState("all");
+  const [projectDateFilter, setProjectDateFilter] =
+    useState<ProjectDateFilter>("all");
+  const [projectSort, setProjectSort] =
+    useState<ProjectSortOption>("updated_desc");
+  const [projectPage, setProjectPage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState<GallerySession | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
   const [imageDialogRowId, setImageDialogRowId] = useState<string | null>(null);
@@ -1123,13 +1139,48 @@ export default function ProductsGalleryPage() {
 
   const filteredProjects = useMemo(() => {
     const query = projectSearch.trim().toLowerCase();
-    if (!query) return sessions;
-    return sessions.filter(
-      (session) =>
+    const filtered = sessions.filter((session) => {
+      const matchesSearch =
+        !query ||
         session.name.toLowerCase().includes(query) ||
-        session.source_file_name.toLowerCase().includes(query)
+        session.source_file_name.toLowerCase().includes(query);
+      if (!matchesSearch) return false;
+
+      if (projectStatusFilter === "ready") {
+        if (!(session.status === "ready" || session.status === "completed")) {
+          return false;
+        }
+      } else if (projectStatusFilter !== "all") {
+        if (session.status !== projectStatusFilter) return false;
+      }
+
+      return matchesProjectDateFilter(
+        session.updated_at || session.created_at,
+        projectDateFilter
+      );
+    });
+    return sortProjectsByOption(filtered, projectSort);
+  }, [
+    projectDateFilter,
+    projectSearch,
+    projectSort,
+    projectStatusFilter,
+    sessions,
+  ]);
+
+  const { pageItems: pagedProjects, totalPages: projectTotalPages, safePage: safeProjectPage } =
+    useMemo(
+      () => paginateProjects(filteredProjects, projectPage),
+      [filteredProjects, projectPage]
     );
-  }, [projectSearch, sessions]);
+
+  useEffect(() => {
+    setProjectPage(1);
+  }, [projectSearch, projectStatusFilter, projectDateFilter, projectSort]);
+
+  useEffect(() => {
+    if (projectPage !== safeProjectPage) setProjectPage(safeProjectPage);
+  }, [projectPage, safeProjectPage]);
 
   const visibleRows = useMemo(() => {
     return rows.filter((row) => {
@@ -3658,23 +3709,25 @@ export default function ProductsGalleryPage() {
         </section>
 
         <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
-          <div className="flex flex-col gap-3 border-b bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold">Gallery projects</h2>
-              <p className="text-[11px] text-muted-foreground">
-                Open a project to manage its worksheet and generated assets.
-              </p>
-            </div>
-            <div className="relative w-full sm:w-64">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={projectSearch}
-                onChange={(event) => setProjectSearch(event.target.value)}
-                placeholder="Search projects..."
-                className="h-8 bg-background pl-8 text-xs"
-              />
-            </div>
-          </div>
+          <ProjectListToolbar
+            title="Gallery projects"
+            description="Open a project to manage its worksheet and generated assets."
+            search={projectSearch}
+            onSearchChange={setProjectSearch}
+            status={projectStatusFilter}
+            onStatusChange={setProjectStatusFilter}
+            statusOptions={[
+              { value: "all", label: "All statuses" },
+              { value: "ready", label: "Ready" },
+              { value: "processing", label: "Processing" },
+              { value: "draft", label: "Draft" },
+              { value: "failed", label: "Failed" },
+            ]}
+            dateFilter={projectDateFilter}
+            onDateFilterChange={setProjectDateFilter}
+            sort={projectSort}
+            onSortChange={setProjectSort}
+          />
 
           {listLoading ? (
             <div className="flex h-56 items-center justify-center">
@@ -3706,11 +3759,12 @@ export default function ProductsGalleryPage() {
             </div>
           ) : filteredProjects.length === 0 ? (
             <div className="px-6 py-14 text-center text-xs text-muted-foreground">
-              No projects match “{projectSearch}”.
+              No projects match your search or filters.
             </div>
           ) : (
+            <>
             <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
-              {filteredProjects.map((session) => {
+              {pagedProjects.map((session) => {
                 const statusLabel =
                   SESSION_STATUS_LABEL[session.status] ?? session.status;
                 const isReady =
@@ -3745,9 +3799,6 @@ export default function ProductsGalleryPage() {
                           <h3 className="truncate text-sm font-semibold group-hover:text-primary">
                             {session.name}
                           </h3>
-                          <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
-                            {session.source_file_name}
-                          </p>
                         </div>
                       </div>
                       <Badge
@@ -3818,6 +3869,13 @@ export default function ProductsGalleryPage() {
                 );
               })}
             </div>
+            <ProjectListPagination
+              page={safeProjectPage}
+              totalPages={projectTotalPages}
+              totalItems={filteredProjects.length}
+              onPageChange={setProjectPage}
+            />
+            </>
           )}
         </section>
       </div>
@@ -3918,50 +3976,15 @@ export default function ProductsGalleryPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <DeleteProjectDialog
         open={!!deleteTarget}
+        projectName={deleteTarget?.name}
+        deleting={deletingProject}
         onOpenChange={(open) => {
           if (!open && !deletingProject) setDeleteTarget(null);
         }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
-              <Trash2 className="h-4 w-4" />
-            </div>
-            <DialogTitle>Delete gallery project?</DialogTitle>
-            <DialogDescription>
-              This permanently deletes “{deleteTarget?.name}”, its worksheet,
-              source file, generated images, and exports from storage.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-[11px] text-destructive">
-            This action cannot be undone.
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={deletingProject}
-              onClick={() => setDeleteTarget(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              className="gap-1.5"
-              disabled={deletingProject}
-              onClick={deleteProject}
-            >
-              {deletingProject ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
-              Delete permanently
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onConfirm={() => void deleteProject()}
+      />
     </div>
   );
 }

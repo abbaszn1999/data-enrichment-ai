@@ -127,7 +127,7 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
 }`;
 
     const result = await (await getAI()).models.generateContent({
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.5-flash-lite",
       contents: [{ role: "user", parts: [{ text: command }] }],
       config: {
         systemInstruction: systemPrompt,
@@ -136,7 +136,7 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
     });
 
     // Calculate cost
-    const cost = calculateCallCost("gemini-3.1-flash-lite-preview", result.usageMetadata, false);
+    const cost = calculateCallCost("gemini-3.5-flash-lite", result.usageMetadata, false);
     console.log(`[AI Function] Cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens, ${costToCredits(cost.totalCost)} credits)`);
 
     const text = result.text?.trim() || "";

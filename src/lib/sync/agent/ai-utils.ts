@@ -10,7 +10,7 @@ export type SyncMode = "fast" | "pro";
 export type SyncThinkingLevel = "low" | "medium" | "high";
 
 export const MODELS: Record<SyncMode, string> = {
-  fast: "gemini-3-flash-preview",
+  fast: "gemini-3.6-flash",
   pro: "gemini-3.1-pro-preview",
 };
 

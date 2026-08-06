@@ -1,24 +1,30 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
+  Check,
+  Clock3,
+  FolderOpen,
   ImageIcon,
-  Plus,
-  Clock,
-  CheckCircle2,
-  Loader2,
-  Search,
-  Trash2,
-  X,
-  BarChart3,
   Layers,
-  AlertCircle,
+  Loader2,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  ProjectListPagination,
+  ProjectListToolbar,
+  matchesProjectDateFilter,
+  paginateProjects,
+  sortProjectsByOption,
+  type ProjectDateFilter,
+  type ProjectSortOption,
+} from "@/components/media/project-list-controls";
+import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
 import { useWorkspaceContext } from "../layout";
 import { useRole } from "@/hooks/use-role";
 import {
@@ -27,55 +33,47 @@ import {
   type ImageClassificationSession,
 } from "@/lib/supabase";
 
+const STATUS_LABEL: Record<string, string> = {
+  pending: "Pending",
+  processing: "Processing",
+  completed: "Ready",
+  failed: "Failed",
+};
+
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
-  const hours = Math.floor(diff / 3600000);
-  if (hours < 1) return "Just now";
-  if (hours < 24) return `${hours}h ago`;
+  if (Number.isNaN(diff) || diff < 0) return "Updated just now";
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "Updated just now";
+  if (minutes < 60) return `Updated ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Updated ${hours}h ago`;
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return `${Math.floor(days / 30)}mo ago`;
+  if (days === 1) return "Updated yesterday";
+  if (days < 30) return `Updated ${days}d ago`;
+  return `Updated ${Math.floor(days / 30)}mo ago`;
 }
-
-const statusConfig: Record<
-  string,
-  { color: string; bgColor: string; dotColor: string; label: string }
-> = {
-  pending: {
-    color: "text-gray-700 dark:text-gray-400",
-    bgColor: "bg-gray-50 dark:bg-gray-950/30 border-gray-200",
-    dotColor: "bg-gray-400",
-    label: "Pending",
-  },
-  processing: {
-    color: "text-blue-700 dark:text-blue-400",
-    bgColor: "bg-blue-50 dark:bg-blue-950/30 border-blue-200",
-    dotColor: "bg-blue-500",
-    label: "Processing",
-  },
-  completed: {
-    color: "text-green-700 dark:text-green-400",
-    bgColor: "bg-green-50 dark:bg-green-950/30 border-green-200",
-    dotColor: "bg-green-500",
-    label: "Completed",
-  },
-  failed: {
-    color: "text-red-700 dark:text-red-400",
-    bgColor: "bg-red-50 dark:bg-red-950/30 border-red-200",
-    dotColor: "bg-red-500",
-    label: "Failed",
-  },
-};
 
 export default function ImageClassifyPage() {
   const params = useParams();
+  const router = useRouter();
   const slug = params.workspaceSlug as string;
   const { workspace, role } = useWorkspaceContext();
   const permissions = useRole(role);
+  const canEdit = permissions.canImport;
+  const canAdmin = permissions.canAdmin;
   const [sessions, setSessions] = useState<ImageClassificationSession[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("all");
-  const [searchTerm, setSearchTerm] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
+  const [projectStatusFilter, setProjectStatusFilter] = useState("all");
+  const [projectDateFilter, setProjectDateFilter] =
+    useState<ProjectDateFilter>("all");
+  const [projectSort, setProjectSort] =
+    useState<ProjectSortOption>("updated_desc");
+  const [projectPage, setProjectPage] = useState(1);
+  const [deleteTarget, setDeleteTarget] =
+    useState<ImageClassificationSession | null>(null);
+  const [deletingProject, setDeletingProject] = useState(false);
 
   useEffect(() => {
     if (!workspace) return;
@@ -87,267 +85,350 @@ export default function ImageClassifyPage() {
       .finally(() => setLoading(false));
   }, [workspace]);
 
-  const stats = useMemo(
+  const projectStats = useMemo(
     () => ({
       total: sessions.length,
-      inProgress: sessions.filter(
-        (s) => s.status === "processing" || s.status === "pending"
-      ).length,
-      completed: sessions.filter((s) => s.status === "completed").length,
-      totalImages: sessions.reduce((sum, s) => sum + (s.total_images || 0), 0),
+      ready: sessions.filter((s) => s.status === "completed").length,
+      processing: sessions.filter((s) => s.status === "processing").length,
+      images: sessions.reduce((sum, s) => sum + (s.total_images || 0), 0),
     }),
     [sessions]
   );
 
-  const filtered = useMemo(() => {
-    let result = [...sessions];
-    if (activeTab === "progress")
-      result = result.filter(
-        (s) => s.status === "processing" || s.status === "pending"
-      );
-    if (activeTab === "completed")
-      result = result.filter((s) => s.status === "completed");
-    if (activeTab === "failed")
-      result = result.filter((s) => s.status === "failed");
-    if (searchTerm) {
-      const s = searchTerm.toLowerCase();
-      result = result.filter((sess) => sess.name.toLowerCase().includes(s));
-    }
-    result.sort(
-      (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
-    return result;
-  }, [sessions, activeTab, searchTerm]);
+  const filteredProjects = useMemo(() => {
+    const query = projectSearch.trim().toLowerCase();
+    const filtered = sessions.filter((session) => {
+      const matchesSearch =
+        !query ||
+        session.name.toLowerCase().includes(query) ||
+        (session.notes || "").toLowerCase().includes(query);
+      if (!matchesSearch) return false;
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Delete this image classification session?")) return;
+      if (projectStatusFilter === "ready") {
+        if (session.status !== "completed") return false;
+      } else if (projectStatusFilter !== "all") {
+        if (session.status !== projectStatusFilter) return false;
+      }
+
+      return matchesProjectDateFilter(
+        session.updated_at || session.created_at,
+        projectDateFilter
+      );
+    });
+    return sortProjectsByOption(filtered, projectSort);
+  }, [
+    projectDateFilter,
+    projectSearch,
+    projectSort,
+    projectStatusFilter,
+    sessions,
+  ]);
+
+  const {
+    pageItems: pagedProjects,
+    totalPages: projectTotalPages,
+    safePage: safeProjectPage,
+  } = useMemo(
+    () => paginateProjects(filteredProjects, projectPage),
+    [filteredProjects, projectPage]
+  );
+
+  useEffect(() => {
+    setProjectPage(1);
+  }, [projectSearch, projectStatusFilter, projectDateFilter, projectSort]);
+
+  useEffect(() => {
+    if (projectPage !== safeProjectPage) setProjectPage(safeProjectPage);
+  }, [projectPage, safeProjectPage]);
+
+  const openProject = (id: string) => {
+    router.push(`/w/${slug}/image-classify/${id}`);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeletingProject(true);
     try {
-      await deleteImageClassificationSession(id);
-      setSessions((prev) => prev.filter((s) => s.id !== id));
+      await deleteImageClassificationSession(deleteTarget.id);
+      setSessions((prev) => prev.filter((s) => s.id !== deleteTarget.id));
+      setDeleteTarget(null);
     } catch (err) {
       alert((err as Error)?.message || "Failed to delete");
+    } finally {
+      setDeletingProject(false);
     }
   };
 
-  const tabs = [
-    { id: "all", label: "All", count: stats.total },
-    { id: "progress", label: "In Progress", count: stats.inProgress },
-    { id: "completed", label: "Completed", count: stats.completed },
-    {
-      id: "failed",
-      label: "Failed",
-      count: sessions.filter((s) => s.status === "failed").length,
-    },
-  ];
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <ImageIcon className="h-5 w-5" /> Image Classification
-          </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Group product images automatically with AI. {stats.total}{" "}
-            session{stats.total === 1 ? "" : "s"}.
-          </p>
-        </div>
-        {permissions.canImport && (
-          <Link href={`/w/${slug}/image-classify/new`}>
-            <Button size="sm" className="gap-1.5 text-xs">
-              <Plus className="h-3.5 w-3.5" /> New Classification
-            </Button>
-          </Link>
-        )}
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        {[
-          {
-            label: "Sessions",
-            value: stats.total,
-            icon: BarChart3,
-            color: "text-primary bg-primary/10",
-          },
-          {
-            label: "In Progress",
-            value: stats.inProgress,
-            icon: Loader2,
-            color:
-              "text-amber-600 bg-amber-50 dark:bg-amber-950/30",
-          },
-          {
-            label: "Completed",
-            value: stats.completed,
-            icon: CheckCircle2,
-            color:
-              "text-green-600 bg-green-50 dark:bg-green-950/30",
-          },
-          {
-            label: "Total Images",
-            value: stats.totalImages,
-            icon: ImageIcon,
-            color: "text-blue-600 bg-blue-50 dark:bg-blue-950/30",
-          },
-        ].map((s) => (
-          <Card key={s.label} className="p-3 flex items-center gap-3">
-            <div
-              className={`h-9 w-9 rounded-lg flex items-center justify-center ${s.color}`}
-            >
-              <s.icon className="h-4 w-4" />
+    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
+              <ImageIcon className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <div className="text-lg font-bold">{s.value}</div>
-              <div className="text-[10px] text-muted-foreground">{s.label}</div>
+              <h1 className="text-xl font-bold tracking-tight">AI Classify</h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Group product images automatically with AI.
+              </p>
             </div>
-          </Card>
-        ))}
-      </div>
-
-      {/* Tabs + search */}
-      <div className="flex items-center gap-3">
-        <div className="flex gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
-                activeTab === tab.id
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:bg-muted/80"
-              }`}
+          </div>
+          {canEdit && (
+            <Button
+              size="sm"
+              className="gap-1.5 self-start shadow-sm sm:self-auto"
+              asChild
             >
-              {tab.label}
-              <span
-                className={`text-[9px] px-1 py-0 rounded-full ${
-                  activeTab === tab.id
-                    ? "bg-primary-foreground/20"
-                    : "bg-background"
-                }`}
-              >
-                {tab.count}
-              </span>
-            </button>
-          ))}
-        </div>
-        <div className="flex-1" />
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50" />
-          <input
-            type="text"
-            placeholder="Search sessions..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-8 w-48 pl-8 pr-7 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2"
-            >
-              <X className="h-3 w-3 text-muted-foreground" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Sessions list */}
-      <div className="space-y-3">
-        {filtered.length === 0 && (
-          <Card className="p-10 flex flex-col items-center gap-2 text-center">
-            <ImageIcon className="h-8 w-8 text-muted-foreground/30" />
-            <p className="text-xs text-muted-foreground">
-              {sessions.length === 0
-                ? "No classifications yet. Upload images to get started."
-                : "No sessions match your filter."}
-            </p>
-          </Card>
-        )}
-
-        {filtered.map((session) => {
-          const sc = statusConfig[session.status] || statusConfig.pending;
-          return (
-            <Card
-              key={session.id}
-              className="hover:border-primary/40 hover:shadow-sm transition-all group relative"
-            >
-              <Link
-                href={`/w/${slug}/image-classify/${session.id}`}
-                className="block p-5"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-sm font-semibold">{session.name}</h3>
-                      <Badge
-                        variant="outline"
-                        className={`text-[9px] gap-1 ${sc.bgColor}`}
-                      >
-                        <span
-                          className={`h-1.5 w-1.5 rounded-full ${sc.dotColor}`}
-                        />
-                        {sc.label}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <ImageIcon className="h-2.5 w-2.5" />{" "}
-                        {session.total_images} images
-                      </span>
-                      {session.group_count > 0 && (
-                        <span className="flex items-center gap-1 text-blue-600">
-                          <Layers className="h-2.5 w-2.5" />{" "}
-                          {session.group_count} groups
-                        </span>
-                      )}
-                      {session.total_credits > 0 && (
-                        <span>
-                          {session.total_credits.toFixed(2)} credits
-                        </span>
-                      )}
-                    </div>
-                    {session.status === "failed" && session.error_message && (
-                      <div className="flex items-center gap-1 mt-2 text-[10px] text-red-600">
-                        <AlertCircle className="h-3 w-3" />
-                        {session.error_message}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-right ml-4 shrink-0">
-                    <div className="text-[10px] text-muted-foreground flex items-center gap-1 justify-end">
-                      <Clock className="h-2.5 w-2.5" />{" "}
-                      {timeAgo(session.created_at)}
-                    </div>
-                  </div>
-                </div>
+              <Link href={`/w/${slug}/image-classify/new`}>
+                <Plus className="h-3.5 w-3.5" /> New project
               </Link>
+            </Button>
+          )}
+        </header>
 
-              {permissions.canAdmin && (
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handleDelete(session.id);
-                  }}
-                  className="absolute top-3 right-3 h-7 px-2 rounded-md border border-destructive/20 bg-background/90 hover:bg-destructive/10 text-destructive flex items-center gap-1 text-[11px] transition-colors z-10"
-                >
-                  <Trash2 className="h-3 w-3" /> Delete
-                </button>
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            {
+              label: "Projects",
+              value: projectStats.total,
+              icon: FolderOpen,
+              style: "bg-primary/10 text-primary",
+            },
+            {
+              label: "Ready",
+              value: projectStats.ready,
+              icon: Check,
+              style: "bg-emerald-500/10 text-emerald-600",
+            },
+            {
+              label: "Processing",
+              value: projectStats.processing,
+              icon: Loader2,
+              style: "bg-amber-500/10 text-amber-600",
+            },
+            {
+              label: "Images",
+              value: projectStats.images.toLocaleString(),
+              icon: ImageIcon,
+              style: "bg-blue-500/10 text-blue-600",
+            },
+          ].map((stat) => (
+            <div
+              key={stat.label}
+              className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
+            >
+              <div
+                className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
+              >
+                <stat.icon
+                  className={`h-4 w-4 ${
+                    stat.label === "Processing" && stat.value ? "animate-spin" : ""
+                  }`}
+                />
+              </div>
+              <div>
+                <p className="text-lg font-bold leading-none">{stat.value}</p>
+                <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {stat.label}
+                </p>
+              </div>
+            </div>
+          ))}
+        </section>
+
+        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+          <ProjectListToolbar
+            title="Classify projects"
+            description="Open a project to review image groups and classification results."
+            search={projectSearch}
+            onSearchChange={setProjectSearch}
+            status={projectStatusFilter}
+            onStatusChange={setProjectStatusFilter}
+            statusOptions={[
+              { value: "all", label: "All statuses" },
+              { value: "ready", label: "Ready" },
+              { value: "processing", label: "Processing" },
+              { value: "pending", label: "Pending" },
+              { value: "failed", label: "Failed" },
+            ]}
+            dateFilter={projectDateFilter}
+            onDateFilterChange={setProjectDateFilter}
+            sort={projectSort}
+            onSortChange={setProjectSort}
+          />
+
+          {loading ? (
+            <div className="flex h-56 items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : sessions.length === 0 ? (
+            <div className="flex flex-col items-center px-6 py-16 text-center">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <ImageIcon className="h-5 w-5" />
+              </div>
+              <h3 className="text-sm font-semibold">
+                Create your first classify project
+              </h3>
+              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                Upload product images and let AI group them into consistent
+                product sets automatically.
+              </p>
+              {canEdit && (
+                <Button size="sm" className="mt-5 gap-1.5" asChild>
+                  <Link href={`/w/${slug}/image-classify/new`}>
+                    <Plus className="h-3.5 w-3.5" /> New project
+                  </Link>
+                </Button>
               )}
-            </Card>
-          );
-        })}
+            </div>
+          ) : filteredProjects.length === 0 ? (
+            <div className="px-6 py-14 text-center text-xs text-muted-foreground">
+              No projects match your search or filters.
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+                {pagedProjects.map((session) => {
+                  const statusLabel =
+                    STATUS_LABEL[session.status] ?? session.status;
+                  const isReady = session.status === "completed";
+                  const totalImages = session.total_images || 0;
+                  const groups = session.group_count || 0;
+                  const failed = session.status === "failed" ? 1 : 0;
+                  const progress =
+                    session.status === "completed" ||
+                    session.status === "failed"
+                      ? 100
+                      : session.status === "processing"
+                        ? totalImages > 0 && groups > 0
+                          ? Math.min(
+                              99,
+                              Math.round(
+                                (groups / Math.max(1, totalImages)) * 100
+                              )
+                            )
+                          : 40
+                        : 0;
+
+                  return (
+                    <article
+                      key={session.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openProject(session.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          openProject(session.id);
+                        }
+                      }}
+                      className="group relative cursor-pointer rounded-xl border bg-background p-4 outline-none transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-primary/40"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-muted/40 text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+                            <Layers className="h-4 w-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="truncate text-sm font-semibold group-hover:text-primary">
+                              {session.name}
+                            </h3>
+                          </div>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={`shrink-0 text-[9px] ${
+                            isReady
+                              ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-600"
+                              : session.status === "failed"
+                                ? "border-destructive/30 bg-destructive/5 text-destructive"
+                                : "border-amber-500/30 bg-amber-500/5 text-amber-600"
+                          }`}
+                        >
+                          {statusLabel}
+                        </Badge>
+                      </div>
+
+                      <div className="mt-5 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-lg bg-muted/35 px-2 py-2">
+                          <p className="text-xs font-semibold">{totalImages}</p>
+                          <p className="text-[9px] text-muted-foreground">
+                            Images
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-muted/35 px-2 py-2">
+                          <p className="text-xs font-semibold text-emerald-600">
+                            {groups}
+                          </p>
+                          <p className="text-[9px] text-muted-foreground">
+                            Groups
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-muted/35 px-2 py-2">
+                          <p className="text-xs font-semibold text-destructive">
+                            {failed}
+                          </p>
+                          <p className="text-[9px] text-muted-foreground">
+                            Failed
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4">
+                        <div className="mb-1.5 flex justify-between text-[9px] text-muted-foreground">
+                          <span>Project progress</span>
+                          <span>{progress}%</span>
+                        </div>
+                        <div className="h-1 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all"
+                            style={{ width: `${Math.min(100, progress)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex items-center justify-between border-t pt-3">
+                        <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                          <Clock3 className="h-3 w-3" />
+                          {timeAgo(session.updated_at || session.created_at)}
+                        </span>
+                        {canAdmin && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setDeleteTarget(session);
+                            }}
+                            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                          >
+                            <Trash2 className="h-3 w-3" /> Delete
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <ProjectListPagination
+                page={safeProjectPage}
+                totalPages={projectTotalPages}
+                totalItems={filteredProjects.length}
+                onPageChange={setProjectPage}
+              />
+            </>
+          )}
+        </section>
       </div>
+
+      <DeleteProjectDialog
+        open={!!deleteTarget}
+        projectName={deleteTarget?.name}
+        deleting={deletingProject}
+        onOpenChange={(open) => {
+          if (!open && !deletingProject) setDeleteTarget(null);
+        }}
+        onConfirm={() => void handleDelete()}
+      />
     </div>
   );
 }

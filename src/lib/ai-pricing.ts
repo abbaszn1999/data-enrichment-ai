@@ -126,10 +126,11 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
+  // Official paid-tier (Gemini API pricing). Preview Fast path; prefer gemini-3.6-flash.
   "gemini-3-flash-preview": {
-    inputPerMillion: 0.25,
-    outputPerMillion: 1.5,
-    cachedInputPerMillion: 0.025,
+    inputPerMillion: 0.5,
+    outputPerMillion: 3.0,
+    cachedInputPerMillion: 0.05,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
@@ -139,6 +140,14 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     cachedInputPerMillion: 0.15,
     searchPerQuery: 0.014,
     freeSearchQuota: 0,
+  },
+  // Official paid-tier (verified 2026-08 against ai.google.dev/gemini-api/docs/pricing).
+  "gemini-3.5-flash-lite": {
+    inputPerMillion: 0.3,
+    outputPerMillion: 2.5,
+    cachedInputPerMillion: 0.03,
+    searchPerQuery: 0.014,
+    freeSearchQuota: 5000,
   },
   // Official paid-tier pricing (verified 2026-07-29).
   "gemini-3.6-flash": {

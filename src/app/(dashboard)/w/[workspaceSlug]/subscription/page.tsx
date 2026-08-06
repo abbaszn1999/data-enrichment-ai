@@ -93,7 +93,8 @@ export default function SubscriptionPage() {
   const currentPlanName = currentPlan?.name;
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-8">
+    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+      <div className="mx-auto max-w-7xl space-y-8 p-5 sm:p-6 lg:p-8">
       {/* Header */}
       <div className="space-y-1">
         <div className="flex items-center gap-2">
@@ -282,6 +283,7 @@ export default function SubscriptionPage() {
       <p className="text-center text-[11px] text-muted-foreground">
         Payments processed securely by Stripe. Cancel anytime from the billing portal.
       </p>
+      </div>
     </div>
   );
 }

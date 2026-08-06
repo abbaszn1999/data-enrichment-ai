@@ -33,11 +33,21 @@ import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { ExportDialog } from "@/components/export-dialog";
 import { FunctionsPanel } from "@/components/functions-panel";
-import type { OutputLanguage, EnrichmentModel, ThinkingLevelOption, WritingTone, ContentLength, CategoryItem, EnrichmentPreset } from "@/types";
-import { LANGUAGE_OPTIONS, MODEL_OPTIONS, TONE_OPTIONS } from "@/types";
-import type { EnrichmentColumn } from "@/types";
+import {
+  LANGUAGE_OPTIONS,
+  MODEL_OPTIONS,
+  TONE_OPTIONS,
+  resolveEnrichmentModel,
+  type OutputLanguage,
+  type EnrichmentModel,
+  type ThinkingLevelOption,
+  type WritingTone,
+  type ContentLength,
+  type CategoryItem,
+  type EnrichmentPreset,
+  type EnrichmentColumn,
+} from "@/types";
 import type { GeminiSettings } from "@/lib/gemini";
-import { createClient as createBrowserClient } from "@/lib/supabase-browser";
 import { saveEnrichmentPreset } from "@/lib/supabase";
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -176,7 +186,7 @@ export function Sidebar() {
         : enrichmentSettings.outputLanguage;
 
       const geminiSettings: GeminiSettings = {
-        enrichmentModel: enrichmentSettings.enrichmentModel,
+        enrichmentModel: resolveEnrichmentModel(enrichmentSettings.enrichmentModel),
         thinkingLevel: enrichmentSettings.thinkingLevel,
         outputLanguage: resolvedLanguage,
       };
@@ -201,12 +211,10 @@ export function Sidebar() {
         }
       }
 
-      // Get access token + user ID for the Supabase Edge Function
-      const supabaseBrowser = createBrowserClient();
-      const { data: { session } } = await supabaseBrowser.auth.getSession();
-      const enrichHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (session?.access_token) enrichHeaders["Authorization"] = `Bearer ${session.access_token}`;
-      const userId = session?.user?.id;
+      // Cookie auth via same-origin /api/enrich (Render)
+      const enrichHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
 
       const isNewTab = enrichOutputTab === "new";
 
@@ -281,14 +289,13 @@ export function Sidebar() {
               }
             }
 
-            const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/enrich`, {
+            const response = await fetch("/api/enrich", {
               method: "POST",
               headers: enrichHeaders,
               signal: controller.signal,
               body: JSON.stringify({
                 row: { id: r.id, rowIndex: r.rowIndex, originalData: filteredData },
                 ...commonPayload,
-                userId,
               }),
             });
 

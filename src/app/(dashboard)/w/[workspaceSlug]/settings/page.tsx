@@ -20,7 +20,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -266,215 +265,327 @@ export default function SettingsPage() {
     : null;
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <Settings className="h-5 w-5 text-primary" />
-          <h1 className="text-xl font-bold">Settings</h1>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Manage workspace configuration for{" "}
-          <span className="font-semibold text-foreground">{workspace.name}</span>
-        </p>
-      </div>
-
-      {error && (
-        <div className="flex items-center gap-2 p-3 rounded-xl bg-destructive/10 text-destructive text-sm border border-destructive/20">
-          <AlertCircle className="h-4 w-4 shrink-0" /> {error}
-        </div>
-      )}
-
-      {integrationError && (
-        <div className="flex items-center gap-2 p-3 rounded-xl bg-destructive/10 text-destructive text-sm border border-destructive/20">
-          <AlertCircle className="h-4 w-4 shrink-0" /> {integrationError}
-        </div>
-      )}
-
-      {integrationSuccess && (
-        <div className="flex items-center gap-2 p-3 rounded-xl bg-green-500/10 text-green-600 text-sm border border-green-500/20">
-          <CheckCircle2 className="h-4 w-4 shrink-0" /> {integrationSuccess}
-        </div>
-      )}
-
-      {/* General Settings */}
-      <div className="rounded-2xl border-2 border-border/60 p-6 space-y-6">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Building2 className="h-4.5 w-4.5 text-primary" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold">General</h2>
-            <p className="text-[11px] text-muted-foreground">Basic workspace information</p>
-          </div>
-        </div>
-
-        <div className="space-y-4 pt-1">
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold">Workspace Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="h-10"
-              disabled={!permissions.canAdmin}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold">CMS / Platform Type</Label>
-            <select
-              value={cmsType}
-              onChange={(e) => setCmsType(e.target.value)}
-              className="w-full h-10 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
-              disabled={!permissions.canAdmin}
-            >
-              {CMS_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold">
-              Description{" "}
-              <span className="text-muted-foreground font-normal">(optional)</span>
-            </Label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              className="w-full px-3 py-2.5 text-sm rounded-lg border bg-background resize-none focus:outline-none focus:ring-1 focus:ring-primary/50"
-              disabled={!permissions.canAdmin}
-            />
-          </div>
-        </div>
-
-        {permissions.canAdmin && (
-          <div className="flex items-center gap-3 pt-2 border-t border-border/50">
-            <Button onClick={handleSave} disabled={saving} className="gap-2">
-              {saving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
-              Save Changes
-            </Button>
-            {saved && (
-              <span className="flex items-center gap-1.5 text-xs text-green-600 font-medium">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Saved successfully
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-2xl border-2 border-border/60 p-6 space-y-6">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center">
-            <PlugZap className="h-4.5 w-4.5 text-primary" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold">Integrations</h2>
-            <p className="text-[11px] text-muted-foreground">Connect one store platform to this workspace</p>
-          </div>
-        </div>
-
-        {integrationLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading integration...
-          </div>
-        ) : integration ? (
-          <Card className="p-4 border-border/60 bg-muted/20">
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Store className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-semibold">{integration.integration_name}</span>
-                  <Badge className="bg-green-500/10 text-green-600 hover:bg-green-500/10">Connected</Badge>
-                </div>
-                <div className="space-y-1 text-xs text-muted-foreground">
-                  <p className="flex items-center gap-1.5">
-                    <Globe className="h-3.5 w-3.5" />
-                    <span className="font-medium text-foreground">{connectedStoreDomain}</span>
-                  </p>
-                  <p>Provider: {integration.provider}</p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                onClick={handleDisconnectIntegration}
-                disabled={disconnectingIntegration}
-                className="gap-2"
-              >
-                {disconnectingIntegration ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Link2Off className="h-4 w-4" />
-                )}
-                Disconnect
-              </Button>
-            </div>
-          </Card>
-        ) : (
-          <div className="rounded-xl border border-dashed border-border/70 p-5 bg-muted/20 flex items-center justify-between gap-4">
-            <div className="space-y-1">
-              <p className="text-sm font-semibold">No integration connected</p>
-              <p className="text-xs text-muted-foreground">Connect Shopify or WooCommerce to enable product sync.</p>
-            </div>
-            <Button onClick={handleOpenIntegrationDialog} className="gap-2">
-              <PlugZap className="h-4 w-4" />
-              Connect
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {permissions.isOwner && (
-        <div className="rounded-2xl border-2 border-destructive/30 p-6 space-y-5">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-destructive/10 flex items-center justify-center">
-              <ShieldAlert className="h-4.5 w-4.5 text-destructive" />
+    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
+              <Settings className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-destructive">Danger Zone</h2>
-              <p className="text-[11px] text-muted-foreground">Irreversible and destructive actions</p>
+              <h1 className="text-xl font-bold tracking-tight">Settings</h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Manage workspace configuration for{" "}
+                <span className="font-medium text-foreground">
+                  {workspace.name}
+                </span>
+                .
+              </p>
             </div>
           </div>
+          {permissions.canAdmin && (
+            <Button
+              size="sm"
+              className="gap-1.5 self-start shadow-sm sm:self-auto"
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              Save changes
+            </Button>
+          )}
+        </header>
 
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Deleting a workspace permanently removes all products, categories,
-            imports, and files. <strong className="text-foreground">This action cannot be undone.</strong>
-          </p>
-
+        {(error || integrationError || integrationSuccess || saved) && (
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">
-              Type <strong className="text-foreground">{workspace.name}</strong> to confirm deletion
-            </Label>
-            <Input
-              value={deleteConfirm}
-              onChange={(e) => setDeleteConfirm(e.target.value)}
-              placeholder={workspace.name}
-              className="h-10 border-destructive/30 focus:ring-destructive/30"
-            />
-          </div>
-
-          <Button
-            variant="destructive"
-            disabled={deleteConfirm !== workspace.name || deleting}
-            onClick={handleDelete}
-            className="gap-2"
-          >
-            {deleting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Trash2 className="h-4 w-4" />
+            {error && (
+              <div className="flex items-center gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+              </div>
             )}
-            Delete Workspace
-          </Button>
-        </div>
-      )}
+            {integrationError && (
+              <div className="flex items-center gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" /> {integrationError}
+              </div>
+            )}
+            {integrationSuccess && (
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-600">
+                <CheckCircle2 className="h-4 w-4 shrink-0" /> {integrationSuccess}
+              </div>
+            )}
+            {saved && (
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-600">
+                <CheckCircle2 className="h-4 w-4 shrink-0" /> Saved successfully
+              </div>
+            )}
+          </div>
+        )}
+
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            {
+              label: "Workspace",
+              value: workspace.name,
+              icon: Building2,
+              style: "bg-primary/10 text-primary",
+            },
+            {
+              label: "CMS",
+              value:
+                CMS_TYPES.find((t) => t.value === cmsType)?.label || cmsType,
+              icon: Globe,
+              style: "bg-blue-500/10 text-blue-600",
+            },
+            {
+              label: "Integration",
+              value: integration ? "Connected" : "None",
+              icon: PlugZap,
+              style: integration
+                ? "bg-emerald-500/10 text-emerald-600"
+                : "bg-amber-500/10 text-amber-600",
+            },
+            {
+              label: "Access",
+              value: permissions.isOwner
+                ? "Owner"
+                : permissions.canAdmin
+                  ? "Admin"
+                  : "Member",
+              icon: ShieldAlert,
+              style: "bg-violet-500/10 text-violet-600",
+            },
+          ].map((stat) => (
+            <div
+              key={stat.label}
+              className="flex min-w-0 items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
+            >
+              <div
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${stat.style}`}
+              >
+                <stat.icon className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold leading-none">
+                  {stat.value}
+                </p>
+                <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {stat.label}
+                </p>
+              </div>
+            </div>
+          ))}
+        </section>
+
+        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+          <div className="border-b bg-muted/20 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Building2 className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold">General</h2>
+                <p className="text-[11px] text-muted-foreground">
+                  Basic workspace information
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="space-y-4 p-5">
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Workspace Name</Label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="h-10"
+                disabled={!permissions.canAdmin}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">CMS / Platform Type</Label>
+              <select
+                value={cmsType}
+                onChange={(e) => setCmsType(e.target.value)}
+                className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
+                disabled={!permissions.canAdmin}
+              >
+                {CMS_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">
+                Description{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </Label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={3}
+                className="w-full resize-none rounded-md border bg-background px-3 py-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                disabled={!permissions.canAdmin}
+              />
+            </div>
+
+            {permissions.canAdmin && (
+              <div className="flex items-center gap-3 border-t pt-4">
+                <Button onClick={handleSave} disabled={saving} className="gap-2">
+                  {saving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  Save Changes
+                </Button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+          <div className="border-b bg-muted/20 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <PlugZap className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold">Integrations</h2>
+                <p className="text-[11px] text-muted-foreground">
+                  Connect one store platform to this workspace
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="p-5">
+            {integrationLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading
+                integration...
+              </div>
+            ) : integration ? (
+              <div className="rounded-xl border bg-background p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Store className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-semibold">
+                        {integration.integration_name}
+                      </span>
+                      <Badge className="bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/10">
+                        Connected
+                      </Badge>
+                    </div>
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      <p className="flex items-center gap-1.5">
+                        <Globe className="h-3.5 w-3.5" />
+                        <span className="font-medium text-foreground">
+                          {connectedStoreDomain}
+                        </span>
+                      </p>
+                      <p>Provider: {integration.provider}</p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={handleDisconnectIntegration}
+                    disabled={disconnectingIntegration}
+                    className="gap-2 self-start"
+                  >
+                    {disconnectingIntegration ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Link2Off className="h-4 w-4" />
+                    )}
+                    Disconnect
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-start justify-between gap-4 rounded-xl border border-dashed bg-muted/10 p-5 sm:flex-row sm:items-center">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold">
+                    No integration connected
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Connect Shopify or WooCommerce to enable product sync.
+                  </p>
+                </div>
+                <Button onClick={handleOpenIntegrationDialog} className="gap-2">
+                  <PlugZap className="h-4 w-4" />
+                  Connect
+                </Button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {permissions.isOwner && (
+          <section className="overflow-hidden rounded-xl border border-destructive/30 bg-card shadow-sm">
+            <div className="border-b border-destructive/20 bg-destructive/5 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+                  <ShieldAlert className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-destructive">
+                    Danger zone
+                  </h2>
+                  <p className="text-[11px] text-muted-foreground">
+                    Irreversible and destructive actions
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Deleting a workspace permanently removes all products,
+                categories, imports, and files.{" "}
+                <strong className="text-foreground">
+                  This action cannot be undone.
+                </strong>
+              </p>
+
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">
+                  Type{" "}
+                  <strong className="text-foreground">{workspace.name}</strong>{" "}
+                  to confirm deletion
+                </Label>
+                <Input
+                  value={deleteConfirm}
+                  onChange={(e) => setDeleteConfirm(e.target.value)}
+                  placeholder={workspace.name}
+                  className="h-10 border-destructive/30 focus:ring-destructive/30"
+                />
+              </div>
+
+              <Button
+                variant="destructive"
+                disabled={deleteConfirm !== workspace.name || deleting}
+                onClick={handleDelete}
+                className="gap-2"
+              >
+                {deleting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                Delete Workspace
+              </Button>
+            </div>
+          </section>
+        )}
+      </div>
 
       <Dialog
         open={integrationDialogOpen}
@@ -485,7 +596,11 @@ export default function SettingsPage() {
       >
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>{integrationStep === "select" ? "Create Integration" : "Configure Integration"}</DialogTitle>
+            <DialogTitle>
+              {integrationStep === "select"
+                ? "Create Integration"
+                : "Configure Integration"}
+            </DialogTitle>
             <DialogDescription>
               {integrationStep === "select"
                 ? "Choose your platform and continue to configuration. Only one connection is allowed at a time."
@@ -495,10 +610,11 @@ export default function SettingsPage() {
 
           {integrationStep === "select" ? (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {INTEGRATION_PROVIDERS.map((provider) => (
                   <button
                     key={provider.value}
+                    type="button"
                     onClick={() => {
                       if (!provider.available) return;
                       setSelectedProvider(provider.value);
@@ -509,17 +625,23 @@ export default function SettingsPage() {
                     className={`rounded-xl border p-4 text-left transition-colors ${
                       provider.available
                         ? "border-border hover:border-primary/40"
-                        : "opacity-50 cursor-not-allowed bg-muted/20"
+                        : "cursor-not-allowed bg-muted/20 opacity-50"
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-2 mb-1">
+                    <div className="mb-1 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <Store className="h-4 w-4 text-primary" />
-                        <span className="font-semibold text-sm">{provider.label}</span>
+                        <span className="text-sm font-semibold">
+                          {provider.label}
+                        </span>
                       </div>
-                      {!provider.available && <Badge variant="secondary">Coming Soon</Badge>}
+                      {!provider.available && (
+                        <Badge variant="secondary">Coming Soon</Badge>
+                      )}
                     </div>
-                    <p className="text-xs text-muted-foreground">{provider.description}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {provider.description}
+                    </p>
                   </button>
                 ))}
               </div>
@@ -545,9 +667,11 @@ export default function SettingsPage() {
               </div>
 
               {selectedProviderConfig && (
-                <div className="rounded-xl border border-border/60 p-4 space-y-4 bg-muted/10">
+                <div className="space-y-4 rounded-xl border bg-muted/10 p-4">
                   <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Integration Name</Label>
+                    <Label className="text-xs font-semibold">
+                      Integration Name
+                    </Label>
                     <Input
                       name="integration-name"
                       autoComplete="off"
@@ -559,34 +683,49 @@ export default function SettingsPage() {
                       placeholder={`e.g. My ${selectedProviderConfig.label} Store`}
                       className="h-10"
                     />
-                    <p className="text-xs text-muted-foreground">A friendly name to identify this integration.</p>
+                    <p className="text-xs text-muted-foreground">
+                      A friendly name to identify this integration.
+                    </p>
                   </div>
 
                   {selectedProviderConfig.configFields.map((field) => (
                     <div key={field.key} className="space-y-2">
-                      <Label className="text-xs font-semibold">{field.label}</Label>
+                      <Label className="text-xs font-semibold">
+                        {field.label}
+                      </Label>
                       <Input
                         type={field.type === "password" ? "password" : "text"}
                         name={`${selectedProvider}-${field.key}`}
-                        autoComplete={field.type === "password" ? "new-password" : "off"}
+                        autoComplete={
+                          field.type === "password" ? "new-password" : "off"
+                        }
                         autoCapitalize="none"
                         autoCorrect="off"
                         value={configValues[field.key] ?? ""}
                         onChange={(e) => {
-                          setConfigValues((prev) => ({ ...prev, [field.key]: e.target.value }));
+                          setConfigValues((prev) => ({
+                            ...prev,
+                            [field.key]: e.target.value,
+                          }));
                           setTestedConnection(null);
                         }}
                         placeholder={field.placeholder}
                         className="h-10"
                       />
-                      {field.helpText && <p className="text-xs text-muted-foreground">{field.helpText}</p>}
+                      {field.helpText && (
+                        <p className="text-xs text-muted-foreground">
+                          {field.helpText}
+                        </p>
+                      )}
                     </div>
                   ))}
 
-                  <div className="rounded-xl border border-border/60 bg-background p-4 flex items-center justify-between gap-4">
+                  <div className="flex flex-col gap-4 rounded-xl border bg-background p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="text-sm font-semibold">Test Connection</p>
-                      <p className="text-xs text-muted-foreground">Validate credentials before creating the integration.</p>
+                      <p className="text-xs text-muted-foreground">
+                        Validate credentials before creating the integration.
+                      </p>
                     </div>
                     <Button
                       variant="outline"
@@ -594,22 +733,28 @@ export default function SettingsPage() {
                       disabled={
                         testingConnection ||
                         !integrationName.trim() ||
-                        selectedProviderConfig.configFields.some((f) => f.required && !configValues[f.key]?.trim())
+                        selectedProviderConfig.configFields.some(
+                          (f) => f.required && !configValues[f.key]?.trim()
+                        )
                       }
                       className="gap-2"
                     >
-                      {testingConnection && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {testingConnection && (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      )}
                       Test Connection
                     </Button>
                   </div>
 
                   {testedConnection && (
-                    <div className="rounded-lg border border-green-500/20 bg-green-500/10 p-3 text-xs text-green-700 dark:text-green-400">
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-400">
                       <div className="flex items-center gap-2 font-medium">
                         <CheckCircle2 className="h-4 w-4" />
                         <span>Connection successful</span>
                       </div>
-                      <p className="mt-1">Store: {testedConnection.accountLabel}</p>
+                      <p className="mt-1">
+                        Store: {testedConnection.accountLabel}
+                      </p>
                     </div>
                   )}
                 </div>
@@ -631,8 +776,16 @@ export default function SettingsPage() {
                 >
                   Back
                 </Button>
-                <Button onClick={handleSaveIntegration} disabled={!testedConnection || savingIntegration} className="gap-2">
-                  {savingIntegration ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                <Button
+                  onClick={handleSaveIntegration}
+                  disabled={!testedConnection || savingIntegration}
+                  className="gap-2"
+                >
+                  {savingIntegration ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
                   Create Integration
                 </Button>
               </>

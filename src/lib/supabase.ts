@@ -517,7 +517,7 @@ export async function createImageClassificationSession(
       name: payload.name,
       notes: payload.notes ?? "",
       total_images: payload.total_images,
-      model: payload.model ?? "gemini-3.5-flash",
+      model: payload.model ?? "gemini-3.6-flash",
       status: "pending",
     })
     .select()
