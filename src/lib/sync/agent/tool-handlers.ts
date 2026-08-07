@@ -230,9 +230,10 @@ function profilesAroundFocus(focus: ColumnProfileKey): ColumnProfileKey[] {
 /**
  * Serverless-safe replacement for Shopify `bulk_query`.
  *
- * Instead of submitting a Bulk Operation and polling it (20-30s+, which busts
- * the Netlify/Lambda execution cap), we fetch successive `products` pages of
- * 250 within a strict wall-clock budget. We stop as soon as ANY of these hit:
+ * Instead of submitting a Bulk Operation and polling it (20-30s+, which can
+ * exceed short-lived serverless execution caps), we fetch successive
+ * `products` pages of 250 within a strict wall-clock budget. We stop as soon
+ * as ANY of these hit:
  *   - no more pages (`hasNextPage` is false)
  *   - the time budget is exhausted (default ~18s, comfortably under the cap)
  *   - a hard page ceiling (safety against pathological loops)
@@ -405,18 +406,17 @@ async function handleProductsLoad(
     };
   }
 
-  // Are we running inside a short-lived serverless function (Netlify/AWS
-  // Lambda)? Shopify Bulk Operations submit a job, then we poll every 5s while
-  // Shopify queues + runs it — on a real catalog this easily takes 20-30s.
-  // Locally (a long-lived dev server) that's fine, but a serverless function
+  // Are we running inside a short-lived serverless function (e.g. AWS Lambda)?
+  // Shopify Bulk Operations submit a job, then we poll every 5s while Shopify
+  // queues + runs it — on a real catalog this easily takes 20-30s. Locally /
+  // on a long-lived Node host (Render) that's fine, but a serverless function
   // gets killed at its execution-time cap, which (a) breaks the NDJSON stream
   // the client is reading and (b) leaves a bulk op RUNNING on Shopify, so the
   // very next submit fails fast with "a bulk query is already in progress".
   // On serverless we therefore NEVER use bulk_query: we fall back to a
   // time-budgeted multi-page fetch (see below) that stays well within the
   // function timeout and lets the user click "Continue" to load more.
-  const isServerless =
-    process.env.NETLIFY === "true" || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+  const isServerless = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 
   // Mode inference — the planner is instructed to OMIT `mode` whenever the
   // user wants the full match set ("all/كل/جميع", any unknown-size load, or any

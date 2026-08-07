@@ -1,78 +1,177 @@
-# AI Product Data Enrichment Tool
+# Data Enrichment AI
 
-A smart spreadsheet web application (SaaS MVP) that automatically enriches e-commerce product data using Google's Gemini AI. 
+A multi-workspace SaaS platform for e-commerce catalog teams. Upload worksheets, enrich product data with AI, generate and source imagery, classify photos, and sync changes back to connected storefronts — with credits, billing, and team roles built in.
 
-Like Clay.com, but specialized for e-commerce catalog teams.
+---
 
+## What you can do
 
-## 🚀 Features
+### Dashboard
+- Workspace overview: product and category counts, recent activity, and remaining credits at a glance.
 
-- **Excel/CSV Upload**: Drag and drop your raw product data.
-- **Smart Spreadsheet UI**: View and manage your data in a beautiful, TanStack-powered data table.
-- **Waterfall AI Enrichment**: 
-  1. **Search Agent (Gemini 3 Flash)**: Automatically searches the web for the product using `google_search` grounding.
-  2. **Writer Agent (Gemini 3.1 Pro)**: Processes the search results and generates structured marketing content.
-- **Real-time Processing**: Rows update live as they are processed via Server-Sent Events (SSE).
-- **Enrichment Columns**:
-  - Enhanced SEO Title
-  - Marketing Description
-  - Key Features (Bullets)
-  - Category Classification
-  - SEO Keywords
-  - Marketplace Bullets (Amazon/Noon style)
-  - Source URLs (Citations from search)
-- **Excel Export**: Download the enriched data back to your local machine.
+### Products & Categories
+- Maintain a master product catalog (upload Excel/CSV, search, bulk delete).
+- Manage a category tree (create, edit, reorder, import/export) used by enrichment and matching.
 
-## 🛠️ Tech Stack
+### Import
+End-to-end supplier import flow:
 
-- **Framework**: Next.js 15 (App Router, Server Actions)
-- **Language**: TypeScript
-- **UI & Styling**: React 19, Tailwind CSS v4, shadcn/ui, Lucide Icons
-- **State Management**: Zustand
-- **Table Component**: TanStack Table v8
-- **Excel Parsing**: SheetJS (xlsx)
-- **AI Models**: `@google/genai` SDK (`gemini-3-flash-preview` and `gemini-3.1-pro-preview`)
+1. **New project** — upload Excel/CSV, set supplier and notes, optionally reuse saved enrichment presets.
+2. **Matching rules** — map supplier columns to your catalog and decide new vs existing products.
+3. **Review** — inspect match results before enrichment.
+4. **Enrichment** — run AI column enrichment with concurrent workers, live row status, custom columns, and Excel export.
 
-## 🚦 Getting Started
+Typical enrichment outputs include SEO titles, marketing descriptions, feature bullets, category suggestions, keywords, marketplace-style copy, images, and source citations (configurable per project).
+
+### Media
+
+**AI Classify**  
+Upload product photos in bulk. AI groups and labels them (e.g. by SKU / product identity). Review results and export.
+
+**Products Gallery**  
+Project-based image pipeline from a product worksheet:
+
+- **Scraping** — find real product images from the web with depth, source preference, resolution, and aspect filters.
+- **AI generation** — create Main and Gallery shots with optional scene/model reference, branding (logo, colors, brand guide), and style controls.
+- Worksheet preview, per-row retry, image lightbox, and export.
+
+**Products Visualizer**  
+Turn product rows into marketing-ready HTML descriptions with image placeholders, then generate those images. Supports branding assets, layout presets, review before image generation, and downloadable results.
+
+### Sync
+Chat-driven agent for connected storefronts (Shopify today; WooCommerce supported in the provider layer):
+
+- Load and filter catalog products.
+- AI column fills, image search, sheet edits, web research, and attachment analysis.
+- Apply approved changes back to the store.
+- Requires a workspace integration in Settings.
+
+### Usage, Team, Settings & Subscription
+- **Usage** — credit consumption history and breakdown.
+- **Team** — invite members; roles (owner / admin / editor / viewer) gate sensitive actions.
+- **Settings** — workspace profile, CMS type, and store integration credentials.
+- **Subscription** — plans, credit packs, Stripe checkout/portal, and cancellation notices (owner/admin).
+
+Credits power AI and media operations. The header balance updates after successful spend without a full page reload.
+
+---
+
+## Architecture (high level)
+
+| Layer | Role |
+|--------|------|
+| **Next.js App Router** | UI + API routes (hosted on Render) |
+| **Supabase** | Auth, Postgres, Storage (`workspace-files`), RLS |
+| **Stripe** | Subscriptions, credit packs, webhooks |
+| **AI + search APIs** | Enrichment, classify, gallery, visualizer, sync agents |
+
+Heavy jobs (enrichment workers, gallery/visualizer runs, classify) run through app API routes with progress polling or background completion — not legacy edge-only hosting.
+
+---
+
+## Tech stack
+
+- **Framework**: Next.js 16 (App Router), React 19, TypeScript
+- **UI**: Tailwind CSS v4, shadcn/ui, Lucide Icons, next-themes
+- **State**: Zustand, TanStack Query / Table / Virtual
+- **Data**: Supabase (SSR + service role on server)
+- **Files**: ExcelJS / SheetJS, JSZip, sharp
+- **Billing**: Stripe
+- **Tests**: Vitest
+- **Hosting**: Render (Node)
+
+---
+
+## Getting started
 
 ### Prerequisites
 
-- Node.js 18+
-- A Google Gemini API Key
+- Node.js 22+ recommended (22 used in production)
+- Accounts/keys for Supabase, Stripe, and the AI / web-search providers you enable
 
-### Installation
+### Install
 
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Set up your environment variables:
-   - Create a `.env` file in the root directory
-   - Add your Gemini API key:
-     ```env
-     GEMINI_API_KEY=your_api_key_here
-     ```
+```bash
+npm install
+```
 
-### Running the App
+### Environment
 
-Start the development server:
+Copy your secrets into a root `.env` (never commit real keys). Typical variables include:
+
+- `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY`
+- `NEXT_PUBLIC_APP_URL` (e.g. `http://localhost:4000`)
+- AI provider API keys used by enrichment and media
+- Web search API key(s) used by scraping / research tools
+- `STRIPE_SECRET_KEY` / `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` / `STRIPE_WEBHOOK_SECRET`
+- Stripe price IDs for plans and credit packs
+
+Configure the same variables on Render for production, and point Stripe webhooks at `/api/webhooks/stripe`.
+
+### Auth email via Resend (SMTP)
+
+Team invites and magic links are sent by **Supabase Auth**. To deliver them from your domain through Resend, enable **custom SMTP** in the Supabase project (no app code change):
+
+1. Verify `autommerce.com` in the [Resend domains](https://resend.com/domains) dashboard (DNS records must be green).
+2. Open Supabase → **Authentication** → **Notifications / Email** → **SMTP Settings**  
+   (or: [Auth SMTP for this project](https://supabase.com/dashboard/project/iqliulcthkzufmlekbrj/auth/smtp)).
+3. Enable Custom SMTP and set:
+
+| Field | Value |
+|--------|--------|
+| Sender email | `noreply@autommerce.com` |
+| Sender name | e.g. `Autommerce` / `Data Enrichment` |
+| Host | `smtp.resend.com` |
+| Port | `465` |
+| Username | `resend` |
+| Password | your Resend API key (`re_…`) |
+
+4. Save, then send a test team invite. Check Resend → **Emails** for delivery.
+
+Optional: connect Supabase from [Resend Integrations](https://resend.com/settings/integrations) to prefill the same settings.
+
+`RESEND_API_KEY` / `RESEND_FROM_EMAIL` in the app `.env` are optional for this SMTP path (Supabase stores the SMTP password itself). Keep them if you later send mail from the Next.js API.
+
+Also confirm Auth **Site URL** and **Redirect URLs** include your app origin (`http://localhost:4000` and the production URL).
+
+### Run locally
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+App default: [http://localhost:4000](http://localhost:4000)
 
-## 💡 How to Use
+```bash
+npm run build && npm start   # production-like
+npm run lint
+npm run typecheck
+npm test
+```
 
-1. Prepare an Excel file (`.xlsx`) or CSV with your raw product data. It should ideally have columns like `SKU`, `Brand`, `Model`, `Price`, and a basic `Description`.
-2. Upload the file on the main page.
-3. Select which enrichment columns you want the AI to generate.
-4. Click **"Enrich X Rows"**.
-5. Watch as the AI searches the web and writes copy for each row in real-time.
-6. Click **"Export Excel"** to download your enriched catalog.
+---
 
-## 📝 License
+## Typical workflows
+
+1. **Create / join a workspace** → subscribe (owner) → invite teammates.
+2. **Upload categories** (optional) → **Import** a supplier sheet → match → enrich → export or push into master products.
+3. **Media** — classify raw photos, build a Gallery project, or generate Visualizer descriptions/images.
+4. **Connect the store** in Settings → use **Sync** to load products, edit with the agent, and apply changes.
+
+---
+
+## Project layout (useful paths)
+
+```
+src/app/(dashboard)/w/[workspaceSlug]/   # Workspace UI (import, media, sync, …)
+src/app/api/                             # Server routes (enrich, gallery, visualizer, sync, stripe, …)
+src/lib/gallery|visualizer|sync|…        # Domain logic & agents
+src/components/                          # Shared UI
+supabase/migrations/                     # Database migrations
+```
+
+---
+
+## License
 
 MIT

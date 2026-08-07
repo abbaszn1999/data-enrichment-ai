@@ -5,8 +5,8 @@
 // The dashboard layout used to trigger a 4-level client fetch waterfall:
 //   useAuth → /api/workspace-init → (credits + subscription + integration)
 //            → page data
-// Every one of those was a separate Netlify function invocation (cold-start
-// prone on the free plan), and nothing rendered until the last level resolved.
+// Each hop was a separate request, and nothing rendered until the last level
+// resolved.
 //
 // `/api/workspace-bootstrap` now returns ALL of that in a single request
 // (the server already had it via `getWorkspaceContext`'s single RPC). After
