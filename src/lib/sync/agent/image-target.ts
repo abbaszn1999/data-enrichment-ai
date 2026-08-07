@@ -51,32 +51,94 @@ export function isCatalogWideImageIntent(instruction: string): boolean {
 }
 
 /**
- * Find sheet rows whose title/handle appear in the instruction (or vice versa).
- * Prefers longer title matches to avoid tiny false positives.
+ * Find every sheet row whose title/handle is *mentioned* in the instruction.
+ *
+ * Unlike {@link matchCatalogRows} (single-query disambiguation with a relative
+ * score band), this is mention detection: keep ALL independent hits. A relative
+ * `top * 0.85` filter drops shorter titles when the user lists many products
+ * (e.g. only "BassLine Studio Over-Ear" survives a 7-name list).
+ *
+ * Typos are out of scope for MVP — normalize + substring + full token overlap.
  */
 export function matchRowIndexesByProductName(
   rows: SyncSheetRow[],
   instruction: string
 ): number[] {
   const hay = normalizeForMatch(instruction);
-  if (!hay || hay.length < 3) return [];
+  if (!hay || hay.length < 2) return [];
 
-  const scored: Array<{ index: number; score: number }> = [];
+  const hits: Array<{ rowIndex: number; score: number }> = [];
 
   for (let i = 0; i < rows.length; i++) {
-    const title = String(rows[i]?.title ?? "").trim();
-    const handle = String(rows[i]?.handle ?? "").trim().replace(/-/g, " ");
-    const candidates = [title, handle].filter((c) => c.length >= 3);
+    const row = rows[i];
+    const title = String(row?.title ?? "").trim();
+    const handle = String(row?.handle ?? "").trim();
+    const handleNorm = handle.replace(/-/g, " ");
+    const candidates = [title, handleNorm].filter((c) => c.length >= 2);
 
     let best = 0;
     for (const raw of candidates) {
       const needle = normalizeForMatch(raw);
-      if (needle.length < 3) continue;
+      // Mentions require the product identity to appear in the instruction —
+      // not the reverse (short chat phrases matching long titles).
+      if (needle.length < 2 || !hay.includes(needle)) {
+        const hayTokens = new Set(hay.split(" ").filter((t) => t.length > 2));
+        const needleTokens = needle.split(" ").filter((t) => t.length > 2);
+        if (needleTokens.length === 0) continue;
+        const hit = needleTokens.filter((t) => hayTokens.has(t)).length;
+        if (hit === needleTokens.length && hit >= 2) {
+          best = Math.max(best, needle.length);
+        }
+        continue;
+      }
+      best = Math.max(best, needle.length);
+    }
+    if (best > 0) hits.push({ rowIndex: i, score: best });
+  }
+
+  hits.sort((a, b) => b.score - a.score || a.rowIndex - b.rowIndex);
+  return hits.map((h) => h.rowIndex).slice(0, 50);
+}
+
+export type CatalogMatch = {
+  rowIndex: number;
+  title: string;
+  handle: string;
+  id: string;
+  score: number;
+};
+
+/**
+ * Deterministic catalog lookup over the full sheet.
+ * Typos are out of scope for MVP — normalize / substring / token overlap only.
+ */
+export function matchCatalogRows(
+  query: string,
+  rows: SyncSheetRow[],
+  limit = 10
+): CatalogMatch[] {
+  const hay = normalizeForMatch(query);
+  if (!hay || hay.length < 2) return [];
+
+  const scored: CatalogMatch[] = [];
+  const lim = Math.max(1, Math.min(50, limit));
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const title = String(row?.title ?? "").trim();
+    const handle = String(row?.handle ?? "").trim();
+    const id = String(row?.id ?? row?.product_id ?? "").trim();
+    const handleNorm = handle.replace(/-/g, " ");
+    const candidates = [title, handleNorm, id].filter((c) => c.length >= 2);
+
+    let best = 0;
+    for (const raw of candidates) {
+      const needle = normalizeForMatch(raw);
+      if (needle.length < 2) continue;
       if (hay.includes(needle) || needle.includes(hay)) {
         best = Math.max(best, needle.length);
         continue;
       }
-      // Token overlap for near matches (e.g. extra punctuation)
       const hayTokens = new Set(hay.split(" ").filter((t) => t.length > 2));
       const needleTokens = needle.split(" ").filter((t) => t.length > 2);
       if (needleTokens.length === 0) continue;
@@ -85,15 +147,22 @@ export function matchRowIndexesByProductName(
         best = Math.max(best, needle.length);
       }
     }
-    if (best > 0) scored.push({ index: i, score: best });
+    if (best > 0) {
+      scored.push({
+        rowIndex: i,
+        title,
+        handle,
+        id,
+        score: best,
+      });
+    }
   }
 
   if (scored.length === 0) return [];
 
-  // Keep only the strongest score group (exact named product wins over weak overlaps)
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score || a.rowIndex - b.rowIndex);
   const top = scored[0].score;
-  return scored.filter((s) => s.score >= top * 0.85).map((s) => s.index);
+  return scored.filter((s) => s.score >= top * 0.85).slice(0, lim);
 }
 
 export type ImageTargetResolution =
@@ -116,13 +185,14 @@ function isFullSheet(indexes: number[], rowsLen: number): boolean {
 /**
  * Resolve image-search targets safely.
  *
- * Priority:
- * 1. Product name(s) found in the instruction (named product request)
- * 2. Explicit rowIndexes — full-sheet only if catalog-wide intent
- * 3. Remembered targets only when they are a proper subset (anaphora),
+ * Priority (professional: trust explicit tool args from catalog lookup first):
+ * 1. Explicit rowIndexes that are a proper subset (post-lookup targeting)
+ * 2. Product name mention(s) in the instruction (multi-name lists included)
+ * 3. Explicit full-sheet only if catalog-wide intent
+ * 4. Remembered targets only when they are a proper subset (anaphora),
  *    or full-sheet when the user explicitly asked for all products
- * 4. Newly created rows
- * 5. Otherwise refuse — never silently search the whole catalog
+ * 5. Newly created rows
+ * 6. Otherwise refuse — never silently search the whole catalog
  */
 export function resolveImageSearchTargets(params: {
   rows: SyncSheetRow[];
@@ -142,9 +212,19 @@ export function resolveImageSearchTargets(params: {
   const created = validIndexes(params.lastCreatedRowIndexes, rowsLen);
   const wantsAll = isCatalogWideImageIntent(params.instruction);
 
-  // Named product(s) always win over "remembered whole sheet" — this is the
-  // SonicBuds-class bug: load all → omit rowIndexes → blast the catalog.
-  if (matched.length > 0 && matched.length <= 10) {
+  // Explicit subset from sync_catalog_lookup wins over partial name extraction.
+  // (Name matching used to override good rowIndexes and keep only the longest title.)
+  if (explicit.length > 0 && !isFullSheet(explicit, rowsLen)) {
+    return {
+      ok: true,
+      indexes: explicit,
+      reason: "explicit_row_indexes",
+    };
+  }
+
+  // Named product(s) win over "remembered whole sheet" — SonicBuds-class bug:
+  // load all → omit rowIndexes → blast the catalog.
+  if (matched.length > 0 && matched.length <= 50) {
     console.log("[Sync Images] target by product name in instruction", {
       matched,
       titles: matched.map((i) => String(params.rows[i]?.title ?? "")),

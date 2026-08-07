@@ -3,6 +3,7 @@ import type { SyncSheetRow } from "@/lib/sync/core/types";
 import {
   buildProductImageQuery,
   isLikelyUserChatInstruction,
+  matchCatalogRows,
   matchRowIndexesByProductName,
   resolveImageSearchTargets,
 } from "./image-target";
@@ -42,6 +43,58 @@ describe("matchRowIndexesByProductName", () => {
       matchRowIndexesByProductName(rows, "ضع صور لكل المنتجات")
     ).toEqual([]);
   });
+
+  it("keeps every independently named product (no longest-title-only filter)", () => {
+    const catalog = [
+      row("FlexPad Mini 8"),
+      row("StudioTab 12.9"),
+      row("AuraPods Pro Max"),
+      row("BassLine Studio Over-Ear"),
+      row("SonicBuds Sport"),
+      row("ClearTone ANC Lite"),
+      row("PulseWatch Series 7"),
+    ];
+    const matched = matchRowIndexesByProductName(
+      catalog,
+      "Find product images for FlexPad Mini 8, StudioTab 12.9, AuraPods Pro Max, BassLine Studio Over-Ear, SonicBuds Sport, ClearTone ANC Lite, PulseWatch Series 7"
+    );
+    expect(matched.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+});
+
+describe("matchCatalogRows", () => {
+  const rows = [
+    row("Classic Tee"),
+    row("SonicBuds Sport", { handle: "sonicbuds-sport", id: "gid://p/13" }),
+    row("SonicBuds Pro"),
+    row("FlexPad Mini 8"),
+  ];
+
+  it("returns a single match with metadata", () => {
+    const matches = matchCatalogRows("SonicBuds Sport", rows, 10);
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({
+      rowIndex: 1,
+      title: "SonicBuds Sport",
+      handle: "sonicbuds-sport",
+    });
+  });
+
+  it("returns multiple near matches without auto-picking one", () => {
+    const matches = matchCatalogRows("SonicBuds", rows, 10);
+    expect(matches.length).toBeGreaterThan(1);
+    expect(matches.map((m) => m.rowIndex).sort()).toEqual([1, 2]);
+  });
+
+  it("respects limit", () => {
+    const matches = matchCatalogRows("SonicBuds", rows, 1);
+    expect(matches).toHaveLength(1);
+  });
+
+  it("returns empty for empty sheet / no hit", () => {
+    expect(matchCatalogRows("SonicBuds", [], 10)).toEqual([]);
+    expect(matchCatalogRows("DoesNotExist XYZ", rows, 10)).toEqual([]);
+  });
 });
 
 describe("resolveImageSearchTargets", () => {
@@ -62,6 +115,19 @@ describe("resolveImageSearchTargets", () => {
       ok: true,
       indexes: [1],
       reason: "instruction_product_name",
+    });
+  });
+
+  it("prefers explicit subset rowIndexes over instruction name matching", () => {
+    const result = resolveImageSearchTargets({
+      rows,
+      instruction: "Find images for Classic Tee and SonicBuds Sport",
+      explicitRowIndexes: [0, 1, 2].slice(0, 2), // lookup returned first two
+    });
+    expect(result).toEqual({
+      ok: true,
+      indexes: [0, 1],
+      reason: "explicit_row_indexes",
     });
   });
 

@@ -2,6 +2,9 @@
  * Sync Pro image backend — OpenAI Sol + hosted web_search (images only).
  * Fast mode must NOT use this module (Serper stays in ai-helpers).
  * Text research (Globe) always uses Gemini grounding — not this file.
+ *
+ * Precision-first: model must select a URL from the tool image pool or abstain.
+ * Never fall back to the first tool image when the model declines.
  */
 
 import {
@@ -12,6 +15,9 @@ import {
 import {
   collectToolImages,
   countWebSearchCalls,
+  looksLikeDirectImageUrl,
+  parseJsonObject,
+  responseOutputText,
 } from "@/lib/enrich/parse";
 import { requireOpenAiApiKey, OPENAI_RESPONSES_URL } from "@/lib/enrich/openai";
 import type { OpenAiResponse } from "@/lib/enrich/types";
@@ -79,7 +85,7 @@ async function postResponses(body: Record<string, unknown>): Promise<OpenAiRespo
   if (parsed.status && parsed.status !== "completed") {
     console.error("[Sync Pro OpenAI] incomplete status", {
       status: parsed.status,
-      responseId: parsedId(parsed),
+      responseId: parsedId(body),
     });
     throw new Error(`OpenAI Sync web ended with status ${parsed.status}`);
   }
@@ -89,6 +95,76 @@ async function postResponses(body: Record<string, unknown>): Promise<OpenAiRespo
     searchCalls: countWebSearchCalls(parsed),
   });
   return parsed;
+}
+
+export type SyncImageSelection = {
+  status: "found" | "no_confident_match";
+  selectedImageUrl: string | null;
+  notes: string;
+};
+
+/** Parse Sol structured output. Exported for unit tests. */
+export function parseSyncImageSelection(raw: unknown): SyncImageSelection | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  const status = rec.status === "found" ? "found" : "no_confident_match";
+  let selectedImageUrl: string | null = null;
+  if (typeof rec.selectedImageUrl === "string") {
+    const trimmed = rec.selectedImageUrl.trim();
+    selectedImageUrl = trimmed.length > 0 ? trimmed : null;
+  } else if (rec.selectedImageUrl == null) {
+    selectedImageUrl = null;
+  } else {
+    selectedImageUrl = null;
+  }
+  const notes = typeof rec.notes === "string" ? rec.notes : "";
+  return { status, selectedImageUrl, notes };
+}
+
+/**
+ * Ground model selection against the tool image pool.
+ * Returns null when abstaining or when the URL is not a tool image_url.
+ * Exported for unit tests.
+ */
+export function resolveGroundedImageSelection(params: {
+  selection: SyncImageSelection | null;
+  toolImages: Array<{ imageUrl: string; pageUrl?: string }>;
+}): { imageUrl: string; pageUrl: string } | null {
+  const { selection, toolImages } = params;
+  if (!selection || selection.status !== "found") {
+    console.log("[Sync Pro OpenAI] abstained", {
+      abstained: true,
+      status: selection?.status ?? "missing_selection",
+      notes: selection?.notes?.slice(0, 160),
+    });
+    return null;
+  }
+
+  const url = selection.selectedImageUrl;
+  if (!url || !looksLikeDirectImageUrl(url)) {
+    console.log("[Sync Pro OpenAI] abstained", {
+      abstained: true,
+      reason: !url ? "null_or_empty_url" : "not_direct_image_url",
+    });
+    return null;
+  }
+
+  const key = url.toLowerCase();
+  const matched = toolImages.find((img) => img.imageUrl.toLowerCase() === key);
+  if (!matched) {
+    console.log("[Sync Pro OpenAI] abstained", {
+      abstained: true,
+      reason: "url_not_in_tool_pool",
+      selectedPreview: url.slice(0, 120),
+      poolSize: toolImages.length,
+    });
+    return null;
+  }
+
+  return {
+    imageUrl: matched.imageUrl,
+    pageUrl: matched.pageUrl || matched.imageUrl,
+  };
 }
 
 /**
@@ -120,8 +196,6 @@ export async function searchImagesWithOpenAiWeb(params: {
     .trim();
 
   const hint = String(params.instruction ?? "").trim();
-  // Identity-only search query. Short hints (e.g. "white background") stay as
-  // Extra instruction — never concatenate raw user chat into the search focus.
   const query = identity;
 
   if (!query) {
@@ -130,9 +204,13 @@ export async function searchImagesWithOpenAiWeb(params: {
   }
 
   const prompt = [
-    "Find ONE high-quality packshot / product image for this exact ecommerce product.",
-    "Prefer official brand or reputable retailer images on a clean background.",
+    "Find ONE useful ecommerce product image for this product.",
     "Use web_search with image results. Do not invent URLs.",
+    'When status is "found", selectedImageUrl MUST be copied exactly from a web_search image_result.image_url.',
+    "Prefer a clear product photo that matches the product type and name as closely as possible.",
+    'Set status to "no_confident_match" and selectedImageUrl to null only if results are clearly unrelated',
+    "(wrong category, people-only shots, logos, or otherwise unusable).",
+    "Do not abstain merely because there is no official brand page or perfect exact-name packshot.",
     "",
     `Search focus: ${query}`,
     hint ? `Extra instruction: ${hint}` : "",
@@ -179,11 +257,22 @@ export async function searchImagesWithOpenAiWeb(params: {
           schema: {
             type: "object",
             additionalProperties: false,
-            required: ["notes"],
+            required: ["status", "selectedImageUrl", "notes"],
             properties: {
+              status: {
+                type: "string",
+                enum: ["found", "no_confident_match"],
+                description:
+                  "found when selectedImageUrl is a tool image_url that reasonably matches the product; no_confident_match only if results are clearly unrelated",
+              },
+              selectedImageUrl: {
+                type: ["string", "null"],
+                description:
+                  "Exact image_result.image_url from web_search, or null when abstaining",
+              },
               notes: {
                 type: "string",
-                description: "Brief note on what was found",
+                description: "Brief note on match quality or why abstaining",
               },
             },
           },
@@ -201,27 +290,34 @@ export async function searchImagesWithOpenAiWeb(params: {
     );
     trackCost(params.billingTracker, cost);
 
-    const best = images[0];
-    if (!best?.imageUrl) {
-      console.log("[Sync Pro OpenAI] image search found no direct image_url", {
+    const selection = parseSyncImageSelection(parseJsonObject(responseOutputText(body)));
+    const grounded = resolveGroundedImageSelection({
+      selection,
+      toolImages: images,
+    });
+
+    if (!grounded) {
+      console.log("[Sync Pro OpenAI] image search abstained or ungrounded", {
         query: query.slice(0, 120),
         searchCallCount,
         toolImageCount: images.length,
+        status: selection?.status,
         responseId: parsedId(body),
+        abstained: true,
       });
       return null;
     }
 
     console.log("[Sync Pro OpenAI] image search success", {
-      imageUrl: best.imageUrl.slice(0, 120),
+      imageUrl: grounded.imageUrl.slice(0, 120),
       searchCallCount,
       totalCost: cost.totalCost,
       responseId: parsedId(body),
     });
 
     return {
-      imageUrl: best.imageUrl,
-      pageUrl: best.pageUrl || best.imageUrl,
+      imageUrl: grounded.imageUrl,
+      pageUrl: grounded.pageUrl,
       query,
       cost,
     };

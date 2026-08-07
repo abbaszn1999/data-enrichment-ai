@@ -94,21 +94,52 @@ function rowVal(row: SyncSheetRow, col: string): string {
   return String(v);
 }
 
-function imageCount(row: SyncSheetRow): number {
-  const c = row.image_count;
-  if (typeof c === "number") return c;
-  const parsed = Number(c);
-  if (Number.isFinite(parsed)) return parsed;
-  // Fallback: if there's a featured_image URL, count it as 1
-  return rowVal(row, "featured_image") ? 1 : 0;
+/**
+ * Effective image count for filters and UI coherence.
+ *
+ * Draft writes set `featured_image` but often leave `image_count` at the stale
+ * Shopify value (0). Treating stored `0` alone as authoritative incorrectly
+ * marks imaged drafts as "without images".
+ */
+export function effectiveImageCount(row: SyncSheetRow): number {
+  const raw = row.image_count;
+  let stored = 0;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    stored = Math.max(0, Math.floor(raw));
+  } else {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) stored = Math.max(0, Math.floor(parsed));
+  }
+  const hasFeatured = rowVal(row, "featured_image").trim().length > 0;
+  return Math.max(stored, hasFeatured ? 1 : 0);
+}
+
+export function rowHasImage(row: SyncSheetRow): boolean {
+  return effectiveImageCount(row) > 0;
+}
+
+/**
+ * When a draft gains a featured_image URL, keep the `image_count` column in
+ * sync so the Imagery tab and human-readable filters don't show 0.
+ */
+export function bumpImageCountForFeaturedImage(row: SyncSheetRow): void {
+  if (!rowVal(row, "featured_image").trim()) return;
+  const raw = row.image_count;
+  const stored =
+    typeof raw === "number" && Number.isFinite(raw)
+      ? raw
+      : Number(raw);
+  if (!Number.isFinite(stored) || stored < 1) {
+    row.image_count = 1;
+  }
 }
 
 function matchesPredicate(row: SyncSheetRow, predicate: ClientPredicate): boolean {
   switch (predicate.kind) {
     case "missing_image":
-      return imageCount(row) === 0;
+      return !rowHasImage(row);
     case "image_count_lt":
-      return imageCount(row) < predicate.n;
+      return effectiveImageCount(row) < predicate.n;
     case "description_shorter_than":
       return rowVal(row, "body_html").length < predicate.chars;
     case "missing_seo_title":

@@ -325,7 +325,16 @@ Rules:
 - Use only standard JavaScript (no imports, no async, no DOM).
 - The function body must start with \`return\`.
 
-Return JSON: { "filterFnBody": "return !row.featured_image || row.featured_image.trim() === \\"\\";", "description": "Products without a featured image" }`;
+Image presence (critical — drafts often set featured_image while image_count stays "0"):
+- A row HAS an image when: \`(row.featured_image && row.featured_image.trim() !== "") || Number(row.image_count || 0) > 0\`
+- "without images" / "missing images" / "no image": return true ONLY when BOTH featured_image is empty AND Number(image_count||0)===0.
+  NEVER use \`Number(row.image_count||0)===0\` alone, and NEVER OR that with an empty featured_image check in a way that keeps imaged drafts.
+  Correct without-images body:
+  \`return (!row.featured_image || row.featured_image.trim() === "") && Number(row.image_count || 0) === 0;\`
+- "with images" / "has images" / "that have images":
+  \`return (row.featured_image && row.featured_image.trim() !== "") || Number(row.image_count || 0) > 0;\`
+
+Return JSON: { "filterFnBody": "return (!row.featured_image || row.featured_image.trim() === \\"\\") && Number(row.image_count || 0) === 0;", "description": "Products without a featured image" }`;
 
   const sampleNormalized = params.sampleRows.slice(0, 3).map((row) =>
     Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v ?? "")]))

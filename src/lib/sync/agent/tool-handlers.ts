@@ -29,13 +29,13 @@ import {
   type IntegrationContext,
   type SyncInlineAttachment,
 } from "./ai-helpers";
-import { resolveImageSearchTargets } from "./image-target";
+import { matchCatalogRows, resolveImageSearchTargets } from "./image-target";
 import {
   fetchShopifyProductsPage,
   fetchShopifyProductsByIds,
   fetchShopifyProductsBulk,
 } from "@/lib/sync/providers/shopify/fetch-products";
-import { applyClientPredicates } from "@/lib/sync/providers/shopify/filter-builder";
+import { applyClientPredicates, bumpImageCountForFeaturedImage } from "@/lib/sync/providers/shopify/filter-builder";
 import {
   createShopifyCollection,
   fetchShopifyCollections,
@@ -140,6 +140,35 @@ function effectiveScopeCap(ctx: HandlerContext, argsCap: number | undefined): nu
   const a = typeof argsCap === "number" && argsCap > 0 ? argsCap : 0;
   if (planCap > 0 && a > 0) return Math.min(planCap, a);
   return planCap > 0 ? planCap : a;
+}
+
+/**
+ * After a successful apply (or whenever draft featured_image is authoritative),
+ * keep `image_count` coherent and mirror image fields into originalSheet so
+ * filters/"without images" match what the user sees.
+ */
+function reconcileSheetImageCounts(ctx: HandlerContext): void {
+  if (!ctx.sheet) return;
+  for (const row of ctx.sheet.rows) {
+    bumpImageCountForFeaturedImage(row);
+  }
+  if (!ctx.originalSheet) return;
+  const byId = new Map(
+    ctx.sheet.rows
+      .map((r) => [String(r.id ?? "").trim(), r] as const)
+      .filter(([id]) => Boolean(id))
+  );
+  for (const orig of ctx.originalSheet.rows) {
+    const id = String(orig.id ?? "").trim();
+    const live = id ? byId.get(id) : undefined;
+    if (!live) continue;
+    if (!String(live.featured_image ?? "").trim()) continue;
+    orig.featured_image = live.featured_image;
+    orig.image_count = live.image_count ?? 1;
+    if (live.featured_image_alt_text != null) {
+      orig.featured_image_alt_text = live.featured_image_alt_text;
+    }
+  }
 }
 
 function columnsFromRow(row: Record<string, unknown> | null | undefined): string[] {
@@ -593,6 +622,9 @@ async function handleProductsFilterClient(
 ): Promise<HandlerResult> {
   if (!ctx.sheet) return { assistantMessage: "No sheet loaded to filter." };
 
+  // Keep image_count coherent with draft featured_image before evaluating.
+  for (const row of ctx.sheet.rows) bumpImageCountForFeaturedImage(row);
+
   const rowsToCheck = args.rowIndexes
     ? args.rowIndexes.map((i) => ctx.sheet!.rows[i]).filter(Boolean)
     : ctx.sheet.rows;
@@ -1034,14 +1066,34 @@ async function handleColumnsWriteWithAi(
     );
   }
 
+  const wrote = values.length;
+  const targeted = targetIndexes.length;
+  let assistantMessage: string | undefined;
+  if (wrote === 0 && targeted > 0) {
+    assistantMessage = `Column write status=empty for "${args.targetColumn}": targeted ${targeted}, wrote 0. Do not claim success.`;
+  } else if (wrote < targeted || failedRowIndexes.length > 0) {
+    assistantMessage =
+      `Column write status=partial for "${args.targetColumn}": wrote ${wrote} of ${targeted}` +
+      (failedRowIndexes.length ? ` (failedIndexes: ${failedRowIndexes.slice(0, 15).join(", ")})` : "") +
+      `. Report exact counts — do not claim every targeted row was updated.`;
+  }
+
   return {
-    rowsAffected: values.length,
+    rowsAffected: wrote,
     columnsAffected: [args.targetColumn],
     warnings: summaryWarnings,
+    assistantMessage,
     output: {
+      status:
+        wrote === 0 && targeted > 0
+          ? "empty"
+          : wrote < targeted || failedRowIndexes.length > 0
+            ? "partial"
+            : "complete",
       totalEligible,
       processedCount,
-      values: values.length,
+      values: wrote,
+      targetRows: targeted,
       failedRowIndexes,
     },
   };
@@ -1059,9 +1111,8 @@ async function handleImagesSearch(
 ): Promise<HandlerResult> {
   if (!ctx.sheet) throw new Error("No sheet loaded.");
 
-  // Image search must NEVER silently fall back to the whole catalog after a
-  // products load. Prefer product names in the instruction, then explicit
-  // indexes, then a remembered subset — otherwise refuse and ask.
+  // Prefer explicit subset rowIndexes (post-lookup), then product-name mentions
+  // in the instruction, then a remembered subset — otherwise refuse and ask.
   const resolution = resolveImageSearchTargets({
     rows: ctx.sheet.rows,
     instruction: args.instruction,
@@ -1122,6 +1173,9 @@ async function handleImagesSearch(
           continue;
         }
         ctx.sheet.rows[rowIndex][args.targetColumn] = imageUrl;
+        if (args.targetColumn === "featured_image" || args.targetColumn === "image") {
+          bumpImageCountForFeaturedImage(ctx.sheet.rows[rowIndex]);
+        }
         partial.push({ rowIndex, column: args.targetColumn, value: imageUrl });
       }
       ctx.onToolProgress?.({
@@ -1139,13 +1193,64 @@ async function handleImagesSearch(
     const existing = ctx.sheet.rows[rowIndex][args.targetColumn];
     if (!args.overwrite && existing !== undefined && String(existing ?? "").trim()) continue;
     ctx.sheet.rows[rowIndex][args.targetColumn] = imageUrl;
+    if (args.targetColumn === "featured_image" || args.targetColumn === "image") {
+      bumpImageCountForFeaturedImage(ctx.sheet.rows[rowIndex]);
+    }
+  }
+
+  // Ensure image_count is coherent even when overwrite skipped because a URL
+  // was already present (e.g. prior draft write left image_count at 0).
+  if (args.targetColumn === "featured_image" || args.targetColumn === "image") {
+    for (const rowIndex of results.map((r) => r.rowIndex)) {
+      bumpImageCountForFeaturedImage(ctx.sheet.rows[rowIndex]);
+    }
+  }
+
+  const succeededIndexes = results.map((r) => r.rowIndex);
+  const succeededSet = new Set(succeededIndexes);
+  const failedIndexes = targetIndexes.filter((i) => !succeededSet.has(i));
+  const titleOf = (i: number) => String(ctx.sheet!.rows[i]?.title ?? `row ${i}`).trim();
+  const succeededTitles = succeededIndexes.map(titleOf);
+  const failedTitles = failedIndexes.map(titleOf);
+  const targetRows = targetIndexes.length;
+  const imagesFound = results.length;
+  const status =
+    imagesFound === 0 ? "empty" : imagesFound < targetRows ? "partial" : "complete";
+
+  // Ground the model's summary in tool facts (partial success is first-class).
+  let assistantMessage: string | undefined;
+  if (status === "empty") {
+    assistantMessage =
+      `Image search status=empty: targeted ${targetRows} row(s), wrote 0 images` +
+      (failedTitles.length
+        ? ` (failed: ${failedTitles.slice(0, 12).join(", ")}${failedTitles.length > 12 ? "…" : ""})`
+        : "") +
+      `. Tell the user clearly that no image was written — do not claim success.`;
+  } else if (status === "partial") {
+    assistantMessage =
+      `Image search status=partial: targeted ${targetRows}, wrote ${imagesFound}, failed ${failedIndexes.length}. ` +
+      `Succeeded: ${succeededTitles.slice(0, 12).join(", ") || "(none)"}` +
+      (succeededTitles.length > 12 ? "…" : "") +
+      `. Failed: ${failedTitles.slice(0, 12).join(", ") || "(none)"}` +
+      (failedTitles.length > 12 ? "…" : "") +
+      `. You MUST report these exact counts and names. Never say all targeted products got images.`;
   }
 
   ctx.workingMemory.lastTouchedColumns = [
     ...new Set([...(ctx.workingMemory.lastTouchedColumns ?? []), args.targetColumn]),
   ];
   ctx.workingMemory.lastActionType = "write_column";
-  ctx.workingMemory.lastTargetedRowIndexes = targetIndexes;
+  // Remember rows that now have an image in the draft so "put alt text for them"
+  // covers every imaged product — not only the last single lookup.
+  {
+    const withImage = ctx.sheet.rows
+      .map((row, i) =>
+        String(row[args.targetColumn] ?? row.featured_image ?? "").trim() ? i : -1
+      )
+      .filter((i) => i >= 0);
+    ctx.workingMemory.lastTargetedRowIndexes =
+      withImage.length > 0 ? withImage : succeededIndexes.length > 0 ? succeededIndexes : targetIndexes;
+  }
   // Image writes always belong to the Imagery tab — surface it so the user
   // immediately sees the column that was just populated.
   {
@@ -1156,19 +1261,60 @@ async function handleImagesSearch(
   }
 
   return {
-    rowsAffected: results.length,
+    rowsAffected: imagesFound,
     columnsAffected: [args.targetColumn],
+    assistantMessage,
     output: {
-      imagesFound: results.length,
-      targetRows: targetIndexes.length,
+      status,
+      imagesFound,
+      targetRows,
+      failedCount: failedIndexes.length,
+      succeededTitles: succeededTitles.slice(0, 25),
+      failedTitles: failedTitles.slice(0, 25),
       targetReason: resolution.reason,
     },
-    ...(results.length === 0
-      ? {
-          assistantMessage:
-            "No product images were found via web search for the targeted rows. Tell the user clearly that no images were found.",
-        }
-      : {}),
+  };
+}
+
+async function handleCatalogLookup(
+  args: { query: string; limit: number },
+  ctx: HandlerContext
+): Promise<HandlerResult> {
+  if (!ctx.sheet || ctx.sheet.rows.length === 0) {
+    return {
+      assistantMessage:
+        "No sheet loaded. Load products first, then call sync_catalog_lookup.",
+      output: { matches: [], count: 0, query: args.query },
+    };
+  }
+
+  const matches = matchCatalogRows(args.query, ctx.sheet.rows, args.limit);
+  const count = matches.length;
+
+  // Policy D: update memory only on a single unambiguous match.
+  if (count === 1) {
+    ctx.workingMemory.lastTargetedRowIndexes = [matches[0].rowIndex];
+    ctx.workingMemory.lastActionType = "target_rows";
+  }
+
+  const compact = matches.map((m) => ({
+    rowIndex: m.rowIndex,
+    title: m.title,
+    handle: m.handle || undefined,
+    id: m.id || undefined,
+  }));
+
+  let assistantMessage: string | undefined;
+  if (count === 0) {
+    assistantMessage = `No products matched "${args.query}". Tell the user clearly; do not invent rowIndexes.`;
+  } else if (count > 1) {
+    assistantMessage = `Multiple products matched "${args.query}" (${count}). Ask the user which title/rowIndex to use before writing images or columns. Do not auto-pick.`;
+  }
+
+  return {
+    rowsAffected: 0,
+    assistantMessage,
+    output: { matches: compact, count, query: args.query },
   };
 }
 
@@ -1221,6 +1367,9 @@ async function handleSheetProgram(
   ctx: HandlerContext
 ): Promise<HandlerResult> {
   if (!ctx.sheet) return { assistantMessage: "No sheet loaded yet." };
+
+  // Draft featured_image often leaves image_count at 0 — fix before filter/answer.
+  for (const row of ctx.sheet.rows) bumpImageCountForFeaturedImage(row);
 
   // For "answer" goal, just answer the question (no row filtering)
   if (args.goal === "answer") {
@@ -1490,6 +1639,10 @@ async function handleApplyToShopify(
     });
     const allErrors = productResult.errors;
 
+    if (productResult.updatedCount + productResult.createdCount > 0) {
+      reconcileSheetImageCounts(ctx);
+    }
+
     ctx.workingMemory.lastApplyStats = {
       created: productResult.createdCount,
       updated: productResult.updatedCount,
@@ -1601,6 +1754,10 @@ async function handleApplyToShopify(
   ctx.workingMemory.lastErrorRows = allErrors.map((reason, i) => ({ rowIndex: i, reason }));
   ctx.workingMemory.lastActionType = "apply_to_shopify";
 
+  if (totalCreated + totalUpdated > 0) {
+    reconcileSheetImageCounts(ctx);
+  }
+
   const breakdown =
     collectionUpdates.length > 0
       ? ` (products: ${productResult.updatedCount} updated; collections: ${collectionResult.updatedCount} updated)`
@@ -1658,6 +1815,8 @@ export async function executeTool(
       return handleColumnsWriteWithAi(args as never, ctx);
     case "sync_images_search":
       return handleImagesSearch(args as never, ctx);
+    case "sync_catalog_lookup":
+      return handleCatalogLookup(args as never, ctx);
     case "sync_row_append":
       return handleRowAppend(args as never, ctx);
     case "sync_sheet_program":

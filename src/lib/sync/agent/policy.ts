@@ -93,6 +93,7 @@ export const TOOL_TIERS: Record<string, ConfirmationTier> = {
   sync_collections_resolve: "allow",
   sync_sheet_program: "allow",
   sync_answer_question: "allow",
+  sync_catalog_lookup: "allow",
   sync_research_web: "allow",
   sync_attachments_analyze: "allow",
   sync_reply_only: "allow",

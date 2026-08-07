@@ -118,6 +118,7 @@ const TOOL_LABELS: Record<string, string> = {
   sync_collections_assign: "Assign taxonomy group",
   sync_columns_write_with_ai: "Write column with AI",
   sync_images_search: "Search product images",
+  sync_catalog_lookup: "Look up product in sheet",
   sync_row_append: "Add row",
   sync_sheet_program: "Filter/analyze sheet",
   sync_answer_question: "Answer question",

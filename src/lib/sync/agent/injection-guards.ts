@@ -19,32 +19,164 @@ export const USER_END = "<<<USER_MESSAGE_END>>>";
 const SENTINEL_RE = /<<<(?:DATA_BEGIN|DATA_END|USER_MESSAGE_BEGIN|USER_MESSAGE_END|SYSTEM_BEGIN|SYSTEM_END)>>>/gi;
 const SECTION_RE = /^=+\s*[A-Z][A-Z _]+\s*=+$/gm;
 
+/** Full title directory for sheets up to this size. */
+export const DIRECTORY_FULL_MAX = 2000;
+/** Prefer full directory when at or below this (cheap). */
+export const DIRECTORY_SMALL_MAX = 400;
+/** When > DIRECTORY_FULL_MAX, show first N + last N titles only. */
+export const DIRECTORY_EDGE_SAMPLE = 50;
+const TITLE_MAX_CHARS = 80;
+
 /** Remove any sentinel / section-marker strings from untrusted content. */
 export function sanitizeUntrustedText(input: unknown): string {
   const str = String(input ?? "");
   return str.replace(SENTINEL_RE, "[REDACTED_MARKER]").replace(SECTION_RE, "");
 }
 
-/** Sanitize all cell values in a sheet sample before embedding in a prompt. */
-export function sanitizeSheetSample(sheet: SyncSheet | null, maxRows = 5): {
+export type ProductDirectoryEntry = {
+  i: number;
+  t: string;
+  h?: string;
+};
+
+export type SanitizedSheetSample = {
   title: string;
   columns: string[];
   rowCount: number;
+  /** Full rows for column shape only — never the catalog. */
   sampleRows: SyncSheetRow[];
-} | null {
+  productDirectory: ProductDirectoryEntry[];
+  directoryComplete: boolean;
+  directoryShown: number;
+  directoryTotal: number;
+  /** Human hint when directory is truncated. */
+  directoryNote?: string;
+};
+
+function cleanRow(row: SyncSheetRow): SyncSheetRow {
+  const clean: SyncSheetRow = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (typeof v === "string") clean[k] = sanitizeUntrustedText(v);
+    else if (Array.isArray(v))
+      clean[k] = v.map((x) => (typeof x === "string" ? sanitizeUntrustedText(x) : x));
+    else clean[k] = v;
+  }
+  return clean;
+}
+
+function directoryEntry(row: SyncSheetRow, index: number): ProductDirectoryEntry {
+  const title = sanitizeUntrustedText(String(row.title ?? "")).slice(0, TITLE_MAX_CHARS);
+  const handleRaw = String(row.handle ?? "").trim();
+  const entry: ProductDirectoryEntry = { i: index, t: title || `(row ${index})` };
+  if (handleRaw) {
+    entry.h = sanitizeUntrustedText(handleRaw).slice(0, TITLE_MAX_CHARS);
+  }
+  return entry;
+}
+
+/**
+ * Build a tiered title-only product directory for the orchestrator prompt.
+ * ≤400 / ≤2000: full directory. >2000: first 50 + last 50 only.
+ * Directory is orientation only — sync_catalog_lookup is source of truth.
+ */
+export function buildProductDirectory(
+  rows: SyncSheetRow[]
+): Pick<
+  SanitizedSheetSample,
+  | "productDirectory"
+  | "directoryComplete"
+  | "directoryShown"
+  | "directoryTotal"
+  | "directoryNote"
+> {
+  const total = rows.length;
+  if (total === 0) {
+    return {
+      productDirectory: [],
+      directoryComplete: true,
+      directoryShown: 0,
+      directoryTotal: 0,
+    };
+  }
+
+  if (total <= DIRECTORY_FULL_MAX) {
+    const productDirectory = rows.map((row, i) => directoryEntry(row, i));
+    return {
+      productDirectory,
+      directoryComplete: true,
+      directoryShown: productDirectory.length,
+      directoryTotal: total,
+      ...(total > DIRECTORY_SMALL_MAX
+        ? {
+            directoryNote:
+              "Full title directory included. Still ALWAYS call sync_catalog_lookup for named products before writes.",
+          }
+        : {}),
+    };
+  }
+
+  const head = rows
+    .slice(0, DIRECTORY_EDGE_SAMPLE)
+    .map((row, i) => directoryEntry(row, i));
+  const tailStart = total - DIRECTORY_EDGE_SAMPLE;
+  const tail = rows
+    .slice(tailStart)
+    .map((row, offset) => directoryEntry(row, tailStart + offset));
+
+  return {
+    productDirectory: [...head, ...tail],
+    directoryComplete: false,
+    directoryShown: head.length + tail.length,
+    directoryTotal: total,
+    directoryNote:
+      "Directory is truncated. For any named product ALWAYS call sync_catalog_lookup — do not assume absence from the directory.",
+  };
+}
+
+/**
+ * Sanitize sheet for the agent prompt: tiny shape sample + tiered title directory.
+ * @param maxShapeRows — full rows for column shape (default 2). Legacy callers
+ *   that passed maxRows=5 still get at most 2 shape rows (catalog lives in directory).
+ */
+export function sanitizeSheetSample(
+  sheet: SyncSheet | null,
+  maxShapeRows = 2
+): SanitizedSheetSample | null {
   if (!sheet) return null;
+  const shapeCount = Math.min(Math.max(1, maxShapeRows), 2);
   const cleanTitle = sanitizeUntrustedText(sheet.title);
   const columns = sheet.columns.map((c) => sanitizeUntrustedText(c));
-  const sampleRows = sheet.rows.slice(0, maxRows).map((row) => {
-    const clean: SyncSheetRow = {};
-    for (const [k, v] of Object.entries(row)) {
-      if (typeof v === "string") clean[k] = sanitizeUntrustedText(v);
-      else if (Array.isArray(v)) clean[k] = v.map((x) => (typeof x === "string" ? sanitizeUntrustedText(x) : x));
-      else clean[k] = v;
-    }
-    return clean;
+  const sampleRows = sheet.rows.slice(0, shapeCount).map(cleanRow);
+  const directory = buildProductDirectory(sheet.rows);
+
+  return {
+    title: cleanTitle,
+    columns,
+    rowCount: sheet.rows.length,
+    sampleRows,
+    ...directory,
+  };
+}
+
+/** Format sheet sample for the CURRENT SHEET prompt section. */
+export function formatSheetSampleForPrompt(sample: SanitizedSheetSample): string {
+  const lines = sample.productDirectory.map((e) => {
+    const handle = e.h ? ` (${e.h})` : "";
+    return `[${e.i}] ${e.t}${handle}`;
   });
-  return { title: cleanTitle, columns, rowCount: sheet.rows.length, sampleRows };
+
+  const payload = {
+    title: sample.title,
+    columns: sample.columns,
+    rowCount: sample.rowCount,
+    directoryComplete: sample.directoryComplete,
+    directoryShown: sample.directoryShown,
+    directoryTotal: sample.directoryTotal,
+    ...(sample.directoryNote ? { directoryNote: sample.directoryNote } : {}),
+    sampleRows: sample.sampleRows,
+    productDirectory: lines,
+  };
+  return JSON.stringify(payload, null, 2);
 }
 
 export function sanitizeUserMessage(message: string): string {

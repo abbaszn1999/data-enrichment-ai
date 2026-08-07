@@ -21,10 +21,19 @@ description: >-
 
 Flow for Pro images:
 
-1. Gemini Pro decides `sync_images_search`.
+1. Gemini Pro calls `sync_catalog_lookup` for named products, then `sync_images_search`.
 2. Runtime sends product fields to OpenAI Sol with hosted image web_search.
-3. Accept only tool `image_result.image_url` (no page URLs / no Serper).
-4. If none found → tool reports `imagesFound: 0`; agent tells the user no images were found.
+3. Sol returns `status` + `selectedImageUrl` (`string | null`). Runtime accepts the URL only if status is `found`, URL is a direct image URL, and it exactly matches a tool `image_result.image_url`.
+4. Abstain only when results are clearly unrelated — not merely because there is no official brand packshot. Never invent URLs; never fall back to the first tool image without model selection.
+
+## Catalog memory
+
+- Prompt includes a tiered title-only `productDirectory` (orientation).
+- Named products always require `sync_catalog_lookup` (full sheet) before writes.
+- Multi-name instructions keep **all** mentioned titles (mention detection) — do not drop shorter names via relative score bands.
+- Explicit `rowIndexes` from lookup beat instruction name extraction.
+- Image tool returns `status: complete | partial | empty` with succeeded/failed titles; the agent must report those counts — never polish partial into full success.
+- `sync_catalog_lookup` does not increment write `rowsAffected`.
 
 ## Globe
 
@@ -33,5 +42,8 @@ Flow for Pro images:
 
 ## Files
 
-- `src/lib/sync/agent/openai-web.ts` — Sol image search only
+- `src/lib/sync/agent/openai-web.ts` — Sol image search + grounded selection
 - `src/lib/sync/agent/ai-helpers.ts` — `searchImagesForRows` branches on mode
+- `src/lib/sync/agent/injection-guards.ts` — tiered product directory
+- `src/lib/sync/agent/image-target.ts` — `matchCatalogRows` / image row targeting
+- `src/lib/sync/agent/tool-handlers.ts` — partial-success grounding for images/columns

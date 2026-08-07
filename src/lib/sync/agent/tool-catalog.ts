@@ -183,6 +183,13 @@ export const ToolSchemas = {
     })
     .passthrough(),
 
+  sync_catalog_lookup: z
+    .object({
+      query: z.string().min(1),
+      limit: z.number().int().min(1).max(50).default(10),
+    })
+    .passthrough(),
+
   sync_row_append: z
     .object({
       instruction: z.string().min(1),
@@ -293,14 +300,21 @@ export const TOOL_METADATA: Record<ToolName, ToolMetadata> = {
     name: "sync_columns_write_with_ai",
     strategy: "heavy_ai_write",
     description:
-      `Fill or rewrite ONE column of the current sheet using AI. Pick \`targetColumn\` from the allowed enum: ${WRITABLE_COLUMNS.join(", ")}. Use \`body_html\` for product descriptions, \`description\` for collection descriptions, \`featured_image_alt_text\` for product image alt text, \`image_alt_text\` for collection image alt text, \`seo_title\`/\`seo_description\` for SEO, \`handle\` for URL slugs, \`tags\` for tag lists, \`title\` for titles, etc. Pass the user's intent verbatim as \`instruction\`. Set \`rowIndexes\` to the rows to process; if the user referenced specific rows by position/name use concrete indexes; otherwise omit and the runtime will fall back to remembered targets and scopeCap. Set \`overwrite=true\` only if the user explicitly asked to replace existing values.`,
+      `Fill or rewrite ONE column of the current sheet using AI. Pick \`targetColumn\` from the allowed enum: ${WRITABLE_COLUMNS.join(", ")}. Use \`body_html\` for product descriptions, \`description\` for collection descriptions, \`featured_image_alt_text\` for product image alt text, \`image_alt_text\` for collection image alt text, \`seo_title\`/\`seo_description\` for SEO, \`handle\` for URL slugs, \`tags\` for tag lists, \`title\` for titles, etc. Pass the user's intent verbatim as \`instruction\`. For a user-named product, call sync_catalog_lookup first and pass its rowIndexes — never invent indexes from productDirectory alone. Otherwise omit rowIndexes to fall back to remembered targets and scopeCap. Set \`overwrite=true\` only if the user explicitly asked to replace existing values.`,
     destructive: false,
   },
   sync_images_search: {
     name: "sync_images_search",
     strategy: "heavy_ai_write",
     description:
-      "Source product images from the web and write them into an image column of the sheet. Always available (does not require Web mode / Globe). Use this whenever the user wants images found, fetched, added, attached, populated, downloaded, set, or otherwise sourced for one or more products — in any language. Pass the user's intent verbatim as `instruction`. CRITICAL: when the user names a specific product, you MUST pass `rowIndexes` for that product only (look it up in the sheet) — never omit rowIndexes after loading the whole catalog, and never pass every row index. Default `targetColumn` is 'featured_image'.",
+      "Source product images from the web and write them into an image column of the sheet. Always available (does not require Web mode / Globe). Use this whenever the user wants images found, fetched, added, attached, populated, downloaded, set, or otherwise sourced for one or more products — in any language. Pass the user's intent verbatim as `instruction`. CRITICAL: for a user-named product you MUST call sync_catalog_lookup first, then pass ONLY the returned rowIndexes — never omit rowIndexes after loading the whole catalog, never pass every row index, and never use productDirectory indexes alone. Default `targetColumn` is 'featured_image'.",
+    destructive: false,
+  },
+  sync_catalog_lookup: {
+    name: "sync_catalog_lookup",
+    strategy: "read",
+    description:
+      "Look up products in the currently loaded sheet by name/handle/id (deterministic full-sheet search). REQUIRED before image or column writes that target a user-named product — even if the title appears in productDirectory. Returns matches with rowIndex. If count>1, ask the user which product; if count===0, say not found. Do not invent indexes.",
     destructive: false,
   },
   sync_row_append: {
