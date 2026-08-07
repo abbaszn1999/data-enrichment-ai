@@ -19,9 +19,9 @@ End-to-end supplier import flow:
 1. **New project** — upload Excel/CSV, set supplier and notes, optionally reuse saved enrichment presets.
 2. **Matching rules** — map supplier columns to your catalog and decide new vs existing products.
 3. **Review** — inspect match results before enrichment.
-4. **Enrichment** — run AI column enrichment with concurrent workers, live row status, custom columns, and Excel export.
+4. **Enrichment** — run AI column enrichment (OpenAI Standard/Premium) with concurrent workers, live row status, custom columns, and Excel export.
 
-Typical enrichment outputs include SEO titles, marketing descriptions, feature bullets, category suggestions, keywords, marketplace-style copy, images, and source citations (configurable per project).
+Typical enrichment outputs include SEO titles, marketing descriptions, feature bullets, category suggestions, keywords, marketplace-style copy, images, and source citations (configurable per project). Each selected product is enriched in a single OpenAI Responses call with hosted web search when needed.
 
 ### Media
 
@@ -101,8 +101,8 @@ Copy your secrets into a root `.env` (never commit real keys). Typical variables
 
 - `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY`
 - `NEXT_PUBLIC_APP_URL` (e.g. `http://localhost:4000`)
-- AI provider API keys used by enrichment and media
-- Web search API key(s) used by scraping / research tools
+- AI provider API keys used by enrichment and media (`OPENAI_API_KEY` required for Import AI enrichment and Gallery scraping)
+- Optional Gemini / Serper keys still used by Sync and some media paths
 - `STRIPE_SECRET_KEY` / `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` / `STRIPE_WEBHOOK_SECRET`
 - Stripe price IDs for plans and credit packs
 

@@ -1656,8 +1656,12 @@ export default function SyncPage() {
               ? "bg-primary/10 text-primary"
               : "text-muted-foreground hover:bg-muted hover:text-foreground"
           }`}
-          aria-label={webEnabled ? "Web search enabled" : "Enable web search"}
-          title={webEnabled ? "Web search enabled" : "Enable web search"}
+          aria-label={webEnabled ? "Web research enabled" : "Enable web research"}
+          title={
+            webEnabled
+              ? "Web research on (text search). Product images always search the web."
+              : "Enable web research (text). Product image search works without this."
+          }
         >
           <Globe className="h-4 w-4" />
         </button>

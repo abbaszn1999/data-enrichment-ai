@@ -100,7 +100,8 @@ export default function WorkspaceLayout({
 
   const basePath = `/w/${slug}`;
 
-  // Hide main sidebar + header on enrichment tool page (it has its own UI)
+  // Hide workspace nav sidebar on enrichment tool (it has its own left panel).
+  // Keep the top app header visible so credits / workspace / user stay accessible.
   const isEnrichPage = pathname.includes("/enrich");
   const isSyncPage = pathname.includes("/sync");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
@@ -113,8 +114,10 @@ export default function WorkspaceLayout({
     isProductsGalleryProject ||
     isProductsVisualizerProject ||
     (isSyncPage && syncFocusMode);
-  // Full immersive mode: hides header + sidebar only for dedicated full-screen pages
-  const isImmersive = isEnrichPage;
+  // Immersive mode hides the top header — keep false so Enrich shows it
+  const isImmersive = false;
+  // Lock main content height so tool UIs (Enrich sidebar/table) scroll internally
+  const lockContentHeight = isEnrichPage || isSyncPage;
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage = pathname.includes("/subscription");
   const isTeamPage = pathname.includes("/team");
@@ -477,7 +480,7 @@ export default function WorkspaceLayout({
           )}
 
           {/* Main Content */}
-          <main className={`flex-1 flex flex-col min-h-0 ${(isImmersive || isSyncPage) ? "overflow-hidden" : "overflow-auto"}`}>
+          <main className={`flex-1 flex flex-col min-h-0 ${lockContentHeight ? "overflow-hidden" : "overflow-auto"}`}>
             {!isImmersive && (
               <SubscriptionBanner
                 subscription={subscription}
@@ -485,11 +488,11 @@ export default function WorkspaceLayout({
                 role={role}
               />
             )}
-            {isSubscriptionPage || isImmersive || isSyncPage ? (
-              <div className={(isImmersive || isSyncPage) ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
+            {isSubscriptionPage || isSyncPage ? (
+              <div className={isSyncPage ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
             ) : (
               <SubscriptionGate subscription={subscription} isActive={isActive} isLoading={subLoading} role={role}>
-                <div className="flex-1">{children}</div>
+                <div className={isEnrichPage ? "flex-1 flex flex-col min-h-0 overflow-hidden h-full" : "flex-1"}>{children}</div>
               </SubscriptionGate>
             )}
           </main>

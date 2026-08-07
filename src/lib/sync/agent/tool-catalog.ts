@@ -300,7 +300,7 @@ export const TOOL_METADATA: Record<ToolName, ToolMetadata> = {
     name: "sync_images_search",
     strategy: "heavy_ai_write",
     description:
-      "Source product images from the web and write them into an image column of the sheet. Use this whenever the user wants images found, fetched, added, attached, populated, downloaded, set, or otherwise sourced for one or more products — in any language. Pass the user's intent verbatim as `instruction`. Set `rowIndexes` to the targeted rows (infer from the user's reference to position, count, or specific products). Default `targetColumn` is 'featured_image'.",
+      "Source product images from the web and write them into an image column of the sheet. Always available (does not require Web mode / Globe). Use this whenever the user wants images found, fetched, added, attached, populated, downloaded, set, or otherwise sourced for one or more products — in any language. Pass the user's intent verbatim as `instruction`. CRITICAL: when the user names a specific product, you MUST pass `rowIndexes` for that product only (look it up in the sheet) — never omit rowIndexes after loading the whole catalog, and never pass every row index. Default `targetColumn` is 'featured_image'.",
     destructive: false,
   },
   sync_row_append: {
@@ -326,7 +326,7 @@ export const TOOL_METADATA: Record<ToolName, ToolMetadata> = {
     name: "sync_research_web",
     strategy: "read",
     description:
-      "Search the web for grounded information. Only available when Web mode is enabled.",
+      "Search the web for grounded text research (product facts, specs, sources). Only available when Web mode (Globe) is enabled. Image search uses sync_images_search separately and does not need Web mode.",
     destructive: false,
   },
   sync_attachments_analyze: {
@@ -379,6 +379,7 @@ export function buildToolSystemBlock(options: {
   webEnabled: boolean;
   hasAttachments: boolean;
 }): string {
+  // Globe / webEnabled gates text research only — never sync_images_search.
   const unavailable: string[] = [];
   if (!options.webEnabled) unavailable.push("sync_research_web");
   if (!options.hasAttachments) unavailable.push("sync_attachments_analyze");

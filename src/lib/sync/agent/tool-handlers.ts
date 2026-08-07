@@ -29,6 +29,7 @@ import {
   type IntegrationContext,
   type SyncInlineAttachment,
 } from "./ai-helpers";
+import { resolveImageSearchTargets } from "./image-target";
 import {
   fetchShopifyProductsPage,
   fetchShopifyProductsByIds,
@@ -1057,9 +1058,45 @@ async function handleImagesSearch(
   ctx: HandlerContext
 ): Promise<HandlerResult> {
   if (!ctx.sheet) throw new Error("No sheet loaded.");
-  const resolved = resolveRowIndexes(ctx, args.rowIndexes);
+
+  // Image search must NEVER silently fall back to the whole catalog after a
+  // products load. Prefer product names in the instruction, then explicit
+  // indexes, then a remembered subset — otherwise refuse and ask.
+  const resolution = resolveImageSearchTargets({
+    rows: ctx.sheet.rows,
+    instruction: args.instruction,
+    explicitRowIndexes: args.rowIndexes,
+    lastTargetedRowIndexes: ctx.workingMemory.lastTargetedRowIndexes,
+    lastCreatedRowIndexes: ctx.workingMemory.lastCreatedRowIndexes,
+  });
+
+  if (!resolution.ok) {
+    console.warn("[Sync Handler] sync_images_search refused", {
+      message: resolution.message,
+      sheetRows: ctx.sheet.rows.length,
+      explicitCount: Array.isArray(args.rowIndexes) ? args.rowIndexes.length : 0,
+      rememberedCount: ctx.workingMemory.lastTargetedRowIndexes.length,
+    });
+    return {
+      assistantMessage: resolution.message,
+      warnings: [resolution.message],
+      output: { refused: true, reason: resolution.message },
+    };
+  }
+
   const cap = effectiveScopeCap(ctx, args.scopeCap);
-  const targetIndexes = applyScopeCap(resolved, cap, ctx.sheet.rows.length);
+  const targetIndexes = applyScopeCap(resolution.indexes, cap, ctx.sheet.rows.length);
+
+  console.log("[Sync Handler] sync_images_search", {
+    mode: ctx.mode,
+    backend: ctx.mode === "pro" ? "openai-sol" : "serper",
+    targetColumn: args.targetColumn,
+    overwrite: args.overwrite,
+    scopeCap: args.scopeCap,
+    targetReason: resolution.reason,
+    targetIndexes,
+    instruction: args.instruction.slice(0, 120),
+  });
 
   // Ensure the image column exists up-front so streamed chunks can write into
   // it without the UI seeing a column-shape mismatch.
@@ -1072,6 +1109,8 @@ async function handleImagesSearch(
     rowIndexes: targetIndexes,
     instruction: args.instruction,
     targetColumn: args.targetColumn,
+    mode: ctx.mode,
+    billingTracker: ctx.billingTracker,
     signal: ctx.signal,
     onChunk: (chunk) => {
       if (!ctx.sheet) return;
@@ -1119,7 +1158,17 @@ async function handleImagesSearch(
   return {
     rowsAffected: results.length,
     columnsAffected: [args.targetColumn],
-    output: { imagesFound: results.length, targetRows: targetIndexes.length },
+    output: {
+      imagesFound: results.length,
+      targetRows: targetIndexes.length,
+      targetReason: resolution.reason,
+    },
+    ...(results.length === 0
+      ? {
+          assistantMessage:
+            "No product images were found via web search for the targeted rows. Tell the user clearly that no images were found.",
+        }
+      : {}),
   };
 }
 
@@ -1266,12 +1315,18 @@ async function handleResearchWeb(
   args: { instruction: string },
   ctx: HandlerContext
 ): Promise<HandlerResult> {
+  console.log("[Sync Handler] sync_research_web", {
+    mode: ctx.mode,
+    backend: "gemini-grounding",
+    instruction: args.instruction.slice(0, 120),
+  });
   const { summary, sources } = await researchWithWeb({
     instruction: args.instruction,
     integration: ctx.integrationContext,
     sheet: ctx.sheet,
     rowIndexes: ctx.workingMemory.lastTargetedRowIndexes,
     billingTracker: ctx.billingTracker,
+    mode: ctx.mode,
   });
   ctx.workingMemory.lastResearchSummary = summary;
   ctx.workingMemory.lastResearchSubject = args.instruction.slice(0, 200);

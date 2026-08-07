@@ -361,6 +361,18 @@ How AI write tools (\`sync_columns_write_with_ai\`, \`sync_images_search\`) scal
     4. \`sync_columns_write_with_ai\` for featured_image_alt_text (one call).
   Three tool calls total, not 3 × N.
 
+How \`sync_images_search\` targets rows (critical — avoid catalog blasts):
+- If the user names a product (e.g. "SonicBuds Sport" / "ضع صورة لهذا المنتج X"),
+  find that row in the sheet and pass ONLY its \`rowIndexes\`. Never omit
+  rowIndexes after a full-catalog load, and never pass every row index.
+- Omitting rowIndexes after \`sync_products_load\` of the whole sheet used to
+  search images for EVERY product — the runtime now refuses that. Always be
+  explicit for named-product image requests.
+- Only omit rowIndexes when the user clearly means a remembered subset
+  ("them" / "البقية" / the rows just filtered) that is NOT the entire sheet.
+- Pattern for one product image: load sheet (if needed) → sync_images_search
+  with rowIndexes=[thatIndex] and the user's instruction.
+
 Invariants (must obey):
 - Reply in the user's language.
 - Don't claim an action you didn't perform. If a tool failed, surface the error and either retry or ask.

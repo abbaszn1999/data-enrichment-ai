@@ -8,8 +8,21 @@ import type {
   SheetState,
   EnrichmentSettings,
 } from "@/types";
-import { DEFAULT_ENRICHMENT_COLUMNS, DEFAULT_ENRICHMENT_SETTINGS } from "@/types";
+import { DEFAULT_ENRICHMENT_COLUMNS, DEFAULT_ENRICHMENT_SETTINGS, resolveEnrichmentModel } from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
+
+function normalizeEnrichmentSettings(
+  settings: EnrichmentSettings | Partial<EnrichmentSettings> | null | undefined
+): EnrichmentSettings {
+  const merged = {
+    ...DEFAULT_ENRICHMENT_SETTINGS,
+    ...(settings || {}),
+  };
+  return {
+    ...merged,
+    enrichmentModel: resolveEnrichmentModel(merged.enrichmentModel),
+  };
+}
 
 type UndoAction =
   | { type: "cell"; rowId: string; column: string; oldValue: string; newValue: string }
@@ -613,7 +626,10 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   // Settings
   updateSettings: (settings) =>
     set((state) => ({
-      enrichmentSettings: { ...state.enrichmentSettings, ...settings },
+      enrichmentSettings: normalizeEnrichmentSettings({
+        ...state.enrichmentSettings,
+        ...settings,
+      }),
     })),
 
   // Pause/Resume
@@ -634,7 +650,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         originalColumns: session.originalColumns,
         sourceColumns: session.sourceColumns,
         enrichmentColumns: session.enrichmentColumns,
-        enrichmentSettings: session.enrichmentSettings,
+        enrichmentSettings: normalizeEnrichmentSettings(session.enrichmentSettings),
         columnVisibility: session.columnVisibility || {},
         selectedRowIds: new Set(session.rows.map((r) => r.id)),
         isEnriching: false,
@@ -656,7 +672,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       rows,
       sourceColumns,
       enrichmentColumns,
-      enrichmentSettings,
+      enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
       columnVisibility,
       selectedRowIds: new Set(rows.map((r) => r.id)),
       isEnriching: false,

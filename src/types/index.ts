@@ -76,7 +76,7 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
   {
     id: "imageUrls",
     label: "Image URLs",
-    description: "Find product images from the web using Google Image Search.",
+    description: "Find product images from the web using OpenAI web image search.",
     type: "imageUrls",
     enabled: true,
     imageCount: 3,
@@ -105,18 +105,28 @@ export interface EnrichmentEvent {
 
 export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turkish" | "German" | "Chinese" | "Japanese" | "custom";
 
-export type EnrichmentModel = "gemini-3.1-pro-preview" | "gemini-3.6-flash";
+/** UI tier: Standard = Terra, Premium = Sol. */
+export type EnrichmentModel = "standard" | "premium";
 
-/** Map legacy Fast model ids saved in presets/settings to the current Fast model. */
+/**
+ * Map legacy Gemini / OpenAI ids saved in presets to current tiers.
+ * Pro / Sol → premium; Fast / Terra / unknown → standard.
+ */
 export function resolveEnrichmentModel(
   model: string | null | undefined
 ): EnrichmentModel {
-  if (model === "gemini-3.1-pro-preview") return "gemini-3.1-pro-preview";
-  if (model === "gemini-3.6-flash") return "gemini-3.6-flash";
-  // Legacy Fast / unknown → current Fast
-  return "gemini-3.6-flash";
+  if (
+    model === "premium" ||
+    model === "gemini-3.1-pro-preview" ||
+    model === "gpt-5.6-sol"
+  ) {
+    return "premium";
+  }
+  // standard | gemini flash | terra | unknown → standard
+  return "standard";
 }
 
+/** @deprecated Kept for preset backward compatibility; Import AI ignores this. */
 export type ThinkingLevelOption = "none" | "low" | "medium" | "high";
 
 export type WritingTone = "professional" | "persuasive" | "simple" | "technical" | "custom";
@@ -127,6 +137,7 @@ export interface EnrichmentSettings {
   outputLanguage: OutputLanguage;
   customLanguage: string;
   enrichmentModel: EnrichmentModel;
+  /** @deprecated Ignored by OpenAI enrich agent; tier drives reasoning effort. */
   thinkingLevel: ThinkingLevelOption;
 }
 
@@ -147,7 +158,7 @@ export interface EnrichmentPreset {
 export const DEFAULT_ENRICHMENT_SETTINGS: EnrichmentSettings = {
   outputLanguage: "English",
   customLanguage: "",
-  enrichmentModel: "gemini-3.1-pro-preview",
+  enrichmentModel: "standard",
   thinkingLevel: "low",
 };
 
@@ -164,8 +175,8 @@ export const LANGUAGE_OPTIONS: { value: OutputLanguage; label: string; flag: str
 ];
 
 export const MODEL_OPTIONS: { value: EnrichmentModel; label: string; description: string; icon: string }[] = [
-  { value: "gemini-3.1-pro-preview", label: "Pro", description: "Highest quality, slower", icon: "✨" },
-  { value: "gemini-3.6-flash", label: "Fast", description: "Fastest, lower cost", icon: "⚡" },
+  { value: "standard", label: "Standard", description: "Balanced quality and cost (Terra)", icon: "⚡" },
+  { value: "premium", label: "Premium", description: "Highest quality, deeper search (Sol)", icon: "✨" },
 ];
 
 export const TONE_OPTIONS: { value: WritingTone; label: string; description: string }[] = [

@@ -148,7 +148,7 @@ export default function EnrichPage() {
   // Render the original big enrichment tool: Sidebar (left) + DataTable (center)
   return (
     <TooltipProvider>
-      <div className="flex h-full overflow-hidden">
+      <div className="flex h-full min-h-0 overflow-hidden">
         <Sidebar />
         <DataTable />
       </div>

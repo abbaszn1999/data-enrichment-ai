@@ -279,7 +279,7 @@ export function FunctionsPanel() {
 
   return (
     <>
-    <div className="flex-1 overflow-y-auto custom-scrollbar">
+    <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar min-h-0">
       <div className="p-4 space-y-4">
         {/* Column Selector */}
         <div className="space-y-2">

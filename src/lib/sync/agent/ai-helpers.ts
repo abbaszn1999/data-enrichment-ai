@@ -18,6 +18,11 @@ import {
   type SyncMode,
 } from "./ai-utils";
 import { costToCredits } from "@/lib/ai-pricing";
+import { searchImagesWithOpenAiWeb } from "./openai-web";
+import {
+  buildProductImageQuery,
+  isLikelyUserChatInstruction,
+} from "./image-target";
 
 export type IntegrationContext = {
   provider: string;
@@ -475,7 +480,7 @@ Return: { "answer": "..." }`;
   return typeof parsed.answer === "string" ? parsed.answer.trim() : "";
 }
 
-// ─── Web research (grounded) ────────────────────────────────────────────────
+// ─── Web research (Gemini googleSearch grounding — Fast and Pro) ────────────
 
 export async function researchWithWeb(params: {
   instruction: string;
@@ -483,6 +488,8 @@ export async function researchWithWeb(params: {
   sheet: SyncSheet | null;
   rowIndexes?: number[] | null;
   billingTracker?: SyncBillingTracker;
+  /** Unused for research (always Gemini). Kept for call-site compat. */
+  mode?: SyncMode;
 }): Promise<{ summary: string; sources: SourceUrl[] }> {
   const sheet = params.sheet;
   const scopedRows = sheet
@@ -502,7 +509,7 @@ export async function researchWithWeb(params: {
     ),
   }));
 
-  const result = await searchProduct({
+  const contextPayload = {
     request: String(params.instruction ?? ""),
     provider: String(params.integration?.provider ?? ""),
     integrationName: String(params.integration?.integration_name ?? ""),
@@ -511,7 +518,14 @@ export async function researchWithWeb(params: {
     sheetColumns: JSON.stringify(sheet?.columns.slice(0, 30) ?? []),
     sheetRowCount: String(sheet?.rows.length ?? 0),
     targetedRows: JSON.stringify(rowSummaries ?? []),
+  };
+
+  // Text research always uses Gemini grounding (OpenAI is images-only on Pro).
+  console.log("[Sync Web] researchWithWeb → gemini-grounding", {
+    mode: params.mode ?? "(n/a)",
+    instruction: String(params.instruction ?? "").slice(0, 120),
   });
+  const result = await searchProduct(contextPayload);
   trackDirectCost(params.billingTracker, result.cost);
 
   return {
@@ -520,12 +534,14 @@ export async function researchWithWeb(params: {
   };
 }
 
-// ─── Image search (Serper via gemini module) ────────────────────────────────
+// ─── Image search (Fast: Serper | Pro: OpenAI Sol web_search images) ────────
 
 export async function searchImagesForRows(params: {
   rows: SyncSheetRow[];
   rowIndexes?: number[];
   instruction: string;
+  mode?: SyncMode;
+  billingTracker?: SyncBillingTracker;
   /** Target column name to report in the streaming chunks (defaults to
    *  "featured_image" — the handler may override). */
   targetColumn?: string;
@@ -543,10 +559,17 @@ export async function searchImagesForRows(params: {
     ? params.rowIndexes.filter((i) => Number.isInteger(i) && i >= 0 && i < params.rows.length)
     : params.rows.map((_, i) => i);
 
-  // Removed the previous LIMIT=25 hard cap — the handler/agent now decides
-  // scope via rowIndexes/scopeCap. We still bound concurrency to be a good
-  // citizen with Serper rate limits.
+  // Bound concurrency for Serper (Fast) and OpenAI (Pro) rate limits.
   const CONCURRENCY = 5;
+  const isPro = params.mode === "pro";
+
+  console.log("[Sync Images] searchImagesForRows", {
+    mode: params.mode ?? "(undefined→fast)",
+    backend: isPro ? "openai-sol" : "serper",
+    rowCount: targetIndexes.length,
+    rowIndexes: targetIndexes.slice(0, 10),
+    instruction: params.instruction.slice(0, 120),
+  });
 
   const results: Array<{ rowIndex: number; imageUrl: string; sourcePageUrl: string; query: string }> = [];
   let failedCount = 0;
@@ -563,18 +586,48 @@ export async function searchImagesForRows(params: {
         const productType = String(row.product_type ?? "").trim();
         const tags = String(row.tags ?? "").trim();
 
-        const query = [title, vendor, productType, tags, params.instruction]
-          .filter(Boolean)
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim();
+        // Search on product identity only. Full user chat ("أريد صورة لهذا
+        // المنتج …") pollutes Serper/OpenAI queries and hurts match quality.
+        const query = buildProductImageQuery(row);
+        const imageHint = isLikelyUserChatInstruction(params.instruction)
+          ? ""
+          : String(params.instruction ?? "").trim();
 
-        if (!query) return null;
+        if (!query) {
+          console.warn("[Sync Images] skip row — empty query", { rowIndex });
+          return null;
+        }
+
+        console.log("[Sync Images] row lookup", {
+          rowIndex,
+          backend: isPro ? "openai-sol" : "serper",
+          title: title.slice(0, 80),
+          query: query.slice(0, 120),
+          hasHint: Boolean(imageHint),
+        });
+
+        if (isPro) {
+          const found = await searchImagesWithOpenAiWeb({
+            title,
+            vendor,
+            productType,
+            tags,
+            instruction: imageHint,
+            billingTracker: params.billingTracker,
+          });
+          if (!found) return null;
+          return {
+            rowIndex,
+            imageUrl: found.imageUrl,
+            sourcePageUrl: found.pageUrl || "",
+            query: found.query,
+          };
+        }
 
         const images = await searchProductImages(
           { title, vendor, product_type: productType, tags },
           1,
-          params.instruction,
+          imageHint || undefined,
           undefined,
           query
         );
@@ -596,6 +649,11 @@ export async function searchImagesForRows(params: {
         results.push(r.value);
       } else {
         failedCount += 1;
+        if (r.status === "rejected") {
+          console.error("[Sync Images] row FAILED", {
+            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          });
+        }
       }
     }
     processed += chunk.length;
@@ -606,6 +664,13 @@ export async function searchImagesForRows(params: {
       failedCount,
     });
   }
+
+  console.log("[Sync Images] finished", {
+    backend: isPro ? "openai-sol" : "serper",
+    found: results.length,
+    failedCount,
+    processed,
+  });
   return results;
 }
 

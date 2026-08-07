@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
   const {
     workspaceId,
     userMessage,
-    mode = "fast",
+    mode: rawMode = "fast",
     thinkingLevel = "low",
     webEnabled = false,
     attachments: rawAttachments = [],
@@ -285,6 +285,15 @@ export async function POST(request: NextRequest) {
     planOnly = false,
     preApprovedPlan,
   } = body;
+
+  const mode: SyncMode = rawMode === "pro" ? "pro" : "fast";
+  console.log("[Sync Agent] request", {
+    mode,
+    rawMode,
+    thinkingLevel,
+    webEnabled,
+    messagePreview: String(userMessage ?? "").slice(0, 100),
+  });
 
   if (!workspaceId || !userMessage || !userMessage.trim()) {
     return NextResponse.json(

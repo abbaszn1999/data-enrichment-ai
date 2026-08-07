@@ -40,14 +40,13 @@ import {
   resolveEnrichmentModel,
   type OutputLanguage,
   type EnrichmentModel,
-  type ThinkingLevelOption,
   type WritingTone,
   type ContentLength,
   type CategoryItem,
   type EnrichmentPreset,
   type EnrichmentColumn,
 } from "@/types";
-import type { GeminiSettings } from "@/lib/gemini";
+import type { EnrichSettings } from "@/lib/enrich";
 import { saveEnrichmentPreset } from "@/lib/supabase";
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -185,9 +184,8 @@ export function Sidebar() {
         ? enrichmentSettings.customLanguage || "English"
         : enrichmentSettings.outputLanguage;
 
-      const geminiSettings: GeminiSettings = {
+      const enrichSettings: EnrichSettings = {
         enrichmentModel: resolveEnrichmentModel(enrichmentSettings.enrichmentModel),
-        thinkingLevel: enrichmentSettings.thinkingLevel,
         outputLanguage: resolvedLanguage,
       };
 
@@ -242,7 +240,7 @@ export function Sidebar() {
         enrichmentColumns: isNewTab
           ? enrichmentColumns.filter((c) => c.enabled)
           : existingAsEnrichCols,
-        settings: geminiSettings,
+        settings: enrichSettings,
         cmsType: workspace?.cms_type || undefined,
         workspaceCategories,
         categoriesRawRows,
@@ -528,9 +526,9 @@ export function Sidebar() {
   }
 
   return (
-    <div className="w-[320px] border-r bg-card flex flex-col shrink-0 h-full min-h-0">
+    <div className="w-[320px] border-r bg-card flex flex-col shrink-0 h-full min-h-0 overflow-hidden">
       {/* Header with Tab Toggle */}
-      <div className="border-b bg-muted/30">
+      <div className="border-b bg-muted/30 shrink-0">
         <div className="p-3 flex items-center justify-between">
           <Button
             variant="ghost"
@@ -603,7 +601,7 @@ export function Sidebar() {
 
       {/* AI Tab */}
       {!isViewer && sidebarTab === "ai" && (
-      <div className="flex-1 overflow-y-auto custom-scrollbar min-h-0">
+      <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar min-h-0">
         <div className="p-4 space-y-5">
           {/* Selection Info */}
           <div className="flex items-center justify-between">
@@ -1346,35 +1344,6 @@ export function Sidebar() {
                   </div>
                 </div>
 
-                {/* Thinking Level */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    Thinking Level
-                  </label>
-                  <div className="flex gap-1">
-                    {(["none", "low", "medium", "high"] as ThinkingLevelOption[]).map((level) => {
-                      const isSelected = enrichmentSettings.thinkingLevel === level;
-                      return (
-                        <button
-                          key={level}
-                          onClick={() => updateSettings({ thinkingLevel: level })}
-                          disabled={isEnriching}
-                          className={`flex-1 text-[10px] py-1.5 px-1 rounded-md border font-medium capitalize transition-all disabled:opacity-50 ${
-                            isSelected
-                              ? "bg-amber-500/15 border-amber-500/30 text-amber-600 dark:text-amber-400 shadow-sm"
-                              : "border-border/50 text-muted-foreground hover:border-border hover:bg-muted/50"
-                          }`}
-                        >
-                          {level}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[9px] text-muted-foreground/60 leading-tight">
-                    Higher = better quality but slower and more expensive
-                  </p>
-                </div>
-
               </div>
             )}
           </div>
@@ -1459,11 +1428,11 @@ export function Sidebar() {
 
       {/* Action Buttons - Fixed at bottom */}
       {isViewer ? (
-        <div className="p-4 border-t bg-muted/20">
+        <div className="p-4 border-t bg-muted/20 shrink-0">
           <ExportDialog />
         </div>
       ) : sidebarTab === "ai" && (
-      <div className="p-4 border-t bg-muted/20 space-y-2">
+      <div className="p-4 border-t bg-muted/20 space-y-2 shrink-0">
         {!isEnriching && (
           <Button
             onClick={handleEnrich}

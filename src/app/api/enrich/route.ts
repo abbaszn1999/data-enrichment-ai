@@ -1,6 +1,5 @@
 // Import row enrichment API — one row per request (called by concurrent
-// sidebar workers). Uses shared gemini.ts + ai-pricing (official rates).
-// Replaces the deprecated Supabase Edge Function `enrich`.
+// sidebar workers). Uses OpenAI Responses (Terra/Sol + web_search).
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
@@ -11,11 +10,10 @@ import {
   updateCachedCredits,
 } from "@/lib/workspace-context";
 import { sumCosts } from "@/lib/ai-pricing";
-import { enrichProductRow, type GeminiSettings } from "@/lib/gemini";
+import { enrichProductRow, type EnrichSettings } from "@/lib/enrich";
 import {
   resolveEnrichmentModel,
   type CategoryItem,
-  type ThinkingLevelOption,
 } from "@/types";
 
 export const maxDuration = 300;
@@ -111,24 +109,43 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const geminiSettings: GeminiSettings = {
+    const enrichSettings: EnrichSettings = {
       enrichmentModel: resolveEnrichmentModel(settings?.enrichmentModel),
-      thinkingLevel: (settings?.thinkingLevel || "low") as ThinkingLevelOption,
       outputLanguage: settings?.outputLanguage || "English",
     };
 
     console.log(
-      `[API enrich] row ${row.rowIndex} | model: ${geminiSettings.enrichmentModel} | search: gemini-3.6-flash`
+      `[API enrich] row ${row.rowIndex} | tier: ${enrichSettings.enrichmentModel} | cols: ${enabledColumns.join(",")}`
     );
 
     const enriched = await enrichProductRow(
       row.originalData,
       enabledColumns,
       enrichmentColumns?.map((c) => ({
-        ...c,
+        id: c.id,
+        label: c.label,
+        description: c.description,
+        type: (c.type || "text") as
+          | "text"
+          | "list"
+          | "imageUrls"
+          | "sourceUrls"
+          | "categories",
         enabled: c.enabled !== false,
+        imageCount: c.imageCount,
+        sourceCount: c.sourceCount,
+        maxCategories: c.maxCategories,
+        customInstruction: c.customInstruction,
+        writingTone: c.writingTone as
+          | "professional"
+          | "persuasive"
+          | "simple"
+          | "technical"
+          | "custom"
+          | undefined,
+        contentLength: c.contentLength as "short" | "medium" | "long" | undefined,
       })),
-      geminiSettings,
+      enrichSettings,
       cmsType,
       workspaceCategories,
       categoriesRawRows
@@ -157,7 +174,7 @@ export async function POST(request: NextRequest) {
             p_entity_id: row.id,
             p_details: {
               rowIndex: row.rowIndex,
-              enrichmentModel: geminiSettings.enrichmentModel,
+              enrichmentModel: enrichSettings.enrichmentModel,
               totalCost: rowCostSummary.totalCost,
               totalTokens: rowCostSummary.totalTokens,
             },
