@@ -215,16 +215,29 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   setAllSourceColumns: (enabled) =>
     set((state) => {
       if (!enabled) return { sourceColumns: [] };
-      // Include original columns + any enriched columns that have data
-      const enrichedColIds = state.enrichmentColumns
-        .filter((col) => col.type === "text" || col.type === "list")
+
+      const hasEnrichedValue = (colId: string, row: (typeof state.rows)[number]) => {
+        const val = row.enrichedData?.[colId];
+        if (Array.isArray(val)) return val.length > 0;
+        return val !== undefined && val !== null && val !== "";
+      };
+
+      // Match the sidebar: only AI columns that have data on the current selection.
+      const scopeRows =
+        state.selectedRowIds.size > 0
+          ? state.rows.filter(
+              (row) =>
+                state.selectedRowIds.has(row.id) &&
+                (state.activeSheet === "existing"
+                  ? row.matchType === "existing"
+                  : row.matchType !== "existing")
+            )
+          : [];
+
+      const enrichedWithData = state.enrichmentColumns
+        .filter((col) => scopeRows.some((row) => hasEnrichedValue(col.id, row)))
         .map((col) => col.id);
-      const enrichedWithData = enrichedColIds.filter((colId) =>
-        state.rows.some((r) => {
-          const val = r.enrichedData?.[colId];
-          return val !== undefined && val !== null && val !== "";
-        })
-      );
+
       return { sourceColumns: [...state.originalColumns, ...enrichedWithData] };
     }),
 

@@ -17,8 +17,11 @@ import {
   type SyncBillingTracker,
   type SyncMode,
 } from "./ai-utils";
-import { costToCredits } from "@/lib/ai-pricing";
-import { searchImagesWithOpenAiWeb } from "./openai-web";
+import { costToCredits, createSerperCost } from "@/lib/ai-pricing";
+import {
+  searchGalleryWithOpenAiWeb,
+  searchImagesWithOpenAiWeb,
+} from "./openai-web";
 import {
   buildProductImageQuery,
   isLikelyUserChatInstruction,
@@ -157,7 +160,6 @@ Return valid JSON:
             config: {
               systemInstruction,
               responseMimeType: "application/json",
-              temperature: params.mode === "pro" ? 0.6 : 0.3,
               maxOutputTokens: params.mode === "pro" ? 8192 : 4096,
             },
           })
@@ -279,7 +281,6 @@ Return valid JSON: { "row": { "title": "..." } }`;
       config: {
         systemInstruction,
         responseMimeType: "application/json",
-        temperature: 0.2,
         maxOutputTokens: 4096,
       },
     })
@@ -358,7 +359,6 @@ Return valid JSON with filterFnBody and description.`;
       config: {
         systemInstruction,
         responseMimeType: "application/json",
-        temperature: 0.1,
         maxOutputTokens: 1024,
       },
     })
@@ -415,7 +415,6 @@ Return: { "answer": "..." }`;
       config: {
         systemInstruction,
         responseMimeType: "application/json",
-        temperature: 0.1,
         maxOutputTokens: 2048,
       },
     })
@@ -476,7 +475,6 @@ Return: { "answer": "..." }`;
       config: {
         systemInstruction,
         responseMimeType: "application/json",
-        temperature: 0.1,
         maxOutputTokens: params.mode === "pro" ? 4096 : 2048,
       },
     })
@@ -633,6 +631,9 @@ export async function searchImagesForRows(params: {
           };
         }
 
+        // Serper bills per executed query regardless of result quality, so the
+        // charge is recorded up-front — not only on successful matches.
+        trackDirectCost(params.billingTracker, createSerperCost(1));
         const images = await searchProductImages(
           { title, vendor, product_type: productType, tags },
           1,
@@ -677,6 +678,163 @@ export async function searchImagesForRows(params: {
   console.log("[Sync Images] finished", {
     backend: isPro ? "openai-sol" : "serper",
     found: results.length,
+    failedCount,
+    processed,
+  });
+  return results;
+}
+
+// ─── Gallery search (several images per product) ─────────────────────────────
+
+export type GalleryRowResult = {
+  rowIndex: number;
+  imageUrls: string[];
+  query: string;
+};
+
+/**
+ * Finds several gallery images per product.
+ *
+ * Cost note: one query per row in both modes, no matter how many images are
+ * requested. Serper returns a whole result page for a single billed query, and
+ * the Pro path asks Sol for the full set in one call — so a 4-image gallery
+ * costs the same as a single featured image.
+ */
+export async function searchGalleryImagesForRows(params: {
+  rows: SyncSheetRow[];
+  rowIndexes?: number[];
+  instruction: string;
+  imageCount: number;
+  mode?: SyncMode;
+  billingTracker?: SyncBillingTracker;
+  /** Per-row URLs to skip (featured image + gallery already on the product). */
+  excludeUrlsByRow?: Map<number, string[]>;
+  onChunk?: (chunk: {
+    values: GalleryRowResult[];
+    processedCount: number;
+    totalCount: number;
+    failedCount: number;
+  }) => void;
+  signal?: AbortSignal;
+}): Promise<GalleryRowResult[]> {
+  const targetIndexes = Array.isArray(params.rowIndexes)
+    ? params.rowIndexes.filter(
+        (i) => Number.isInteger(i) && i >= 0 && i < params.rows.length
+      )
+    : params.rows.map((_, i) => i);
+
+  const CONCURRENCY = 5;
+  const isPro = params.mode === "pro";
+  const imageCount = Math.max(1, Math.floor(params.imageCount));
+
+  console.log("[Sync Gallery] searchGalleryImagesForRows", {
+    mode: params.mode ?? "(undefined→fast)",
+    backend: isPro ? "openai-sol" : "serper",
+    rowCount: targetIndexes.length,
+    imageCount,
+    instruction: params.instruction.slice(0, 120),
+  });
+
+  const results: GalleryRowResult[] = [];
+  let failedCount = 0;
+  let processed = 0;
+
+  for (let i = 0; i < targetIndexes.length; i += CONCURRENCY) {
+    if (params.signal?.aborted) break;
+    const chunk = targetIndexes.slice(i, i + CONCURRENCY);
+    const chunkResults = await Promise.allSettled(
+      chunk.map(async (rowIndex) => {
+        const row = params.rows[rowIndex];
+        const title = String(row.title ?? "").trim();
+        const vendor = String(row.vendor ?? "").trim();
+        const productType = String(row.product_type ?? "").trim();
+        const tags = String(row.tags ?? "").trim();
+
+        const query = buildProductImageQuery(row);
+        const imageHint = isLikelyUserChatInstruction(params.instruction)
+          ? ""
+          : String(params.instruction ?? "").trim();
+        const exclude = params.excludeUrlsByRow?.get(rowIndex) ?? [];
+
+        if (!query) {
+          console.warn("[Sync Gallery] skip row — empty query", { rowIndex });
+          return null;
+        }
+
+        if (isPro) {
+          const found = await searchGalleryWithOpenAiWeb({
+            title,
+            vendor,
+            productType,
+            tags,
+            instruction: imageHint,
+            imageCount,
+            excludeUrls: exclude,
+            billingTracker: params.billingTracker,
+          });
+          const urls = found?.images.map((img) => img.imageUrl) ?? [];
+          if (urls.length === 0) return null;
+          return { rowIndex, imageUrls: urls, query: found?.query || query };
+        }
+
+        // Serper bills per executed query, so the charge lands once per row even
+        // though the single response supplies every gallery image.
+        trackDirectCost(params.billingTracker, createSerperCost(1));
+        const excludeKeys = new Set(
+          exclude.map((url) => String(url ?? "").trim().toLowerCase())
+        );
+        const images = await searchProductImages(
+          { title, vendor, product_type: productType, tags },
+          // Over-fetch so images already on the product can be discarded and the
+          // gallery still reaches the requested size.
+          imageCount + excludeKeys.size + 2,
+          imageHint || undefined,
+          undefined,
+          query
+        );
+        const urls: string[] = [];
+        const seen = new Set<string>();
+        for (const image of images) {
+          if (urls.length >= imageCount) break;
+          const url = String(image?.imageUrl ?? "").trim();
+          if (!url) continue;
+          const key = url.toLowerCase();
+          if (seen.has(key) || excludeKeys.has(key)) continue;
+          seen.add(key);
+          urls.push(url);
+        }
+        if (urls.length === 0) return null;
+        return { rowIndex, imageUrls: urls, query };
+      })
+    );
+
+    const waveValues: GalleryRowResult[] = [];
+    for (const r of chunkResults) {
+      if (r.status === "fulfilled" && r.value) {
+        waveValues.push(r.value);
+        results.push(r.value);
+      } else {
+        failedCount += 1;
+        if (r.status === "rejected") {
+          console.error("[Sync Gallery] row FAILED", {
+            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          });
+        }
+      }
+    }
+    processed += chunk.length;
+    params.onChunk?.({
+      values: waveValues,
+      processedCount: processed,
+      totalCount: targetIndexes.length,
+      failedCount,
+    });
+  }
+
+  console.log("[Sync Gallery] finished", {
+    backend: isPro ? "openai-sol" : "serper",
+    rowsWithImages: results.length,
+    totalImages: results.reduce((sum, r) => sum + r.imageUrls.length, 0),
     failedCount,
     processed,
   });

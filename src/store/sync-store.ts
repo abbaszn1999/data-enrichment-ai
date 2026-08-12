@@ -81,6 +81,10 @@ const MAX_SHEET_HISTORY = 5;
 interface SyncState {
   isFocusMode: boolean;
   messages: SyncMessage[];
+  /** Durable compressed memory of older turns (updated by the agent). */
+  sessionSummary: string;
+  /** High-water mark: messages [0, N) are folded into sessionSummary. */
+  sessionSummaryUpTo: number;
   isStreaming: boolean;
   mode: SyncMode;
   thinkingLevel: SyncThinkingLevel;
@@ -107,6 +111,8 @@ interface SyncActions {
   updateLastAssistantThinking: (text: string, inline?: boolean) => void;
   updateLastAssistantProgress: (progress: string[]) => void;
   updateLastAssistantSessionSummary: (sessionSummary: string) => void;
+  setSessionSummary: (sessionSummary: string) => void;
+  setSessionSummaryUpTo: (sessionSummaryUpTo: number) => void;
   setStreaming: (streaming: boolean) => void;
   addPendingAttachment: (file: File) => void;
   removePendingAttachment: (index: number) => void;
@@ -131,6 +137,8 @@ interface SyncActions {
 export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
   isFocusMode: false,
   messages: [],
+  sessionSummary: "",
+  sessionSummaryUpTo: 0,
   isStreaming: false,
   mode: "fast",
   thinkingLevel: "low",
@@ -203,8 +211,11 @@ export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
           break;
         }
       }
-      return { messages: msgs };
+      return { messages: msgs, sessionSummary };
     }),
+  setSessionSummary: (sessionSummary) => set({ sessionSummary }),
+  setSessionSummaryUpTo: (sessionSummaryUpTo) =>
+    set({ sessionSummaryUpTo: Math.max(0, Math.floor(sessionSummaryUpTo)) }),
   setStreaming: (streaming) => set({ isStreaming: streaming }),
   addPendingAttachment: (file) =>
     set((s) => ({ pendingAttachments: [...s.pendingAttachments, file] })),
@@ -270,6 +281,8 @@ export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
   resetChat: () =>
     set({
       messages: [],
+      sessionSummary: "",
+      sessionSummaryUpTo: 0,
       isStreaming: false,
       isFocusMode: false,
       pendingAttachments: [],

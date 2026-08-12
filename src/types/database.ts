@@ -425,7 +425,7 @@ export interface Database {
           id: string;
           workspace_id: string;
           user_id: string;
-          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
+          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "sync_agent" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
           credits_used: number;
           entity_type: string | null;
           entity_id: string | null;
@@ -435,7 +435,7 @@ export interface Database {
         Insert: {
           workspace_id: string;
           user_id: string;
-          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
+          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "sync_agent" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
           credits_used?: number;
           entity_type?: string | null;
           entity_id?: string | null;

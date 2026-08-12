@@ -1,9 +1,68 @@
 import type { SyncSheetRow } from "../../core/types";
+import {
+  buildGalleryMediaIndex,
+  parseGalleryImages,
+} from "../../core/gallery-images";
 import { mapStatusToWoo } from "./status-mapper";
 import { parseCommaList } from "./taxonomy";
 
 function toText(value: unknown) {
   return String(value ?? "").trim();
+}
+
+type WooImageEntry = { id?: number; src?: string; alt?: string };
+
+/**
+ * WooCommerce's `images` field is the complete desired state: the first entry is
+ * the featured image, the rest are the gallery, and anything omitted is deleted
+ * from the product. Existing pictures must therefore be re-sent — by attachment
+ * `id`, because passing `src` again makes Woo re-download the file and leaves a
+ * duplicate in the media library.
+ *
+ * Returns null when no image column is in play, so `images` stays out of the
+ * payload entirely and Woo leaves the product's media untouched.
+ */
+export function buildWooImagesPayload(
+  row: SyncSheetRow,
+  include: (column: string) => boolean
+): WooImageEntry[] | null {
+  const featuredTouched = include("featured_image") || include("featured_image_alt_text");
+  const galleryTouched = include("gallery_images");
+  if (!featuredTouched && !galleryTouched) return null;
+
+  const mediaIndex = buildGalleryMediaIndex(row.gallery_media);
+  const featuredUrl = toText(row.featured_image);
+  const featuredId = Number(toText(row.featured_image_id));
+  const featuredAlt = toText(row.featured_image_alt_text);
+  const images: WooImageEntry[] = [];
+  const usedKeys = new Set<string>();
+
+  if (featuredUrl) {
+    // A known attachment is referenced by id; a freshly searched URL is sent as
+    // src so Woo imports it. Alt text rides along either way.
+    const entry: WooImageEntry = Number.isInteger(featuredId) && featuredId > 0
+      ? { id: featuredId }
+      : { src: featuredUrl };
+    if (featuredAlt) entry.alt = featuredAlt;
+    images.push(entry);
+    usedKeys.add(featuredUrl.toLowerCase());
+  }
+
+  for (const url of parseGalleryImages(row.gallery_images)) {
+    const key = url.toLowerCase();
+    if (usedKeys.has(key)) continue;
+    usedKeys.add(key);
+    const known = mediaIndex.get(key);
+    const knownId = Number(known?.id);
+    images.push(
+      Number.isInteger(knownId) && knownId > 0 ? { id: knownId } : { src: url }
+    );
+  }
+
+  // Every image column was cleared — that is a real "remove all media" intent,
+  // but an empty array is indistinguishable from a bug, so skip it instead.
+  if (images.length === 0) return null;
+  return images;
 }
 
 const DIRECT_FIELDS: Record<string, string> = {
@@ -83,14 +142,9 @@ export function buildWooProductPayload(
     if (weight) payload.weight = weight;
   }
 
-  // Featured image
-  if (include("featured_image")) {
-    const url = toText(row.featured_image);
-    if (url) {
-      const alt = toText(row.featured_image_alt_text);
-      payload.images = [{ src: url, ...(alt ? { alt } : {}) }];
-    }
-  }
+  // Featured image + gallery share one array; see buildWooImagesPayload.
+  const images = buildWooImagesPayload(row, include);
+  if (images) payload.images = images;
 
   // SEO via Yoast meta_data
   if (include("seo_title")) {

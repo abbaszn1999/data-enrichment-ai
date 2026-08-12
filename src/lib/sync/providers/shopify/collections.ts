@@ -494,13 +494,17 @@ export async function applyShopifyCollectionUpdates(params: {
     }
 
     // SEO — only set the sub-object when at least one SEO field is touched.
+    // Both halves are then resent from the row: Shopify nulls out whichever
+    // SEOInput field is omitted, so sending just one would wipe the other.
     const seoTouched =
       (touched("seo_title") && row.seo_title !== undefined) ||
       (touched("seo_description") && row.seo_description !== undefined);
     if (seoTouched) {
       const seo: Record<string, unknown> = {};
-      if (touched("seo_title")) seo.title = String(row.seo_title ?? "");
-      if (touched("seo_description")) seo.description = String(row.seo_description ?? "");
+      if (row.seo_title !== undefined) seo.title = String(row.seo_title ?? "");
+      if (row.seo_description !== undefined) {
+        seo.description = String(row.seo_description ?? "");
+      }
       input.seo = seo;
     }
 

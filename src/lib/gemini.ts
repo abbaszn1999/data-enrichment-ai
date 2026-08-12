@@ -1,6 +1,10 @@
 import { buildSearchPrompt } from "./prompts";
 import type { SourceUrl, ImageUrl, ThinkingLevelOption } from "@/types";
-import { calculateCallCost, type AiCallCost } from "./ai-pricing";
+import {
+  calculateCallCost,
+  calculateGroundedCallCost,
+  type AiCallCost,
+} from "./ai-pricing";
 
 /**
  * Gemini helpers retained for Sync (web research + Serper image search).
@@ -126,9 +130,24 @@ export async function searchProduct(
 
     const text = response.text || "";
 
-    // Calculate cost from usageMetadata
-    const cost = calculateCallCost("gemini-3.6-flash", response.usageMetadata, true);
-    console.log(`[Gemini] Search cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens)`);
+    // Gemini 3 bills grounding per executed search query, not per prompt.
+    // groundingMetadata.webSearchQueries lists the queries the model ran;
+    // when it's absent (older shapes / no search executed) fall back to 1
+    // because the tool was enabled for this call.
+    const executedQueries =
+      response.candidates?.[0]?.groundingMetadata?.webSearchQueries?.filter(
+        (q) => typeof q === "string" && q.trim()
+      ).length;
+    const queryCount =
+      typeof executedQueries === "number" ? Math.max(executedQueries, 1) : 1;
+    const cost = calculateGroundedCallCost(
+      "gemini-3.6-flash",
+      response.usageMetadata,
+      queryCount
+    );
+    console.log(
+      `[Gemini] Search cost: $${cost.totalCost.toFixed(6)} (${cost.usage.totalTokens} tokens, ${queryCount} search queries)`
+    );
 
     const sources: SourceUrl[] = [];
     const chunks =

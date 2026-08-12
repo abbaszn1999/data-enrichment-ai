@@ -1,4 +1,8 @@
 import type { SyncSheet, SyncSheetRow } from "../../core/types";
+import {
+  serializeGalleryImages,
+  type GalleryMediaEntry,
+} from "../../core/gallery-images";
 import { WOOCOMMERCE_CORE_PRODUCT_COLUMNS } from "./columns";
 
 function toNumber(value: unknown) {
@@ -14,6 +18,27 @@ function getFeaturedImage(product: any) {
     return product.images[0];
   }
   return null;
+}
+
+/**
+ * WooCommerce keeps one `images` array where the first entry is the featured
+ * image and everything after it is the gallery — so the gallery is simply the
+ * tail. Attachment IDs are kept so updates can reference existing images
+ * instead of re-uploading them.
+ */
+function getGalleryMedia(product: any): GalleryMediaEntry[] {
+  if (!Array.isArray(product?.images)) return [];
+  const gallery: GalleryMediaEntry[] = [];
+  const seen = new Set<string>();
+  for (const image of product.images.slice(1)) {
+    const src = toText(image?.src);
+    if (!src) continue;
+    const key = src.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    gallery.push({ id: toText(image?.id), src });
+  }
+  return gallery;
 }
 
 function getYoastMeta(product: any, key: string): string {
@@ -42,6 +67,7 @@ function collectVariationStats(variations: any[]) {
 export function normalizeWooCommerceProductRow(product: any, variations: any[] = []): SyncSheetRow {
   const isVariable = product?.type === "variable" && variations.length > 0;
   const featuredImage = getFeaturedImage(product);
+  const galleryMedia = getGalleryMedia(product);
 
   let price = toText(product?.regular_price) || toText(product?.price);
   let comparePrice = toText(product?.sale_price);
@@ -96,6 +122,9 @@ export function normalizeWooCommerceProductRow(product: any, variations: any[] =
     featured_image: toText(featuredImage?.src),
     featured_image_id: toText(featuredImage?.id),
     featured_image_alt_text: toText(featuredImage?.alt),
+    gallery_images: serializeGalleryImages(galleryMedia.map((m) => m.src)),
+    gallery_media: galleryMedia,
+    image_count: Array.isArray(product?.images) ? product.images.length : 0,
     short_description: toText(product?.short_description),
     body_html: toText(product?.description),
     weight: toText(product?.weight),

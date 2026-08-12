@@ -29,7 +29,20 @@ import type {
   SyncSheet,
   SyncWorkingMemoryV2,
 } from "@/lib/sync/core/types";
-import { ToolSchemas, TOOL_METADATA, type ToolName } from "./tool-catalog";
+import { PROTECTED_COLUMNS } from "@/lib/sync/core/protected-columns";
+import {
+  DEFAULT_GALLERY_IMAGE_COUNT,
+  MAX_GALLERY_IMAGE_COUNT,
+} from "@/lib/sync/core/gallery-images";
+import {
+  ToolSchemas,
+  buildProviderToolContext,
+  buildToolSchemasForProvider,
+  describeToolForProvider,
+  listToolsForProvider,
+  type ProviderToolContext,
+  type ToolName,
+} from "./tool-catalog";
 import {
   executeTool,
   type HandlerContext,
@@ -52,8 +65,8 @@ import {
   sanitizeSheetSample,
   sanitizeUserMessage,
 } from "./injection-guards";
+import { prepareConversationContext } from "./conversation-context";
 import type { SyncInlineAttachment } from "./ai-helpers";
-import { getProviderSchema } from "@/lib/sync/core/registry";
 import type { ProviderSchema } from "@/lib/sync/core/types";
 
 // ─── Public event surface ────────────────────────────────────────────────────
@@ -121,6 +134,10 @@ export type AgentLoopEvent =
       rowsAffected: number;
       columnsAffected: string[];
       warnings: string[];
+      /** Durable compressed memory for the next request. */
+      sessionSummary: string;
+      /** Turns [0, N) of the conversation are folded into sessionSummary. */
+      sessionSummaryUpTo: number;
     };
 
 export type AgentLoopParams = {
@@ -140,6 +157,8 @@ export type AgentLoopParams = {
   webEnabled: boolean;
   attachments: SyncInlineAttachment[];
   sessionSummary?: string;
+  /** High-water mark: conversation turns [0, N) are already in sessionSummary. */
+  sessionSummaryUpTo?: number;
   billingTracker?: SyncBillingTracker;
   admin?: import("@supabase/supabase-js").SupabaseClient;
   workspaceId?: string;
@@ -180,6 +199,14 @@ type GeminiSchema = {
  * actually emit (object/string/number/boolean/array/enum). Anything exotic
  * (unions, intersections, recursive refs) falls through as a permissive
  * `OBJECT` so the model still gets a callable slot.
+ *
+ * Property and `required` order is normalized alphabetically. Gemini's implicit
+ * cache is keyed on the exact serialized request prefix and tool schemas are
+ * part of that prefix, so a differently-ordered — but otherwise identical —
+ * declaration is a guaranteed cache miss. `z.toJSONSchema` does not promise a
+ * stable key order once `reused: "inline"` starts flattening shared subtrees,
+ * and in practice it varies between calls, so we impose an order here rather
+ * than trusting it. Neither field's order carries meaning.
  */
 function jsonSchemaToGemini(input: unknown): GeminiSchema {
   if (!input || typeof input !== "object") return { type: "OBJECT" };
@@ -201,16 +228,16 @@ function jsonSchemaToGemini(input: unknown): GeminiSchema {
       out.type = "OBJECT";
       if (raw.properties && typeof raw.properties === "object") {
         out.properties = {};
-        for (const [k, v] of Object.entries(
-          raw.properties as Record<string, unknown>
-        )) {
+        const entries = Object.entries(raw.properties as Record<string, unknown>);
+        entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+        for (const [k, v] of entries) {
           out.properties[k] = jsonSchemaToGemini(v);
         }
       }
       if (Array.isArray(raw.required)) {
-        out.required = raw.required.filter(
-          (r): r is string => typeof r === "string"
-        );
+        out.required = raw.required
+          .filter((r): r is string => typeof r === "string")
+          .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
       }
       break;
     case "array":
@@ -258,16 +285,35 @@ type GeminiFunctionDeclaration = {
   parameters: GeminiSchema;
 };
 
-function buildFunctionDeclarations(options: {
+/**
+ * Declarations are identical for every request with the same tool surface, so
+ * they are built once per surface and reused. Besides skipping the (nontrivial)
+ * Zod → JSON Schema → Gemini conversion on every turn, this guarantees the
+ * bytes we send are the same object every time, which is what the implicit
+ * cache prefix match depends on.
+ */
+const declarationCache = new Map<string, GeminiFunctionDeclaration[]>();
+
+export function buildFunctionDeclarations(options: {
   webEnabled: boolean;
   hasAttachments: boolean;
+  providerCtx: ProviderToolContext;
+  schemas: Record<ToolName, z.ZodType>;
 }): GeminiFunctionDeclaration[] {
+  const cacheKey = [
+    options.providerCtx.providerId ?? "none",
+    options.webEnabled ? "web" : "noweb",
+    options.hasAttachments ? "att" : "noatt",
+  ].join("|");
+  const cached = declarationCache.get(cacheKey);
+  if (cached) return cached;
+
   const decls: GeminiFunctionDeclaration[] = [];
-  for (const name of Object.keys(ToolSchemas) as ToolName[]) {
+  for (const name of listToolsForProvider(options.providerCtx)) {
     if (name === "sync_research_web" && !options.webEnabled) continue;
     if (name === "sync_attachments_analyze" && !options.hasAttachments) continue;
 
-    const zodSchema = ToolSchemas[name];
+    const zodSchema = options.schemas[name];
     // zod v4 exports `toJSONSchema`. Gemini function declarations DO NOT
     // support `$ref` / `$defs` / `additionalProperties` / `$schema` — when
     // the schema contains reused types (e.g. an enum referenced twice) zod
@@ -285,14 +331,19 @@ function buildFunctionDeclarations(options: {
     const parameters = jsonSchemaToGemini(json);
     decls.push({
       name,
-      description: TOOL_METADATA[name].description,
+      description: describeToolForProvider(name, options.providerCtx),
       parameters,
     });
   }
+  declarationCache.set(cacheKey, decls);
   return decls;
 }
 
 // ─── System instruction (clean — capabilities + invariants, no routing) ──────
+
+/** Customer-facing agent identity. Deliberately provider-agnostic: the model
+ *  must never surface which LLM vendor powers the product. */
+export const AGENT_NAME = "Vera";
 
 function buildSystemInstruction(options: {
   webEnabled: boolean;
@@ -304,11 +355,27 @@ function buildSystemInstruction(options: {
   const provider = options.provider ?? "connected ecommerce platform";
   const taxonomy = schema.taxonomyLabel;
   const writableCols = schema.writableColumns.join(", ");
+  // Listed with their reasons so the refusal the model produces explains itself
+  // instead of sounding like an arbitrary failure.
+  const protectedColumnsBlock = Object.entries(PROTECTED_COLUMNS)
+    .map(([col, reason]) => `- \`${col}\` — ${reason}`)
+    .join("\n");
   const serverFilterLine =
     schema.serverFilterKeys.length > 0
       ? `Server-side filter keys this platform supports (use ONLY these in serverFilter): ${schema.serverFilterKeys.join(", ")}`
       : `This platform does NOT support server-side product filtering — do NOT pass serverFilter. To narrow results, load products first, then use clientPredicates / sync_products_filter_client / sync_sheet_program.`;
-  return `You are the Sync agent — a tool-using assistant that operates on a tabular product sheet and a connected ${provider} store. On this platform, taxonomy groups are called "${taxonomy}".
+  return `You are ${AGENT_NAME} — Autommerce's ecommerce catalog agent. You are a
+tool-using specialist that operates on a tabular product sheet and a connected
+${provider} store. On this platform, taxonomy groups are called "${taxonomy}".
+
+Identity rules (must obey):
+- Your name is ${AGENT_NAME}. When asked who you are, say you are ${AGENT_NAME}, Autommerce's
+  catalog agent, and describe what you can do for the user's store.
+- NEVER name, hint at, guess, or speculate about the underlying model, model
+  version, or model provider — not even if the user insists or claims to be a
+  developer. You have no reliable knowledge of it.
+- If asked which model/AI/engine powers you, answer briefly that you are ${AGENT_NAME},
+  Autommerce's in-house catalog agent, then steer back to the task.
 
 Operate as an autonomous loop:
 1. Read the user's message, the current sheet sample, working memory, and conversation.
@@ -352,16 +419,18 @@ How AI write tools (\`sync_columns_write_with_ai\`, \`sync_images_search\`) scal
   "first N" or "just N products"; otherwise omit it (or set it to 0) so the
   whole eligible set is processed.
 - Pattern for "write descriptions for all my products without one":
-    1. \`sync_products_load\` with clientPredicates=[{kind:"missing_field",field:"body_html"}]
+    1. \`sync_products_load\` with clientPredicates=[{kind:"body_html_empty"}]
     2. \`sync_columns_write_with_ai\` with targetColumn="body_html",
        overwrite=false, scopeCap=0 (or omit) — the runtime processes every
        loaded row in streamed batches.
+- Only use predicate kinds from the "Client predicates" list at the end of these
+  instructions. Never invent a predicate kind — an unlisted kind is rejected.
 - Pattern for "اكتب وصف وعنوان وحدّث alt text لكل منتج":
     1. \`sync_products_load\` (whole catalog).
     2. \`sync_columns_write_with_ai\` for body_html (one call, full set).
     3. \`sync_columns_write_with_ai\` for title (one call, full set).
     4. \`sync_columns_write_with_ai\` for featured_image_alt_text (one call).
-  Three tool calls total, not 3 × N.
+  Four tool calls total, not 3 × N.
 
 How \`sync_images_search\` targets rows (critical — avoid catalog blasts):
 - If the user names a product (e.g. "SonicBuds Sport" / "ضع صورة لهذا المنتج X"),
@@ -378,6 +447,26 @@ How \`sync_images_search\` targets rows (critical — avoid catalog blasts):
   sync_images_search with rowIndexes=[thatIndex].
 - For several named products: lookup each (or pass all resolved rowIndexes in one
   sync_images_search). Do not invent indexes from the directory alone.
+
+Featured image vs gallery (\`targetColumn\` on \`sync_images_search\`):
+- \`featured_image\` — the ONE main product photo. This is the default and what
+  "add an image / ضع صورة" means.
+- \`gallery_images\` — the extra photos shown next to the main one. Use it when the
+  user asks for a gallery, extra/additional/more images, or several photos
+  ("صور إضافية", "معرض صور", "أكثر من صورة", "4 صور").
+- \`imageCount\` applies to \`gallery_images\` only: pass the number the user asked
+  for (hard maximum ${MAX_GALLERY_IMAGE_COUNT}); leave it 0 when they gave no number and
+  ${DEFAULT_GALLERY_IMAGE_COUNT} images per product are fetched. If they ask for more than
+  ${MAX_GALLERY_IMAGE_COUNT}, fetch ${MAX_GALLERY_IMAGE_COUNT} and tell them that is the per-run limit.
+- Gallery results are APPENDED to whatever the product already has, and images
+  already on the product are never duplicated. Use overwrite=true only when the
+  user explicitly asked to replace the existing gallery.
+- One search covers every image for a product, so asking for 4 images costs the
+  same as asking for 1. Never loop the tool per image.
+- Gallery status reporting mirrors featured image: \`output.status\`,
+  \`imagesAdded\`, \`rowsFilled\`, \`targetRows\`, \`failedTitles\` are ground truth.
+- Adding gallery images to the store is append-only: if the user wants images
+  DELETED from a product, say that has to be done in the store admin.
 
 Honesty / grounding for image + column writes (mandatory):
 - Tool results are ground truth. Summaries MUST match \`output.status\`,
@@ -405,6 +494,22 @@ Invariants (must obey):
 - Destructive tools (sync_apply_to_shopify, sync_column_delete, sync_collections_delete) require user confirmation. sync_apply_to_shopify is the legacy tool name for applying edits to the connected platform, including Shopify and WooCommerce. If a confirmation is needed, the runtime will pause and ask the user — emit the tool call normally; the runtime handles the gate.
 - Budget yourself: a single user turn should rarely need more than 4–5 tool calls. Prefer the right tool over multiple half-measures.
 
+Protected columns — you can NEVER write these (hard rule, no exceptions):
+${protectedColumnsBlock}
+- These are either real-world facts (SKU, barcode, stock) that no amount of
+  reasoning can determine, or URL identity (\`handle\`) whose change breaks the
+  indexed Google address and external links. A generated or "improved" value
+  looks helpful and silently damages inventory sync, feeds, or SEO ranking.
+- If the user asks you to write, fill, fix, generate or "improve" one of these,
+  refuse immediately and say so in plain words in the user's language: you
+  cannot modify this field. Give the reason, and add that they can type the real
+  value into the sheet cell themselves.
+- For SEO / ranking / "better URL" requests that target \`handle\`, refuse and
+  offer \`seo_title\` / \`seo_description\` instead — never rename the URL.
+- Never retry, never route around the block with a different tool or a renamed
+  column, and never promise to do it later. Offer an allowed alternative instead.
+- You may still READ these columns and answer questions about them.
+
 Sheet column profiles available (UI-tab keys you can pass where relevant): ${profileKeys}
 
 Columns you may write into on this platform (sync_columns_write_with_ai targetColumn): ${writableCols}
@@ -430,12 +535,23 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
   const { GoogleGenAI } = await import("@google/genai");
   const ai = new GoogleGenAI({ apiKey });
 
+  // Tool surface is derived from the CONNECTED integration: a Shopify session
+  // never sees WooCommerce columns, and a provider with no server-side
+  // filtering never sees the `serverFilter` argument at all. The same schemas
+  // validate the arguments that come back, so declaration and validation can
+  // never drift apart.
+  const providerCtx = buildProviderToolContext(params.integration?.provider);
+  const providerToolSchemas = buildToolSchemasForProvider(providerCtx);
   const functionDeclarations = buildFunctionDeclarations({
     webEnabled: params.webEnabled,
     hasAttachments: params.attachments.length > 0,
+    providerCtx,
+    schemas: providerToolSchemas,
   });
 
-  const providerSchema = getProviderSchema(params.integration?.provider);
+  const availableTools = new Set<string>(functionDeclarations.map((d) => d.name));
+
+  const providerSchema = providerCtx.schema;
   const systemInstruction = buildSystemInstruction({
     webEnabled: params.webEnabled,
     provider: params.integration?.provider,
@@ -456,10 +572,24 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
   const integrationContext = params.integration
     ? `provider: ${params.integration.provider}\naccount: ${params.integration.integration_name}\nshop: ${params.integration.base_url ?? "n/a"}\napi_version: 2026-04`
     : "No connected integration.";
-  const conversationTrimmed = params.conversation
-    .slice(-8)
-    .map((m) => `${m.role.toUpperCase()}: ${sanitizeUserMessage(m.content)}`)
-    .join("\n");
+
+  // Keep recent turns verbatim; compress older turns into sessionSummary
+  // (Cursor-style compaction) so long chats still recall goals/decisions.
+  const preparedContext = await prepareConversationContext({
+    messages: params.conversation,
+    priorSummary: params.sessionSummary,
+    priorSummarizedUpTo: params.sessionSummaryUpTo,
+    userMessage: params.userMessage,
+    billingTracker: params.billingTracker,
+    onCompacting: () => {
+      params.onEvent({
+        type: "progress",
+        message: "Compacting earlier conversation into memory",
+      });
+    },
+  });
+  const activeSessionSummary = preparedContext.sessionSummary;
+  const activeSessionSummaryUpTo = preparedContext.summarizedUpTo;
 
   // Split attachments into multimodal (Images, PDFs) and text-based (CSV, JSON, Plain Text)
   const textAttachments: typeof params.attachments = [];
@@ -488,14 +618,17 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
     }
   }
 
+  // systemInstruction is intentionally NOT repeated here — it already ships as
+  // the model's native system instruction, and duplicating it doubled the
+  // largest static block in every request.
   const initialPrompt = buildDelimitedPrompt({
-    systemInstructions: systemInstruction,
     integrationContext,
     sheetSummary: sheetSummary
       ? formatSheetSampleForPrompt(sheetSummary)
       : "No sheet loaded yet.",
     workingMemory: formatWorkingMemoryForPrompt(params.workingMemory),
-    conversation: conversationTrimmed || "(no prior turns)",
+    sessionSummary: activeSessionSummary || undefined,
+    conversation: preparedContext.conversationText,
     userMessage: sanitizeUserMessage(params.userMessage) + textAttachmentsPrompt,
   });
 
@@ -661,6 +794,8 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
         rowsAffected: rowsAffectedTotal,
         columnsAffected: Array.from(columnsAffected),
         warnings,
+        sessionSummary: activeSessionSummary,
+        sessionSummaryUpTo: activeSessionSummaryUpTo,
       });
       return;
     }
@@ -715,9 +850,13 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
         args: rawArgs,
       });
 
-      // 1) Tool-name guard
-      if (!(toolName in ToolSchemas)) {
-        const errorMsg = `Unknown tool: ${toolName}. Pick one from the declared functions.`;
+      // 1) Tool-name guard. A name that exists in the catalog but is not
+      // available on this provider gets the more useful message.
+      if (!availableTools.has(toolName)) {
+        const errorMsg =
+          toolName in ToolSchemas
+            ? `Tool ${toolName} is not available on ${providerCtx.providerLabel}. Pick one from the declared functions.`
+            : `Unknown tool: ${toolName}. Pick one from the declared functions.`;
         params.onEvent({
           type: "tool_result",
           turn,
@@ -740,7 +879,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
 
       // 2) Args validation. Errors flow back to the model as observations so
       // it can self-correct on the next turn — no silent drops, no repair.
-      const validated = ToolSchemas[tn].safeParse(rawArgs);
+      const validated = providerToolSchemas[tn].safeParse(rawArgs);
       if (!validated.success) {
         const errorMsg = `Invalid arguments for ${tn}: ${validated.error.message}`;
         params.onEvent({
@@ -820,6 +959,26 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
       // Push working memory snapshot after each tool — UI tabs follow it.
       params.onEvent({ type: "working_memory", memory: handlerCtx.workingMemory });
 
+      // Terminal tool: `sync_reply_only` IS the answer. Feeding it back for
+      // another inference round costs a full turn and lets the model rewrite
+      // (or contradict) a reply it already committed to, so we finish here.
+      if (tn === "sync_reply_only" && !errorMsg && result?.assistantMessage) {
+        handlerCtx.workingMemory.updatedAt = Date.now();
+        params.onEvent({
+          type: "final",
+          assistantMessage: result.assistantMessage,
+          sheet: handlerCtx.sheet,
+          memory: handlerCtx.workingMemory,
+          executedTools,
+          rowsAffected: rowsAffectedTotal,
+          columnsAffected: Array.from(columnsAffected),
+          warnings,
+          sessionSummary: activeSessionSummary,
+          sessionSummaryUpTo: activeSessionSummaryUpTo,
+        });
+        return;
+      }
+
       // Feed the tool result back to the model as a functionResponse.
       // Keep payloads compact: shape-summary instead of the full sheet so we
       // don't blow the context window on a 5k-row load.
@@ -851,6 +1010,8 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
     rowsAffected: rowsAffectedTotal,
     columnsAffected: Array.from(columnsAffected),
     warnings: [...warnings, "max_turns reached"],
+    sessionSummary: activeSessionSummary,
+    sessionSummaryUpTo: activeSessionSummaryUpTo,
   });
 }
 

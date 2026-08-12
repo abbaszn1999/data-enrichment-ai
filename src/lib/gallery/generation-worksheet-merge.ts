@@ -2,8 +2,97 @@ import { imageRefsMatch } from "@/lib/gallery/image-refs";
 import {
   getRowMainImagePaths,
   type GalleryRow,
+  type GalleryRowStatus,
   type GalleryWorksheetJson,
 } from "@/lib/gallery/types";
+
+function isBusyRowStatus(status: GalleryRowStatus | undefined): boolean {
+  return status === "queued" || status === "generating";
+}
+
+/**
+ * Merge one polled row onto the client copy while a generate request is in
+ * flight. Stale idle/ready snapshots must not wipe optimistic queued UI.
+ */
+export function mergePolledGenerationRow(
+  local: GalleryRow,
+  polled: GalleryRow,
+  options: { clientRunActive: boolean }
+): GalleryRow {
+  const localBusy = isBusyRowStatus(local.status);
+  const polledBusy = isBusyRowStatus(polled.status);
+
+  // Live server progress (checkpoints) wins over optimistic local state.
+  if (polledBusy) {
+    return polled;
+  }
+
+  // Local is mid-run but the poll returned a non-busy snapshot.
+  if (localBusy && !polledBusy) {
+    // After the client request ends, storage is authoritative again.
+    if (!options.clientRunActive) {
+      return polled;
+    }
+
+    // Explicit failure / completed progress after the row was already generating.
+    // Do not trust a stale `ready` while we are still only optimistically queued —
+    // that is the common race before the generate route persists the run.
+    if (polled.status === "failed") {
+      return polled;
+    }
+    if (polled.status === "ready" && local.status === "generating") {
+      return polled;
+    }
+
+    return {
+      ...polled,
+      status: local.status,
+      generationStage: local.generationStage,
+      generationTarget: local.generationTarget ?? polled.generationTarget,
+      errorMessage: local.errorMessage,
+    };
+  }
+
+  return polled;
+}
+
+/**
+ * Apply a generation poll snapshot without erasing in-flight row loading UI.
+ */
+export function mergePolledGenerationWorksheet(params: {
+  local: GalleryWorksheetJson;
+  polled: GalleryWorksheetJson;
+  clientRunActive: boolean;
+}): GalleryWorksheetJson {
+  const { local, polled, clientRunActive } = params;
+  const localById = new Map(local.rows.map((row) => [row.id, row]));
+
+  const rows = polled.rows.map((polledRow) => {
+    const localRow = localById.get(polledRow.id);
+    if (!localRow) return polledRow;
+    return mergePolledGenerationRow(localRow, polledRow, { clientRunActive });
+  });
+
+  let activeRun = polled.activeRun ?? local.activeRun ?? null;
+  const polledRunActive =
+    polled.activeRun?.status === "running" ||
+    polled.activeRun?.status === "queued";
+  const localRunActive =
+    local.activeRun?.status === "running" ||
+    local.activeRun?.status === "queued";
+
+  // Keep the local activeRun badge while the client request is still open and
+  // the poll has not yet observed the run (or already dropped a stale copy).
+  if (clientRunActive && !polledRunActive && localRunActive) {
+    activeRun = local.activeRun ?? activeRun;
+  }
+
+  return {
+    ...polled,
+    rows,
+    activeRun,
+  };
+}
 
 /** Paths present in memory but removed from storage (user delete won). */
 export function pathsRemovedByUser(

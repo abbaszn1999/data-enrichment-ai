@@ -79,6 +79,9 @@ export const SHOPIFY_LIMITS = {
  * Used as a strict enum in the tool's Zod schema so the model never invents
  * a target column name. Add new entries here when you want the agent to be
  * able to fill them.
+ *
+ * Identity, URL, and inventory fields (handle, primary_sku, barcode, …) are
+ * deliberately absent — see core/protected-columns.ts for the block list.
  */
 export const WRITABLE_COLUMNS = [
   "title",
@@ -86,15 +89,12 @@ export const WRITABLE_COLUMNS = [
   "description",
   "seo_title",
   "seo_description",
-  "handle",
   "tags",
   "vendor",
   "product_type",
   "status",
   "price",
   "compare_at_price",
-  "primary_sku",
-  "barcode",
   "featured_image_alt_text",
   "image_alt_text",
 ] as const;
@@ -130,6 +130,7 @@ export const COLUMN_PROFILES: Record<string, string[]> = {
     "title",
     "featured_image",
     "featured_image_alt_text",
+    "gallery_images",
     "image_count",
   ],
   inventory: [

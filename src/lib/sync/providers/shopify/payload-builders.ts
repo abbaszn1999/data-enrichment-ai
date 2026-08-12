@@ -8,6 +8,7 @@
 // path has a known bug that empties existing metafields (Shopify Community 2025).
 
 import type { SyncSheetRow } from "@/lib/sync/core/types";
+import { parseGalleryImages } from "@/lib/sync/core/gallery-images";
 
 // ─── Column → ProductSetInput field map ──────────────────────────────────────
 
@@ -29,6 +30,7 @@ export const SPECIAL_PRODUCT_COLUMNS = new Set([
   "seo_description",
   "featured_image",
   "featured_image_alt_text",
+  "gallery_images",
   "price",
   "compare_at_price",
   "primary_sku",
@@ -142,10 +144,11 @@ export function buildProductSetInput(
     const v = toText(row.title);
     if (v) input.title = v;
   }
-  if (touched("handle")) {
-    const v = toText(row.handle);
-    if (v) input.handle = v;
-  }
+  // `handle` is the lookup identifier, and productSet rejects the mutation with
+  // MISSING_FIELD_REQUIRED unless the identifier's field is also in the input —
+  // so it ships on every payload, not only when the handle itself changed.
+  const handleValue = toText(row.handle);
+  if (handleValue) input.handle = handleValue;
   if (touched("vendor") && row.vendor !== undefined) {
     input.vendor = toText(row.vendor);
   }
@@ -165,17 +168,16 @@ export function buildProductSetInput(
     if (desc) input.descriptionHtml = desc;
   }
 
-  // SEO
+  // SEO — Shopify nulls out any SEOInput field that is omitted, so whenever one
+  // half changes the other must be resent from the row to avoid wiping it.
   const seoFromRow =
     (touched("seo_title") && row.seo_title !== undefined) ||
     (touched("seo_description") && row.seo_description !== undefined);
   const includeSeo = options.includeSeo ?? seoFromRow;
   if (includeSeo) {
     const seo: Record<string, unknown> = {};
-    if (touched("seo_title") && row.seo_title !== undefined) seo.title = toText(row.seo_title);
-    if (touched("seo_description") && row.seo_description !== undefined) {
-      seo.description = toText(row.seo_description);
-    }
+    if (row.seo_title !== undefined) seo.title = toText(row.seo_title);
+    if (row.seo_description !== undefined) seo.description = toText(row.seo_description);
     if (Object.keys(seo).length > 0) input.seo = seo;
   }
 
@@ -195,21 +197,35 @@ export function buildProductSetInput(
     if (variant) input.variants = [variant];
   }
 
-  // Featured image for product creation / bulk productSet via FileSetInput.
-  // Existing products use productCreateMedia in apply.ts so image upload
-  // errors are surfaced explicitly instead of being hidden inside productSet.
-  if (touched("featured_image")) {
-    const url = toText(row.featured_image);
+  // Images for product creation / bulk productSet via FileSetInput. Existing
+  // products go through productCreateMedia in apply.ts instead: `files` is an
+  // upsert on productSet, so a partial list would delete whatever it omits,
+  // and routing media separately also surfaces upload errors explicitly.
+  //
+  // The featured image must lead the array — Shopify treats the first media
+  // item as the product's primary image.
+  if (touched("featured_image") || touched("gallery_images")) {
+    const featuredUrl = toText(row.featured_image);
     const alt = toText(row.featured_image_alt_text);
-    if (url) {
-      input.files = [
-        {
-          originalSource: url,
-          contentType: "IMAGE",
-          ...(alt ? { alt } : {}),
-        },
-      ];
+    const files: Array<Record<string, unknown>> = [];
+    const seen = new Set<string>();
+
+    if (featuredUrl) {
+      files.push({
+        originalSource: featuredUrl,
+        contentType: "IMAGE",
+        ...(alt ? { alt } : {}),
+      });
+      seen.add(featuredUrl.toLowerCase());
     }
+    for (const url of parseGalleryImages(row.gallery_images)) {
+      const key = url.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      files.push({ originalSource: url, contentType: "IMAGE" });
+    }
+
+    if (files.length > 0) input.files = files;
   }
 
   const identifierHandle = toText(row.handle);

@@ -48,6 +48,22 @@ export function trackAiUsage(
   tracker.totalCost += cost.totalCost;
   tracker.totalTokens += cost.usage.totalTokens;
   tracker.totalCredits += costToCredits(cost.totalCost);
+
+  // Cache-hit visibility: Gemini's implicit cache only kicks in when the
+  // request repeats an identical prefix, and a hit is billed at the discounted
+  // cached rate. `cachedHitRatio` near 0 across a multi-turn run means the
+  // prefix is being invalidated and each turn is paying full input price.
+  const { promptTokens, cachedTokens, thoughtsTokens, candidatesTokens } = cost.usage;
+  console.log("[Sync Billing] ai usage", {
+    model,
+    promptTokens,
+    cachedTokens,
+    cachedHitRatio: promptTokens > 0 ? +(cachedTokens / promptTokens).toFixed(3) : 0,
+    candidatesTokens,
+    thoughtsTokens,
+    totalTokens: cost.usage.totalTokens,
+    credits: +costToCredits(cost.totalCost).toFixed(4),
+  });
 }
 
 export async function withAiRetry<T>(

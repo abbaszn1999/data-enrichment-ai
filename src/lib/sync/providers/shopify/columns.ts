@@ -15,6 +15,10 @@ export const SHOPIFY_CORE_PRODUCT_COLUMNS = [
   "variant_count",
   "featured_image",
   "featured_image_alt_text",
+  // Gallery = every media item except the featured one. `gallery_media` carries
+  // the platform media IDs and is hidden from the UI; see core/gallery-images.ts.
+  "gallery_images",
+  "gallery_media",
   "body_html",
   "seo_title",
   "seo_description",

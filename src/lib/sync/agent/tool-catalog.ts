@@ -9,8 +9,21 @@ import {
   COLLECTION_RULE_COLUMNS,
   COLLECTION_RULE_RELATIONS,
 } from "@/lib/sync/providers/shopify/schema-catalog";
-import { getAllWritableColumns, getAllColumnProfileKeys } from "@/lib/sync/core/registry";
-import type { AgentStrategy } from "@/lib/sync/core/types";
+import {
+  getAllWritableColumns,
+  getAllColumnProfileKeys,
+  getProviderSchema,
+  PROVIDERS,
+} from "@/lib/sync/core/registry";
+import {
+  DEFAULT_GALLERY_IMAGE_COUNT,
+  MAX_GALLERY_IMAGE_COUNT,
+} from "@/lib/sync/core/gallery-images";
+import type {
+  AgentStrategy,
+  ProviderSchema,
+  SyncProviderId,
+} from "@/lib/sync/core/types";
 
 // Union of writable columns across ALL registered providers. The agent loop's
 // per-provider system instruction steers the model to the correct subset for
@@ -71,24 +84,105 @@ const ClientPredicateSchema = z.discriminatedUnion("kind", [
 
 const ColumnProfileKeySchema = z.enum(COLUMN_PROFILE_KEYS);
 
+// ─── Provider-shaped schema factories ────────────────────────────────────────
+//
+// Three tools carry a provider-specific vocabulary. Building them from a
+// factory lets the agent send the connected platform's vocabulary ONLY —
+// a WooCommerce-only column never reaches a Shopify session, and Shopify's
+// large `serverFilter` object is not shipped to a provider that cannot filter
+// server-side. Both correctness and prompt size benefit.
+
+function makeProductsLoadSchema(opts: {
+  includeServerFilter: boolean;
+  profileKeys: [string, ...string[]];
+}) {
+  const shape = {
+    clientPredicates: z.array(ClientPredicateSchema).optional(),
+    cursor: z.string().optional(),
+    limit: z.number().int().min(1).max(250).optional(),
+    // Intentionally NO default here — the handler infers the right mode
+    // from context (e.g. `bulk_query` whenever clientPredicates are present,
+    // because client-side filters can't be expressed to the platform and would
+    // otherwise return a tiny page that doesn't reflect the true match set).
+    mode: z.enum(["page", "bulk_query", "by_ids"]).optional(),
+    ids: z.array(z.string()).optional(),
+    columnProfile: z.enum(opts.profileKeys).default("core"),
+  };
+  return opts.includeServerFilter
+    ? z.object({ ...shape, serverFilter: ShopifyServerFilterSchema.optional() }).passthrough()
+    : z.object(shape).passthrough();
+}
+
+function makeColumnsWriteSchema(writableColumns: [string, ...string[]]) {
+  return z
+    .object({
+      // Strict enum — the model picks the column from the set that is actually
+      // writable on the connected platform, so it can neither hallucinate a
+      // name nor pick a column belonging to a different CMS.
+      targetColumn: z.enum(writableColumns),
+      instruction: z.string().min(1),
+      overwrite: z.boolean().default(false),
+      rowIndexes: z.array(z.number().int().min(0)).optional(),
+      // 0 = no cap (process every targeted row). Hard ceiling 2000 prevents
+      // an accidental runaway cost. The handler streams partial results so
+      // even a 1000-row write feels live in the UI.
+      scopeCap: z.number().int().min(0).max(2000).default(0),
+    })
+    .passthrough();
+}
+
+function makeCollectionsCreateSchema(opts: {
+  includeSmartRules: boolean;
+  includeHierarchy: boolean;
+}) {
+  const base = {
+    title: z.string().min(1),
+    type: z.enum(["manual", "smart"] as [string, ...string[]]),
+    descriptionHtml: z.string().optional(),
+    productIds: z.array(z.string()).optional(),
+  };
+  // Smart rule sets are Shopify-only; slug/parent/imageId are WooCommerce-only.
+  const smart = opts.includeSmartRules
+    ? {
+        ruleSet: z
+          .object({
+            appliedDisjunctively: z.boolean().default(false),
+            rules: z
+              .array(
+                z.object({
+                  column: z.enum(COLLECTION_RULE_COLUMNS),
+                  relation: z.enum(COLLECTION_RULE_RELATIONS),
+                  condition: z.string(),
+                  conditionObjectId: z.string().optional(),
+                })
+              )
+              .min(1),
+          })
+          .optional(),
+      }
+    : {};
+  const hierarchy = opts.includeHierarchy
+    ? {
+        slug: z.string().optional(),
+        parent: z.number().int().min(0).optional(),
+        imageId: z.number().int().min(1).optional(),
+      }
+    : {};
+  return z.object({ ...base, ...smart, ...hierarchy }).passthrough();
+}
+
 // ─── Individual tool schemas ─────────────────────────────────────────────────
+//
+// This map is the permissive UNION across every registered provider. It defines
+// `ToolName` and backs any caller that has no integration in hand. The agent
+// loop uses `buildToolSchemasForProvider` instead, which narrows the three
+// provider-shaped tools above to the connected platform.
 
 export const ToolSchemas = {
-  sync_products_load: z
-    .object({
-      serverFilter: ShopifyServerFilterSchema.optional(),
-      clientPredicates: z.array(ClientPredicateSchema).optional(),
-      cursor: z.string().optional(),
-      limit: z.number().int().min(1).max(250).optional(),
-      // Intentionally NO default here — the handler infers the right mode
-      // from context (e.g. `bulk_query` whenever clientPredicates are present,
-      // because client-side filters can't be expressed to Shopify and would
-      // otherwise return a tiny page that doesn't reflect the true match set).
-      mode: z.enum(["page", "bulk_query", "by_ids"]).optional(),
-      ids: z.array(z.string()).optional(),
-      columnProfile: ColumnProfileKeySchema.default("core"),
-    })
-    .passthrough(),
+  sync_products_load: makeProductsLoadSchema({
+    includeServerFilter: true,
+    profileKeys: COLUMN_PROFILE_KEYS,
+  }),
 
   sync_products_filter_client: z
     .object({
@@ -110,32 +204,10 @@ export const ToolSchemas = {
     })
     .passthrough(),
 
-  sync_collections_create: z
-    .object({
-      title: z.string().min(1),
-      type: z.enum(["manual", "smart"]),
-      descriptionHtml: z.string().optional(),
-      slug: z.string().optional(),
-      parent: z.number().int().min(0).optional(),
-      imageId: z.number().int().min(1).optional(),
-      productIds: z.array(z.string()).optional(),
-      ruleSet: z
-        .object({
-          appliedDisjunctively: z.boolean().default(false),
-          rules: z
-            .array(
-              z.object({
-                column: z.enum(COLLECTION_RULE_COLUMNS),
-                relation: z.enum(COLLECTION_RULE_RELATIONS),
-                condition: z.string(),
-                conditionObjectId: z.string().optional(),
-              })
-            )
-            .min(1),
-        })
-        .optional(),
-    })
-    .passthrough(),
+  sync_collections_create: makeCollectionsCreateSchema({
+    includeSmartRules: true,
+    includeHierarchy: true,
+  }),
 
   sync_collections_assign: z
     .object({
@@ -155,21 +227,7 @@ export const ToolSchemas = {
     })
     .passthrough(),
 
-  sync_columns_write_with_ai: z
-    .object({
-      // Strict enum — the model picks the column from a known set so it can't
-      // hallucinate a name. To allow a new column the agent can write, add it
-      // to WRITABLE_COLUMNS in schema-catalog.ts.
-      targetColumn: z.enum(WRITABLE_COLUMNS),
-      instruction: z.string().min(1),
-      overwrite: z.boolean().default(false),
-      rowIndexes: z.array(z.number().int().min(0)).optional(),
-      // 0 = no cap (process every targeted row). Hard ceiling 2000 prevents
-      // an accidental runaway cost. The handler streams partial results so
-      // even a 1000-row write feels live in the UI.
-      scopeCap: z.number().int().min(0).max(2000).default(0),
-    })
-    .passthrough(),
+  sync_columns_write_with_ai: makeColumnsWriteSchema(WRITABLE_COLUMNS),
 
   sync_images_search: z
     .object({
@@ -180,6 +238,14 @@ export const ToolSchemas = {
       // Same scopeCap policy as sync_columns_write_with_ai — image search is
       // streamed in waves of 5, so processing the whole catalog is fine.
       scopeCap: z.number().int().min(0).max(2000).default(0),
+      // Gallery only. 0 = the user named no number, so the runtime picks the
+      // default. The real ceiling is enforced server-side, not by this max.
+      imageCount: z
+        .number()
+        .int()
+        .min(0)
+        .max(MAX_GALLERY_IMAGE_COUNT)
+        .default(0),
     })
     .passthrough(),
 
@@ -300,14 +366,14 @@ export const TOOL_METADATA: Record<ToolName, ToolMetadata> = {
     name: "sync_columns_write_with_ai",
     strategy: "heavy_ai_write",
     description:
-      `Fill or rewrite ONE column of the current sheet using AI. Pick \`targetColumn\` from the allowed enum: ${WRITABLE_COLUMNS.join(", ")}. Use \`body_html\` for product descriptions, \`description\` for collection descriptions, \`featured_image_alt_text\` for product image alt text, \`image_alt_text\` for collection image alt text, \`seo_title\`/\`seo_description\` for SEO, \`handle\` for URL slugs, \`tags\` for tag lists, \`title\` for titles, etc. Pass the user's intent verbatim as \`instruction\`. For a user-named product, call sync_catalog_lookup first and pass its rowIndexes — never invent indexes from productDirectory alone. Otherwise omit rowIndexes to fall back to remembered targets and scopeCap. Set \`overwrite=true\` only if the user explicitly asked to replace existing values.`,
+      `Fill or rewrite ONE column of the current sheet using AI. Pick \`targetColumn\` from the allowed enum: ${WRITABLE_COLUMNS.join(", ")}. Use \`body_html\` for product descriptions, \`description\` for collection descriptions, \`featured_image_alt_text\` for product image alt text, \`image_alt_text\` for collection image alt text, \`seo_title\`/\`seo_description\` for SEO, \`tags\` for tag lists, \`title\` for titles, etc. Never write \`handle\` (URL slug) — it is protected. Pass the user's intent verbatim as \`instruction\`. For a user-named product, call sync_catalog_lookup first and pass its rowIndexes — never invent indexes from productDirectory alone. Otherwise omit rowIndexes to fall back to remembered targets and scopeCap. Set \`overwrite=true\` only if the user explicitly asked to replace existing values.`,
     destructive: false,
   },
   sync_images_search: {
     name: "sync_images_search",
     strategy: "heavy_ai_write",
     description:
-      "Source product images from the web and write them into an image column of the sheet. Always available (does not require Web mode / Globe). Use this whenever the user wants images found, fetched, added, attached, populated, downloaded, set, or otherwise sourced for one or more products — in any language. Pass the user's intent verbatim as `instruction`. CRITICAL: for a user-named product you MUST call sync_catalog_lookup first, then pass ONLY the returned rowIndexes — never omit rowIndexes after loading the whole catalog, never pass every row index, and never use productDirectory indexes alone. Default `targetColumn` is 'featured_image'.",
+      `Source product images from the web and write them into an image column of the sheet. Always available (does not require Web mode / Globe). Use this whenever the user wants images found, fetched, added, attached, populated, downloaded, set, or otherwise sourced for one or more products — in any language. Pass the user's intent verbatim as \`instruction\`. CRITICAL: for a user-named product you MUST call sync_catalog_lookup first, then pass ONLY the returned rowIndexes — never omit rowIndexes after loading the whole catalog, never pass every row index, and never use productDirectory indexes alone. Set \`targetColumn\` to 'featured_image' (default) for the ONE main image, or 'gallery_images' when the user wants a gallery / extra / additional images / more than one photo (صور إضافية، معرض صور، أكثر من صورة). For 'gallery_images' set \`imageCount\` to the number the user asked for (max ${MAX_GALLERY_IMAGE_COUNT}); leave it at 0 when they named no number and the runtime uses ${DEFAULT_GALLERY_IMAGE_COUNT}. Gallery images are appended to whatever the product already has unless overwrite=true.`,
     destructive: false,
   },
   sync_catalog_lookup: {
@@ -370,6 +436,131 @@ export const TOOL_METADATA: Record<ToolName, ToolMetadata> = {
     destructive: false,
   },
 };
+
+// ─── Provider-scoped catalog ─────────────────────────────────────────────────
+//
+// Everything the agent sends to the model is derived from the CONNECTED
+// integration: which tools exist, what their arguments accept, and how they are
+// described. A Shopify session never sees WooCommerce columns and vice versa.
+
+export type ProviderToolContext = {
+  providerId: SyncProviderId | null;
+  /** Display name of the platform ("Shopify" | "WooCommerce"). */
+  providerLabel: string;
+  /** What this platform calls taxonomy groups ("Collections" | "Categories"). */
+  taxonomyLabel: string;
+  schema: ProviderSchema;
+  /** Provider implements resolve/assign/delete for taxonomy groups. */
+  supportsTaxonomyWrites: boolean;
+  /** Provider supports rule-based ("smart") taxonomy groups. Shopify only. */
+  supportsSmartTaxonomy: boolean;
+  /** Provider taxonomy groups are hierarchical with slug/parent/image. Woo only. */
+  supportsTaxonomyHierarchy: boolean;
+};
+
+export function buildProviderToolContext(
+  providerId: SyncProviderId | null | undefined
+): ProviderToolContext {
+  const id = providerId && PROVIDERS[providerId] ? providerId : null;
+  const provider = id ? PROVIDERS[id] : null;
+  const schema = getProviderSchema(id);
+  return {
+    providerId: id,
+    providerLabel: provider?.label ?? "the connected platform",
+    taxonomyLabel: schema.taxonomyLabel,
+    schema,
+    supportsTaxonomyWrites: !!provider?.taxonomy,
+    supportsSmartTaxonomy: id === "shopify",
+    supportsTaxonomyHierarchy: id === "woocommerce",
+  };
+}
+
+/** Tools the connected provider can actually service, in catalog order. */
+export function listToolsForProvider(ctx: ProviderToolContext): ToolName[] {
+  const taxonomyWriteTools = new Set<ToolName>([
+    "sync_collections_resolve",
+    "sync_collections_assign",
+    "sync_collections_delete",
+  ]);
+  return (Object.keys(ToolSchemas) as ToolName[]).filter((name) => {
+    if (taxonomyWriteTools.has(name) && !ctx.supportsTaxonomyWrites) return false;
+    return true;
+  });
+}
+
+/**
+ * Argument schemas narrowed to the connected provider. Used for BOTH the
+ * function declarations sent to the model and the runtime validation of the
+ * arguments it returns, so the two can never disagree.
+ */
+export function buildToolSchemasForProvider(
+  ctx: ProviderToolContext
+): Record<ToolName, z.ZodType> {
+  const writable = [...ctx.schema.writableColumns] as [string, ...string[]];
+  const profiles = Object.keys(ctx.schema.columnProfiles) as [string, ...string[]];
+  return {
+    ...(ToolSchemas as unknown as Record<ToolName, z.ZodType>),
+    sync_products_load: makeProductsLoadSchema({
+      includeServerFilter: ctx.schema.serverFilterKeys.length > 0,
+      profileKeys: profiles.length > 0 ? profiles : COLUMN_PROFILE_KEYS,
+    }),
+    sync_columns_write_with_ai: makeColumnsWriteSchema(
+      writable.length > 0 ? writable : WRITABLE_COLUMNS
+    ),
+    sync_collections_create: makeCollectionsCreateSchema({
+      includeSmartRules: ctx.supportsSmartTaxonomy,
+      includeHierarchy: ctx.supportsTaxonomyHierarchy,
+    }),
+  };
+}
+
+/** Tool description phrased for the connected provider's vocabulary. */
+export function describeToolForProvider(
+  name: ToolName,
+  ctx: ProviderToolContext
+): string {
+  const platform = ctx.providerLabel;
+  const taxonomy = ctx.taxonomyLabel;
+  const writable = ctx.schema.writableColumns.join(", ");
+  const predicates = ctx.schema.clientPredicateKinds.join(", ");
+  const canFilterServerSide = ctx.schema.serverFilterKeys.length > 0;
+
+  switch (name) {
+    case "sync_products_load":
+      return (
+        `Load products from ${platform} into the sheet. ` +
+        (canFilterServerSide
+          ? "Use `serverFilter` for API-level filtering (status, vendor, product_type, tag, collection_id, price range, inventory, metafields, dates). "
+          : `${platform} cannot filter server-side — there is no serverFilter argument. Load, then narrow with clientPredicates. `) +
+        `Use \`clientPredicates\` for post-fetch filtering (${predicates}). ` +
+        "Use mode='bulk_query' when >250 rows expected. Always pick a `columnProfile`."
+      );
+    case "sync_collections_load":
+      return `Load ${platform} ${taxonomy} as a separate sheet.`;
+    case "sync_collections_resolve":
+      return `Resolve one of the store's ${taxonomy} by title to its ${platform} id. Use before any tool that needs a collectionId.`;
+    case "sync_collections_create":
+      return (
+        `Create a new taxonomy group (${taxonomy}) on ${platform}. ` +
+        (ctx.supportsSmartTaxonomy
+          ? "Pass type='smart' with a `ruleSet` for a rule-based group, or type='manual' with optional productIds. "
+          : "Pass type='manual'; rule-based groups are not supported on this platform. ") +
+        (ctx.supportsTaxonomyHierarchy
+          ? "Optional `slug`, `parent` (for nesting) and `imageId` are supported."
+          : "")
+      ).trim();
+    case "sync_collections_assign":
+      return `Add the given product \`rowIndexes\` to one of the store's ${taxonomy} on ${platform} (additive — existing memberships are preserved). Pass the group id as \`collectionId\`.`;
+    case "sync_collections_delete":
+      return `PERMANENTLY DELETE one or more ${taxonomy} from ${platform}. Use ONLY when the user explicitly asks to delete/remove/erase (Arabic: حذف/امسح/ازل). DO NOT use for filter/hide/view-only requests — use sync_products_filter_client or sync_sheet_program for those. Accepts \`collectionIds\` or \`rowIndexes\` into the current taxonomy sheet. Deleted rows are removed from the sheet automatically.`;
+    case "sync_columns_write_with_ai":
+      return `Fill or rewrite ONE column of the current sheet using AI. \`targetColumn\` must be one of the columns writable on ${platform}: ${writable}. Use \`body_html\` for product descriptions, \`featured_image_alt_text\` for image alt text, \`seo_title\`/\`seo_description\` for SEO, \`tags\` for tag lists, \`title\` for titles. Never write \`handle\` (URL slug) — it is protected; for SEO goals use seo_title/seo_description instead. Pass the user's intent verbatim as \`instruction\`. For a user-named product, call sync_catalog_lookup first and pass its rowIndexes — never invent indexes from productDirectory alone. Otherwise omit rowIndexes to fall back to remembered targets and scopeCap. Set \`overwrite=true\` only if the user explicitly asked to replace existing values.`;
+    case "sync_apply_to_shopify":
+      return `Push the sheet's pending changes back to ${platform}. Requires user confirmation.`;
+    default:
+      return TOOL_METADATA[name].description;
+  }
+}
 
 export function isValidTool(name: string): name is ToolName {
   return Object.prototype.hasOwnProperty.call(ToolSchemas, name);

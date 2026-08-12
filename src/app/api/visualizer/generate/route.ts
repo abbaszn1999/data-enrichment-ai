@@ -70,19 +70,20 @@ function selectTargetIds(
   }
   if (targetIds.length > 0) return targetIds;
 
-  if (phase === "description") {
+  if (phase === "images") {
     return worksheet.rows
       .filter(
-        (row) => row.status === "not_started" || row.status === "failed"
+        (row) =>
+          row.status === "description_ready" ||
+          (row.status === "failed" && !!row.generatedDescription)
       )
       .map((row) => row.id);
   }
 
+  // description + full: start from rows that still need a description pass
   return worksheet.rows
     .filter(
-      (row) =>
-        row.status === "description_ready" ||
-        (row.status === "failed" && !!row.generatedDescription)
+      (row) => row.status === "not_started" || row.status === "failed"
     )
     .map((row) => row.id);
 }
@@ -136,9 +137,16 @@ async function generateSynchronously(request: NextRequest) {
   }
 
   const phase: VisualizerPhase =
-    body.phase === "images" ? "images" : "description";
+    body.phase === "images"
+      ? "images"
+      : body.phase === "full"
+        ? "full"
+        : "description";
 
-  if (phase === "description" && !process.env.OPENAI_API_KEY?.trim()) {
+  const needsOpenAI = phase === "description" || phase === "full";
+  const needsGemini = phase === "images" || phase === "full";
+
+  if (needsOpenAI && !process.env.OPENAI_API_KEY?.trim()) {
     return NextResponse.json(
       {
         error:
@@ -147,7 +155,7 @@ async function generateSynchronously(request: NextRequest) {
       { status: 503 }
     );
   }
-  if (phase === "images" && !process.env.GEMINI_API_KEY?.trim()) {
+  if (needsGemini && !process.env.GEMINI_API_KEY?.trim()) {
     return NextResponse.json(
       {
         error:
@@ -232,7 +240,9 @@ async function generateSynchronously(request: NextRequest) {
         error:
           phase === "images"
             ? "No description-ready rows selected for image generation"
-            : "No rows selected for description generation",
+            : phase === "full"
+              ? "No rows selected for generation"
+              : "No rows selected for description generation",
       },
       { status: 400, headers: auth.headers }
     );
@@ -262,20 +272,38 @@ async function generateSynchronously(request: NextRequest) {
     }
   }
 
-  const estimateRange =
-    phase === "description"
+  const expectedPlaceholdersPerRow = Math.max(
+    1,
+    Number(runtimeSettings.description.imageCount) || 4
+  );
+  const descriptionEstimate =
+    phase === "description" || phase === "full"
       ? estimateDescriptionCredits({
           rowCount: targetIds.length,
           tier: runtimeSettings.description.tier,
         })
-      : estimateImageCredits({
-          placeholderCount: targetIds.reduce(
-            (sum, id) =>
-              sum + (rowsById.get(id)?.imagePlaceholders?.length || 0),
-            0
-          ),
+      : { min: 0, max: 0 };
+  const imagePlaceholderCount =
+    phase === "images"
+      ? targetIds.reduce(
+          (sum, id) =>
+            sum + (rowsById.get(id)?.imagePlaceholders?.length || 0),
+          0
+        )
+      : phase === "full"
+        ? targetIds.length * expectedPlaceholdersPerRow
+        : 0;
+  const imageEstimate =
+    phase === "images" || phase === "full"
+      ? estimateImageCredits({
+          placeholderCount: imagePlaceholderCount,
           images: runtimeSettings.images,
-        });
+        })
+      : { min: 0, max: 0 };
+  const estimateRange = {
+    min: descriptionEstimate.min + imageEstimate.min,
+    max: descriptionEstimate.max + imageEstimate.max,
+  };
   const estimatedCredits = estimateRange.max;
 
   if (body.estimateOnly) {
@@ -381,6 +409,8 @@ async function generateSynchronously(request: NextRequest) {
     worksheet.rows[index] = {
       ...worksheet.rows[index]!,
       status: "generating",
+      generationStage:
+        phase === "images" ? "images" : "description",
       errorMessage: undefined,
     };
   }
@@ -474,7 +504,9 @@ async function generateSynchronously(request: NextRequest) {
 
   const writeResults = async (options?: { signImages?: boolean }) => {
     try {
-      const shouldSign = phase === "images" && options?.signImages !== false;
+      const shouldSign =
+        (phase === "images" || phase === "full") &&
+        options?.signImages !== false;
       const signed = shouldSign
         ? await signVisualizerWorksheetImages(worksheet, 60 * 60 * 24 * 7).catch(
             (error) => {
@@ -509,7 +541,10 @@ async function generateSynchronously(request: NextRequest) {
     sessionId,
     runId,
     rowCount: targetIds.length,
-    concurrency: Math.min(3, targetIds.length),
+    concurrency:
+      phase === "full"
+        ? Math.min(2, targetIds.length)
+        : Math.min(3, targetIds.length),
   });
 
   let nextTargetIndex = 0;
@@ -536,6 +571,8 @@ async function generateSynchronously(request: NextRequest) {
         worksheet.rows[index] = {
           ...worksheet.rows[index]!,
           status: "generating",
+          generationStage:
+            phase === "images" ? "images" : "description",
           errorMessage: undefined,
         };
         if (worksheet.activeRun) {
@@ -547,70 +584,156 @@ async function generateSynchronously(request: NextRequest) {
       if (!claimedRow) continue;
       const inputRow: VisualizerRow = claimedRow;
 
-      let result: Awaited<ReturnType<typeof processDescriptionRow>>;
+      let rowCredits = 0;
+      let rowCost = 0;
+      let finalRow: VisualizerRow = inputRow;
+      let rowFailed = false;
+      let imagesStoppedEarly = false;
+
       try {
-        result =
-          phase === "description"
-            ? await processDescriptionRow({
+        if (phase === "description" || phase === "full") {
+          const descResult = await processDescriptionRow({
+            admin: auth.admin,
+            workspaceId,
+            sessionId,
+            worksheet: structuredClone(worksheet),
+            row: inputRow,
+            settings: runtimeSettings,
+            ownerUserId,
+            actorUserId: auth.user.id,
+            runId,
+          });
+          rowCredits += descResult.creditsUsed;
+          rowCost += descResult.cost;
+          finalRow = descResult.row;
+
+          if (descResult.row.status !== "description_ready") {
+            rowFailed = true;
+          } else if (phase === "full") {
+            // Reveal description, then move loading to the Images field.
+            await commitWorksheet(() => {
+              const index = worksheet.rows.findIndex((row) => row.id === rowId);
+              if (index < 0) return;
+              worksheet.rows[index] = {
+                ...descResult.row,
+                status: "generating",
+                generationStage: "images",
+                // Clear prior image paths so the UI stays in skeleton mode.
+                imagePlaceholders: (descResult.row.imagePlaceholders ?? []).map(
+                  (item) => ({ ...item, storagePath: null })
+                ),
+              };
+              if (worksheet.activeRun) {
+                worksheet.activeRun.currentRowId = rowId;
+                worksheet.activeRun.updatedAt = new Date().toISOString();
+              }
+              finalRow = structuredClone(worksheet.rows[index]!) as VisualizerRow;
+            });
+            await writeResults({ signImages: false });
+
+            if (await cancellationRequested()) {
+              // Keep description result if the user stops before images start.
+              finalRow = {
+                ...descResult.row,
+                status: "description_ready",
+                generationStage: undefined,
+              };
+              imagesStoppedEarly = true;
+            } else {
+              const imageResult = await processImagesRow({
                 admin: auth.admin,
                 workspaceId,
                 sessionId,
                 worksheet: structuredClone(worksheet),
-                row: inputRow,
-                settings: runtimeSettings,
-                ownerUserId,
-                actorUserId: auth.user.id,
-                runId,
-              })
-            : await processImagesRow({
-                admin: auth.admin,
-                workspaceId,
-                sessionId,
-                worksheet: structuredClone(worksheet),
-                row: inputRow,
+                row: finalRow,
                 settings: runtimeSettings,
                 ownerUserId,
                 actorUserId: auth.user.id,
                 runId,
                 shouldCancel: cancellationRequested,
               });
+              rowCredits += imageResult.creditsUsed;
+              rowCost += imageResult.cost;
+              finalRow = {
+                ...imageResult.row,
+                generationStage: undefined,
+              };
+              if (imageResult.row.status === "images_ready") {
+                // ok
+              } else if (imageResult.row.status === "description_ready") {
+                imagesStoppedEarly = true;
+              } else {
+                rowFailed = true;
+              }
+            }
+          } else {
+            finalRow = {
+              ...descResult.row,
+              generationStage: undefined,
+            };
+          }
+        } else {
+          const imageResult = await processImagesRow({
+            admin: auth.admin,
+            workspaceId,
+            sessionId,
+            worksheet: structuredClone(worksheet),
+            row: inputRow,
+            settings: runtimeSettings,
+            ownerUserId,
+            actorUserId: auth.user.id,
+            runId,
+            shouldCancel: cancellationRequested,
+          });
+          rowCredits += imageResult.creditsUsed;
+          rowCost += imageResult.cost;
+          finalRow = {
+            ...imageResult.row,
+            generationStage: undefined,
+          };
+          if (imageResult.row.status === "images_ready") {
+            // ok
+          } else if (imageResult.row.status === "description_ready") {
+            imagesStoppedEarly = true;
+          } else {
+            rowFailed = true;
+          }
+        }
       } catch (error) {
-        result = {
-          row: {
-            ...inputRow,
-            status: "failed",
-            errorMessage:
-              error instanceof Error
-                ? error.message.slice(0, 500)
-                : "Row processing failed",
-          },
-          creditsUsed: 0,
-          cost: 0,
-          error:
-            error instanceof Error ? error.message : "Row processing failed",
+        rowFailed = true;
+        finalRow = {
+          ...inputRow,
+          status: "failed",
+          generationStage: undefined,
+          errorMessage:
+            error instanceof Error
+              ? error.message.slice(0, 500)
+              : "Row processing failed",
         };
       }
 
       await commitWorksheet(() => {
         const index = worksheet.rows.findIndex((row) => row.id === rowId);
         if (index >= 0) {
-          worksheet.rows[index] = result.row;
+          worksheet.rows[index] = finalRow;
         }
-        const successStatus =
-          phase === "description" ? "description_ready" : "images_ready";
-        if (result.row.status === successStatus) {
-          completed += 1;
-          usedCredits += result.creditsUsed;
-          usedCost += result.cost;
-        } else if (
-          phase === "images" &&
-          result.row.status === "description_ready"
+        if (
+          finalRow.status === "images_ready" ||
+          (phase === "description" && finalRow.status === "description_ready")
         ) {
-          // Stopped after finishing in-flight image requests; keep progress, not a failure.
-          usedCredits += result.creditsUsed;
-          usedCost += result.cost;
-        } else {
+          completed += 1;
+          usedCredits += rowCredits;
+          usedCost += rowCost;
+        } else if (imagesStoppedEarly) {
+          usedCredits += rowCredits;
+          usedCost += rowCost;
+        } else if (rowFailed || finalRow.status === "failed") {
           failed += 1;
+          usedCredits += rowCredits;
+          usedCost += rowCost;
+        } else {
+          usedCredits += rowCredits;
+          usedCost += rowCost;
         }
         if (worksheet.activeRun) {
           worksheet.activeRun.completed = completed;
@@ -631,7 +754,10 @@ async function generateSynchronously(request: NextRequest) {
     }
   };
 
-  const workerCount = Math.min(3, targetIds.length);
+  const workerCount =
+    phase === "full"
+      ? Math.min(2, targetIds.length)
+      : Math.min(3, targetIds.length);
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   // Drain in-flight worksheet writes before marking the run terminal (gallery parity).
   await worksheetWriteQueue.catch(() => undefined);
@@ -654,7 +780,7 @@ async function generateSynchronously(request: NextRequest) {
   if (cancelled || stopObserved || (await cancellationRequested())) {
     cancelled = true;
     markRunCancelled();
-    if (phase === "images") {
+    if (phase === "images" || phase === "full") {
       const anyImagesReady = worksheet.rows.some(
         (row) => row.status === "images_ready"
       );
@@ -674,7 +800,7 @@ async function generateSynchronously(request: NextRequest) {
     finalStatus = "failed";
     awaiting = false;
     errorMessage = "All selected rows failed";
-  } else if (phase === "images") {
+  } else if (phase === "images" || phase === "full") {
     if (worksheet.activeRun) {
       worksheet.activeRun.status = "completed";
       worksheet.activeRun.finishedAt = new Date().toISOString();
@@ -690,6 +816,16 @@ async function generateSynchronously(request: NextRequest) {
     }
     finalStatus = "paused";
     awaiting = true;
+  }
+
+  // Clear leftover generating stages on unfinished targets after cancel.
+  for (const row of worksheet.rows) {
+    if (row.status === "generating") {
+      const previous = previousStatus.get(row.id);
+      row.status =
+        previous && previous !== "generating" ? previous : "not_started";
+      row.generationStage = undefined;
+    }
   }
 
   await persistRevision();
@@ -710,7 +846,9 @@ async function generateSynchronously(request: NextRequest) {
         ? "description"
         : finalStatus === "completed"
           ? "images"
-          : phase,
+          : phase === "full"
+            ? "images"
+            : phase,
   });
 
   await auth.admin
@@ -727,7 +865,7 @@ async function generateSynchronously(request: NextRequest) {
     .single();
 
   const signedUrls =
-    phase === "images"
+    phase === "images" || phase === "full"
       ? await signVisualizerWorksheetImages(worksheet).catch(() => ({}))
       : {};
 
@@ -746,17 +884,23 @@ async function generateSynchronously(request: NextRequest) {
       session: updatedSession,
       signedUrls,
       message:
-        phase === "images"
+        phase === "full"
           ? finalStatus === "completed"
-            ? "Images embedded. Project completed."
+            ? "Descriptions and images ready."
             : cancelled
-              ? "Image generation stopped"
+              ? "Generation stopped"
               : undefined
-          : awaiting
-            ? "Descriptions ready for review. Approve before generating images."
-            : cancelled
-              ? "Description generation stopped"
-              : undefined,
+          : phase === "images"
+            ? finalStatus === "completed"
+              ? "Images embedded. Project completed."
+              : cancelled
+                ? "Image generation stopped"
+                : undefined
+            : awaiting
+              ? "Descriptions ready for review. Approve before generating images."
+              : cancelled
+                ? "Description generation stopped"
+                : undefined,
     },
     { headers: auth.headers }
   );

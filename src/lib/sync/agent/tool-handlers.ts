@@ -7,6 +7,7 @@
 import type {
   AgentPlanV2,
   ApplyChangesInput,
+  ApplyChangesResult,
   ApplyUpdate,
   ClientPredicate,
   ColumnProfileKey,
@@ -24,6 +25,7 @@ import {
   createRowWithAi,
   generateSheetFilterFn,
   researchWithWeb,
+  searchGalleryImagesForRows,
   searchImagesForRows,
   writeSheetColumnWithAi,
   type IntegrationContext,
@@ -46,7 +48,23 @@ import {
   fetchWooCommerceCategories,
   updateWooCommerceCategories,
 } from "@/lib/sync/providers/woocommerce/categories";
-import { getProvider } from "@/lib/sync/core/registry";
+import {
+  getProvider,
+  getProviderSchema,
+  getAllWritableColumns,
+} from "@/lib/sync/core/registry";
+import {
+  isProtectedColumn,
+  protectedColumnRefusal,
+  stripProtectedColumns,
+} from "@/lib/sync/core/protected-columns";
+import {
+  clampGalleryImageCount,
+  GALLERY_IMAGES_COLUMN,
+  mergeGalleryImages,
+  parseGalleryImages,
+  serializeGalleryImages,
+} from "@/lib/sync/core/gallery-images";
 
 export type HandlerContext = {
   integration: IntegrationRecord | null;
@@ -162,6 +180,11 @@ function reconcileSheetImageCounts(ctx: HandlerContext): void {
     const id = String(orig.id ?? "").trim();
     const live = id ? byId.get(id) : undefined;
     if (!live) continue;
+    // Settle the gallery too, or the next Apply would resend URLs the store has
+    // already imported and every click would add duplicate images.
+    if (String(live[GALLERY_IMAGES_COLUMN] ?? "").trim()) {
+      orig[GALLERY_IMAGES_COLUMN] = live[GALLERY_IMAGES_COLUMN];
+    }
     if (!String(live.featured_image ?? "").trim()) continue;
     orig.featured_image = live.featured_image;
     orig.image_count = live.image_count ?? 1;
@@ -205,6 +228,7 @@ function profileForColumn(column: string): ColumnProfileKey {
   switch (column) {
     case "featured_image":
     case "featured_image_alt_text":
+    case "gallery_images":
     case "image_count":
       return "imagery";
     case "seo_title":
@@ -969,6 +993,42 @@ async function handleCollectionsDelete(
   };
 }
 
+/**
+ * The `targetColumn` enum spans every registered provider's writable columns,
+ * so a WooCommerce-only column validates while a Shopify store is connected.
+ * Reject that here — writing it would stage an edit that can never be applied.
+ * Columns outside the union are left alone: those are the sheet's own custom
+ * columns, which are always legal to fill locally.
+ */
+/**
+ * Last line of defence for identity/inventory columns. The tool enum already
+ * excludes them, but the model can still reach a protected name through a
+ * free-form `targetColumn` (image search) or a renamed sheet column, so every
+ * AI write path funnels through here.
+ */
+function assertColumnNotProtected(targetColumn: string): void {
+  if (!isProtectedColumn(targetColumn)) return;
+  throw new Error(protectedColumnRefusal(targetColumn));
+}
+
+function assertColumnWritableOnProvider(
+  targetColumn: string,
+  ctx: HandlerContext
+): void {
+  const knownToSomeProvider = getAllWritableColumns().includes(targetColumn);
+  if (!knownToSomeProvider) return;
+
+  const schema = getProviderSchema(ctx.integration?.provider);
+  if (schema.writableColumns.includes(targetColumn)) return;
+
+  const provider = ctx.integration?.provider ?? "the connected platform";
+  throw new Error(
+    `Column "${targetColumn}" is not writable on ${provider}. ` +
+      `Writable columns here: ${schema.writableColumns.join(", ")}. ` +
+      `Pick one of those, or tell the user this field does not exist on their platform.`
+  );
+}
+
 async function handleColumnsWriteWithAi(
   args: {
     targetColumn: string;
@@ -980,6 +1040,8 @@ async function handleColumnsWriteWithAi(
   ctx: HandlerContext
 ): Promise<HandlerResult> {
   if (!ctx.sheet) throw new Error("No sheet loaded.");
+  assertColumnNotProtected(args.targetColumn);
+  assertColumnWritableOnProvider(args.targetColumn, ctx);
   const resolved = resolveRowIndexes(ctx, args.rowIndexes);
   const cap = effectiveScopeCap(ctx, args.scopeCap);
   const targetIndexes = applyScopeCap(resolved, cap, ctx.sheet.rows.length);
@@ -1110,6 +1172,7 @@ async function handleImagesSearch(
   ctx: HandlerContext
 ): Promise<HandlerResult> {
   if (!ctx.sheet) throw new Error("No sheet loaded.");
+  assertColumnNotProtected(args.targetColumn);
 
   // Prefer explicit subset rowIndexes (post-lookup), then product-name mentions
   // in the instruction, then a remembered subset — otherwise refuse and ask.
@@ -1137,6 +1200,12 @@ async function handleImagesSearch(
 
   const cap = effectiveScopeCap(ctx, args.scopeCap);
   const targetIndexes = applyScopeCap(resolution.indexes, cap, ctx.sheet.rows.length);
+
+  // The gallery column holds a list, not a single URL, so it has its own write
+  // path (append + dedupe against what the product already shows).
+  if (args.targetColumn === GALLERY_IMAGES_COLUMN) {
+    return handleGallerySearch(args, ctx, targetIndexes, resolution.reason);
+  }
 
   console.log("[Sync Handler] sync_images_search", {
     mode: ctx.mode,
@@ -1276,6 +1345,157 @@ async function handleImagesSearch(
   };
 }
 
+/**
+ * Gallery variant of image search: several images per product, appended to the
+ * existing gallery instead of replacing a single-URL cell.
+ */
+async function handleGallerySearch(
+  args: {
+    instruction: string;
+    overwrite: boolean;
+    imageCount?: number;
+    scopeCap: number;
+  },
+  ctx: HandlerContext,
+  targetIndexes: number[],
+  targetReason: string
+): Promise<HandlerResult> {
+  const sheet = ctx.sheet;
+  if (!sheet) throw new Error("No sheet loaded.");
+
+  const perProduct = clampGalleryImageCount(args.imageCount);
+
+  // Images already on the product must not come back as "new" gallery entries.
+  const excludeUrlsByRow = new Map<number, string[]>();
+  for (const rowIndex of targetIndexes) {
+    const row = sheet.rows[rowIndex];
+    if (!row) continue;
+    const existing = [
+      String(row.featured_image ?? "").trim(),
+      ...parseGalleryImages(row[GALLERY_IMAGES_COLUMN]),
+    ].filter(Boolean);
+    if (existing.length > 0) excludeUrlsByRow.set(rowIndex, existing);
+  }
+
+  console.log("[Sync Handler] sync_images_search (gallery)", {
+    targetRows: targetIndexes.length,
+    perProduct,
+    overwrite: args.overwrite,
+    mode: ctx.mode,
+  });
+
+  /** Writes the merged gallery back and returns how many URLs were added. */
+  const applyToRow = (rowIndex: number, imageUrls: string[]): number => {
+    const row = sheet.rows[rowIndex];
+    if (!row) return 0;
+    const merged = mergeGalleryImages({
+      existing: row[GALLERY_IMAGES_COLUMN],
+      incoming: imageUrls,
+      featuredImage: row.featured_image,
+      overwrite: args.overwrite,
+    });
+    if (merged.added.length === 0 && !args.overwrite) return 0;
+    row[GALLERY_IMAGES_COLUMN] = serializeGalleryImages(merged.urls);
+    return merged.added.length;
+  };
+
+  const results = await searchGalleryImagesForRows({
+    rows: sheet.rows,
+    rowIndexes: targetIndexes,
+    instruction: args.instruction,
+    imageCount: perProduct,
+    mode: ctx.mode,
+    billingTracker: ctx.billingTracker,
+    excludeUrlsByRow,
+    signal: ctx.signal,
+    onChunk: (chunk) => {
+      const partial: Array<{ rowIndex: number; column: string; value: string }> = [];
+      for (const { rowIndex, imageUrls } of chunk.values) {
+        if (applyToRow(rowIndex, imageUrls) === 0) continue;
+        partial.push({
+          rowIndex,
+          column: GALLERY_IMAGES_COLUMN,
+          value: String(sheet.rows[rowIndex]?.[GALLERY_IMAGES_COLUMN] ?? ""),
+        });
+      }
+      ctx.onToolProgress?.({
+        column: GALLERY_IMAGES_COLUMN,
+        processed: chunk.processedCount,
+        total: chunk.totalCount,
+        partialValues: partial,
+        failedCount: chunk.failedCount,
+      });
+    },
+  });
+
+  // Reconciliation pass — the streamed writes above already applied, and
+  // mergeGalleryImages dedupes, so re-running is safe and covers dropped chunks.
+  let imagesAdded = 0;
+  const rowsWithImages: number[] = [];
+  for (const { rowIndex, imageUrls } of results) {
+    const added = applyToRow(rowIndex, imageUrls);
+    if (added > 0) {
+      imagesAdded += added;
+      rowsWithImages.push(rowIndex);
+    }
+  }
+
+  const targetRows = targetIndexes.length;
+  const succeededSet = new Set(rowsWithImages);
+  const titleOf = (i: number) => String(sheet.rows[i]?.title ?? `row ${i}`).trim();
+  const failedTitles = targetIndexes.filter((i) => !succeededSet.has(i)).map(titleOf);
+  const status =
+    rowsWithImages.length === 0
+      ? "empty"
+      : rowsWithImages.length < targetRows
+        ? "partial"
+        : "complete";
+
+  let assistantMessage: string | undefined;
+  if (status === "empty") {
+    assistantMessage =
+      `Gallery search status=empty: targeted ${targetRows} row(s), added 0 images` +
+      (failedTitles.length
+        ? ` (no usable result for: ${failedTitles.slice(0, 12).join(", ")}${failedTitles.length > 12 ? "…" : ""})`
+        : "") +
+      `. Tell the user plainly that no gallery image was added — do not claim success.`;
+  } else if (status === "partial") {
+    assistantMessage =
+      `Gallery search status=partial: targeted ${targetRows}, filled ${rowsWithImages.length} product(s) with ${imagesAdded} image(s) total. ` +
+      `No usable result for: ${failedTitles.slice(0, 12).join(", ") || "(none)"}${failedTitles.length > 12 ? "…" : ""}. ` +
+      `Report these exact counts — never say every targeted product got a gallery.`;
+  } else {
+    assistantMessage =
+      `Gallery search status=complete: added ${imagesAdded} image(s) across ${rowsWithImages.length} product(s) ` +
+      `(up to ${perProduct} each). The images are staged in the sheet — they reach the store only after the user applies the changes.`;
+  }
+
+  ctx.workingMemory.lastTouchedColumns = [
+    ...new Set([...(ctx.workingMemory.lastTouchedColumns ?? []), GALLERY_IMAGES_COLUMN]),
+  ];
+  ctx.workingMemory.lastActionType = "write_column";
+  ctx.workingMemory.lastTargetedRowIndexes =
+    rowsWithImages.length > 0 ? rowsWithImages : targetIndexes;
+  ctx.workingMemory.lastEntity = ctx.workingMemory.lastEntity ?? "products";
+  ctx.workingMemory.lastColumnProfile = "imagery";
+  ctx.workingMemory.lastRelevantProfiles = profilesAroundFocus("imagery");
+
+  return {
+    rowsAffected: rowsWithImages.length,
+    columnsAffected: [GALLERY_IMAGES_COLUMN],
+    assistantMessage,
+    output: {
+      status,
+      imagesAdded,
+      perProduct,
+      rowsFilled: rowsWithImages.length,
+      targetRows,
+      failedTitles: failedTitles.slice(0, 25),
+      targetReason,
+    },
+  };
+}
+
 async function handleCatalogLookup(
   args: { query: string; limit: number },
   ctx: HandlerContext
@@ -1333,7 +1553,7 @@ async function handleRowAppend(
     ctx.originalSheet = ctx.sheet;
   }
 
-  const row = await createRowWithAi({
+  const generated = await createRowWithAi({
     mode: ctx.mode,
     instruction: args.instruction,
     integration: ctx.integrationContext,
@@ -1341,6 +1561,10 @@ async function handleRowAppend(
     sheet: ctx.sheet,
     billingTracker: ctx.billingTracker,
   });
+
+  // A new row is the one place the model can mint an identifier out of thin
+  // air, so protected keys are dropped before the row reaches the sheet.
+  const { row, stripped } = stripProtectedColumns(generated);
 
   const newIdx = ctx.sheet.rows.length;
   // Extend columns for any new keys in the row
@@ -1358,7 +1582,13 @@ async function handleRowAppend(
   return {
     rowsAffected: 1,
     columnsAffected: columnsFromRow(row),
-    output: { rowIndex: newIdx },
+    warnings:
+      stripped.length > 0
+        ? [
+            `Left ${stripped.join(", ")} empty — AI may not generate identity or inventory values. Tell the user to fill them in manually.`,
+          ]
+        : undefined,
+    output: { rowIndex: newIdx, protectedColumnsSkipped: stripped },
   };
 }
 
@@ -1660,6 +1890,10 @@ async function handleApplyToShopify(
       rowsAffected: productResult.createdCount + productResult.updatedCount,
       userErrorCount: allErrors.length,
       userErrorCodes: [],
+      warnings:
+        productResult.warnings && productResult.warnings.length > 0
+          ? productResult.warnings
+          : undefined,
       output: {
         provider: integration.provider,
         products: productResult,
@@ -1721,7 +1955,12 @@ async function handleApplyToShopify(
   ctx.onProgress?.(`Applying ${totalPending} change(s) to Shopify…`);
 
   // ── Products path ──────────────────────────────────────────────────────
-  let productResult = { createdCount: 0, updatedCount: 0, skippedCount: 0, errors: [] as string[] };
+  let productResult: ApplyChangesResult = {
+    createdCount: 0,
+    updatedCount: 0,
+    skippedCount: 0,
+    errors: [],
+  };
   if (productCreates.length > 0 || productUpdates.length > 0) {
     const input: ApplyChangesInput = {
       integration,
@@ -1745,6 +1984,7 @@ async function handleApplyToShopify(
   const totalUpdated = productResult.updatedCount + collectionResult.updatedCount;
   const totalSkipped = productResult.skippedCount;
   const allErrors = [...productResult.errors, ...collectionResult.errors];
+  const applyWarnings = productResult.warnings ?? [];
 
   ctx.workingMemory.lastApplyStats = {
     created: totalCreated,
@@ -1775,6 +2015,7 @@ async function handleApplyToShopify(
     rowsAffected: totalCreated + totalUpdated,
     userErrorCount: allErrors.length,
     userErrorCodes: [],
+    warnings: applyWarnings.length > 0 ? applyWarnings : undefined,
     output: {
       products: productResult,
       collections: collectionResult,

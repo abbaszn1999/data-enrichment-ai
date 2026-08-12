@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyGenerationRowPatch,
+  mergePolledGenerationRow,
+  mergePolledGenerationWorksheet,
   pathsRemovedByUser,
   reconcileGenerationWorksheet,
 } from "@/lib/gallery/generation-worksheet-merge";
@@ -134,5 +136,122 @@ describe("generation worksheet merge", () => {
     expect(merged.rows[0]?.mainImagePaths).toEqual([]);
     expect(merged.rows[1]?.mainImagePaths).toEqual(["b-storage.webp"]);
     expect(merged.rows[1]?.galleryImagePaths).toEqual([]);
+  });
+
+  it("keeps optimistic queued UI when a poll returns a stale idle row", () => {
+    const local = row({
+      id: "row-a",
+      status: "queued",
+      generationStage: "planning",
+      generationTarget: "main",
+    });
+    const polled = row({
+      id: "row-a",
+      status: "not_started",
+    });
+
+    const merged = mergePolledGenerationRow(local, polled, {
+      clientRunActive: true,
+    });
+
+    expect(merged.status).toBe("queued");
+    expect(merged.generationStage).toBe("planning");
+    expect(merged.generationTarget).toBe("main");
+  });
+
+  it("keeps optimistic queued UI when a poll returns a stale prior ready row", () => {
+    const local = row({
+      id: "row-a",
+      status: "queued",
+      generationStage: "planning",
+      generationTarget: "main",
+      mainImagePaths: ["old.webp"],
+      mainImagePath: "old.webp",
+    });
+    const polled = row({
+      id: "row-a",
+      status: "ready",
+      mainImagePaths: ["old.webp"],
+      mainImagePath: "old.webp",
+    });
+
+    const merged = mergePolledGenerationRow(local, polled, {
+      clientRunActive: true,
+    });
+
+    expect(merged.status).toBe("queued");
+    expect(merged.generationStage).toBe("planning");
+  });
+
+  it("prefers live server generating progress over local queued", () => {
+    const local = row({
+      id: "row-a",
+      status: "queued",
+      generationStage: "planning",
+      generationTarget: "main",
+    });
+    const polled = row({
+      id: "row-a",
+      status: "generating",
+      generationStage: "searching",
+      generationTarget: "main",
+    });
+
+    const merged = mergePolledGenerationRow(local, polled, {
+      clientRunActive: true,
+    });
+
+    expect(merged.status).toBe("generating");
+    expect(merged.generationStage).toBe("searching");
+  });
+
+  it("takes terminal server results after the row was already generating", () => {
+    const local = row({
+      id: "row-a",
+      status: "generating",
+      generationStage: "searching",
+      generationTarget: "main",
+    });
+    const polled = row({
+      id: "row-a",
+      status: "ready",
+      mainImagePaths: ["https://cdn.example/main.png"],
+      mainImagePath: "https://cdn.example/main.png",
+    });
+
+    const merged = mergePolledGenerationRow(local, polled, {
+      clientRunActive: true,
+    });
+
+    expect(merged.status).toBe("ready");
+    expect(merged.mainImagePaths).toEqual(["https://cdn.example/main.png"]);
+  });
+
+  it("preserves local activeRun when the poll has not observed it yet", () => {
+    const local = sheet([
+      row({
+        id: "row-a",
+        status: "queued",
+        generationStage: "planning",
+        generationTarget: "main",
+      }),
+    ]);
+    const polled = sheet([
+      row({
+        id: "row-a",
+        status: "not_started",
+      }),
+    ]);
+    polled.activeRun = null;
+
+    const merged = mergePolledGenerationWorksheet({
+      local,
+      polled,
+      clientRunActive: true,
+    });
+
+    expect(merged.activeRun?.status).toBe("running");
+    expect(merged.rows[0]?.status).toBe("queued");
+    expect(merged.rows[0]?.generationStage).toBe("planning");
   });
 });

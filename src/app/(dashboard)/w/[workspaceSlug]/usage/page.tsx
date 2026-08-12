@@ -19,6 +19,7 @@ import {
   Crown,
   Users,
   ChevronDown,
+  RefreshCw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ const OP_LABELS: Record<string, { label: string; icon: any; color: string }> = {
   ai_column_mapping: { label: "AI Column Mapping", icon: Columns3, color: "text-amber-600" },
   ai_category_suggest: { label: "AI Category Suggest", icon: FolderTree, color: "text-green-600" },
   ai_function: { label: "AI Function", icon: Zap, color: "text-indigo-600" },
+  sync_agent: { label: "Sync Agent", icon: RefreshCw, color: "text-cyan-600" },
   credit_topup: { label: "Credit Top-up", icon: Zap, color: "text-emerald-600" },
   monthly_reset: { label: "Monthly Reset", icon: Clock, color: "text-gray-600" },
 };
@@ -310,13 +312,19 @@ export default function UsagePage() {
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-3 lg:grid-cols-5">
             {[
               {
                 label: "AI Enrichment",
                 desc: "Per row enriched",
                 icon: Sparkles,
                 style: "bg-violet-500/10 text-violet-600",
+              },
+              {
+                label: "Sync Agent",
+                desc: "Per Sync chat run",
+                icon: RefreshCw,
+                style: "bg-cyan-500/10 text-cyan-600",
               },
               {
                 label: "AI Image Search",

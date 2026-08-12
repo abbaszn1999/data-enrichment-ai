@@ -14,6 +14,12 @@ import type {
   SyncSheetRow,
 } from "../../core/types";
 import { runWithConcurrency } from "../../core/batch-executor";
+import {
+  SHOPIFY_MAX_MEDIA_PER_PRODUCT,
+  galleryUrlKey,
+  parseGalleryImages,
+  parseGalleryMedia,
+} from "../../core/gallery-images";
 import { shopifyGraphQL } from "./graphql-client";
 import { submitBulkMutation } from "./bulk-ops";
 import {
@@ -82,7 +88,10 @@ type SyncApplyOutcome = {
   skipped: boolean;
   handle: string;
   errors: string[];
+  warnings: string[];
 };
+
+type MediaToCreate = { originalSource: string; alt?: string };
 
 function toText(value: unknown): string {
   return String(value ?? "").trim();
@@ -92,12 +101,72 @@ function hasChangedColumn(item: SyncApplyItem, column: string): boolean {
   return !item.changedColumns || item.changedColumns.includes(column);
 }
 
+/**
+ * Works out which images still need uploading for an existing product.
+ *
+ * Media on a live product is added with productCreateMedia (append-only), never
+ * with productSet's `files` field — that one is an upsert and deletes whatever
+ * the payload omits. Anything already attached is skipped so re-applying the
+ * same sheet is a no-op instead of piling up duplicates.
+ */
+function planProductMedia(item: SyncApplyItem): {
+  media: MediaToCreate[];
+  droppedFromGallery: number;
+  overCapCount: number;
+} {
+  const media: MediaToCreate[] = [];
+  const attachedKeys = new Set<string>();
+
+  const featuredUrl = toText(item.row.featured_image);
+  const existingGallery = parseGalleryMedia(item.row.gallery_media);
+  for (const entry of existingGallery) {
+    if (entry.src) attachedKeys.add(galleryUrlKey(entry.src));
+  }
+
+  if (hasChangedColumn(item, "featured_image") && featuredUrl) {
+    media.push({
+      originalSource: featuredUrl,
+      alt: toText(item.row.featured_image_alt_text || item.row.title) || undefined,
+    });
+    attachedKeys.add(galleryUrlKey(featuredUrl));
+  } else if (featuredUrl) {
+    attachedKeys.add(galleryUrlKey(featuredUrl));
+  }
+
+  let droppedFromGallery = 0;
+  if (hasChangedColumn(item, "gallery_images")) {
+    const desired = parseGalleryImages(item.row.gallery_images);
+    const desiredKeys = new Set(desired.map(galleryUrlKey));
+    for (const url of desired) {
+      const key = galleryUrlKey(url);
+      if (attachedKeys.has(key)) continue;
+      attachedKeys.add(key);
+      media.push({ originalSource: url });
+    }
+    // Removing media needs productDeleteMedia, which this path deliberately
+    // does not do — deletions are reported instead of silently ignored.
+    droppedFromGallery = existingGallery.filter(
+      (entry) => entry.src && !desiredKeys.has(galleryUrlKey(entry.src))
+    ).length;
+  }
+
+  // Respect Shopify's hard 250-media-per-product ceiling.
+  const attachedCount = existingGallery.length + (featuredUrl ? 1 : 0);
+  const room = Math.max(0, SHOPIFY_MAX_MEDIA_PER_PRODUCT - attachedCount);
+  const overCapCount = Math.max(0, media.length - room);
+  return {
+    media: overCapCount > 0 ? media.slice(0, room) : media,
+    droppedFromGallery,
+    overCapCount,
+  };
+}
+
 async function createProductMedia(params: {
   integration: IntegrationRecord;
   productId: string;
-  imageUrl: string;
-  alt?: string;
+  media: MediaToCreate[];
 }): Promise<string[]> {
+  if (params.media.length === 0) return [];
   const res = await shopifyGraphQL<{
     productCreateMedia: {
       media: Array<{ alt?: string | null; mediaContentType?: string | null; status?: string | null }>;
@@ -110,15 +179,18 @@ async function createProductMedia(params: {
     query: PRODUCT_CREATE_MEDIA,
     variables: {
       productId: params.productId,
-      media: [
-        {
-          originalSource: params.imageUrl,
-          mediaContentType: "IMAGE",
-          ...(params.alt ? { alt: params.alt } : {}),
-        },
-      ],
+      // One request carries every image: productCreateMedia accepts an array and
+      // adds all valid entries, reporting per-file errors for the rest.
+      media: params.media.map((entry) => ({
+        originalSource: entry.originalSource,
+        mediaContentType: "IMAGE",
+        ...(entry.alt ? { alt: entry.alt } : {}),
+      })),
     },
-    options: { estimatedCost: 12, tag: "productCreateMedia" },
+    options: {
+      estimatedCost: 10 + params.media.length * 2,
+      tag: "productCreateMedia",
+    },
   });
 
   const errors: string[] = [];
@@ -146,14 +218,30 @@ async function applyOneProductSet(params: {
   item: SyncApplyItem;
 }): Promise<SyncApplyOutcome> {
   const { integration, item } = params;
-  const shouldCreateMedia =
-    !item.isCreate &&
-    hasChangedColumn(item, "featured_image") &&
-    toText(item.row.id).startsWith("gid://shopify/Product/") &&
-    !!toText(item.row.featured_image);
+  // Existing products route all media through productCreateMedia; only brand-new
+  // products get their images inline via productSet's `files`.
+  const mediaEligible =
+    !item.isCreate && toText(item.row.id).startsWith("gid://shopify/Product/");
+  const mediaPlan = mediaEligible
+    ? planProductMedia(item)
+    : { media: [] as MediaToCreate[], droppedFromGallery: 0, overCapCount: 0 };
+  const warnings: string[] = [];
+  if (mediaPlan.droppedFromGallery > 0) {
+    warnings.push(
+      `${mediaPlan.droppedFromGallery} gallery image(s) were removed in the sheet but stay on the product — deleting store media is not done automatically.`
+    );
+  }
+  if (mediaPlan.overCapCount > 0) {
+    warnings.push(
+      `${mediaPlan.overCapCount} image(s) skipped — the product is at Shopify's limit of ${SHOPIFY_MAX_MEDIA_PER_PRODUCT} media files.`
+    );
+  }
+
   const built = buildProductSetInput(item.row, {
-    changedColumns: shouldCreateMedia
-      ? (item.changedColumns ?? []).filter((col) => col !== "featured_image")
+    changedColumns: mediaEligible
+      ? (item.changedColumns ?? []).filter(
+          (col) => col !== "featured_image" && col !== "gallery_images"
+        )
       : item.changedColumns ?? undefined,
   });
 
@@ -165,6 +253,7 @@ async function applyOneProductSet(params: {
       skipped: false,
       handle: "",
       errors: ["Missing handle — productSet upsert requires a handle"],
+      warnings,
     };
   }
 
@@ -173,12 +262,11 @@ async function applyOneProductSet(params: {
     (k) => k !== "handle" // handle is always present as identifier duplicate
   );
   if (!hasChanges) {
-    if (shouldCreateMedia) {
+    if (mediaPlan.media.length > 0) {
       const mediaErrors = await createProductMedia({
         integration,
         productId: toText(item.row.id),
-        imageUrl: toText(item.row.featured_image),
-        alt: toText(item.row.featured_image_alt_text || item.row.title),
+        media: mediaPlan.media,
       });
       return {
         ok: mediaErrors.length === 0,
@@ -187,6 +275,7 @@ async function applyOneProductSet(params: {
         skipped: false,
         handle: built.identifier.handle,
         errors: mediaErrors,
+        warnings,
       };
     }
     return {
@@ -196,6 +285,7 @@ async function applyOneProductSet(params: {
       skipped: true,
       handle: built.identifier.handle,
       errors: [],
+      warnings,
     };
   }
 
@@ -228,6 +318,7 @@ async function applyOneProductSet(params: {
       skipped: false,
       handle: built.identifier.handle,
       errors: res.errors.map((e) => e.message),
+      warnings,
     };
   }
 
@@ -240,6 +331,7 @@ async function applyOneProductSet(params: {
       skipped: false,
       handle: built.identifier.handle,
       errors: ["productSet returned no payload"],
+      warnings,
     };
   }
 
@@ -253,15 +345,15 @@ async function applyOneProductSet(params: {
       errors: payload.userErrors.map(
         (e) => `${e.field ? e.field.join(".") + ": " : ""}${e.message}${e.code ? ` [${e.code}]` : ""}`
       ),
+      warnings,
     };
   }
 
-  if (shouldCreateMedia) {
+  if (mediaPlan.media.length > 0) {
     const mediaErrors = await createProductMedia({
       integration,
       productId: toText(item.row.id),
-      imageUrl: toText(item.row.featured_image),
-      alt: toText(item.row.featured_image_alt_text || item.row.title),
+      media: mediaPlan.media,
     });
     if (mediaErrors.length > 0) {
       return {
@@ -271,6 +363,7 @@ async function applyOneProductSet(params: {
         skipped: false,
         handle: built.identifier.handle,
         errors: mediaErrors.map((e) => `media: ${e}`),
+        warnings,
       };
     }
   }
@@ -284,6 +377,7 @@ async function applyOneProductSet(params: {
     skipped: false,
     handle: built.identifier.handle,
     errors: [],
+    warnings,
   };
 }
 
@@ -301,8 +395,12 @@ async function applySyncPath(
   let updated = 0;
   let skipped = 0;
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   for (const outcome of result.successes) {
+    for (const warning of outcome.warnings) {
+      warnings.push(`[${outcome.handle || "<no-handle>"}] ${warning}`);
+    }
     if (!outcome.ok) {
       errors.push(
         `[${outcome.handle || "<no-handle>"}] ${outcome.errors.join("; ") || "Unknown error"}`
@@ -323,6 +421,7 @@ async function applySyncPath(
     updatedCount: updated,
     skippedCount: skipped,
     errors,
+    warnings,
   };
 }
 
@@ -332,11 +431,22 @@ async function applyBulkPath(
   integration: IntegrationRecord,
   items: SyncApplyItem[]
 ): Promise<ApplyChangesResult & { bulkOperationId?: string }> {
+  // Image columns are stripped from the JSONL for existing products: productSet
+  // treats `files` as the product's complete media list, so a bulk payload
+  // carrying one image would wipe every other picture on the product. Media for
+  // those rows is added afterwards through the append-only media mutation.
   const jsonlLines: string[] = [];
+  const mediaItems: SyncApplyItem[] = [];
   for (const item of items) {
-    jsonlLines.push(
-      buildProductSetJsonlLine(item.row, item.changedColumns ?? undefined)
-    );
+    const routesMediaSeparately =
+      !item.isCreate && toText(item.row.id).startsWith("gid://shopify/Product/");
+    const changedColumns = routesMediaSeparately
+      ? (item.changedColumns ?? []).filter(
+          (col) => col !== "featured_image" && col !== "gallery_images"
+        )
+      : item.changedColumns ?? undefined;
+    jsonlLines.push(buildProductSetJsonlLine(item.row, changedColumns));
+    if (routesMediaSeparately) mediaItems.push(item);
   }
   const jsonlContent = jsonlLines.join("\n") + "\n";
 
@@ -347,6 +457,8 @@ async function applyBulkPath(
     filename: `product-set-${Date.now()}.jsonl`,
   });
 
+  const mediaOutcome = await applyMediaOnly(integration, mediaItems);
+
   // We don't poll here — the caller (agent route) returns a pending result
   // and can query Shopify's `bulkOperation(id:)` later for final counts.
   // For the synchronous API response we return optimistic "submitted" counts.
@@ -354,9 +466,56 @@ async function applyBulkPath(
     createdCount: 0,
     updatedCount: items.length,
     skippedCount: 0,
-    errors: [],
+    errors: mediaOutcome.errors,
+    warnings: mediaOutcome.warnings,
     bulkOperationId: submitted.id,
   };
+}
+
+/** Uploads pending media for rows whose other fields went through bulk JSONL. */
+async function applyMediaOnly(
+  integration: IntegrationRecord,
+  items: SyncApplyItem[]
+): Promise<{ errors: string[]; warnings: string[] }> {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const pending = items
+    .map((item) => ({ item, plan: planProductMedia(item) }))
+    .filter(
+      ({ plan }) =>
+        plan.media.length > 0 || plan.droppedFromGallery > 0 || plan.overCapCount > 0
+    );
+  if (pending.length === 0) return { errors, warnings };
+
+  const result = await runWithConcurrency(
+    pending,
+    async ({ item, plan }) => {
+      const label = toText(item.row.handle) || toText(item.row.id) || "<no-handle>";
+      if (plan.droppedFromGallery > 0) {
+        warnings.push(
+          `[${label}] ${plan.droppedFromGallery} gallery image(s) were removed in the sheet but stay on the product — deleting store media is not done automatically.`
+        );
+      }
+      if (plan.overCapCount > 0) {
+        warnings.push(
+          `[${label}] ${plan.overCapCount} image(s) skipped — the product is at Shopify's limit of ${SHOPIFY_MAX_MEDIA_PER_PRODUCT} media files.`
+        );
+      }
+      if (plan.media.length === 0) return;
+      const mediaErrors = await createProductMedia({
+        integration,
+        productId: toText(item.row.id),
+        media: plan.media,
+      });
+      for (const err of mediaErrors) errors.push(`[${label}] media: ${err}`);
+    },
+    { concurrency: 3, delayMsBetweenBatches: 500 }
+  );
+
+  for (const err of result.errors) {
+    errors.push(`Media batch error at index ${err.index}: ${err.error}`);
+  }
+  return { errors, warnings };
 }
 
 // ─── Public entry-point (used by provider registry) ──────────────────────────

@@ -14,7 +14,7 @@ export type VisualizerSessionStatus =
   | "completed"
   | "failed";
 
-export type VisualizerPhase = "description" | "images";
+export type VisualizerPhase = "description" | "images" | "full";
 
 export type VisualizerRowStatus =
   | "not_started"
@@ -22,6 +22,12 @@ export type VisualizerRowStatus =
   | "description_ready"
   | "images_ready"
   | "failed";
+
+export type VisualizerGenerationStage =
+  | "planning"
+  | "description"
+  | "images"
+  | "finalizing";
 
 export type VisualizerTier = "standard" | "premium";
 export type VisualizerThinkingLevel = "low" | "medium" | "high";
@@ -89,6 +95,8 @@ export interface VisualizerRow {
   id: string;
   rowIndex: number;
   status: VisualizerRowStatus;
+  /** Which field is actively generating during a run. */
+  generationStage?: VisualizerGenerationStage;
   originalData: Record<string, string>;
   generatedDescription?: string;
   imagePlaceholders?: VisualizerImagePlaceholder[];
@@ -244,9 +252,17 @@ export function normalizeVisualizerWorksheet(
       status:
         row.status === "description_ready" ||
         row.status === "images_ready" ||
-        row.status === "failed"
+        row.status === "failed" ||
+        row.status === "generating"
           ? row.status
           : "not_started",
+      generationStage:
+        row.generationStage === "planning" ||
+        row.generationStage === "description" ||
+        row.generationStage === "images" ||
+        row.generationStage === "finalizing"
+          ? row.generationStage
+          : undefined,
       originalData: Object.fromEntries(
         Object.entries(row.originalData || {}).map(([key, value]) => [
           key,

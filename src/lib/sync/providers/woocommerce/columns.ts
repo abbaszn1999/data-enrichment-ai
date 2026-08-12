@@ -21,6 +21,10 @@ export const WOOCOMMERCE_CORE_PRODUCT_COLUMNS = [
   "variant_count",
   "featured_image",
   "featured_image_alt_text",
+  // Gallery = every image after the first. `gallery_media` carries the
+  // attachment IDs and is hidden from the UI; see core/gallery-images.ts.
+  "gallery_images",
+  "gallery_media",
   "short_description",
   "body_html",
   "weight",

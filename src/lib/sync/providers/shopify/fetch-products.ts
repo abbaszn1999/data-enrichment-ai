@@ -46,7 +46,7 @@ const PRODUCTS_PAGE_QUERY = /* GraphQL */ `
           updatedAt
           seo { title description }
           featuredMedia { id alt preview { image { url } } }
-          media(first: 10) { nodes { id } }
+          media(first: 20) { nodes { id alt preview { image { url } } } }
           variantsCount { count }
           variants(first: 10) {
             nodes {
@@ -81,7 +81,7 @@ const PRODUCTS_BY_IDS_QUERY = /* GraphQL */ `
         totalInventory publishedAt createdAt updatedAt
         seo { title description }
         featuredMedia { id alt preview { image { url } } }
-        media(first: 10) { nodes { id } }
+        media(first: 20) { nodes { id alt preview { image { url } } } }
         variantsCount { count }
         variants(first: 10) {
           nodes {
@@ -203,7 +203,7 @@ export async function fetchShopifyProductsBulk(params: {
             totalInventory publishedAt createdAt updatedAt
             seo { title description }
             featuredMedia { id alt preview { image { url } } }
-            media { edges { node { id } } }
+            media { edges { node { id alt preview { image { url } } } } }
             variantsCount { count }
             variants {
               edges {

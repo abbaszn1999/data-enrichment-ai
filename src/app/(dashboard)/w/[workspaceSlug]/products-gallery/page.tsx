@@ -14,6 +14,8 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Cloud,
   CloudCheck,
@@ -96,6 +98,7 @@ import { shouldApplySubmittedResponse } from "@/lib/gallery/settings-schema";
 import {
   DEFAULT_AI_SETTINGS,
   DEFAULT_SCRAPING_SETTINGS,
+  resolveGalleryRunPhase,
   resolveSelectionRunPhase,
 } from "@/lib/gallery/types";
 import { parseImageUrls, listColumnsWithHttpUrls } from "@/lib/gallery/image-urls";
@@ -104,6 +107,7 @@ import {
   pendingImageDeleteKey,
   stripPendingImageDeletes as stripPendingDeletesFromWorksheet,
 } from "@/lib/gallery/pending-image-deletes";
+import { mergePolledGenerationWorksheet } from "@/lib/gallery/generation-worksheet-merge";
 
 type ImageUploadPreview = {
   name: string;
@@ -205,6 +209,53 @@ function InfoTip({ children }: { children: ReactNode }) {
       </TooltipContent>
     </Tooltip>
   );
+}
+
+/** Compact pulse placeholders matching thumbnail size — one slot per expected image. */
+function FieldImageSkeletons({
+  count,
+  label,
+}: {
+  count: number;
+  label: string;
+}) {
+  const n = Math.max(1, Math.min(6, Math.floor(count) || 1));
+  return (
+    <div
+      className="flex items-center gap-1"
+      aria-busy="true"
+      aria-label={label}
+      title={label}
+    >
+      {Array.from({ length: n }, (_, i) => (
+        <div
+          key={i}
+          className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded border border-primary/40 bg-primary/15"
+        >
+          <div className="absolute inset-0 animate-pulse bg-primary/25" />
+          <Loader2 className="relative h-3.5 w-3.5 animate-spin text-primary" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function generationStageLabel(
+  stage: GalleryRow["generationStage"] | undefined,
+  target: GalleryRow["generationTarget"] | undefined
+): string {
+  if (stage === "gallery") return "Gallery images";
+  if (stage === "searching") return "Searching main images";
+  if (stage === "main") return "Main images";
+  if (stage === "finalizing") return "Finishing";
+  if (stage === "planning") {
+    if (target === "gallery") return "Preparing gallery";
+    if (target === "main") return "Preparing main images";
+    return "Preparing";
+  }
+  if (target === "gallery") return "Gallery images";
+  if (target === "main") return "Main images";
+  return "Images";
 }
 
 export default function ProductsGalleryPage() {
@@ -1046,16 +1097,20 @@ export default function ProductsGalleryPage() {
           freshWorksheet,
           pendingImageDeletesRef.current
         );
-        setWorksheet((current) =>
-          current
-            ? {
-                ...current,
-                rows: mergedFresh.rows,
-                activeRun: mergedFresh.activeRun,
-                revision: mergedFresh.revision,
-              }
-            : mergedFresh
-        );
+        setWorksheet((current) => {
+          if (!current) return mergedFresh;
+          const merged = mergePolledGenerationWorksheet({
+            local: current,
+            polled: mergedFresh,
+            clientRunActive: isGenerating,
+          });
+          return {
+            ...current,
+            rows: merged.rows,
+            activeRun: merged.activeRun,
+            revision: merged.revision,
+          };
+        });
         const run = mergedFresh.activeRun;
         if (run && (run.status === "running" || run.status === "queued")) {
           const done = run.completed + run.failed;
@@ -1075,6 +1130,8 @@ export default function ProductsGalleryPage() {
           if (lastCreditsProgressRef.current > 0 || run) {
             invalidateCredits();
           }
+          // Do not clear generationRun while the client request is still in flight —
+          // that was causing the Processing banner to disappear mid-run.
           setGenerationRun(null);
           setIsStoppingGeneration(false);
         }
@@ -1389,27 +1446,56 @@ export default function ProductsGalleryPage() {
     setIsGenerating(true);
     const worksheetBeforeGeneration = worksheet;
     let receivedResult = false;
+    const originalCol =
+      originalImageColumn === "none" ? null : originalImageColumn;
+    const selectedRowsForPhase =
+      worksheet?.rows.filter((row) => rowIds.includes(row.id)) ?? [];
+    const selectionPhase = resolveSelectionRunPhase({
+      originalImageColumn: originalCol,
+      rows: selectedRowsForPhase,
+    });
     setGenerationRun({ total: rowIds.length, completed: 0 });
     setWorksheet((current) =>
       current
         ? {
             ...current,
-            rows: current.rows.map((row) =>
-              rowIds.includes(row.id) ? { ...row, status: "queued" as const } : row
-            ),
+            activeRun: {
+              id: current.activeRun?.id ?? `local-${Date.now()}`,
+              status: "running",
+              provider: activeTab,
+              selectedRowIds: rowIds,
+              total: rowIds.length,
+              completed: 0,
+              failed: 0,
+              estimatedCredits: current.activeRun?.estimatedCredits ?? 0,
+              usedCredits: 0,
+              cancelRequested: false,
+              startedAt: new Date().toISOString(),
+            },
+            rows: current.rows.map((row) => {
+              if (!rowIds.includes(row.id)) return row;
+              const phase = resolveGalleryRunPhase({
+                originalImageColumn: originalCol,
+                row,
+                requested:
+                  selectionPhase.phase === "mixed"
+                    ? null
+                    : selectionPhase.phase,
+              });
+              return {
+                ...row,
+                status: "queued" as const,
+                generationTarget: phase,
+                generationStage: "planning" as const,
+                errorMessage: undefined,
+              };
+            }),
           }
         : current
     );
 
     try {
       const settingsSnapshot = buildSettingsPatch();
-      const selectedRows =
-        worksheet?.rows.filter((row) => rowIds.includes(row.id)) ?? [];
-      const selectionPhase = resolveSelectionRunPhase({
-        originalImageColumn:
-          originalImageColumn === "none" ? null : originalImageColumn,
-        rows: selectedRows,
-      });
       const result = await generateGallery({
         workspaceId: workspace.id,
         sessionId: projectId,
@@ -1505,15 +1591,52 @@ export default function ProductsGalleryPage() {
     setIsStoppingGeneration(false);
     setIsGenerating(true);
     setGenerationRun({ total: 1, completed: 0 });
+    const originalCol =
+      originalImageColumn === "none" ? null : originalImageColumn;
+    const targetRow = worksheet?.rows.find((row) => row.id === rowId);
+    const retryPhase = resolveSelectionRunPhase({
+      originalImageColumn: originalCol,
+      rows: targetRow ? [targetRow] : [],
+    });
+    setWorksheet((current) =>
+      current
+        ? {
+            ...current,
+            activeRun: {
+              id: current.activeRun?.id ?? `local-retry-${Date.now()}`,
+              status: "running",
+              provider: activeTab,
+              selectedRowIds: [rowId],
+              total: 1,
+              completed: 0,
+              failed: 0,
+              estimatedCredits: 0,
+              usedCredits: 0,
+              cancelRequested: false,
+              startedAt: new Date().toISOString(),
+            },
+            rows: current.rows.map((row) => {
+              if (row.id !== rowId) return row;
+              const phase = resolveGalleryRunPhase({
+                originalImageColumn: originalCol,
+                row,
+                requested:
+                  retryPhase.phase === "mixed" ? null : retryPhase.phase,
+              });
+              return {
+                ...row,
+                status: "queued" as const,
+                generationTarget: phase,
+                generationStage: "planning" as const,
+                errorMessage: undefined,
+              };
+            }),
+          }
+        : current
+    );
     let receivedResult = false;
     try {
       const settingsSnapshot = buildSettingsPatch();
-      const targetRow = worksheet?.rows.find((row) => row.id === rowId);
-      const retryPhase = resolveSelectionRunPhase({
-        originalImageColumn:
-          originalImageColumn === "none" ? null : originalImageColumn,
-        rows: targetRow ? [targetRow] : [],
-      });
       const result = await generateGallery({
         workspaceId: workspace.id,
         sessionId: projectId,
@@ -1999,10 +2122,73 @@ export default function ProductsGalleryPage() {
   const activeImageSourceUrl = imageDialogRow
     ? getImageSourceUrl(imageDialogRow, activeImagePreviewPath)
     : null;
+  const activeImageDialogIndex = activeImagePreviewPath
+    ? imageDialogPaths.indexOf(activeImagePreviewPath)
+    : -1;
+  const goToRelativeImage = useCallback(
+    (delta: number) => {
+      if (imageDialogPaths.length < 2 || activeImageDialogIndex < 0) return;
+      const next =
+        (activeImageDialogIndex + delta + imageDialogPaths.length) %
+        imageDialogPaths.length;
+      setImagePreviewPath(imageDialogPaths[next]!);
+    },
+    [activeImageDialogIndex, imageDialogPaths]
+  );
+
+  useEffect(() => {
+    if (!imageDialogRowId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      if (imageDialogPaths.length < 2) return;
+      event.preventDefault();
+      goToRelativeImage(event.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [goToRelativeImage, imageDialogPaths.length, imageDialogRowId]);
+
   const serverRunIsActive =
     worksheet?.activeRun?.status === "running" ||
     worksheet?.activeRun?.status === "queued";
   const generationIsActive = isGenerating || serverRunIsActive;
+  const busyGenerationRows = useMemo(
+    () =>
+      rows.filter(
+        (row) => row.status === "generating" || row.status === "queued"
+      ),
+    [rows]
+  );
+  const showGenerationBanner =
+    generationIsActive || busyGenerationRows.length > 0;
+  const bannerActiveRow =
+    busyGenerationRows.find((row) => row.status === "generating") ??
+    busyGenerationRows[0] ??
+    null;
+  const bannerPhaseLabel = generationStageLabel(
+    bannerActiveRow?.generationStage,
+    bannerActiveRow?.generationTarget
+  );
+  const bannerTotal =
+    generationRun?.total ??
+    worksheet?.activeRun?.total ??
+    Math.max(busyGenerationRows.length, 1);
+  const bannerCompleted =
+    generationRun?.completed ??
+    (worksheet?.activeRun
+      ? worksheet.activeRun.completed + worksheet.activeRun.failed
+      : 0);
+  const expectedMainSlots = Math.max(
+    1,
+    Number(activeTab === "scraping" ? scrapingMainImages : aiMainImages) || 1
+  );
+  const expectedGallerySlots = Math.max(
+    1,
+    Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4
+  );
 
   // ── Project detail view ──────────────────────────────────────────────
   if (projectId) {
@@ -2145,11 +2331,12 @@ export default function ProductsGalleryPage() {
                   type="button"
                   onClick={() => setActiveTab("ai")}
                   disabled={!canEdit || !!generationRun || isGenerating}
+                  title="Create product images with AI"
                   className={`flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
                     activeTab === "ai" ? "bg-background shadow-sm" : "text-muted-foreground"
                   }`}
                 >
-                  <Sparkles className="h-3.5 w-3.5" /> AI
+                  <Sparkles className="h-3.5 w-3.5" /> Generate
                 </button>
               </div>
             </div>
@@ -2163,9 +2350,9 @@ export default function ProductsGalleryPage() {
                   <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
                   <h3 className="text-xs font-semibold">Original product image</h3>
                   <InfoTip>
-                    This is never detected automatically. Select a column only when its first URL
-                    should be the trusted main-image reference. Otherwise the agent finds a new
-                    main image for every product.
+                    {activeTab === "ai"
+                      ? "Select a column only when its first URL should be the trusted main-image reference. Otherwise AI generates a new main image for every product."
+                      : "This is never detected automatically. Select a column only when its first URL should be the trusted main-image reference. Otherwise the agent finds a new main image for every product."}
                   </InfoTip>
                 </div>
                 <select
@@ -2186,7 +2373,11 @@ export default function ProductsGalleryPage() {
                   disabled={!canEdit}
                   className="h-8 w-full rounded-md border bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-ring"
                 >
-                  <option value="none">Find a new main image for every product</option>
+                  <option value="none">
+                    {activeTab === "ai"
+                      ? "Create a new main image with AI"
+                      : "Find a new main image"}
+                  </option>
                   {originalImageCandidateColumns.map((column) => (
                     <option key={column} value={column}>
                       {column}
@@ -2196,8 +2387,9 @@ export default function ProductsGalleryPage() {
                 {originalImageCandidateColumns.length === 0 &&
                 originalImageColumn === "none" ? (
                   <p className="text-[11px] leading-snug text-muted-foreground">
-                    No URL columns detected in this sheet. Use “Find a new main
-                    image” or add a column with image/page links.
+                    {activeTab === "ai"
+                      ? "No URL columns detected in this sheet. Use “Create with AI” or add a column with image/page links."
+                      : "No URL columns detected in this sheet. Use “Find a new main image” or add a column with image/page links."}
                   </p>
                 ) : null}
                 {originalImageColumn === "none" ? (
@@ -2943,7 +3135,7 @@ export default function ProductsGalleryPage() {
                         Delete ({selectedRowIds.size})
                       </Button>
                     )}
-                    {generationIsActive ? (
+                    {showGenerationBanner ? (
                       <Button
                         size="sm"
                         variant="destructive"
@@ -2973,19 +3165,36 @@ export default function ProductsGalleryPage() {
                 </div>
               </div>
 
-              {generationRun && generationIsActive && (
+              {showGenerationBanner && (
                 <div className="mb-3 flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  <div className="min-w-36">
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                  <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium">
-                      Processing {generationRun.total} products
+                      Processing {bannerTotal} product
+                      {bannerTotal === 1 ? "" : "s"}
+                      {bannerPhaseLabel ? ` · ${bannerPhaseLabel}` : ""}
                     </p>
                     <p className="text-[10px] text-muted-foreground">
                       {isStoppingGeneration
                         ? "Finishing the current product before stopping"
-                        : "Keep this page open until generation finishes"}
+                        : bannerCompleted > 0
+                          ? `${bannerCompleted} of ${bannerTotal} done · Keep this page open`
+                          : "Keep this page open until generation finishes"}
                     </p>
                   </div>
+                  {bannerTotal > 1 && (
+                    <div className="h-1.5 w-24 overflow-hidden rounded-full bg-primary/15">
+                      <div
+                        className="h-full rounded-full bg-primary transition-[width] duration-300"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            Math.round((bannerCompleted / bannerTotal) * 100)
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -3047,10 +3256,10 @@ export default function ProductsGalleryPage() {
                     ) : (
                       visibleRows.map((row) => {
                         const isEditing = editingRowId === row.id && rowDraft;
-                        const rowIsGenerating =
-                          generationIsActive && row.status === "generating";
+                        const rowIsBusy =
+                          row.status === "generating" || row.status === "queued";
                         const mainIsLoading =
-                          rowIsGenerating &&
+                          rowIsBusy &&
                           ((row.generationStage === "planning" &&
                             (row.generationTarget === "main" ||
                               row.generationTarget === "full")) ||
@@ -3059,9 +3268,11 @@ export default function ProductsGalleryPage() {
                             (!row.generationStage &&
                               row.generationTarget !== "gallery"));
                         const galleryIsLoading =
-                          rowIsGenerating &&
+                          rowIsBusy &&
                           (row.generationStage === "gallery" ||
                             (row.generationStage === "planning" &&
+                              row.generationTarget === "gallery") ||
+                            (!row.generationStage &&
                               row.generationTarget === "gallery"));
                         return (
                           <tr
@@ -3102,7 +3313,16 @@ export default function ProductsGalleryPage() {
                                   );
                                 return (
                                   <td key={column} className="min-w-[140px] px-3 py-3">
-                                    {mainImages.length > 0 ? (
+                                    {mainIsLoading ? (
+                                      <FieldImageSkeletons
+                                        count={expectedMainSlots}
+                                        label={
+                                          row.generationStage === "searching"
+                                            ? "Searching for main images"
+                                            : "Generating main images"
+                                        }
+                                      />
+                                    ) : mainImages.length > 0 ? (
                                       <div className="flex items-center gap-1">
                                         {mainImages.map(
                                           ({ path, src, fallbackSrc }, idx) => (
@@ -3160,21 +3380,6 @@ export default function ProductsGalleryPage() {
                                             </div>
                                           )
                                         )}
-                                        {mainIsLoading && (
-                                          <div
-                                            className="ml-1 flex h-8 w-8 items-center justify-center rounded border border-primary/30 bg-primary/5"
-                                            title="Finding more main images"
-                                          >
-                                            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                                          </div>
-                                        )}
-                                      </div>
-                                    ) : mainIsLoading ? (
-                                      <div
-                                        className="flex h-12 w-12 items-center justify-center rounded border border-primary/30 bg-primary/5"
-                                        title="Finding the main product image"
-                                      >
-                                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
                                       </div>
                                     ) : row.status === "failed" ? (
                                       <div className="max-w-[180px] space-y-1.5">
@@ -3230,7 +3435,12 @@ export default function ProductsGalleryPage() {
                                   );
                                 return (
                                   <td key={column} className="min-w-[180px] px-3 py-3">
-                                    {galleryImages.length > 0 ? (
+                                    {galleryIsLoading ? (
+                                      <FieldImageSkeletons
+                                        count={expectedGallerySlots}
+                                        label="Generating gallery images"
+                                      />
+                                    ) : galleryImages.length > 0 ? (
                                       <div className="flex items-center gap-1">
                                         {galleryImages.slice(0, 3).map(({ path, src, fallbackSrc }, idx) => (
                                           <div
@@ -3298,21 +3508,6 @@ export default function ProductsGalleryPage() {
                                             +{galleryImages.length - 3}
                                           </button>
                                         )}
-                                        {galleryIsLoading && (
-                                          <div
-                                            className="ml-1 flex h-8 w-8 items-center justify-center rounded border border-primary/30 bg-primary/5"
-                                            title="Finding more gallery images"
-                                          >
-                                            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                                          </div>
-                                        )}
-                                      </div>
-                                    ) : galleryIsLoading ? (
-                                      <div
-                                        className="flex h-10 w-10 items-center justify-center rounded border border-primary/30 bg-primary/5"
-                                        title="Finding gallery images"
-                                      >
-                                        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
                                       </div>
                                     ) : row.status === "failed" ? (
                                       getRowMainPaths(row).length === 0 ? (
@@ -3544,10 +3739,13 @@ export default function ProductsGalleryPage() {
                 {imageDialogRow
                   ? `${imageDialogRow.originalData.Name || imageDialogRow.originalData.name || `Product ${imageDialogRow.rowIndex + 1}`} · ${imageDialogPaths.length} image${imageDialogPaths.length === 1 ? "" : "s"}`
                   : "Preview and manage product images"}
+                {activeImageDialogIndex >= 0 && imageDialogPaths.length > 0
+                  ? ` · ${activeImageDialogIndex + 1} of ${imageDialogPaths.length}`
+                  : ""}
               </DialogDescription>
             </DialogHeader>
             <div className="grid min-h-[480px] md:grid-cols-[minmax(0,1fr)_132px]">
-              <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
+              <div className="relative flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
                 {activeImagePreviewSrc ? (
                   <>
                     <img
@@ -3563,6 +3761,26 @@ export default function ProductsGalleryPage() {
                         }
                       }}
                     />
+                    {imageDialogPaths.length > 1 ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => goToRelativeImage(-1)}
+                          className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border bg-background/90 text-foreground shadow-sm transition-colors hover:bg-background"
+                          aria-label="Previous image"
+                        >
+                          <ChevronLeft className="h-5 w-5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => goToRelativeImage(1)}
+                          className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border bg-background/90 text-foreground shadow-sm transition-colors hover:bg-background"
+                          aria-label="Next image"
+                        >
+                          <ChevronRight className="h-5 w-5" />
+                        </button>
+                      </>
+                    ) : null}
                     {activeImageSourceUrl && (
                       <a
                         href={activeImageSourceUrl}

@@ -135,6 +135,7 @@ export async function processAiRow(params: {
   };
 
   if (runMain) {
+    await params.onCheckpoint?.({ generationStage: "main" });
     const originalUrls = worksheet.originalImageColumn
       ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
       : [];
@@ -173,11 +174,13 @@ export async function processAiRow(params: {
       };
       mainProductReferences.push(reference);
       if (!canonicalProduct) canonicalProduct = reference;
+    }
+    if (mainPaths.length > 0) {
       await params.onCheckpoint?.({
         mainImagePaths: [...mainPaths],
         mainImagePath: mainPaths[0] ?? null,
         galleryImagePaths: runGallery ? [] : oldGalleryPaths,
-        generationStage: "main",
+        generationStage: runGallery ? "gallery" : "finalizing",
       });
     }
   } else {
@@ -299,6 +302,7 @@ export async function processAiRow(params: {
   });
 
   if (needGeneratedMain) {
+    await params.onCheckpoint?.({ generationStage: "main" });
     for (let mainIndex = 0; mainIndex < mainTarget; mainIndex += 1) {
       ensureTime(35_000);
       try {
@@ -339,25 +343,27 @@ export async function processAiRow(params: {
         };
         mainProductReferences.push(generatedReference);
         if (!canonicalProduct) canonicalProduct = generatedReference;
-        await params.onCheckpoint?.({
-          mainImagePaths: [...mainPaths],
-          mainImagePath: mainPath,
-          galleryImagePaths: runGallery ? [] : oldGalleryPaths,
-          generationStage: "main",
-        });
       } catch (error) {
         galleryError("ai-image:row", "Main image generation failed", error);
         break;
       }
     }
+    if (mainPaths.length > 0) {
+      await params.onCheckpoint?.({
+        mainImagePaths: [...mainPaths],
+        mainImagePath: mainPath,
+        galleryImagePaths: runGallery ? [] : oldGalleryPaths,
+        generationStage: runGallery ? "gallery" : "finalizing",
+      });
+    }
   }
 
   if (runGallery) {
+    // Clear previous Gallery paths while this stage runs so the UI stays in
+    // skeleton mode for the whole field (no one-by-one / stale reveals).
     await params.onCheckpoint?.({
-      mainImagePaths: [...mainPaths],
-      mainImagePath: mainPath,
-      galleryImagePaths: [...galleryPaths],
       generationStage: "gallery",
+      galleryImagePaths: [],
     });
     for (let galleryIndex = 0; galleryIndex < galleryTarget; galleryIndex += 1) {
       ensureTime(35_000);
@@ -388,13 +394,6 @@ export async function processAiRow(params: {
         newlyStoredPaths.push(path);
         aiGeneratedPaths.push(path);
         galleryPaths.push(path);
-        await params.onCheckpoint?.({
-          mainImagePaths: [...mainPaths],
-          mainImagePath: mainPath,
-          galleryImagePaths: [...galleryPaths],
-          generationStage:
-            galleryIndex === galleryTarget - 1 ? "finalizing" : "gallery",
-        });
       } catch (error) {
         galleryError("ai-image:row", "Image generation attempt failed", error);
         galleryWarn("ai-image:row", "Keeping partial AI image result", {
@@ -405,6 +404,12 @@ export async function processAiRow(params: {
         break;
       }
     }
+    await params.onCheckpoint?.({
+      mainImagePaths: [...mainPaths],
+      mainImagePath: mainPath,
+      galleryImagePaths: [...galleryPaths],
+      generationStage: "finalizing",
+    });
   }
 
   if (!mainPath) {

@@ -34,7 +34,6 @@ const STAGED_UPLOADS_CREATE = /* GraphQL */ `
       userErrors {
         field
         message
-        code
       }
     }
   }

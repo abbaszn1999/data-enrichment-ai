@@ -6,6 +6,8 @@ import {
   ArrowLeft,
   Boxes,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Cloud,
   Download,
@@ -53,8 +55,7 @@ import {
   deleteVisualizerSession,
   deleteVisualizerAsset,
   exportVisualizer,
-  generateVisualizerDescriptions,
-  generateVisualizerImages,
+  generateVisualizerFull,
   getVisualizerSession,
   listVisualizerSessions,
   requestVisualizerGenerationStop,
@@ -62,6 +63,7 @@ import {
   uploadVisualizerAsset,
   VisualizerApiError,
 } from "@/lib/visualizer/client";
+import { mergePolledVisualizerWorksheet } from "@/lib/visualizer/generation-worksheet-merge";
 import { resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
 import { productDisplayName } from "@/lib/visualizer/row-fields";
 import {
@@ -70,6 +72,7 @@ import {
 } from "@/components/visualizer/description-layout-dialog";
 import {
   DEFAULT_VISUALIZER_SETTINGS,
+  type VisualizerGenerationStage,
   type VisualizerProjectSettings,
   type VisualizerRow,
   type VisualizerSession,
@@ -88,6 +91,44 @@ const STATUS_LABEL: Record<VisualizerSessionStatus, string> = {
 
 const RESULT_DESCRIPTION = "\u0000visualizer:description";
 const RESULT_IMAGES = "\u0000visualizer:images";
+
+function FieldImageSkeletons({
+  count,
+  label,
+}: {
+  count: number;
+  label: string;
+}) {
+  const n = Math.max(1, Math.min(6, Math.floor(count) || 1));
+  return (
+    <div
+      className="flex items-center gap-1"
+      aria-busy="true"
+      aria-label={label}
+      title={label}
+    >
+      {Array.from({ length: n }, (_, i) => (
+        <div
+          key={i}
+          className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded border border-primary/40 bg-primary/15"
+        >
+          <div className="absolute inset-0 animate-pulse bg-primary/25" />
+          <Loader2 className="relative h-3.5 w-3.5 animate-spin text-primary" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function generationStageLabel(
+  stage: VisualizerGenerationStage | undefined
+): string {
+  if (stage === "images") return "Images";
+  if (stage === "description") return "Description";
+  if (stage === "finalizing") return "Finishing";
+  if (stage === "planning") return "Preparing";
+  return "Content";
+}
 
 function descriptionSnippet(html: string | undefined, maxWords = 5): string {
   if (!html?.trim()) return "";
@@ -346,7 +387,20 @@ export default function ProductsVisualizerPage() {
         });
         if (cancelled || !fresh.worksheet) return;
         setSession(fresh.session);
-        setWorksheet(fresh.worksheet);
+        setWorksheet((current) => {
+          if (!current) return fresh.worksheet!;
+          const merged = mergePolledVisualizerWorksheet({
+            local: current,
+            polled: fresh.worksheet!,
+            clientRunActive: generating,
+          });
+          return {
+            ...current,
+            rows: merged.rows,
+            activeRun: merged.activeRun,
+            revision: merged.revision,
+          };
+        });
         if (fresh.signedUrls) setSignedUrls(fresh.signedUrls);
         const run = fresh.worksheet.activeRun;
         if (run && (run.status === "running" || run.status === "queued")) {
@@ -827,6 +881,40 @@ export default function ProductsVisualizerPage() {
 
   const rows = useMemo(() => worksheet?.rows ?? [], [worksheet?.rows]);
 
+  useEffect(() => {
+    if (!imageDialogRowId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+
+      const row = rows.find((item) => item.id === imageDialogRowId);
+      if (!row) return;
+      // Match the dialog list: only paths that can actually be previewed.
+      const keys = (row.imagePlaceholders ?? [])
+        .map((item) => item.storagePath)
+        .filter((path): path is string => {
+          if (!path) return false;
+          return !!signedUrls[path] || /^https?:\/\//i.test(path);
+        });
+      if (keys.length < 2) return;
+
+      const currentKey =
+        imagePreviewKey && keys.includes(imagePreviewKey)
+          ? imagePreviewKey
+          : keys[0]!;
+      const index = keys.indexOf(currentKey);
+      if (index < 0) return;
+      const delta = event.key === "ArrowLeft" ? -1 : 1;
+      const next = (index + delta + keys.length) % keys.length;
+      event.preventDefault();
+      setImagePreviewKey(keys[next]!);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [imageDialogRowId, imagePreviewKey, rows, signedUrls]);
+
   const displayColumns = useMemo(() => {
     if (!worksheet) return [RESULT_DESCRIPTION, RESULT_IMAGES];
     const productImage =
@@ -883,7 +971,7 @@ export default function ProductsVisualizerPage() {
     });
   };
 
-  const selectedDescriptionTargets = useMemo(() => {
+  const selectedGenerateTargets = useMemo(() => {
     return rows
       .filter(
         (row) =>
@@ -896,23 +984,39 @@ export default function ProductsVisualizerPage() {
       .map((row) => row.id);
   }, [rows, selectedRowIds]);
 
-  const selectedImageTargets = useMemo(() => {
-    return rows
-      .filter(
-        (row) =>
-          selectedRowIds.has(row.id) &&
-          !!row.generatedDescription &&
-          (row.imagePlaceholders?.length ?? 0) > 0 &&
-          (row.status === "description_ready" ||
-            row.status === "images_ready" ||
-            (row.status === "failed" && !!row.generatedDescription))
-      )
-      .map((row) => row.id);
-  }, [rows, selectedRowIds]);
-
   const imagesReadyCount = useMemo(() => {
     return rows.filter((row) => row.status === "images_ready").length;
   }, [rows]);
+
+  const busyGenerationRows = useMemo(
+    () => rows.filter((row) => row.status === "generating"),
+    [rows]
+  );
+  const showGenerationBanner =
+    generating ||
+    busyGenerationRows.length > 0 ||
+    worksheet?.activeRun?.status === "running" ||
+    worksheet?.activeRun?.status === "queued";
+  const bannerActiveRow =
+    busyGenerationRows.find(
+      (row) => row.id === worksheet?.activeRun?.currentRowId
+    ) ??
+    busyGenerationRows[0] ??
+    null;
+  const bannerPhaseLabel = generationStageLabel(bannerActiveRow?.generationStage);
+  const bannerTotal =
+    generationRun?.total ??
+    worksheet?.activeRun?.total ??
+    Math.max(busyGenerationRows.length, 1);
+  const bannerCompleted =
+    generationRun?.completed ??
+    (worksheet?.activeRun
+      ? worksheet.activeRun.completed + worksheet.activeRun.failed
+      : 0);
+  const expectedImageSlots = Math.max(
+    1,
+    Number(settings.description.imageCount) || 4
+  );
 
   const columnLabel = (column: string) => {
     if (column === RESULT_DESCRIPTION) return "AI Description";
@@ -956,7 +1060,7 @@ export default function ProductsVisualizerPage() {
     await loadProject();
   };
 
-  const runDescriptions = async (retryFailed = false) => {
+  const runGenerate = async (retryFailed = false) => {
     if (!workspace || !session || !worksheet || !canEdit || generating) return;
     if (!settingsReady) {
       toast.error("Select worksheet columns and a Product image column first");
@@ -970,12 +1074,12 @@ export default function ProductsVisualizerPage() {
               (selectedRowIds.size === 0 || selectedRowIds.has(row.id))
           )
           .map((row) => row.id)
-      : selectedDescriptionTargets;
+      : selectedGenerateTargets;
     if (rowIds.length === 0) {
       toast.error(
         selectedRowIds.size === 0
           ? "Select products in the worksheet first"
-          : "No selected products need descriptions"
+          : "No selected products to generate"
       );
       return;
     }
@@ -990,94 +1094,36 @@ export default function ProductsVisualizerPage() {
       current
         ? {
             ...current,
+            activeRun: {
+              id: current.activeRun?.id ?? `local-${Date.now()}`,
+              phase: "full",
+              status: "running",
+              selectedRowIds: rowIds,
+              total: rowIds.length,
+              completed: 0,
+              failed: 0,
+              estimatedCredits: 0,
+              usedCredits: 0,
+              cancelRequested: false,
+              currentRowId: rowIds[0] ?? null,
+              startedAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
             rows: current.rows.map((row) =>
               rowIds.includes(row.id)
-                ? { ...row, status: "generating" as const, errorMessage: undefined }
+                ? {
+                    ...row,
+                    status: "generating" as const,
+                    generationStage: "description" as const,
+                    errorMessage: undefined,
+                  }
                 : row
             ),
           }
         : current
     );
     try {
-      const result = await generateVisualizerDescriptions({
-        workspaceId: workspace.id,
-        sessionId: activeSession.id,
-        settingsSnapshot: activeSettings,
-        worksheetSnapshot: activeWorksheet,
-        worksheetRevision: Number(activeSession.worksheet_revision ?? 0),
-        rowIds,
-        retryFailed,
-      });
-
-      if (result.session) setSession(result.session);
-      if (result.worksheet) setWorksheet(result.worksheet);
-      setSaveStatus("saved");
-
-      if (result.status === "paused") {
-        toast.success(
-          result.message ||
-            `Descriptions ready (${result.completed ?? 0}). Review before images.`
-        );
-      } else if (result.status === "failed") {
-        toast.error("Description generation failed");
-      } else {
-        toast.success(
-          `Stopped after ${result.completed ?? 0} description${
-            (result.completed ?? 0) === 1 ? "" : "s"
-          }`
-        );
-      }
-    } catch (error) {
-      await handleGenerateError(error, "Description generation failed");
-    } finally {
-      setGenerating(false);
-      setStopping(false);
-      setGenerationRun(null);
-      invalidateCredits();
-    }
-  };
-
-  const runImages = async (retryFailed = false) => {
-    if (!workspace || !session || !worksheet || !canEdit || generating) return;
-    const rowIds = retryFailed
-      ? rows
-          .filter(
-            (row) =>
-              row.status === "failed" &&
-              !!row.generatedDescription &&
-              (selectedRowIds.size === 0 || selectedRowIds.has(row.id))
-          )
-          .map((row) => row.id)
-      : selectedImageTargets;
-    if (rowIds.length === 0) {
-      toast.error(
-        selectedRowIds.size === 0
-          ? "Select products in the worksheet first"
-          : "Selected products need reviewed descriptions before images"
-      );
-      return;
-    }
-
-    const prepared = await prepareRunSession();
-    if (!prepared) return;
-    const { activeSession, activeWorksheet, activeSettings } = prepared;
-
-    setGenerating(true);
-    setGenerationRun({ total: rowIds.length, completed: 0 });
-    setWorksheet((current) =>
-      current
-        ? {
-            ...current,
-            rows: current.rows.map((row) =>
-              rowIds.includes(row.id)
-                ? { ...row, status: "generating" as const, errorMessage: undefined }
-                : row
-            ),
-          }
-        : current
-    );
-    try {
-      const result = await generateVisualizerImages({
+      const result = await generateVisualizerFull({
         workspaceId: workspace.id,
         sessionId: activeSession.id,
         settingsSnapshot: activeSettings,
@@ -1090,25 +1136,27 @@ export default function ProductsVisualizerPage() {
       if (result.session) setSession(result.session);
       if (result.worksheet) setWorksheet(result.worksheet);
       if (result.signedUrls) setSignedUrls(result.signedUrls);
-      else await loadProject();
       setSaveStatus("saved");
 
       if (result.status === "completed") {
         toast.success(
           result.message ||
-            `Images ready (${result.completed ?? 0}). You can download results.`
+            `Generated ${result.completed ?? 0} product${
+              (result.completed ?? 0) === 1 ? "" : "s"
+            }`
         );
       } else if (result.status === "failed") {
-        toast.error("Image generation failed");
+        toast.error("Generation failed");
       } else {
         toast.success(
-          `Stopped after ${result.completed ?? 0} product${
-            (result.completed ?? 0) === 1 ? "" : "s"
-          }`
+          result.message ||
+            `Stopped after ${result.completed ?? 0} product${
+              (result.completed ?? 0) === 1 ? "" : "s"
+            }`
         );
       }
     } catch (error) {
-      await handleGenerateError(error, "Image generation failed");
+      await handleGenerateError(error, "Generation failed");
     } finally {
       setGenerating(false);
       setStopping(false);
@@ -1189,11 +1237,11 @@ export default function ProductsVisualizerPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {generating ? (
+            {showGenerationBanner ? (
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="destructive"
                 disabled={stopping}
                 onClick={() => void stopGeneration()}
                 className="gap-1.5 text-xs"
@@ -1206,46 +1254,25 @@ export default function ProductsVisualizerPage() {
                 {stopping ? "Stopping…" : "Stop"}
               </Button>
             ) : (
-              <>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={
-                    !canEdit ||
-                    !settingsReady ||
-                    selectedRowIds.size === 0 ||
-                    selectedDescriptionTargets.length === 0 ||
-                    session.status === "processing"
-                  }
-                  onClick={() => void runDescriptions(false)}
-                  className="gap-1.5 text-xs"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Descriptions
-                  {selectedRowIds.size > 0
-                    ? ` (${selectedDescriptionTargets.length})`
-                    : ""}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={
-                    !canEdit ||
-                    selectedRowIds.size === 0 ||
-                    selectedImageTargets.length === 0 ||
-                    session.status === "processing"
-                  }
-                  onClick={() => void runImages(false)}
-                  className="gap-1.5 text-xs"
-                >
-                  <ImageIcon className="h-3.5 w-3.5" />
-                  Generate images
-                  {selectedRowIds.size > 0
-                    ? ` (${selectedImageTargets.length})`
-                    : ""}
-                </Button>
-              </>
+              <Button
+                type="button"
+                size="sm"
+                disabled={
+                  !canEdit ||
+                  !settingsReady ||
+                  selectedRowIds.size === 0 ||
+                  selectedGenerateTargets.length === 0 ||
+                  session.status === "processing"
+                }
+                onClick={() => void runGenerate(false)}
+                className="gap-1.5 text-xs"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Generate
+                {selectedRowIds.size > 0
+                  ? ` (${selectedGenerateTargets.length})`
+                  : ""}
+              </Button>
             )}
             {(imagesReadyCount > 0 ||
               session.status === "completed" ||
@@ -1653,7 +1680,7 @@ export default function ProductsVisualizerPage() {
               <div>
                 <h2 className="text-xs font-semibold">Worksheet</h2>
                 <p className="text-[11px] text-muted-foreground">
-                  Select products, then run Descriptions or Generate images.
+                  Select products, then press Generate. Description runs first, then images on the same row.
                   Open the eye to review AI output.
                 </p>
               </div>
@@ -1672,6 +1699,39 @@ export default function ProductsVisualizerPage() {
                 ) : null}
               </div>
             </div>
+
+            {showGenerationBanner && (
+              <div className="mb-3 flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium">
+                    Processing {bannerTotal} product
+                    {bannerTotal === 1 ? "" : "s"}
+                    {bannerPhaseLabel ? ` · ${bannerPhaseLabel}` : ""}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {stopping
+                      ? "Finishing the current product before stopping"
+                      : bannerCompleted > 0
+                        ? `${bannerCompleted} of ${bannerTotal} done · Keep this page open`
+                        : "Keep this page open until generation finishes"}
+                  </p>
+                </div>
+                {bannerTotal > 1 && (
+                  <div className="h-1.5 w-24 overflow-hidden rounded-full bg-primary/15">
+                    <div
+                      className="h-full rounded-full bg-primary transition-[width] duration-300"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.round((bannerCompleted / bannerTotal) * 100)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <div
@@ -1729,10 +1789,19 @@ export default function ProductsVisualizerPage() {
                     ) : (
                       rows.map((row) => {
                         const hasDescription = !!row.generatedDescription?.trim();
-                        const snippet =
-                          descriptionSnippet(row.generatedDescription) ||
-                          row.errorMessage ||
-                          "—";
+                        const descriptionIsLoading =
+                          row.status === "generating" &&
+                          (row.generationStage === "description" ||
+                            row.generationStage === "planning" ||
+                            !row.generationStage);
+                        const imagesIsLoading =
+                          row.status === "generating" &&
+                          row.generationStage === "images";
+                        const snippet = descriptionIsLoading
+                          ? "Writing description…"
+                          : descriptionSnippet(row.generatedDescription) ||
+                            row.errorMessage ||
+                            "—";
                         const placeholders = row.imagePlaceholders ?? [];
                         return (
                           <tr
@@ -1761,8 +1830,11 @@ export default function ProductsVisualizerPage() {
                                 return (
                                   <td key={column} className="px-3 py-3 align-top">
                                     <div className="flex min-w-[200px] items-start gap-2">
-                                      {row.status === "generating" ? (
-                                        <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-600" />
+                                      {descriptionIsLoading ? (
+                                        <div className="relative mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded border border-primary/40 bg-primary/15">
+                                          <div className="absolute inset-0 animate-pulse bg-primary/25" />
+                                          <Loader2 className="relative h-3.5 w-3.5 animate-spin text-primary" />
+                                        </div>
                                       ) : (
                                         <button
                                           type="button"
@@ -1784,7 +1856,7 @@ export default function ProductsVisualizerPage() {
                                           title={
                                             hasDescription
                                               ? "Review description & image prompts"
-                                              : "Generate a description first"
+                                              : "Generate first"
                                           }
                                         >
                                           {hasDescription ? (
@@ -1795,13 +1867,23 @@ export default function ProductsVisualizerPage() {
                                         </button>
                                       )}
                                       <div className="min-w-0 flex-1">
-                                        <p className="truncate text-[11px] leading-relaxed text-foreground">
+                                        <p
+                                          className={`truncate text-[11px] leading-relaxed ${
+                                            descriptionIsLoading
+                                              ? "text-primary"
+                                              : "text-foreground"
+                                          }`}
+                                        >
                                           {snippet}
                                         </p>
                                         <span
                                           className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-medium capitalize ${rowStatusTone(row.status)}`}
                                         >
-                                          {row.status.replaceAll("_", " ")}
+                                          {descriptionIsLoading
+                                            ? "writing description"
+                                            : imagesIsLoading
+                                              ? "generating images"
+                                              : row.status.replaceAll("_", " ")}
                                         </span>
                                       </div>
                                     </div>
@@ -1843,7 +1925,15 @@ export default function ProductsVisualizerPage() {
                                     key={column}
                                     className="min-w-[180px] px-3 py-3 align-top"
                                   >
-                                    {thumbs.length > 0 ? (
+                                    {imagesIsLoading ? (
+                                      <FieldImageSkeletons
+                                        count={
+                                          placeholders.length ||
+                                          expectedImageSlots
+                                        }
+                                        label="Generating images"
+                                      />
+                                    ) : thumbs.length > 0 ? (
                                       <div className="flex items-center gap-1">
                                         {thumbs.slice(0, 3).map((thumb, idx) => (
                                           <button
@@ -1882,6 +1972,10 @@ export default function ProductsVisualizerPage() {
                                       <span className="text-[11px] text-muted-foreground">
                                         {placeholders.length} placeholder
                                         {placeholders.length === 1 ? "" : "s"}
+                                      </span>
+                                    ) : descriptionIsLoading ? (
+                                      <span className="text-[11px] text-muted-foreground">
+                                        Waiting for description…
                                       </span>
                                     ) : (
                                       <span className="text-[11px] text-muted-foreground">
@@ -2121,6 +2215,16 @@ export default function ProductsVisualizerPage() {
                 dialogThumbs.find((item) => item.key === imagePreviewKey) ??
                 dialogThumbs[0] ??
                 null;
+              const activeIndex = active
+                ? dialogThumbs.findIndex((item) => item.key === active.key)
+                : -1;
+              const goToRelative = (delta: number) => {
+                if (dialogThumbs.length < 2 || activeIndex < 0) return;
+                const next =
+                  (activeIndex + delta + dialogThumbs.length) %
+                  dialogThumbs.length;
+                setImagePreviewKey(dialogThumbs[next]!.key);
+              };
 
               return (
                 <Dialog
@@ -2140,17 +2244,42 @@ export default function ProductsVisualizerPage() {
                       </DialogTitle>
                       <DialogDescription>
                         {`${rowProductLabel(imageDialogRow, settings)} · ${dialogThumbs.length} image${dialogThumbs.length === 1 ? "" : "s"}`}
+                        {activeIndex >= 0
+                          ? ` · ${activeIndex + 1} of ${dialogThumbs.length}`
+                          : ""}
                       </DialogDescription>
                     </DialogHeader>
                     <div className="grid min-h-[480px] md:grid-cols-[minmax(0,1fr)_132px]">
-                      <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
+                      <div className="relative flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
                         {active ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={active.src}
-                            alt={active.alt}
-                            className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
-                          />
+                          <>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={active.src}
+                              alt={active.alt}
+                              className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
+                            />
+                            {dialogThumbs.length > 1 ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => goToRelative(-1)}
+                                  className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border bg-background/90 text-foreground shadow-sm transition-colors hover:bg-background"
+                                  aria-label="Previous image"
+                                >
+                                  <ChevronLeft className="h-5 w-5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => goToRelative(1)}
+                                  className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border bg-background/90 text-foreground shadow-sm transition-colors hover:bg-background"
+                                  aria-label="Next image"
+                                >
+                                  <ChevronRight className="h-5 w-5" />
+                                </button>
+                              </>
+                            ) : null}
+                          </>
                         ) : (
                           <div className="text-center text-xs text-muted-foreground">
                             <ImageIcon className="mx-auto mb-2 h-8 w-8 opacity-50" />

@@ -29,9 +29,13 @@ export const WOOCOMMERCE_CLIENT_PREDICATE_KINDS = [
   "body_html_empty",
 ] as const;
 
+/**
+ * Identity, URL, and inventory fields (handle, primary_sku, barcode,
+ * global_unique_id, inventory_total, manage_stock, stock_status) are
+ * deliberately absent — see core/protected-columns.ts for the block list.
+ */
 export const WOOCOMMERCE_WRITABLE_COLUMNS = [
   "title",
-  "handle",
   "status",
   "type",
   "tags",
@@ -39,12 +43,6 @@ export const WOOCOMMERCE_WRITABLE_COLUMNS = [
   "categories_ids",
   "price",
   "compare_at_price",
-  "inventory_total",
-  "primary_sku",
-  "barcode",
-  "global_unique_id",
-  "manage_stock",
-  "stock_status",
   "featured_image",
   "featured_image_alt_text",
   "short_description",
@@ -84,6 +82,7 @@ export const WOOCOMMERCE_COLUMN_PROFILES: Record<string, string[]> = {
     "title",
     "featured_image",
     "featured_image_alt_text",
+    "gallery_images",
   ],
   inventory: [
     "title",

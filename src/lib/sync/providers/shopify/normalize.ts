@@ -1,4 +1,8 @@
 import type { SyncSheet, SyncSheetRow } from "../../core/types";
+import {
+  serializeGalleryImages,
+  type GalleryMediaEntry,
+} from "../../core/gallery-images";
 import { SHOPIFY_CORE_PRODUCT_COLUMNS } from "./columns";
 
 function toNumber(value: unknown) {
@@ -34,7 +38,10 @@ type GqlProductNode = {
     alt?: string | null;
     preview?: { image?: { url?: string } } | null;
   } | null;
-  media?: { edges?: Array<{ node?: { id?: string } }>; nodes?: Array<{ id?: string }> } | null;
+  media?: {
+    edges?: Array<{ node?: GqlMediaNode }>;
+    nodes?: Array<GqlMediaNode>;
+  } | null;
   variants?: {
     edges?: Array<{ node?: GqlVariantNode }>;
     nodes?: Array<GqlVariantNode>;
@@ -47,6 +54,12 @@ type GqlProductNode = {
     edges?: Array<{ node?: GqlMetafieldNode }>;
     nodes?: Array<GqlMetafieldNode>;
   } | null;
+};
+
+type GqlMediaNode = {
+  id?: string;
+  alt?: string | null;
+  preview?: { image?: { url?: string } } | null;
 };
 
 type GqlVariantNode = {
@@ -95,13 +108,45 @@ function collectGqlVariantStats(variants: GqlVariantNode[]) {
   };
 }
 
+/**
+ * Gallery = every media item except the featured one. Shopify returns the
+ * featured image inside `media` too, so it is filtered out by ID (and by URL as
+ * a fallback, since `featuredMedia.id` is occasionally absent on older shapes).
+ */
+function collectGalleryMedia(
+  mediaNodes: GqlMediaNode[],
+  featured: { id?: string; url?: string }
+): GalleryMediaEntry[] {
+  const featuredId = toText(featured.id);
+  const featuredUrl = toText(featured.url).toLowerCase();
+  const gallery: GalleryMediaEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const node of mediaNodes) {
+    const src = toText(node?.preview?.image?.url);
+    if (!src) continue;
+    const id = toText(node?.id);
+    if (featuredId && id === featuredId) continue;
+    if (featuredUrl && src.toLowerCase() === featuredUrl) continue;
+    const key = src.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    gallery.push({ id, src });
+  }
+  return gallery;
+}
+
 export function normalizeShopifyGqlProduct(product: GqlProductNode): SyncSheetRow {
   const variants = extractNodes<GqlVariantNode>(product.variants ?? null);
   const vs = collectGqlVariantStats(variants);
   const collections = extractNodes(product.collections ?? null);
   const metafields = extractNodes<GqlMetafieldNode>(product.metafields ?? null);
-  const mediaNodes = extractNodes(product.media ?? null);
+  const mediaNodes = extractNodes<GqlMediaNode>(product.media ?? null);
   const featuredImg = product.featuredMedia?.preview?.image?.url;
+  const galleryMedia = collectGalleryMedia(mediaNodes, {
+    id: product.featuredMedia?.id,
+    url: featuredImg,
+  });
 
   const row: SyncSheetRow = {
     id: toText(product?.id),
@@ -126,6 +171,8 @@ export function normalizeShopifyGqlProduct(product: GqlProductNode): SyncSheetRo
     featured_image: toText(featuredImg),
     featured_image_id: toText(product.featuredMedia?.id),
     featured_image_alt_text: toText(product.featuredMedia?.alt),
+    gallery_images: serializeGalleryImages(galleryMedia.map((m) => m.src)),
+    gallery_media: galleryMedia,
     image_count: mediaNodes.length,
     body_html: toText(product?.descriptionHtml),
     seo_title: toText(product?.seo?.title),
@@ -206,6 +253,18 @@ export function normalizeShopifyProductRow(product: any): SyncSheetRow {
   const variants = Array.isArray(product?.variants) ? product.variants : [];
   const variantStats = collectVariantStats(variants);
   const featuredImage = getFeaturedImage(product);
+  const featuredSrcKey = toText(featuredImage?.src).toLowerCase();
+  const galleryMedia: GalleryMediaEntry[] = Array.isArray(product?.images)
+    ? product.images
+        .map((image: any) => ({
+          id: toText(image?.id),
+          src: toText(image?.src),
+        }))
+        .filter(
+          (entry: GalleryMediaEntry) =>
+            entry.src && entry.src.toLowerCase() !== featuredSrcKey
+        )
+    : [];
 
   return {
     id: toText(product?.id),
@@ -229,6 +288,10 @@ export function normalizeShopifyProductRow(product: any): SyncSheetRow {
     featured_image: toText(featuredImage?.src),
     featured_image_id: toText(featuredImage?.id),
     featured_image_alt_text: toText(featuredImage?.alt),
+    gallery_images: serializeGalleryImages(
+      galleryMedia.map((m: GalleryMediaEntry) => m.src)
+    ),
+    gallery_media: galleryMedia,
     body_html: toText(product?.body_html),
     seo_title: toText(product?.seo_title),
     seo_description: toText(product?.seo_description),

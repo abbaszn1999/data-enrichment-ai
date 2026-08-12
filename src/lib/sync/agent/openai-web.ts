@@ -329,3 +329,218 @@ export async function searchImagesWithOpenAiWeb(params: {
     throw err;
   }
 }
+
+// ─── Gallery (multiple images per product) ───────────────────────────────────
+
+export type SyncGallerySelection = {
+  status: "found" | "no_confident_match";
+  selectedImageUrls: string[];
+  notes: string;
+};
+
+/** Parse Sol structured output for a multi-image pick. Exported for tests. */
+export function parseSyncGallerySelection(raw: unknown): SyncGallerySelection | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  const status = rec.status === "found" ? "found" : "no_confident_match";
+  const urls = Array.isArray(rec.selectedImageUrls)
+    ? rec.selectedImageUrls
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+    : [];
+  const notes = typeof rec.notes === "string" ? rec.notes : "";
+  return { status, selectedImageUrls: urls, notes };
+}
+
+/**
+ * Keeps only the picks that really came from the tool's image pool, in the order
+ * the model ranked them. Same precision rule as the single-image path: a URL the
+ * model invented is dropped rather than trusted.
+ */
+export function resolveGroundedGallerySelection(params: {
+  selection: SyncGallerySelection | null;
+  toolImages: Array<{ imageUrl: string; pageUrl?: string }>;
+  excludeUrls?: readonly string[];
+  limit: number;
+}): Array<{ imageUrl: string; pageUrl: string }> {
+  const { selection, toolImages, limit } = params;
+  if (!selection || selection.status !== "found") return [];
+
+  const pool = new Map<string, { imageUrl: string; pageUrl?: string }>();
+  for (const image of toolImages) {
+    if (!image?.imageUrl) continue;
+    pool.set(image.imageUrl.toLowerCase(), image);
+  }
+  const blocked = new Set(
+    (params.excludeUrls ?? []).map((url) => String(url ?? "").trim().toLowerCase())
+  );
+
+  const out: Array<{ imageUrl: string; pageUrl: string }> = [];
+  const taken = new Set<string>();
+  for (const raw of selection.selectedImageUrls) {
+    if (out.length >= limit) break;
+    if (!looksLikeDirectImageUrl(raw)) continue;
+    const key = raw.toLowerCase();
+    if (taken.has(key) || blocked.has(key)) continue;
+    const matched = pool.get(key);
+    if (!matched) continue;
+    taken.add(key);
+    out.push({
+      imageUrl: matched.imageUrl,
+      pageUrl: matched.pageUrl || matched.imageUrl,
+    });
+  }
+  return out;
+}
+
+/**
+ * Several gallery images for one product via OpenAI Sol web_search.
+ * One API call per product regardless of how many images are requested.
+ */
+export async function searchGalleryWithOpenAiWeb(params: {
+  title: string;
+  vendor?: string;
+  productType?: string;
+  tags?: string;
+  instruction: string;
+  imageCount: number;
+  /** URLs already on the product, so the model doesn't re-pick them. */
+  excludeUrls?: readonly string[];
+  billingTracker?: SyncBillingTracker;
+}): Promise<{
+  images: Array<{ imageUrl: string; pageUrl: string }>;
+  query: string;
+  cost: AiCallCost;
+} | null> {
+  const identity = [params.title, params.vendor, params.productType, params.tags]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const hint = String(params.instruction ?? "").trim();
+  const query = identity;
+  const limit = Math.max(1, Math.floor(params.imageCount));
+
+  if (!query) {
+    console.warn("[Sync Pro OpenAI] gallery search skipped — empty query");
+    return null;
+  }
+
+  const prompt = [
+    `Find up to ${limit} DIFFERENT useful ecommerce product images for this product.`,
+    "Use web_search with image results. Do not invent URLs.",
+    'When status is "found", every selectedImageUrls entry MUST be copied exactly from a web_search image_result.image_url.',
+    "Prefer varied, genuinely useful shots of the SAME product: different angles, detail shots, packaging, or in-use photos.",
+    "Never repeat the same image twice, and never include images of a different product.",
+    "Return fewer entries rather than padding the list with weak or unrelated matches.",
+    'Set status to "no_confident_match" with an empty list only if no result is usable.',
+    "",
+    `Search focus: ${query}`,
+    hint ? `Extra instruction: ${hint}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  console.log("[Sync Pro OpenAI] searchGalleryWithOpenAiWeb starting", {
+    model: SYNC_PRO_OPENAI_MODEL,
+    imageCount: limit,
+    query: query.slice(0, 160),
+  });
+
+  try {
+    const body = await postResponses({
+      model: SYNC_PRO_OPENAI_MODEL,
+      reasoning: { effort: "high" },
+      tools: [
+        {
+          type: "web_search",
+          search_context_size: "high",
+          external_web_access: true,
+          search_content_types: ["image", "text"],
+          image_settings: {
+            // Ask for a deeper pool than requested so the model has room to
+            // discard duplicates and still fill the gallery.
+            max_results: Math.min(20, limit * 3),
+            caption: true,
+          },
+        },
+      ],
+      tool_choice: "required",
+      include: ["web_search_call.results"],
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: prompt }],
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "sync_product_gallery",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["status", "selectedImageUrls", "notes"],
+            properties: {
+              status: {
+                type: "string",
+                enum: ["found", "no_confident_match"],
+                description:
+                  "found when selectedImageUrls holds at least one tool image_url matching the product",
+              },
+              selectedImageUrls: {
+                type: "array",
+                maxItems: limit,
+                items: { type: "string" },
+                description:
+                  "Exact image_result.image_url values from web_search, best first, no duplicates",
+              },
+              notes: {
+                type: "string",
+                description: "Brief note on match quality or why abstaining",
+              },
+            },
+          },
+        },
+      },
+      store: true,
+    });
+
+    const images = collectToolImages(body);
+    const searchCallCount = countWebSearchCalls(body);
+    const cost = calculateOpenAiWebSearchCost(
+      SYNC_PRO_OPENAI_MODEL,
+      body.usage,
+      searchCallCount
+    );
+    trackCost(params.billingTracker, cost);
+
+    const selection = parseSyncGallerySelection(
+      parseJsonObject(responseOutputText(body))
+    );
+    const grounded = resolveGroundedGallerySelection({
+      selection,
+      toolImages: images,
+      excludeUrls: params.excludeUrls,
+      limit,
+    });
+
+    console.log("[Sync Pro OpenAI] gallery search done", {
+      requested: limit,
+      selected: grounded.length,
+      toolImageCount: images.length,
+      status: selection?.status,
+      responseId: parsedId(body),
+    });
+
+    return { images: grounded, query, cost };
+  } catch (err) {
+    console.error("[Sync Pro OpenAI] searchGalleryWithOpenAiWeb FAILED", {
+      query: query.slice(0, 120),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}

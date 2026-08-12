@@ -13,15 +13,13 @@ import {
   Loader2,
   Store,
   Download,
-  ArrowLeftRight,
-  FileUp,
   Search,
   ListChecks,
-  Table2,
-  X,
   FileText,
   Image as ImageIcon,
   File as FileIcon,
+  FolderTree,
+  X,
   Bot,
   User as UserIcon,
   ChevronRight,
@@ -64,12 +62,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import ReactMarkdown from "react-markdown";
+import {
+  StreamingMarkdown,
+  resetRevealedMessages,
+} from "@/components/streaming-markdown";
 import { useWorkspaceContext } from "../layout";
 import { useSyncStore, type SyncMessage, type SyncMode, type SyncWorkingMemory, type SyncActionReceipt } from "@/store/sync-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { getWorkspaceIntegration, type WorkspaceIntegration } from "@/lib/supabase";
 import { getClientProviderSchema } from "@/lib/sync/client-schema";
+import { parseGalleryImages } from "@/lib/sync/core/gallery-images";
 import { SyncExportButton } from "@/components/sync/sync-export-button";
 import type { ColumnProfileKey } from "@/lib/sync/core/types";
 
@@ -375,7 +377,31 @@ function ExpandableText({ text, maxLen = 80 }: { text: string; maxLen?: number }
 }
 
 /** Columns that should never appear in the UI table. */
-const HIDDEN_COLUMNS = new Set(["id"]);
+const HIDDEN_COLUMNS = new Set(["id", "gallery_media"]);
+
+/** Thumbnail strip for the gallery cell, which holds several URLs. */
+function GalleryCell({ urls }: { urls: string[] }) {
+  const shown = urls.slice(0, 4);
+  const overflow = urls.length - shown.length;
+  return (
+    <div className="flex items-center gap-1.5 min-w-[150px]">
+      {shown.map((url) => (
+        <img
+          key={url}
+          src={url}
+          alt="Product gallery"
+          className="h-10 w-10 rounded-md border object-cover bg-muted shrink-0"
+          onError={(e) => {
+            (e.target as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ))}
+      <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+        {overflow > 0 ? `+${overflow} more` : `${urls.length} image${urls.length === 1 ? "" : "s"}`}
+      </span>
+    </div>
+  );
+}
 
 function renderCellValue(column: string, value: unknown) {
   const text = String(value ?? "").trim();
@@ -401,6 +427,12 @@ function renderCellValue(column: string, value: unknown) {
         <div className="min-w-0 text-[11px] text-muted-foreground break-all">{truncateText(text, 42)}</div>
       </div>
     );
+  }
+
+  if (column === "gallery_images") {
+    const urls = parseGalleryImages(text);
+    if (urls.length === 0) return <span className="text-muted-foreground">—</span>;
+    return <GalleryCell urls={urls} />;
   }
 
   // Description / body_html — expandable preview
@@ -447,46 +479,184 @@ function getSyncRowIdentity(row: SyncSheetRow | null | undefined) {
   return null;
 }
 
+// ─── Context usage ring (Cursor-style) ───────────────────
+//
+// Shows how full the agent's active context is: compressed session memory +
+// the verbatim recent turns still in the window. When turns age out they get
+// compacted into memory automatically, so the ring drops back down after
+// each compaction instead of overflowing.
+
+/** Rough chars→tokens estimate (≈4 chars per token). */
+const estimateTokens = (chars: number) => Math.ceil(chars / 4);
+
+/** Nominal budget for the conversational part of the prompt:
+ *  12 verbatim turns × 10K chars cap + 3K chars summary ≈ 31K tokens. */
+const CONTEXT_BUDGET_TOKENS = 32_000;
+
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return String(n);
+}
+
+function ContextUsageRing({
+  messages,
+  sessionSummary,
+  sessionSummaryUpTo,
+}: {
+  messages: SyncMessage[];
+  sessionSummary: string;
+  sessionSummaryUpTo: number;
+}) {
+  const { percent, summaryTokens, convoTokens, compactedCount, liveCount } =
+    useMemo(() => {
+      const compacted = Math.min(
+        Math.max(0, sessionSummaryUpTo),
+        messages.length
+      );
+      const live = messages.slice(compacted);
+      const convoChars = live.reduce(
+        (sum, m) => sum + Math.min(m.content.length, 10_000),
+        0
+      );
+      const summaryChars = sessionSummary.length;
+      const used = estimateTokens(convoChars) + estimateTokens(summaryChars);
+      return {
+        percent: Math.min(100, Math.round((used / CONTEXT_BUDGET_TOKENS) * 100)),
+        summaryTokens: estimateTokens(summaryChars),
+        convoTokens: estimateTokens(convoChars),
+        compactedCount: compacted,
+        liveCount: live.length,
+      };
+    }, [messages, sessionSummary, sessionSummaryUpTo]);
+
+  // Hide entirely on a brand-new chat — nothing to report yet.
+  if (messages.length === 0) return null;
+
+  const R = 5.5;
+  const CIRC = 2 * Math.PI * R;
+  const color =
+    percent >= 85
+      ? "text-red-500"
+      : percent >= 60
+        ? "text-amber-500"
+        : "text-muted-foreground";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          className="flex items-center gap-1 h-8 px-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors cursor-default"
+          aria-label={`Context usage ${percent}%`}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" className={color}>
+            <circle
+              cx="8"
+              cy="8"
+              r={R}
+              fill="none"
+              stroke="currentColor"
+              strokeOpacity="0.25"
+              strokeWidth="2"
+            />
+            <circle
+              cx="8"
+              cy="8"
+              r={R}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeDasharray={CIRC}
+              strokeDashoffset={CIRC * (1 - percent / 100)}
+              transform="rotate(-90 8 8)"
+              className="transition-[stroke-dashoffset] duration-500"
+            />
+          </svg>
+          <span className="text-[10px] font-medium tabular-nums">{percent}%</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        <div className="space-y-0.5">
+          <div className="font-semibold">Chat context · {percent}% used</div>
+          <div>Conversation: ~{formatTokens(convoTokens)} tokens ({liveCount} messages)</div>
+          <div>Session memory: ~{formatTokens(summaryTokens)} tokens</div>
+          {compactedCount > 0 && (
+            <div className="text-muted-foreground">
+              {compactedCount} older messages compacted into memory
+            </div>
+          )}
+          <div className="text-muted-foreground">
+            Older messages auto-summarize — the chat never overflows.
+          </div>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 // ─── Quick Prompt Suggestions ────────────────────────────
 
-const QUICK_PROMPTS = [
-  {
-    icon: Download,
-    title: "Get products",
-    description: "Load products from the connected platform",
-    prompt: "Get all products from the connected platform into a new sheet",
-  },
-  {
-    icon: ListChecks,
-    title: "Show drafts",
-    description: "Show draft products from the current platform data",
-    prompt: "Show draft products from the current sheet",
-  },
-  {
-    icon: Table2,
-    title: "List brands",
-    description: "Group products by vendor and count them",
-    prompt: "List brands or vendors in the current sheet and count how many products each one has",
-  },
-  {
-    icon: ArrowLeftRight,
-    title: "Find products without images",
-    description: "Show products that are missing a featured image",
-    prompt: "Show products without images in the current sheet",
-  },
-  {
-    icon: ListChecks,
-    title: "Find incomplete items",
-    description: "Detect products missing key catalog fields",
-    prompt: "Show products in the current sheet that are missing important fields like image, description, vendor, or price",
-  },
-  {
-    icon: FileUp,
-    title: "Research a product",
-    description: "Use Web mode to research official product details",
-    prompt: "Research this product on the web and summarize the official details and key specifications",
-  },
-];
+type QuickPrompt = {
+  icon: typeof Download;
+  title: string;
+  description: string;
+  prompt: string;
+};
+
+/** Discovery-first starters. Taxonomy card adapts to Shopify vs WooCommerce. */
+function buildQuickPrompts(provider?: string | null): QuickPrompt[] {
+  const taxonomy = taxonomyLabel(provider);
+  const taxonomyPromptText =
+    provider === "woocommerce"
+      ? "Get all product categories from the connected WooCommerce store into the sheet"
+      : "Get all collections from the connected Shopify store into the sheet";
+
+  return [
+    {
+      icon: Download,
+      title: "Get products",
+      description: "Load products from the connected platform",
+      prompt: "Get all products from the connected platform into a new sheet",
+    },
+    {
+      icon: ImageIcon,
+      title: "Products without images",
+      description: "Show products that are missing a featured image",
+      prompt:
+        "Show products that are missing a featured image. Load from the store first if the sheet is empty.",
+    },
+    {
+      icon: Search,
+      title: "Missing SEO title/description",
+      description: "Show products missing SEO title or description",
+      prompt:
+        "Show products that are missing SEO title or SEO description. Load from the store first if the sheet is empty.",
+    },
+    {
+      icon: FolderTree,
+      title: `Get all ${taxonomy.toLowerCase()}`,
+      description:
+        provider === "woocommerce"
+          ? "Load all product categories from WooCommerce"
+          : "Load all collections from Shopify",
+      prompt: taxonomyPromptText,
+    },
+    {
+      icon: ListChecks,
+      title: "Show drafts",
+      description: "Show draft products from the connected store",
+      prompt:
+        "Show draft products from the connected store. Load from the store first if the sheet is empty.",
+    },
+    {
+      icon: FileText,
+      title: "Products without description",
+      description: "Show products missing a product description",
+      prompt:
+        "Show products that are missing a product description (body_html empty). Load from the store first if the sheet is empty.",
+    },
+  ];
+}
 
 // ─── Main Page Component ─────────────────────────────────
 
@@ -508,6 +678,9 @@ export default function SyncPage() {
     updateLastAssistantThinking,
     updateLastAssistantProgress,
     updateLastAssistantSessionSummary,
+    sessionSummary,
+    sessionSummaryUpTo,
+    setSessionSummaryUpTo,
     isStreaming,
     setStreaming,
     mode,
@@ -606,6 +779,11 @@ export default function SyncPage() {
     [integration?.provider]
   );
 
+  const quickPrompts = useMemo(
+    () => buildQuickPrompts(integration?.provider),
+    [integration?.provider]
+  );
+
   const providerSchema = useMemo(
     () => getClientProviderSchema(integration?.provider),
     [integration?.provider]
@@ -619,6 +797,7 @@ export default function SyncPage() {
   const [chatBlockedReason, setChatBlockedReason] = useState<"NO_CREDITS" | "NO_SUBSCRIPTION" | null>(null);
   const [pendingPlan, setPendingPlan] = useState<PendingPlanInfo | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -759,11 +938,6 @@ export default function SyncPage() {
     return { creates, updates };
   })();
 
-  const sessionSummary = messages
-    .slice(-6)
-    .map((message) => `${message.role}: ${message.content}`)
-    .join("\n");
-
   const processAgentStream = useCallback(
     async (
       response: Response,
@@ -818,6 +992,7 @@ export default function SyncPage() {
                   assistantMessage?: string;
                   progress?: string[];
                   sessionSummary?: string;
+                  sessionSummaryUpTo?: number;
                   sheet?: SyncSheet;
                   columnProfile?: string;
                   remainingCount?: number | null;
@@ -992,6 +1167,9 @@ export default function SyncPage() {
             if (typeof event.data?.sessionSummary === "string") {
               updateLastAssistantSessionSummary(event.data.sessionSummary);
             }
+            if (typeof event.data?.sessionSummaryUpTo === "number") {
+              setSessionSummaryUpTo(event.data.sessionSummaryUpTo);
+            }
 
             if (event.data?.columnProfile) {
               setColumnProfile(event.data.columnProfile as ColumnProfileKey);
@@ -1041,6 +1219,7 @@ export default function SyncPage() {
       updateLastAssistantThinking,
       updateLastAssistantProgress,
       updateLastAssistantSessionSummary,
+      setSessionSummaryUpTo,
       updateLastAssistantActionReceipt,
       appendAssistantTraceEvent,
       pushSheetSnapshot,
@@ -1098,9 +1277,11 @@ export default function SyncPage() {
 
   useEffect(() => {
     resetChat();
+    resetRevealedMessages();
 
     return () => {
       resetChat();
+      resetRevealedMessages();
     };
   }, [resetChat]);
 
@@ -1115,6 +1296,22 @@ export default function SyncPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Only the newest message may type itself in — anything above it is history
+  // the user has already read.
+  const lastMessageId = messages[messages.length - 1]?.id;
+
+  // Called on every frame of the reply's typing animation. Only follows the
+  // text while the user is already at the bottom, so scrolling up to re-read
+  // earlier turns isn't yanked back down.
+  const keepChatPinnedToBottom = useCallback(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 140) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
 
   // Auto-resize textarea
   const handleTextareaChange = useCallback(
@@ -1155,6 +1352,7 @@ export default function SyncPage() {
         content: message.content,
       })),
       sessionSummary,
+      sessionSummaryUpTo,
       mode,
       thinkingLevel,
       webEnabled,
@@ -1171,7 +1369,7 @@ export default function SyncPage() {
       workingMemory,
       ...extra,
     }),
-    [workspace?.id, messages, sessionSummary, mode, thinkingLevel, webEnabled, integration, currentSheet, originalSheet, workingMemory]
+    [workspace?.id, messages, sessionSummary, sessionSummaryUpTo, mode, thinkingLevel, webEnabled, integration, currentSheet, originalSheet, workingMemory]
   );
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1739,6 +1937,12 @@ export default function SyncPage() {
 
         <div className="flex-1" />
 
+        <ContextUsageRing
+          messages={messages}
+          sessionSummary={sessionSummary}
+          sessionSummaryUpTo={sessionSummaryUpTo}
+        />
+
         {integration && (
           <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
             <Store className="h-3 w-3" />
@@ -1760,7 +1964,10 @@ export default function SyncPage() {
           {/* Left: Chat Panel */}
           <div className="w-[460px] min-w-[360px] border-r flex flex-col min-h-0 overflow-hidden bg-background">
             {/* Messages */}
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-4">
+            <div
+              ref={messagesScrollRef}
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-4"
+            >
               {messages.map((msg) => (
                 <div key={msg.id} className="flex gap-3">
                   <div
@@ -1882,9 +2089,13 @@ export default function SyncPage() {
                           <div className="text-[10px] font-semibold uppercase tracking-wide text-primary/80 mb-1">
                             Action summary
                           </div>
-                          <div className="text-xs leading-relaxed text-foreground/90 break-words prose prose-xs prose-neutral dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_strong]:text-foreground [&_code]:text-[11px] [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded">
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
-                          </div>
+                          <StreamingMarkdown
+                            text={msg.content}
+                            messageId={msg.id}
+                            animate={msg.id === lastMessageId}
+                            onReveal={keepChatPinnedToBottom}
+                            className="text-xs leading-relaxed text-foreground/90 break-words prose prose-xs prose-neutral dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_strong]:text-foreground [&_code]:text-[11px] [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded"
+                          />
                         </div>
                       </>
                     )}
@@ -2286,7 +2497,7 @@ export default function SyncPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-3 w-full max-w-2xl mb-8">
-            {QUICK_PROMPTS.map((qp) => (
+            {quickPrompts.map((qp) => (
               <button
                 key={qp.title}
                 onClick={() => handleQuickPrompt(qp.prompt)}

@@ -147,6 +147,43 @@ export async function generateVisualizerDescriptions(params: {
   }>(res);
 }
 
+export async function generateVisualizerFull(params: {
+  workspaceId: string;
+  sessionId: string;
+  settingsSnapshot: VisualizerProjectSettings;
+  worksheetSnapshot: VisualizerWorksheetJson;
+  worksheetRevision: number;
+  rowIds?: string[];
+  estimateOnly?: boolean;
+  retryFailed?: boolean;
+}) {
+  const res = await fetch("/api/visualizer/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...params,
+      phase: "full",
+    }),
+  });
+  return parseJson<{
+    runId?: string;
+    status?: string;
+    phase?: string;
+    completed?: number;
+    failed?: number;
+    usedCredits?: number;
+    estimatedCredits?: number;
+    estimateRange?: { min: number; max: number };
+    remaining?: number;
+    required?: number;
+    worksheet?: VisualizerWorksheetJson;
+    session?: VisualizerSession;
+    signedUrls?: Record<string, string>;
+    message?: string;
+    error?: string;
+  }>(res);
+}
+
 export async function generateVisualizerImages(params: {
   workspaceId: string;
   sessionId: string;

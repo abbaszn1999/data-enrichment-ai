@@ -52,6 +52,8 @@ type RequestBody = {
   originalSheet?: SyncSheet | null;
   messages?: AgentChatMessage[];
   sessionSummary?: string;
+  /** Turns [0, N) of `messages` are already folded into sessionSummary. */
+  sessionSummaryUpTo?: number;
   workingMemory?: Partial<SyncWorkingMemoryV2> | null;
   planOnly?: boolean;
   preApprovedPlan?: AgentPlanV2;
@@ -111,6 +113,8 @@ type StreamEvent =
         assistantMessage: string;
         progress: string[];
         sessionSummary: string;
+        /** Turns [0, N) of the request `messages` are folded into sessionSummary. */
+        sessionSummaryUpTo?: number;
         sheet: SyncSheet | null;
         columnProfile: string;
         executedSteps: Array<{ tool: string }>;
@@ -246,11 +250,6 @@ function createNdjsonStream(
   });
 }
 
-function buildSessionSummary(userMessage: string, executedTools: string[]): string {
-  const toolList = executedTools.join(" → ") || "(no tools)";
-  return `User: ${userMessage.slice(0, 200)}\nTools: ${toolList}`;
-}
-
 // ─── POST handler ───────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -281,6 +280,7 @@ export async function POST(request: NextRequest) {
     originalSheet: rawOriginalSheet,
     messages = [],
     sessionSummary,
+    sessionSummaryUpTo,
     workingMemory: rawWorkingMemory,
     planOnly = false,
     preApprovedPlan,
@@ -370,7 +370,12 @@ export async function POST(request: NextRequest) {
   // planOnly mode is deprecated under the new agent loop — confirmations are
   // surfaced dynamically during execution via `needs_confirmation` events.
   void planOnly; // intentionally unused
-  void sessionSummary; // accepted for backward compat, not used by the loop
+  const priorSessionSummary =
+    typeof sessionSummary === "string" ? sessionSummary.trim() : "";
+  const priorSessionSummaryUpTo =
+    typeof sessionSummaryUpTo === "number" && Number.isFinite(sessionSummaryUpTo)
+      ? Math.max(0, Math.floor(sessionSummaryUpTo))
+      : 0;
 
   // ─── Execute mode (streaming) ─────────────────────────────────────────────
 
@@ -501,7 +506,8 @@ export async function POST(request: NextRequest) {
             data: {
               assistantMessage: event.assistantMessage,
               progress,
-              sessionSummary: buildSessionSummary(userMessage, event.executedTools),
+              sessionSummary: event.sessionSummary || priorSessionSummary,
+              sessionSummaryUpTo: event.sessionSummaryUpTo,
               sheet: event.sheet,
               columnProfile: event.memory.lastColumnProfile ?? "core",
               executedSteps: event.executedTools.map((tool) => ({ tool })),
@@ -546,6 +552,8 @@ export async function POST(request: NextRequest) {
         workingMemory,
         webEnabled,
         attachments,
+        sessionSummary: priorSessionSummary || undefined,
+        sessionSummaryUpTo: priorSessionSummaryUpTo,
         billingTracker,
         admin,
         workspaceId,
@@ -565,7 +573,8 @@ export async function POST(request: NextRequest) {
         data: {
           assistantMessage: "Done.",
           progress,
-          sessionSummary: buildSessionSummary(userMessage, executedToolNames),
+          sessionSummary: priorSessionSummary,
+          sessionSummaryUpTo: priorSessionSummaryUpTo,
           sheet,
           columnProfile: workingMemory.lastColumnProfile ?? "core",
           executedSteps: executedToolNames.map((tool) => ({ tool })),
@@ -590,7 +599,7 @@ export async function POST(request: NextRequest) {
           p_user_id: ctx.subscription.user_id,
           p_amount: creditsToDeduct,
           p_workspace_id: workspaceId,
-          p_operation: "ai_function",
+          p_operation: "sync_agent",
           p_uid: user.id,
           p_entity_type: "sync_agent",
           p_entity_id: null,

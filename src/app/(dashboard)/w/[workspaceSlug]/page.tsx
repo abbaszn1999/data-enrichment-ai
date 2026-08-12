@@ -475,6 +475,7 @@ export default function WorkspaceDashboardPage() {
               const opLabels: Record<string, string> = {
                 enrichment: "Enrichment",
                 ai_function: "AI Functions",
+                sync_agent: "Sync Agent",
                 matching: "Matching",
                 web_search: "Web Search",
                 other: "Other",

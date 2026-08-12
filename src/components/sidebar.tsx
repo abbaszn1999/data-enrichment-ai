@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -135,15 +135,26 @@ export function Sidebar() {
     (r) => r.status === "pending" || r.status === "error" || r.status === "done"
   );
 
-  // Enriched columns that have data in at least one row (all types including imageUrls/sourceUrls)
-  const enrichedColumnsWithData = enrichmentColumns.filter(
-    (col) =>
-      rows.some((r) => {
+  // AI Generated source options: only columns that have data on the currently
+  // selected product(s). Empty on the selected row(s) → do not list the column.
+  const enrichedColumnsWithData = useMemo(() => {
+    if (selectedRowIds.size === 0) return [];
+    const selected = rows.filter(
+      (r) =>
+        selectedRowIds.has(r.id) &&
+        (activeSheet === "existing"
+          ? r.matchType === "existing"
+          : r.matchType !== "existing")
+    );
+    if (selected.length === 0) return [];
+    return enrichmentColumns.filter((col) =>
+      selected.some((r) => {
         const val = r.enrichedData?.[col.id];
         if (Array.isArray(val)) return val.length > 0;
         return val !== undefined && val !== null && val !== "";
       })
-  );
+    );
+  }, [activeSheet, enrichmentColumns, rows, selectedRowIds]);
 
   const handleStopEnrich = useCallback(() => {
     if (abortControllerRef.current) {
@@ -781,7 +792,7 @@ export function Sidebar() {
             )}
 
             {enrichSectionOpen && enrichOutputTab === "new" && (
-              <div className="mt-3 space-y-1.5 pl-6">
+              <div className="mt-2.5 space-y-0.5 pl-6">
                 {enrichmentColumns.map((col) => {
                   const isExpanded = expandedColumns.has(col.id);
                   const toggleExpand = (e: React.MouseEvent) => {
@@ -798,64 +809,68 @@ export function Sidebar() {
                   return (
                     <div
                       key={col.id}
-                      className={`w-full text-left p-2.5 rounded-lg border transition-all duration-200 group relative overflow-hidden ${
+                      className={`rounded-md border transition-colors ${
                         col.enabled
-                          ? "bg-primary/5 border-primary/20 shadow-sm"
-                          : "bg-muted/50 border-transparent hover:border-border/40 hover:bg-muted"
-                      }`}
+                          ? "border-primary/15 bg-primary/[0.04]"
+                          : "border-transparent hover:bg-muted/60"
+                      } ${isExpanded ? "border-primary/20 bg-primary/[0.04]" : ""}`}
                     >
-                      <div className="flex items-start gap-2">
-                        <div
-                          className="mt-0.5 cursor-pointer shrink-0"
+                      <div className="flex h-8 items-center gap-2 px-2">
+                        <button
+                          type="button"
+                          className="shrink-0"
                           onClick={() => toggleEnrichmentColumn(col.id)}
+                          aria-label={col.enabled ? `Disable ${col.label}` : `Enable ${col.label}`}
                         >
                           {col.enabled ? (
-                            <CheckCircle2 className="h-4 w-4 text-primary" />
+                            <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
                           ) : (
-                            <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/40 group-hover:border-muted-foreground/60" />
+                            <div className="h-3.5 w-3.5 rounded-full border-[1.5px] border-muted-foreground/35" />
                           )}
-                        </div>
-                        <div
-                          className="flex flex-col gap-1 min-w-0 flex-1 cursor-pointer"
+                        </button>
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 truncate text-left text-[11px] font-medium leading-none"
                           onClick={() => toggleEnrichmentColumn(col.id)}
                         >
                           <span
-                            className={`text-sm font-semibold tracking-tight leading-none ${
-                              col.enabled ? "text-primary" : "text-muted-foreground"
-                            }`}
+                            className={
+                              col.enabled ? "text-foreground" : "text-muted-foreground"
+                            }
                           >
                             {col.label}
                           </span>
-                          <span className="text-[10px] leading-snug text-muted-foreground/70 line-clamp-2">
-                            {col.description}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
+                        </button>
+                        <div className="flex shrink-0 items-center gap-0.5">
                           {col.isCustom && (
                             <>
-                              <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[8px] font-medium text-secondary-foreground">
+                              <span className="rounded px-1 py-px text-[8px] font-medium uppercase tracking-wide text-muted-foreground/80">
                                 Custom
                               </span>
                               <button
+                                type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   removeCustomEnrichmentColumn(col.id);
                                 }}
-                                className="text-muted-foreground/40 hover:text-destructive transition-colors"
+                                className="rounded p-0.5 text-muted-foreground/40 transition-colors hover:text-destructive"
+                                aria-label={`Remove ${col.label}`}
                               >
-                                <X className="h-3.5 w-3.5" />
+                                <X className="h-3 w-3" />
                               </button>
                             </>
                           )}
                           {hasSettings && (
                             <button
+                              type="button"
                               onClick={toggleExpand}
-                              className="p-0.5 rounded hover:bg-muted/80 transition-colors"
+                              className="rounded p-0.5 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
+                              aria-label={isExpanded ? "Collapse settings" : "Open settings"}
                             >
                               {isExpanded ? (
-                                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                                <ChevronDown className="h-3.5 w-3.5" />
                               ) : (
-                                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                                <ChevronRight className="h-3.5 w-3.5" />
                               )}
                             </button>
                           )}
@@ -865,7 +880,7 @@ export function Sidebar() {
                       {/* Expandable Settings Panel */}
                       {isExpanded && hasSettings && (
                         <div
-                          className="mt-2.5 pt-2.5 border-t border-primary/10 space-y-2.5"
+                          className="space-y-2.5 border-t border-border/50 px-2 pb-2.5 pt-2"
                           onClick={(e) => e.stopPropagation()}
                         >
                           {/* Writing Tone — only for Enhanced Title & Marketing Description */}
@@ -1055,11 +1070,11 @@ export function Sidebar() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="w-full mt-2 border-dashed text-muted-foreground hover:text-primary hover:border-primary/50 gap-1"
+                    className="mt-1.5 h-8 w-full gap-1 border-dashed text-[11px] text-muted-foreground hover:border-primary/40 hover:text-foreground"
                     onClick={() => setShowAddColumn(true)}
                   >
-                    <Plus className="h-3.5 w-3.5" />
-                    Add Custom Column
+                    <Plus className="h-3 w-3" />
+                    Add custom column
                   </Button>
                 ) : (
                   <div className="mt-2 p-3 rounded-lg border border-primary/30 bg-primary/5 space-y-2.5">
@@ -1173,7 +1188,9 @@ export function Sidebar() {
             {sourceSectionOpen && (
               <div className="mt-3 space-y-1 pl-6">
                 <p className="text-[10px] text-muted-foreground mb-2 leading-tight">
-                  Choose which columns are sent to the AI agent for context
+                  Choose which columns are sent to the AI agent for context.
+                  AI Generated columns appear only for the selected product(s)
+                  that already have values.
                 </p>
                 {originalColumns.map((col) => {
                   const isSource = sourceColumns.includes(col);

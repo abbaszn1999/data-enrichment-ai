@@ -44,6 +44,9 @@ export type ApplyChangesResult = {
   updatedCount: number;
   skippedCount: number;
   errors: string[];
+  /** Non-fatal notes: the row was applied, but something needs the user's eye
+   *  (e.g. gallery images can be added via API but not removed). */
+  warnings?: string[];
 };
 
 export type FetchProductsOptions = {

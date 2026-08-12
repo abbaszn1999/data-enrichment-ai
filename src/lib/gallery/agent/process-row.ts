@@ -254,21 +254,22 @@ export async function processScrapingRow(params: {
           role: "main",
           fallbackUrl: originalUrl,
         });
-        await params.onCheckpoint?.({
-          mainImagePaths: [...mainPaths],
-          mainImagePath: mainPaths[0] ?? null,
-          generationStage: "main",
-        });
       }
 
       mainPath = mainPaths[0] ?? null;
       if (!mainPath) {
         return fail("The selected original image is not a valid image URL");
       }
+      // Reveal Main paths only once the full Main set is ready (no partial UI flash).
       await params.onCheckpoint?.({
         mainImagePaths: mainPaths,
         mainImagePath: mainPath,
         generationStage: runGallery ? "gallery" : "finalizing",
+        sourceMeta: {
+          ...(row.sourceMeta ?? {}),
+          provider: "scraping",
+          images: [...sourceMetaImages],
+        },
       });
     } else {
       ensureTime(120_000, "OpenAI product image search");
@@ -314,16 +315,6 @@ export async function processScrapingRow(params: {
             role: "main",
             fallbackUrl: candidate.imageUrl,
           });
-          await params.onCheckpoint?.({
-            mainImagePaths: [...mainPaths],
-            mainImagePath: mainPaths[0] ?? null,
-            generationStage: "main",
-            sourceMeta: {
-              ...(row.sourceMeta ?? {}),
-              provider: "scraping",
-              images: [...sourceMetaImages],
-            },
-          });
         }
         mainPath = mainPaths[0] ?? null;
         if (!mainPath) {
@@ -331,10 +322,16 @@ export async function processScrapingRow(params: {
             stage: "main",
           });
         }
+        // Batch reveal — avoid streaming Main thumbnails one-by-one in the table.
         await params.onCheckpoint?.({
           mainImagePaths: mainPaths,
           mainImagePath: mainPath,
           generationStage: runGallery ? "gallery" : "finalizing",
+          sourceMeta: {
+            ...(row.sourceMeta ?? {}),
+            provider: "scraping",
+            images: [...sourceMetaImages],
+          },
         });
       } catch (error) {
         return fail(
@@ -361,7 +358,12 @@ export async function processScrapingRow(params: {
   if (runGallery && galleryCount > 0) {
     ensureTime(120_000, "OpenAI gallery search");
     trace.stage("gallery-scrape", "Selecting exact Gallery images with OpenAI");
-    await params.onCheckpoint?.({ generationStage: "gallery" });
+    // Clear previous Gallery paths while this stage runs so the UI stays in
+    // skeleton mode for the whole field (no one-by-one / stale reveals).
+    await params.onCheckpoint?.({
+      generationStage: "gallery",
+      galleryImagePaths: [],
+    });
 
     // Scraping attaches Main as public HTTPS URLs for OpenAI input_image.image_url.
     // Legacy internal storage paths are loaded as bytes → data URL instead.
@@ -432,14 +434,20 @@ export async function processScrapingRow(params: {
                 ? candidate.canonicalUrl
                 : undefined,
         });
-        await params.onCheckpoint?.({
-          mainImagePaths: mainPaths,
-          mainImagePath: mainPath,
-          galleryImagePaths: [...galleryPaths],
-          generationStage:
-            galleryPaths.length < galleryCount ? "gallery" : "finalizing",
-        });
       }
+
+      // Batch reveal Gallery only when the selection pass finishes.
+      await params.onCheckpoint?.({
+        mainImagePaths: mainPaths,
+        mainImagePath: mainPath,
+        galleryImagePaths: [...galleryPaths],
+        generationStage: "finalizing",
+        sourceMeta: {
+          ...(row.sourceMeta ?? {}),
+          provider: "scraping",
+          images: [...sourceMetaImages],
+        },
+      });
 
       if (galleryPaths.length === 0) {
         galleryNote = NO_GALLERY_MESSAGE;

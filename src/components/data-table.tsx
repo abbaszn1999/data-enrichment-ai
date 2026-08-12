@@ -56,6 +56,8 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  ImageIcon,
+  Maximize2,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -622,188 +624,437 @@ function handleImgError(e: React.SyntheticEvent<HTMLImageElement>) {
   }
 }
 
-function ImageUrlsCell({ images, isEditable, rowId, enrichKey }: { images: { imageUrl: string; pageUrl: string; title: string }[]; isEditable: boolean; rowId: string; enrichKey: string }) {
+type EnrichImageItem = { imageUrl: string; pageUrl: string; title: string };
+
+function ImageUrlsCell({
+  images,
+  isEditable,
+  rowId,
+  enrichKey,
+}: {
+  images: EnrichImageItem[];
+  isEditable: boolean;
+  rowId: string;
+  enrichKey: string;
+}) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
-  const [editMode, setEditMode] = useState(false);
-  const [draft, setDraft] = useState<{ imageUrl: string; pageUrl: string; title: string }[]>([]);
+  const [previewIndex, setPreviewIndex] = useState(0);
+  const [adding, setAdding] = useState(false);
+  const [newUrl, setNewUrl] = useState("");
+  const [newTitle, setNewTitle] = useState("");
+  const addInputRef = useRef<HTMLInputElement>(null);
 
-  const startEdit = () => {
-    setDraft(images.map((img) => ({ ...img })));
-    setEditMode(true);
+  const list = Array.isArray(images) ? images : [];
+  const safeIndex =
+    list.length === 0 ? 0 : Math.min(previewIndex, list.length - 1);
+  const active = list[safeIndex] ?? null;
+
+  useEffect(() => {
+    if (previewIndex !== safeIndex) setPreviewIndex(safeIndex);
+  }, [previewIndex, safeIndex]);
+
+  useEffect(() => {
+    if (adding) {
+      const t = window.setTimeout(() => addInputRef.current?.focus(), 50);
+      return () => window.clearTimeout(t);
+    }
+  }, [adding]);
+
+  useEffect(() => {
+    if (!open || list.length < 2 || adding) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      event.preventDefault();
+      const delta = event.key === "ArrowLeft" ? -1 : 1;
+      setPreviewIndex(
+        (current) => (current + delta + list.length) % list.length
+      );
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [adding, list.length, open]);
+
+  const openDialog = (index = 0) => {
+    setPreviewIndex(
+      list.length === 0 ? 0 : Math.max(0, Math.min(index, list.length - 1))
+    );
+    setAdding(false);
+    setNewUrl("");
+    setNewTitle("");
     setOpen(true);
   };
 
-  const saveEdit = () => {
-    const cleaned = draft.filter((img) => img.imageUrl.trim() !== "");
-    updateEnrichedCellValue(rowId, enrichKey, cleaned);
-    setEditMode(false);
+  const closeDialog = () => {
     setOpen(false);
+    setAdding(false);
+    setNewUrl("");
+    setNewTitle("");
   };
 
-  if (!images || images.length === 0) {
-    return (
-      <div
-        onClick={isEditable ? startEdit : undefined}
-        className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-text hover:text-muted-foreground/50 transition-colors" : ""}`}
-      >
-        {isEditable ? "Click to add" : "—"}
-      </div>
-    );
-  }
+  const commitImages = (next: EnrichImageItem[], focusIndex?: number) => {
+    updateEnrichedCellValue(rowId, enrichKey, next);
+    if (next.length === 0) {
+      setPreviewIndex(0);
+      return;
+    }
+    const nextIndex =
+      typeof focusIndex === "number"
+        ? Math.max(0, Math.min(focusIndex, next.length - 1))
+        : Math.min(previewIndex, next.length - 1);
+    setPreviewIndex(nextIndex);
+  };
+
+  const removeAt = (index: number) => {
+    if (!isEditable) return;
+    const next = list.filter((_, i) => i !== index);
+    // Keep dialog open even when the last image is removed (empty state + add).
+    const focus =
+      next.length === 0
+        ? 0
+        : index >= next.length
+          ? next.length - 1
+          : index;
+    commitImages(next, focus);
+    setAdding(next.length === 0);
+  };
+
+  const startAdd = () => {
+    if (!isEditable) return;
+    setAdding(true);
+    setNewUrl("");
+    setNewTitle("");
+  };
+
+  const confirmAdd = () => {
+    const url = newUrl.trim();
+    if (!url) return;
+    const item: EnrichImageItem = {
+      imageUrl: url,
+      pageUrl: "",
+      title: newTitle.trim() || "Product image",
+    };
+    const next = [...list, item];
+    commitImages(next, next.length - 1);
+    setAdding(false);
+    setNewUrl("");
+    setNewTitle("");
+  };
 
   return (
     <>
-      <div className="flex gap-1.5 flex-wrap group">
-        {images.slice(0, 3).map((img, i) => (
-          <a
-            key={i}
-            href={img.imageUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block shrink-0 group/img"
-            onClick={(e) => e.stopPropagation()}
-            title={img.title || "Product image"}
-          >
-            <img
-              src={img.imageUrl}
-              data-original-url={img.imageUrl}
-              alt={img.title || "Product"}
-              className="h-10 w-10 object-cover rounded border border-border/40 bg-white group-hover/img:ring-2 group-hover/img:ring-primary/40 transition-all"
-              onError={handleImgError}
-            />
-          </a>
-        ))}
-        {images.length > 3 && (
-          <button
-            onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-            className="h-10 w-10 rounded border border-dashed border-border/40 flex items-center justify-center text-[10px] text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors"
-          >
-            +{images.length - 3}
-          </button>
-        )}
-        {isEditable && (
-          <button
-            onClick={(e) => { e.stopPropagation(); startEdit(); }}
-            className="h-10 w-10 rounded border border-dashed border-border/40 flex items-center justify-center text-[10px] text-primary/0 group-hover:text-primary/50 group-hover:border-primary/30 transition-all"
-          >
-            Edit
-          </button>
-        )}
-      </div>
-
-      {images.length <= 3 && (
-        <div className="mt-1 flex flex-col gap-0.5">
-          {images.map((img, i) => (
-            <a
-              key={i}
-              href={img.imageUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[9px] text-blue-500/70 hover:text-blue-500 hover:underline truncate block"
-              onClick={(e) => e.stopPropagation()}
+      {list.length === 0 ? (
+        <div
+          onClick={
+            isEditable
+              ? (e) => {
+                  e.stopPropagation();
+                  openDialog(0);
+                  setAdding(true);
+                }
+              : undefined
+          }
+          className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-pointer hover:text-muted-foreground/50 transition-colors" : ""}`}
+        >
+          {isEditable ? "Click to add" : "—"}
+        </div>
+      ) : (
+        <div className="flex items-center gap-1">
+          {list.slice(0, 3).map((img, i) => (
+            <button
+              key={`${img.imageUrl}:${i}`}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openDialog(i);
+              }}
+              className="group/image relative h-10 w-10 shrink-0 overflow-hidden rounded border border-border/40 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              aria-label={`Preview image ${i + 1}`}
+              title={img.title || "Product image"}
             >
-              {img.title || img.imageUrl.split("/").pop()?.slice(0, 40) || "Image"}
-            </a>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={img.imageUrl}
+                data-original-url={img.imageUrl}
+                alt={img.title || "Product"}
+                className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
+                onError={handleImgError}
+              />
+            </button>
           ))}
+          {list.length > 3 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openDialog(0);
+              }}
+              className="flex h-10 items-center gap-1 rounded border bg-muted/30 px-2 text-[10px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
+            >
+              <Maximize2 className="h-3 w-3" />
+              +{list.length - 3}
+            </button>
+          )}
         </div>
       )}
 
-      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditMode(false); }}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-between text-sm">
-              <span>{editMode ? "Edit Images" : `All Images (${images.length})`}</span>
-              {isEditable && !editMode && (
-                <button
-                  onClick={startEdit}
-                  className="text-[11px] text-primary hover:underline font-normal"
-                >
-                  Edit
-                </button>
-              )}
+      {/* Dialog stays mounted while open — even if list becomes empty after delete */}
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          if (!v) closeDialog();
+          else setOpen(true);
+        }}
+      >
+        <DialogContent className="w-[min(96vw,1120px)] max-w-[min(96vw,1120px)] overflow-hidden p-0 sm:max-w-[min(96vw,1120px)]">
+          <DialogHeader className="border-b px-6 py-4">
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <ImageIcon className="h-4 w-4 text-primary" />
+              Product images
             </DialogTitle>
+            <p className="text-xs text-muted-foreground">
+              {list.length} image{list.length === 1 ? "" : "s"}
+              {list.length > 0 ? ` · ${safeIndex + 1} of ${list.length}` : ""}
+            </p>
           </DialogHeader>
-          {editMode ? (
-            <div className="flex flex-col gap-2 mt-2">
-              {draft.map((img, i) => (
-                <div key={i} className="flex items-start gap-2 p-2 rounded-md border bg-muted/20">
-                  {img.imageUrl && (
-                    <img
-                      src={img.imageUrl}
-                      alt={img.title || "Preview"}
-                      className="h-14 w-14 object-contain rounded border bg-white shrink-0"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                    />
-                  )}
-                  <div className="flex-1 space-y-1 min-w-0">
-                    <input
-                      value={img.imageUrl}
-                      onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], imageUrl: e.target.value }; setDraft(n); }}
-                      placeholder="Image URL"
-                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
-                    />
-                    <input
-                      value={img.pageUrl}
-                      onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], pageUrl: e.target.value }; setDraft(n); }}
-                      placeholder="Source page URL"
-                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
-                    />
-                    <input
-                      value={img.title}
-                      onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], title: e.target.value }; setDraft(n); }}
-                      placeholder="Title / Description"
-                      className="w-full text-xs px-2 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
-                    />
+
+          <div className="grid min-h-[480px] md:grid-cols-[minmax(0,1fr)_148px]">
+            <div className="relative flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
+              {adding && !active ? (
+                <div className="w-full max-w-md space-y-3 rounded-lg border bg-background p-4 shadow-sm">
+                  <p className="text-xs font-medium">Add image URL</p>
+                  <input
+                    ref={addInputRef}
+                    value={newUrl}
+                    onChange={(e) => setNewUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") confirmAdd();
+                      if (e.key === "Escape") setAdding(false);
+                    }}
+                    placeholder="https://…"
+                    className="w-full rounded border bg-background px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  />
+                  <input
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") confirmAdd();
+                    }}
+                    placeholder="Title (optional)"
+                    className="w-full rounded border bg-background px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdding(false);
+                        setNewUrl("");
+                        setNewTitle("");
+                      }}
+                      className="rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmAdd}
+                      disabled={!newUrl.trim()}
+                      className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+                    >
+                      Add
+                    </button>
                   </div>
-                  <button
-                    onClick={() => setDraft(draft.filter((_, idx) => idx !== i))}
-                    className="text-muted-foreground/40 hover:text-destructive shrink-0 mt-1"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
                 </div>
-              ))}
-              <button
-                onClick={() => setDraft([...draft, { imageUrl: "", pageUrl: "", title: "" }])}
-                className="text-[11px] text-primary/70 hover:text-primary transition-colors text-left"
-              >
-                + Add image
-              </button>
-              <div className="flex justify-end gap-2 pt-2 border-t">
-                <button onClick={() => { setEditMode(false); setOpen(false); }} className="text-xs text-muted-foreground hover:text-foreground px-3 py-1.5 rounded">
-                  Cancel
-                </button>
-                <button onClick={saveEdit} className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 font-medium">
-                  Save
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 mt-2">
-              {images.map((img, i) => (
-                <a
-                  key={i}
-                  href={img.imageUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block rounded-lg border overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all group/card"
-                >
+              ) : active ? (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={img.imageUrl}
-                    data-original-url={img.imageUrl}
-                    alt={img.title || "Product"}
-                    className="w-full h-40 object-contain bg-white p-2"
+                    src={active.imageUrl}
+                    data-original-url={active.imageUrl}
+                    alt={active.title || "Product"}
+                    className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
                     onError={handleImgError}
                   />
-                  <div className="p-2 bg-muted/30 border-t">
-                    <p className="text-[11px] font-medium truncate">{img.title || "Product image"}</p>
-                    <p className="text-[9px] text-blue-500/70 truncate mt-0.5">{img.imageUrl}</p>
+                  {list.length > 1 ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewIndex(
+                            (current) =>
+                              (current - 1 + list.length) % list.length
+                          )
+                        }
+                        className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border bg-background/90 text-foreground shadow-sm transition-colors hover:bg-background"
+                        aria-label="Previous image"
+                      >
+                        <ChevronLeft className="h-5 w-5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewIndex(
+                            (current) => (current + 1) % list.length
+                          )
+                        }
+                        className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border bg-background/90 text-foreground shadow-sm transition-colors hover:bg-background"
+                        aria-label="Next image"
+                      >
+                        <ChevronRight className="h-5 w-5" />
+                      </button>
+                    </>
+                  ) : null}
+                  <div className="flex max-w-full flex-wrap items-center justify-center gap-3">
+                    {active.title ? (
+                      <p className="truncate text-xs text-muted-foreground">
+                        {active.title}
+                      </p>
+                    ) : null}
+                    <a
+                      href={active.imageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Open URL
+                    </a>
+                    {isEditable && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          removeAt(safeIndex);
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] text-destructive/80 hover:text-destructive"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        Remove
+                      </button>
+                    )}
                   </div>
-                </a>
-              ))}
+                </>
+              ) : (
+                <div className="text-center text-xs text-muted-foreground">
+                  <ImageIcon className="mx-auto mb-2 h-8 w-8 opacity-50" />
+                  No images yet
+                  {isEditable ? (
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={startAdd}
+                        className="inline-flex items-center gap-1 rounded border border-dashed px-3 py-1.5 text-[11px] hover:border-primary/40 hover:text-primary"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Add image
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {adding && active ? (
+                <div className="mt-2 w-full max-w-md space-y-2 rounded-lg border bg-background p-3 shadow-sm">
+                  <p className="text-[11px] font-medium">Add another image</p>
+                  <input
+                    ref={addInputRef}
+                    value={newUrl}
+                    onChange={(e) => setNewUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") confirmAdd();
+                      if (e.key === "Escape") setAdding(false);
+                    }}
+                    placeholder="https://…"
+                    className="w-full rounded border bg-background px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdding(false);
+                        setNewUrl("");
+                        setNewTitle("");
+                      }}
+                      className="rounded px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmAdd}
+                      disabled={!newUrl.trim()}
+                      className="rounded bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </div>
-          )}
+
+            <div className="border-l p-3">
+              <p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                All images
+              </p>
+              <div className="flex max-h-[62vh] flex-col gap-2 overflow-y-auto pr-1">
+                {list.map((img, index) => (
+                  <div key={`${img.imageUrl}:rail:${index}`} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewIndex(index);
+                        setAdding(false);
+                      }}
+                      className={`aspect-square w-full shrink-0 overflow-hidden rounded-md border-2 ${
+                        safeIndex === index
+                          ? "border-primary"
+                          : "border-transparent"
+                      }`}
+                      aria-label={`View image ${index + 1}`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={img.imageUrl}
+                        data-original-url={img.imageUrl}
+                        alt={img.title || `Image ${index + 1}`}
+                        className="h-full w-full object-cover"
+                        onError={handleImgError}
+                      />
+                    </button>
+                    {isEditable && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          removeAt(index);
+                        }}
+                        className="absolute right-1 top-1 rounded bg-background/90 p-0.5 text-muted-foreground shadow-sm hover:text-destructive"
+                        aria-label={`Remove image ${index + 1}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {isEditable && (
+                  <button
+                    type="button"
+                    onClick={startAdd}
+                    className="flex aspect-square w-full items-center justify-center rounded-md border border-dashed text-muted-foreground hover:border-primary/40 hover:text-primary"
+                    aria-label="Add image"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </>

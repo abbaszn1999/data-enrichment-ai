@@ -112,10 +112,15 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
+  // Official paid-tier: $2/$12 up to 200k input tokens, $4/$18 above.
   "gemini-3.1-pro-preview": {
     inputPerMillion: 2.0,
     outputPerMillion: 12.0,
     cachedInputPerMillion: 0.2,
+    longContextThresholdTokens: 200_000,
+    longInputPerMillion: 4.0,
+    longOutputPerMillion: 18.0,
+    longCachedInputPerMillion: 0.4,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
   },
