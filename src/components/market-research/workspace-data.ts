@@ -1,0 +1,377 @@
+import { formatUsd, type MockSeedRow, type SeedProbe } from "./mock-data";
+
+/** Full-page workspace after Stage 3 Extract. Agent is gone. */
+export type WorkspaceTab = "extract" | "analyze" | "collections" | "content";
+export type FlowTab = "niches" | "catalog" | "seeds" | WorkspaceTab;
+
+export const FLOW_TABS: {
+  id: FlowTab;
+  n: number;
+  label: string;
+}[] = [
+  { id: "niches", n: 1, label: "Niches" },
+  { id: "catalog", n: 2, label: "Catalog" },
+  { id: "seeds", n: 3, label: "Seed terms" },
+  { id: "extract", n: 4, label: "Extract" },
+  { id: "analyze", n: 5, label: "Analyze" },
+  { id: "collections", n: 6, label: "Collections" },
+  { id: "content", n: 7, label: "Content" },
+];
+
+export const WORKSPACE_TABS = FLOW_TABS.filter(
+  (tab): tab is { id: WorkspaceTab; n: number; label: string } =>
+    tab.n >= 4
+);
+
+export const TAB_ORDER: WorkspaceTab[] = WORKSPACE_TABS.map((t) => t.id);
+
+export function isWorkspaceTab(tab: FlowTab): tab is WorkspaceTab {
+  return tab === "extract" || tab === "analyze" || tab === "collections" || tab === "content";
+}
+
+export function briefStageFromFlow(tab: FlowTab): 1 | 2 | 3 | null {
+  if (tab === "niches") return 1;
+  if (tab === "catalog") return 2;
+  if (tab === "seeds") return 3;
+  return null;
+}
+
+export const EXTRACT_CAP_PER_SEED = 10_000;
+export const USD_PER_COLLECTION = 5;
+export const EXTRACT_MS = 8_000;
+export const ANALYZE_MS = 2_200;
+export const CLUSTER_MS = 2_800;
+export const CONTENT_MS = 4_200;
+
+export type KeywordSheet = "informational" | "category";
+
+export type ExtractedKeyword = {
+  id: string;
+  seedId: string;
+  seed: string;
+  keyword: string;
+  volume: number;
+  difficulty: number;
+  wordCount: number;
+  isQuestion: boolean;
+  sheet: KeywordSheet;
+  productMatches: number;
+  /** How many raw keywords this row stands in for (for the “of N” counter). */
+  weight: number;
+};
+
+export type SeedExtractProgress = {
+  seedId: string;
+  seed: string;
+  cap: number;
+  pulled: number;
+};
+
+export type ProposedCollection = {
+  id: string;
+  name: string;
+  headKeyword: string;
+  parentNiche: string;
+  volume: number;
+  difficulty: number;
+  productCount: number;
+  keywordCount: number;
+  status: "new" | "existing" | "merge";
+  existingName?: string;
+};
+
+export type CollectionFaq = { q: string; a: string };
+export type CollectionLink = { label: string; href: string };
+
+export type CollectionContent = {
+  collectionId: string;
+  seoTitle: string;
+  seoDescription: string;
+  collectionDescription: string;
+  faqs: CollectionFaq[];
+  links: CollectionLink[];
+};
+
+export type KeywordFilters = {
+  minVolume: number;
+  maxKd: number;
+  questionsOnly: boolean;
+  query: string;
+};
+
+export const DEFAULT_FILTERS: KeywordFilters = {
+  minVolume: 0,
+  maxKd: 100,
+  questionsOnly: false,
+  query: "",
+};
+
+function hash(value: string): number {
+  let h = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    h = (h * 31 + value.charCodeAt(i)) % 100000;
+  }
+  return h;
+}
+
+const INFO_PATTERNS = [
+  "how to choose {s}",
+  "what is {s}",
+  "{s} vs glasses",
+  "best {s} guide",
+  "how to clean {s}",
+  "{s} buying guide",
+  "are {s} worth it",
+  "why buy {s}",
+  "{s} for beginners",
+  "difference between {s}",
+];
+
+const CATEGORY_PATTERNS = [
+  "{s}",
+  "buy {s}",
+  "{s} online",
+  "cheap {s}",
+  "best {s}",
+  "men's {s}",
+  "women's {s}",
+  "kids {s}",
+  "{s} sale",
+  "designer {s}",
+  "polarized {s}",
+  "aviator {s}",
+  "{s} shop",
+  "wholesale {s}",
+];
+
+function fill(pattern: string, seed: string): string {
+  return pattern.replace("{s}", seed.toLowerCase());
+}
+
+/**
+ * Display sample for the extracted set. The UI reports the real pulled cap
+ * (min of probe raw and 10k) while the table stays browser-friendly.
+ */
+export function buildExtractedKeywords(
+  seeds: MockSeedRow[],
+  probes: Record<string, SeedProbe>
+): ExtractedKeyword[] {
+  const rows: ExtractedKeyword[] = [];
+  for (const seed of seeds) {
+    const probe = probes[seed.id];
+    const pulled = Math.min(
+      EXTRACT_CAP_PER_SEED,
+      probe && !probe.failed ? probe.rawKeywords : 400
+    );
+    const seedTerm = seed.broadSeedVariation;
+    const products = seed.productCount;
+
+    CATEGORY_PATTERNS.forEach((pattern, i) => {
+      const keyword = fill(pattern, seedTerm);
+      const h = hash(keyword);
+      rows.push({
+        id: `${seed.id}-c-${i}`,
+        seedId: seed.id,
+        seed: seedTerm,
+        keyword,
+        volume: 40 + (h % 9800),
+        difficulty: 8 + (h % 72),
+        wordCount: keyword.split(/\s+/).length,
+        isQuestion: false,
+        sheet: "category",
+        productMatches: Math.max(
+          4,
+          Math.round(products * (0.04 + (h % 40) / 100))
+        ),
+        weight: Math.max(1, Math.round(pulled / 28)),
+      });
+    });
+
+    INFO_PATTERNS.forEach((pattern, i) => {
+      const keyword = fill(pattern, seedTerm);
+      const h = hash(keyword + "i");
+      rows.push({
+        id: `${seed.id}-i-${i}`,
+        seedId: seed.id,
+        seed: seedTerm,
+        keyword,
+        volume: 20 + (h % 4200),
+        difficulty: 5 + (h % 55),
+        wordCount: keyword.split(/\s+/).length,
+        isQuestion: /^(how|what|why|are)\b/.test(keyword),
+        sheet: "informational",
+        productMatches: Math.max(0, Math.round(products * 0.01)),
+        weight: Math.max(1, Math.round(pulled / 40)),
+      });
+    });
+  }
+  return rows;
+}
+
+export function pulledCountForSeed(
+  seed: MockSeedRow,
+  probes: Record<string, SeedProbe>
+): number {
+  const probe = probes[seed.id];
+  if (!probe || probe.failed) return 400;
+  return Math.min(EXTRACT_CAP_PER_SEED, probe.rawKeywords);
+}
+
+export function filterKeywords(
+  rows: ExtractedKeyword[],
+  filters: KeywordFilters,
+  sheet?: KeywordSheet
+): ExtractedKeyword[] {
+  const q = filters.query.trim().toLowerCase();
+  return rows.filter((row) => {
+    if (sheet && row.sheet !== sheet) return false;
+    if (row.volume < filters.minVolume) return false;
+    if (row.difficulty > filters.maxKd) return false;
+    if (filters.questionsOnly && !row.isQuestion) return false;
+    if (!q) return true;
+    return (
+      row.keyword.toLowerCase().includes(q) ||
+      row.seed.toLowerCase().includes(q)
+    );
+  });
+}
+
+export function weightedCount(rows: ExtractedKeyword[]): number {
+  return rows.reduce((sum, row) => sum + row.weight, 0);
+}
+
+export function buildProposedCollections(
+  seeds: MockSeedRow[],
+  keywords: ExtractedKeyword[]
+): ProposedCollection[] {
+  const byCanonical = new Map<string, MockSeedRow[]>();
+  for (const seed of seeds) {
+    const key = seed.canonicalNicheSeed;
+    byCanonical.set(key, [...(byCanonical.get(key) ?? []), seed]);
+  }
+
+  const list: ProposedCollection[] = [];
+  for (const [canonical, family] of byCanonical) {
+    const head = family.find((s) => s.scopeMatch === "Exact") ?? family[0];
+    const related = keywords.filter(
+      (k) =>
+        k.sheet === "category" &&
+        family.some((s) => s.id === k.seedId)
+    );
+    const volume = related.reduce((sum, k) => sum + k.volume, 0);
+    const difficulty = related.length
+      ? Math.round(
+          related.reduce((sum, k) => sum + k.difficulty, 0) / related.length
+        )
+      : 28;
+    const existing = head.scopeMatch === "Exact";
+    list.push({
+      id: `col-${head.collectionId}`,
+      name: canonical,
+      headKeyword: head.broadSeedVariation.toLowerCase(),
+      parentNiche: head.broadParentNiche,
+      volume,
+      difficulty,
+      productCount: head.productCount,
+      keywordCount: related.length,
+      status: existing ? "existing" : "new",
+      existingName: existing ? head.selectedCollection : undefined,
+    });
+  }
+
+  // A couple of gap collections the matching step would surface.
+  if (seeds.some((s) => /sun/i.test(s.broadSeedVariation))) {
+    list.push({
+      id: "col-polarized-sunglasses",
+      name: "Polarized Sunglasses",
+      headKeyword: "polarized sunglasses",
+      parentNiche: "Eyewear",
+      volume: 18400,
+      difficulty: 34,
+      productCount: 860,
+      keywordCount: 42,
+      status: "new",
+    });
+  }
+  if (seeds.some((s) => /toy|game/i.test(s.broadSeedVariation))) {
+    list.push({
+      id: "col-educational-toys",
+      name: "Educational Toys",
+      headKeyword: "educational toys",
+      parentNiche: "Toys",
+      volume: 22100,
+      difficulty: 29,
+      productCount: 410,
+      keywordCount: 38,
+      status: "merge",
+      existingName: "Educational Toys",
+    });
+  }
+  return list;
+}
+
+export function buildCollectionContent(
+  collection: ProposedCollection,
+  instruction?: string
+): CollectionContent {
+  const name = collection.name;
+  const tone = instruction?.trim()
+    ? ` Written to follow: “${instruction.trim().slice(0, 80)}”.`
+    : "";
+  return {
+    collectionId: collection.id,
+    seoTitle: `${name} | Shop ${collection.headKeyword}`,
+    seoDescription: `Browse ${collection.productCount.toLocaleString("en-US")} ${name.toLowerCase()}. Compare styles, find the right fit, and buy with fast shipping.${tone}`,
+    collectionDescription: `${name} for every budget and style. This collection groups products your catalog already carries for “${collection.headKeyword}” — ${collection.productCount.toLocaleString("en-US")} matching items, covering ${collection.keywordCount} related search terms.${tone}`,
+    faqs: [
+      {
+        q: `What should I look for when buying ${name.toLowerCase()}?`,
+        a: `Start with fit and use. ${name} in this collection are grouped so you can filter by the attributes shoppers actually search for, then compare a shortlist.`,
+      },
+      {
+        q: `Do you sell ${collection.headKeyword} for kids and adults?`,
+        a: `Where the catalog supports it, both are included. Product count on this page is the live match against your store — not a marketing estimate.`,
+      },
+      {
+        q: `How do I care for ${name.toLowerCase()}?`,
+        a: `Follow the care notes on each product. Category FAQs stay high-level so they remain accurate across the whole collection.`,
+      },
+    ],
+    links: [
+      {
+        label: collection.existingName ?? collection.parentNiche,
+        href: `/collections/${collection.id.replace(/^col-/, "")}`,
+      },
+      { label: "Buying guide", href: "/pages/guide" },
+      { label: "Related collections", href: "/collections" },
+    ],
+  };
+}
+
+export function collectionCharge(count: number): number {
+  return count * USD_PER_COLLECTION;
+}
+
+export function formatCollectionCharge(count: number): string {
+  return formatUsd(collectionCharge(count));
+}
+
+export function tabIndex(tab: WorkspaceTab): number {
+  return TAB_ORDER.indexOf(tab);
+}
+
+export function clampWorkspaceTab(
+  value: unknown,
+  fallback: WorkspaceTab = "extract"
+): WorkspaceTab {
+  return TAB_ORDER.includes(value as WorkspaceTab)
+    ? (value as WorkspaceTab)
+    : fallback;
+}
+
+export function maxTab(
+  a: WorkspaceTab,
+  b: WorkspaceTab
+): WorkspaceTab {
+  return tabIndex(a) >= tabIndex(b) ? a : b;
+}

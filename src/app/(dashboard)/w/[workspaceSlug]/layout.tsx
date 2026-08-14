@@ -32,6 +32,10 @@ import {
   Images,
   LayoutGrid,
   Boxes,
+  Rocket,
+  Search,
+  LayoutTemplate,
+  Wallet,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/hooks/use-auth";
@@ -41,6 +45,7 @@ import { useCredits } from "@/hooks/use-credits";
 import { useSubscription } from "@/hooks/use-subscription";
 import { signOut } from "@/lib/auth";
 import { formatCredits } from "@/lib/format-credits";
+import { formatMoney, useMockWallet } from "@/lib/mock-wallet";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -78,10 +83,13 @@ export default function WorkspaceLayout({
   const permissions = useRole(role);
 
   const credits = useCredits(workspace?.id ?? null);
+  const wallet = useMockWallet(workspace?.id ?? null);
+  const walletBalance = wallet?.balance ?? null;
   const { subscription, isActive, isLoading: subLoading } = useSubscription(workspace?.id ?? null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
+  const [growthEngineOpen, setGrowthEngineOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -104,6 +112,7 @@ export default function WorkspaceLayout({
   // Keep the top app header visible so credits / workspace / user stay accessible.
   const isEnrichPage = pathname.includes("/enrich");
   const isSyncPage = pathname.includes("/sync");
+  const isMarketResearchPage = pathname.includes("/market-research");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
   const isProductsGalleryProject = isProductsGalleryPage && searchParams.has("project");
   const isProductsVisualizerPage = pathname.includes("/products-visualizer");
@@ -113,11 +122,12 @@ export default function WorkspaceLayout({
     isEnrichPage ||
     isProductsGalleryProject ||
     isProductsVisualizerProject ||
+    isMarketResearchPage ||
     (isSyncPage && syncFocusMode);
   // Immersive mode hides the top header — keep false so Enrich shows it
   const isImmersive = false;
   // Lock main content height so tool UIs (Enrich sidebar/table) scroll internally
-  const lockContentHeight = isEnrichPage || isSyncPage;
+  const lockContentHeight = isEnrichPage || isSyncPage || isMarketResearchPage;
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage = pathname.includes("/subscription");
   const isTeamPage = pathname.includes("/team");
@@ -131,13 +141,46 @@ export default function WorkspaceLayout({
     { href: `${basePath}/products-visualizer`, label: "Products Visualizer", icon: Boxes },
   ];
 
+  // Parent group only — Sync stays the existing page; the rest are separate
+  // placeholder routes that will grow into full modules later.
+  const growthEngineChildren = [
+    {
+      href: hasIntegration ? `${basePath}/market-research` : "",
+      label: "Market research",
+      icon: Search,
+      disabled: !hasIntegration,
+    },
+    {
+      href: hasIntegration ? `${basePath}/sync` : "",
+      label: "Sync",
+      icon: RefreshCw,
+      disabled: !hasIntegration,
+    },
+    {
+      href: `${basePath}/website-restructure`,
+      label: "Website restructure",
+      icon: LayoutTemplate,
+    },
+    { href: `${basePath}/wallet`, label: "Wallet", icon: Wallet },
+  ];
+
   const isMediaActive = mediaChildren.some(
     (child) => pathname === child.href || pathname.startsWith(child.href + "/")
+  );
+
+  const isGrowthEngineActive = growthEngineChildren.some(
+    (child) =>
+      !!child.href &&
+      (pathname === child.href || pathname.startsWith(child.href + "/"))
   );
 
   useEffect(() => {
     if (isMediaActive) setMediaOpen(true);
   }, [isMediaActive]);
+
+  useEffect(() => {
+    if (isGrowthEngineActive) setGrowthEngineOpen(true);
+  }, [isGrowthEngineActive]);
 
   const sidebarLinksBeforeMedia = [
     { href: `${basePath}`, label: "Dashboard", icon: LayoutDashboard },
@@ -146,8 +189,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}/import`, label: "Import", icon: Upload },
   ];
 
-  const sidebarLinksAfterMedia = [
-    { href: hasIntegration ? `${basePath}/sync` : "", label: "Sync", icon: RefreshCw, disabled: !hasIntegration },
+  const sidebarLinksAfterGrowthEngine = [
     { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
     ...(permissions.canAdmin
       ? [{ href: `${basePath}/team`, label: "Team", icon: Users }]
@@ -299,8 +341,23 @@ export default function WorkspaceLayout({
               </Link>
             </div>
 
-            {/* Right: Credits + Theme + User */}
+            {/* Right: Wallet + Credits + Theme + User */}
             <div className="flex items-center gap-2">
+              {walletBalance !== null && (
+                <Link
+                  href={`${basePath}/wallet`}
+                  title="Wallet balance"
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium tabular-nums transition-colors ${
+                    walletBalance < 25
+                      ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                      : "bg-muted hover:bg-muted/80 text-muted-foreground"
+                  }`}
+                >
+                  <Wallet className="h-3.5 w-3.5" />
+                  <span>{formatMoney(walletBalance)}</span>
+                </Link>
+              )}
+
               {/* Credits Badge */}
               {!credits.isLoading && credits.total > 0 && (
                 <Link
@@ -460,7 +517,51 @@ export default function WorkspaceLayout({
                 </div>
               )}
 
-              {sidebarLinksAfterMedia.map((link) => renderNavLink(link))}
+              {/* Growth engine group — parent only; Sync stays the existing page */}
+              {sidebarCollapsed ? (
+                <button
+                  onClick={() => {
+                    setSidebarCollapsed(false);
+                    setGrowthEngineOpen(true);
+                  }}
+                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors ${
+                    isGrowthEngineActive
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                  title="Growth engine"
+                >
+                  <Rocket className="h-4 w-4 shrink-0" />
+                </button>
+              ) : (
+                <div>
+                  <button
+                    onClick={() => setGrowthEngineOpen(!growthEngineOpen)}
+                    className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors ${
+                      isGrowthEngineActive
+                        ? "text-primary"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                  >
+                    <Rocket className="h-4 w-4 shrink-0" />
+                    <span className="flex-1 text-left">Growth engine</span>
+                    <ChevronRight
+                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${
+                        growthEngineOpen ? "rotate-90" : ""
+                      }`}
+                    />
+                  </button>
+                  {growthEngineOpen && (
+                    <div className="mt-0.5 space-y-0.5">
+                      {growthEngineChildren.map((child) =>
+                        renderNavLink(child, { nested: true })
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {sidebarLinksAfterGrowthEngine.map((link) => renderNavLink(link))}
             </nav>
 
             <div className="p-2 border-t">
@@ -492,7 +593,15 @@ export default function WorkspaceLayout({
               <div className={isSyncPage ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
             ) : (
               <SubscriptionGate subscription={subscription} isActive={isActive} isLoading={subLoading} role={role}>
-                <div className={isEnrichPage ? "flex-1 flex flex-col min-h-0 overflow-hidden h-full" : "flex-1"}>{children}</div>
+                <div
+                  className={
+                    isEnrichPage || isMarketResearchPage
+                      ? "flex-1 flex flex-col min-h-0 overflow-hidden h-full"
+                      : "flex-1"
+                  }
+                >
+                  {children}
+                </div>
               </SubscriptionGate>
             )}
           </main>
