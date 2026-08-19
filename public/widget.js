@@ -9,6 +9,8 @@
   if (window.__dea_widget_loaded) return;
   window.__dea_widget_loaded = true;
 
+  var DEFAULT_PROD_API = "https://data-enrichment-ai.onrender.com";
+
   // Determine the API base URL from the script tag's src
   function getApiBaseUrl() {
     var scriptEl =
@@ -16,7 +18,7 @@
       (function () {
         var scripts = document.getElementsByTagName("script");
         for (var i = scripts.length - 1; i >= 0; i--) {
-          if (scripts[i].src && scripts[i].src.indexOf("widget.js") !== -1) {
+          if (scripts[i].src && (scripts[i].src.indexOf("widget.js") !== -1 || scripts[i].src.indexOf("data-enrichment-ai") !== -1)) {
             return scripts[i];
           }
         }
@@ -29,38 +31,69 @@
         return u.origin;
       } catch (e) {}
     }
-    return window.location.origin;
+
+    // If running on localhost, use localhost, otherwise default to production Render URL
+    if (typeof window !== "undefined" && window.location && window.location.hostname === "localhost") {
+      return window.location.origin;
+    }
+
+    return DEFAULT_PROD_API;
   }
 
   var API_BASE = getApiBaseUrl();
+
+  // Resolve Store Domain (Shopify store domain or current hostname)
+  function getStoreDomain() {
+    try {
+      if (window.Shopify && window.Shopify.shop) {
+        return window.Shopify.shop;
+      }
+      if (window.location && window.location.hostname) {
+        return window.location.hostname;
+      }
+    } catch (e) {}
+    return "";
+  }
 
   // Extract collection handle from pathname or element attribute
   function resolveCollectionHandle(element) {
     var attrHandle = (element.getAttribute("data-collection") || "").trim();
 
-    // If explicit handle is provided and not a placeholder/sample
+    // If explicit handle is provided and not a placeholder/liquid template tag
     if (
       attrHandle &&
       attrHandle !== "current" &&
       attrHandle !== "polarized-sunglasses" &&
-      attrHandle !== "{{ collection.handle }}"
+      attrHandle !== "{{ collection.handle }}" &&
+      !attrHandle.startsWith("{{")
     ) {
       return attrHandle;
     }
 
-    // Auto-detect from URL pathname
-    var path = window.location.pathname || "";
-    // Shopify collection URL match: /collections/my-collection-handle
+    // 1. Auto-detect from URL pathname (Shopify /collections/handle)
+    var path = (window.location && window.location.pathname) || "";
     var shopifyMatch = path.match(/\/collections\/([^/?#]+)/i);
     if (shopifyMatch && shopifyMatch[1]) {
-      return shopifyMatch[1];
+      return decodeURIComponent(shopifyMatch[1]);
     }
 
-    // WooCommerce category URL match: /product-category/my-category-slug
+    // 2. Auto-detect from WooCommerce category URL (/product-category/slug)
     var wooMatch = path.match(/\/product-category\/([^/?#]+)/i);
     if (wooMatch && wooMatch[1]) {
-      return wooMatch[1];
+      return decodeURIComponent(wooMatch[1]);
     }
+
+    // 3. Check Shopify global analytics object if present
+    try {
+      if (
+        window.ShopifyAnalytics &&
+        window.ShopifyAnalytics.meta &&
+        window.ShopifyAnalytics.meta.page &&
+        window.ShopifyAnalytics.meta.page.handle
+      ) {
+        return String(window.ShopifyAnalytics.meta.page.handle);
+      }
+    } catch (e) {}
 
     return attrHandle || "current";
   }
@@ -299,7 +332,7 @@
     var elements = document.querySelectorAll("[data-dea]");
     if (elements.length === 0) return;
 
-    var domain = window.location.hostname;
+    var domain = getStoreDomain();
 
     for (var i = 0; i < elements.length; i++) {
       (function (el) {
@@ -309,7 +342,10 @@
         if (!collectionHandle) return;
 
         fetchCollectionContent(domain, collectionHandle, function (err, data) {
-          if (err || !data) return;
+          if (err || !data) {
+            console.warn("[Autommerce Widget] Failed to load content:", err || "No data");
+            return;
+          }
 
           if (kind === "faq") {
             renderFaq(el, data.faqs || []);
