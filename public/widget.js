@@ -5,8 +5,13 @@
 (function () {
   "use strict";
 
-  // Prevent multiple initializations
-  if (window.__dea_widget_loaded) return;
+  // Prevent multiple script initializations
+  if (window.__dea_widget_loaded) {
+    if (typeof window.__dea_init === "function") {
+      window.__dea_init();
+    }
+    return;
+  }
   window.__dea_widget_loaded = true;
 
   var DEFAULT_PROD_API = "https://data-enrichment-ai.onrender.com";
@@ -18,7 +23,8 @@
       (function () {
         var scripts = document.getElementsByTagName("script");
         for (var i = scripts.length - 1; i >= 0; i--) {
-          if (scripts[i].src && (scripts[i].src.indexOf("widget.js") !== -1 || scripts[i].src.indexOf("data-enrichment-ai") !== -1)) {
+          var s = scripts[i].src || "";
+          if (s.indexOf("widget.js") !== -1 || s.indexOf("data-enrichment-ai") !== -1) {
             return scripts[i];
           }
         }
@@ -32,7 +38,6 @@
       } catch (e) {}
     }
 
-    // If running on localhost, use localhost, otherwise default to production Render URL
     if (typeof window !== "undefined" && window.location && window.location.hostname === "localhost") {
       return window.location.origin;
     }
@@ -41,33 +46,6 @@
   }
 
   var API_BASE = getApiBaseUrl();
-
-  // Debug mode: append ?dea_debug=1 to the page URL to see a diagnostic panel
-  var DEBUG =
-    (window.location.search || "").indexOf("dea_debug=1") !== -1 ||
-    window.__dea_debug === true;
-
-  function debugLog() {
-    if (!DEBUG) return;
-    var args = ["[Autommerce Widget]"].concat(Array.prototype.slice.call(arguments));
-    console.log.apply(console, args);
-  }
-
-  function renderDebugPanel(info) {
-    if (!DEBUG) return;
-    var panel = document.getElementById("dea-debug-panel");
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = "dea-debug-panel";
-      panel.style.cssText =
-        "position:fixed;bottom:0;left:0;right:0;z-index:2147483647;max-height:45vh;overflow:auto;" +
-        "background:#0b1120;color:#a5f3fc;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;" +
-        "padding:12px 16px;border-top:2px solid #22d3ee;white-space:pre-wrap;";
-      document.body.appendChild(panel);
-    }
-    panel.textContent =
-      "Autommerce widget diagnostics\n" + JSON.stringify(info, null, 2);
-  }
 
   // Resolve Store Domain (Shopify store domain or current hostname)
   function getStoreDomain() {
@@ -125,7 +103,7 @@
     return attrHandle || "current";
   }
 
-  // Inject Styles for the widgets
+  // Inject Styles for the widgets once
   function injectStyles() {
     if (document.getElementById("dea-widget-styles")) return;
     var style = document.createElement("style");
@@ -238,7 +216,7 @@
         transform: translateY(0);
       }
     `;
-    document.head.appendChild(style);
+    (document.head || document.body).appendChild(style);
   }
 
   // Render FAQs inside container
@@ -270,8 +248,9 @@
     // Attach click listeners
     var buttons = container.querySelectorAll(".dea-faq-question");
     for (var b = 0; b < buttons.length; b++) {
-      buttons[b].addEventListener("click", function (e) {
+      buttons[b].addEventListener("click", function () {
         var card = this.closest(".dea-faq-card");
+        if (!card) return;
         var isOpen = card.classList.contains("is-open");
         card.classList.toggle("is-open", !isOpen);
         this.setAttribute("aria-expanded", !isOpen ? "true" : "false");
@@ -329,6 +308,22 @@
       "&collection=" +
       encodeURIComponent(collectionHandle);
 
+    if (typeof fetch === "function") {
+      fetch(url)
+        .then(function (res) {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return res.json();
+        })
+        .then(function (data) {
+          cache[cacheKey] = data;
+          callback(null, data);
+        })
+        .catch(function (err) {
+          callback(err, null);
+        });
+      return;
+    }
+
     var xhr = new XMLHttpRequest();
     xhr.open("GET", url, true);
     xhr.onreadystatechange = function () {
@@ -354,56 +349,46 @@
 
   // Main initialize loop
   function initWidgets() {
-    injectStyles();
+    try {
+      injectStyles();
 
-    var elements = document.querySelectorAll("[data-dea]");
-    if (elements.length === 0) return;
+      // IMPORTANT: Only select unrendered widgets to completely prevent infinite loops
+      var elements = document.querySelectorAll("[data-dea]:not([data-dea-rendered])");
+      if (!elements || elements.length === 0) return;
 
-    var domain = getStoreDomain();
+      var domain = getStoreDomain();
 
-    for (var i = 0; i < elements.length; i++) {
-      (function (el) {
-        var kind = (el.getAttribute("data-dea") || "").toLowerCase().trim();
-        var collectionHandle = resolveCollectionHandle(el);
+      for (var i = 0; i < elements.length; i++) {
+        var el = elements[i];
+        // Mark as rendered immediately before async fetch
+        el.setAttribute("data-dea-rendered", "true");
 
-        if (!collectionHandle) return;
+        (function (targetEl) {
+          var kind = (targetEl.getAttribute("data-dea") || "").toLowerCase().trim();
+          var collectionHandle = resolveCollectionHandle(targetEl);
 
-        debugLog("resolved", { kind: kind, domain: domain, handle: collectionHandle, apiBase: API_BASE });
+          if (!collectionHandle) return;
 
-        fetchCollectionContent(domain, collectionHandle, function (err, data) {
-          if (err || !data) {
-            console.warn("[Autommerce Widget] Failed to load content:", err || "No data");
-            renderDebugPanel({
-              apiBase: API_BASE,
-              storeDomain: domain,
-              collectionHandle: collectionHandle,
-              widgetKind: kind,
-              status: "request failed",
-              error: err ? String(err.message || err) : "no data",
-            });
-            return;
-          }
+          fetchCollectionContent(domain, collectionHandle, function (err, data) {
+            if (err || !data) {
+              console.warn("[Autommerce Widget] Failed to load content:", err || "No data");
+              return;
+            }
 
-          renderDebugPanel({
-            apiBase: API_BASE,
-            storeDomain: domain,
-            collectionHandle: collectionHandle,
-            widgetKind: kind,
-            status: "ok",
-            matchedCollectionId: data.collectionId || null,
-            faqCount: (data.faqs || []).length,
-            linkCount: (data.links || []).length,
+            if (kind === "faq") {
+              renderFaq(targetEl, data.faqs || []);
+            } else if (kind === "links") {
+              renderLinks(targetEl, data.links || []);
+            }
           });
-
-          if (kind === "faq") {
-            renderFaq(el, data.faqs || []);
-          } else if (kind === "links") {
-            renderLinks(el, data.links || []);
-          }
-        });
-      })(elements[i]);
+        })(el);
+      }
+    } catch (e) {
+      console.error("[Autommerce Widget] init error:", e);
     }
   }
+
+  window.__dea_init = initWidgets;
 
   // Run on DOM ready and load
   if (document.readyState === "loading") {
@@ -412,18 +397,25 @@
     initWidgets();
   }
 
-  // Also support dynamic themes (Shopify theme customizer re-renders)
+  // Safe Debounced MutationObserver for dynamic themes
   if (typeof MutationObserver !== "undefined") {
+    var debounceTimer = null;
     var observer = new MutationObserver(function (mutations) {
-      var hasNew = false;
-      for (var i = 0; i < mutations.length; i++) {
-        if (mutations[i].addedNodes && mutations[i].addedNodes.length > 0) {
-          hasNew = true;
-          break;
-        }
-      }
-      if (hasNew) initWidgets();
+      // Fast check: is there any unrendered widget?
+      var hasUnrendered = document.querySelector("[data-dea]:not([data-dea-rendered])");
+      if (!hasUnrendered) return;
+
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function () {
+        initWidgets();
+      }, 150);
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+
+    try {
+      observer.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    } catch (e) {}
   }
 })();
