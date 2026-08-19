@@ -113,16 +113,10 @@
       .dea-widget-container {
         box-sizing: border-box;
         width: 100%;
-        max-width: var(--page-width, 1200px);
-        margin: 32px auto;
-        padding: 0 1.5rem;
-        color: #1a1a1a;
-      }
-      @media (max-width: 749px) {
-        .dea-widget-container {
-          padding: 0 1rem;
-          margin: 20px auto;
-        }
+        margin-left: auto;
+        margin-right: auto;
+        margin-top: 2rem;
+        margin-bottom: 2rem;
       }
       .dea-widget-container * {
         box-sizing: border-box;
@@ -330,15 +324,130 @@
     return "inherit";
   }
 
-  function getFontSizes(size) {
+  // Read the live font sizes the theme already uses on this page.
+  function getThemeFontSizes(el) {
+    var body = 16;
+    var heading = 22;
+    try {
+      var scope = (el && el.closest("main")) || document.querySelector("main") || document.body;
+
+      var textNode =
+        scope.querySelector(".rte p, .rte, main p, p, li") ||
+        document.body;
+      var textSize = parseFloat(window.getComputedStyle(textNode).fontSize);
+      if (textSize > 0) body = textSize;
+
+      var headingNode = scope.querySelector("h2, h1, .collection-hero__title, .title");
+      if (headingNode) {
+        var headingSize = parseFloat(window.getComputedStyle(headingNode).fontSize);
+        // Hero titles can be oversized; keep the widget heading sane.
+        if (headingSize > 0) {
+          heading = headingSize > 40 ? Math.max(body * 1.4, 28) : headingSize;
+        }
+      } else {
+        heading = body * 1.4;
+      }
+    } catch (e) {}
+
+    return { body: body, heading: heading };
+  }
+
+  function getFontSizes(size, el) {
     if (size === "sm") {
       return { heading: "1.1rem", item: "0.8125rem", pad: "10px" };
     }
     if (size === "lg") {
       return { heading: "1.45rem", item: "1.05rem", pad: "18px" };
     }
-    // "default" and "md"
-    return { heading: "1.25rem", item: "0.9375rem", pad: "14px" };
+    if (size === "md") {
+      return { heading: "1.25rem", item: "0.9375rem", pad: "14px" };
+    }
+    // "default" — inherit the theme's own typography scale.
+    var theme = getThemeFontSizes(el);
+    return {
+      heading: theme.heading + "px",
+      item: theme.body + "px",
+      pad: Math.round(theme.body * 0.9) + "px",
+    };
+  }
+
+  // Find the container the theme uses for page content, so the widget lines up
+  // with the collection title / description instead of guessing a width.
+  function findThemeContainer(el) {
+    var selectors = [
+      ".page-width",
+      ".container",
+      ".shopify-section .page-width",
+      "main .container",
+      ".site-container",
+      ".main-content .container",
+    ];
+
+    var best = null;
+    var bestWidth = 0;
+
+    for (var s = 0; s < selectors.length; s++) {
+      var nodes;
+      try {
+        nodes = document.querySelectorAll(selectors[s]);
+      } catch (e) {
+        continue;
+      }
+      for (var i = 0; i < nodes.length; i++) {
+        var rect = nodes[i].getBoundingClientRect();
+        if (rect.width < 200 || rect.height < 1) continue;
+        if (nodes[i].contains(el)) continue;
+        if (rect.width > bestWidth) {
+          bestWidth = rect.width;
+          best = nodes[i];
+        }
+      }
+    }
+
+    return best;
+  }
+
+  // Match the rendered widget's width and horizontal offset to the theme container.
+  function alignToTheme(el) {
+    try {
+      var inner = el.querySelector(".dea-widget-container");
+      if (!inner) return;
+
+      var ref = findThemeContainer(el);
+      if (!ref) return;
+
+      var refStyle = window.getComputedStyle(ref);
+      var refRect = ref.getBoundingClientRect();
+      var refPadLeft = parseFloat(refStyle.paddingLeft) || 0;
+      var refPadRight = parseFloat(refStyle.paddingRight) || 0;
+      var contentLeft = refRect.left + refPadLeft;
+      var contentWidth = refRect.width - refPadLeft - refPadRight;
+      if (contentWidth < 120) return;
+
+      var parent = el.parentElement || el;
+      var parentStyle = window.getComputedStyle(parent);
+      var parentRect = parent.getBoundingClientRect();
+      var parentContentLeft = parentRect.left + (parseFloat(parentStyle.paddingLeft) || 0);
+
+      var offset = contentLeft - parentContentLeft;
+      if (offset < 0) offset = 0;
+
+      inner.style.maxWidth = "none";
+      inner.style.width = contentWidth + "px";
+      inner.style.marginLeft = offset + "px";
+      inner.style.marginRight = "0";
+    } catch (e) {}
+  }
+
+  var alignTimer = null;
+  function scheduleRealign() {
+    if (alignTimer) clearTimeout(alignTimer);
+    alignTimer = setTimeout(function () {
+      var rendered = document.querySelectorAll("[data-dea][data-dea-rendered]");
+      for (var i = 0; i < rendered.length; i++) {
+        alignToTheme(rendered[i]);
+      }
+    }, 120);
   }
 
   // Render FAQs inside container with customized styles
@@ -356,7 +465,7 @@
     var accentColor = style.accentColor || "#2563eb";
     var backgroundColor = style.backgroundColor || "transparent";
     var fontFamily = getFontStack(style.font);
-    var sizes = getFontSizes(style.size);
+    var sizes = getFontSizes(style.size, container);
 
     var isSplit = template === "split";
     var isCards = template === "cards";
@@ -418,6 +527,8 @@
         }
       });
     }
+
+    alignToTheme(container);
   }
 
   // Render Internal Links inside container with customized styles
@@ -435,7 +546,7 @@
     var accentColor = style.accentColor || "#2563eb";
     var backgroundColor = style.backgroundColor || "transparent";
     var fontFamily = getFontStack(style.font);
-    var sizes = getFontSizes(style.size);
+    var sizes = getFontSizes(style.size, container);
 
     var containerStyle = 'font-family:' + fontFamily + ';';
     if (backgroundColor && backgroundColor !== "#ffffff" && backgroundColor !== "transparent") {
@@ -499,6 +610,8 @@
 
     html += '</div>';
     container.innerHTML = html;
+
+    alignToTheme(container);
   }
 
   function hexToRgba(hex, alpha) {
@@ -631,6 +744,16 @@
   } else {
     initWidgets();
   }
+
+  // Theme layout and web fonts settle after load — re-measure then.
+  window.addEventListener("load", scheduleRealign);
+  window.addEventListener("resize", scheduleRealign);
+  window.addEventListener("orientationchange", scheduleRealign);
+  try {
+    if (document.fonts && document.fonts.ready && document.fonts.ready.then) {
+      document.fonts.ready.then(scheduleRealign);
+    }
+  } catch (e) {}
 
   // Safe Debounced MutationObserver for dynamic themes
   if (typeof MutationObserver !== "undefined") {
