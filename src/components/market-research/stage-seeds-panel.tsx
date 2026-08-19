@@ -21,6 +21,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -50,6 +58,11 @@ import {
   type ScopeMatch,
   type SeedProbe,
 } from "./mock-data";
+import {
+  APIFY_KEYWORD_USD_PER_ROW,
+  APIFY_SEED_PROBE_USD_PER_SEED,
+  estimateProbeCostUsd,
+} from "@/lib/market-research/cost";
 import { cn } from "@/lib/utils";
 
 const SCOPE_FILTERS: ScopeMatch[] = ["Exact", "Close", "Broader", "Ambiguous"];
@@ -86,6 +99,7 @@ type StageSeedsPanelProps = {
   onConfirmSpend: () => void;
   committed?: boolean;
   walletHref?: string;
+  walletBalance?: number | null;
   readOnly?: boolean;
 };
 
@@ -106,6 +120,7 @@ export function StageSeedsPanel({
   onConfirmSpend,
   committed = false,
   walletHref,
+  walletBalance = null,
   readOnly = false,
 }: StageSeedsPanelProps) {
   const [view, setView] = useState<"rows" | "grouped">("rows");
@@ -115,6 +130,7 @@ export function StageSeedsPanel({
   const [manualTerm, setManualTerm] = useState("");
   const [manualFamily, setManualFamily] = useState("");
   const [budget, setBudget] = useState<number | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const probing = useMemo(() => new Set(probingIds), [probingIds]);
@@ -154,6 +170,9 @@ export function StageSeedsPanel({
   const unprobedSelected = selectedRows.filter(
     (row) => !probes[row.id] && !probing.has(row.id)
   );
+  const probeCost = estimateProbeCostUsd(unprobedSelected.length);
+  const canAffordExtract =
+    walletBalance == null || walletBalance >= estimate.usd;
   const staleSelected = selectedRows.filter(
     (row) => probes[row.id] && isProbeStale(probes[row.id], market)
   );
@@ -237,9 +256,6 @@ export function StageSeedsPanel({
       .filter((row) => !probes[row.id])
       .map((row) => row.id);
     onChangeSelected([...kept, ...unprobedKept]);
-    toast.success("Selection trimmed to budget", {
-      description: `${kept.length} probed seeds kept within ${formatUsd(effectiveBudget)}.`,
-    });
   };
 
   return (
@@ -318,6 +334,7 @@ export function StageSeedsPanel({
             )}
             Check demand
             {unprobedSelected.length > 0 ? ` (${unprobedSelected.length})` : ""}
+            {probeCost > 0 ? ` · ${formatUsd(probeCost)}` : ""}
           </Button>
           )}
         </div>
@@ -786,9 +803,10 @@ export function StageSeedsPanel({
 
         {estimate.rows === 0 ? (
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Stages 1–3 are included in your plan. Select seeds and run a demand
-            check to see raw keyword counts, search volume, and what the deep
-            analysis would cost — before anything is charged.
+            Stages 1–3 of the agent are free. Select seeds and run a demand
+            check ({formatUsd(APIFY_SEED_PROBE_USD_PER_SEED)} per seed, billed from your wallet) to see
+            raw keyword counts and what extract would cost at Apify’s rate —
+            {formatUsd(APIFY_KEYWORD_USD_PER_ROW)} per keyword row, billed on rows returned.
           </p>
         ) : (
           <>
@@ -798,8 +816,8 @@ export function StageSeedsPanel({
                 value={estimate.rawKeywords.toLocaleString("en-US")}
               />
               <Metric
-                label="Unique after overlap"
-                value={estimate.uniqueKeywords.toLocaleString("en-US")}
+                label="Billed rows (capped)"
+                value={estimate.billedKeywords.toLocaleString("en-US")}
                 highlight
               />
               <Metric
@@ -813,13 +831,13 @@ export function StageSeedsPanel({
               />
             </div>
 
-            {estimate.usdIfNotDeduped > estimate.usd ? (
+            {estimate.usd > 0 ? (
               <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                Variations of the same canonical seed return overlapping
-                keywords. Billing on the raw sum would be{" "}
-                {formatUsd(estimate.usdIfNotDeduped)} — you’re quoted{" "}
-                {formatUsd(estimate.usd)} on unique keywords only.
+                Each selected seed starts its own Apify run. Overlapping
+                synonyms are billed separately — deselect broad or duplicate
+                wording to keep the bill down. Filters after extract do not
+                change what you pay.
               </p>
             ) : null}
 
@@ -864,7 +882,7 @@ export function StageSeedsPanel({
                 type="button"
                 size="sm"
                 className="ml-auto h-8 text-xs"
-                onClick={onConfirmSpend}
+                onClick={() => setConfirmOpen(true)}
                 disabled={estimate.rows === 0 || committed}
               >
                 {committed
@@ -873,16 +891,92 @@ export function StageSeedsPanel({
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Extract pulls up to 10,000 keywords per selected seed, then
-              filters, classifies intent, and matches them to your catalog —
-              {formatUsd(estimate.usd)} from your wallet. Nothing is charged
-              before you extract.
+              Phrase extraction filters out noise and only pulls exact matching search terms. Unused hold is refunded instantly. Extract pulls up to 10,000 keywords per selected seed at{" "}
+              {formatUsd(APIFY_KEYWORD_USD_PER_ROW)} per row. The figure above is an estimate from
+              the demand check; your wallet is charged for rows actually
+              returned. Agent work after this is free. Publishing collections
+              is {formatUsd(5)} each.
             </p>
+            {walletBalance != null && !canAffordExtract ? (
+              <p className="text-[11px] text-destructive">
+                Wallet balance {formatUsd(walletBalance)} is below the estimate.
+                Add funds or trim the selection.
+              </p>
+            ) : null}
             </>
             )}
           </>
         )}
       </div>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Confirm keyword extract</DialogTitle>
+            <DialogDescription>
+              Phrase extraction filters out noise and only pulls exact matching search terms. Unused hold is refunded instantly. You pay the actual row count returned after the run.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-56 overflow-auto rounded-xl border border-border/70">
+            <table className="w-full text-[11px]">
+              <thead className="sticky top-0 bg-muted/80 text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-1.5 text-left font-medium">Seed</th>
+                  <th className="px-3 py-1.5 text-right font-medium">
+                    Est. rows
+                  </th>
+                  <th className="px-3 py-1.5 text-right font-medium">Est. $</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedRows
+                  .filter((row) => probes[row.id] && !probes[row.id].failed)
+                  .map((row) => (
+                    <tr key={row.id} className="border-t border-border/50">
+                      <td className="px-3 py-1.5">{row.broadSeedVariation}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {Math.min(
+                          10_000,
+                          probes[row.id].rawKeywords
+                        ).toLocaleString("en-US")}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {formatUsd(usdForRawKeywords(probes[row.id].rawKeywords))}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">
+              Wallet {walletBalance == null ? "—" : formatUsd(walletBalance)}
+            </span>
+            <span className="font-semibold tabular-nums">
+              Estimate {formatUsd(estimate.usd)}
+            </span>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!canAffordExtract}
+              onClick={() => {
+                setConfirmOpen(false);
+                onConfirmSpend();
+              }}
+            >
+              Start extract
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

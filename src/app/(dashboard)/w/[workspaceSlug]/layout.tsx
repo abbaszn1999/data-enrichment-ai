@@ -27,15 +27,17 @@ import {
   Loader2,
   Coins,
   Crown,
-  RefreshCw,
   Image as ImageIcon,
   Images,
   LayoutGrid,
   Boxes,
   Rocket,
   Search,
+  Paintbrush,
+  RefreshCw,
   LayoutTemplate,
   Wallet,
+  Bot,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/hooks/use-auth";
@@ -45,7 +47,8 @@ import { useCredits } from "@/hooks/use-credits";
 import { useSubscription } from "@/hooks/use-subscription";
 import { signOut } from "@/lib/auth";
 import { formatCredits } from "@/lib/format-credits";
-import { formatMoney, useMockWallet } from "@/lib/mock-wallet";
+import { formatMoney } from "@/lib/wallet/format";
+import { useWallet } from "@/hooks/use-wallet";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -83,7 +86,7 @@ export default function WorkspaceLayout({
   const permissions = useRole(role);
 
   const credits = useCredits(workspace?.id ?? null);
-  const wallet = useMockWallet(workspace?.id ?? null);
+  const { wallet } = useWallet(workspace?.id ?? null);
   const walletBalance = wallet?.balance ?? null;
   const { subscription, isActive, isLoading: subLoading } = useSubscription(workspace?.id ?? null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -111,7 +114,11 @@ export default function WorkspaceLayout({
   // Hide workspace nav sidebar on enrichment tool (it has its own left panel).
   // Keep the top app header visible so credits / workspace / user stay accessible.
   const isEnrichPage = pathname.includes("/enrich");
-  const isSyncPage = pathname.includes("/sync");
+  const isSyncPage =
+    pathname === `${basePath}/sync` || pathname.startsWith(`${basePath}/sync/`);
+  const isGrowthSyncPage =
+    pathname === `${basePath}/growth-sync` ||
+    pathname.startsWith(`${basePath}/growth-sync/`);
   const isMarketResearchPage = pathname.includes("/market-research");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
   const isProductsGalleryProject = isProductsGalleryPage && searchParams.has("project");
@@ -127,9 +134,12 @@ export default function WorkspaceLayout({
   // Immersive mode hides the top header — keep false so Enrich shows it
   const isImmersive = false;
   // Lock main content height so tool UIs (Enrich sidebar/table) scroll internally
-  const lockContentHeight = isEnrichPage || isSyncPage || isMarketResearchPage;
+  const lockContentHeight =
+    isEnrichPage || isSyncPage || isMarketResearchPage || isGrowthSyncPage;
   // Subscription page should be accessible without an active subscription
-  const isSubscriptionPage = pathname.includes("/subscription");
+  const isSubscriptionPage =
+    pathname === `${basePath}/subscription` ||
+    pathname.startsWith(`${basePath}/subscription/`);
   const isTeamPage = pathname.includes("/team");
   const isSettingsPage = pathname.includes("/settings");
   const requiresAdminAccess = isTeamPage || isSettingsPage;
@@ -141,8 +151,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}/products-visualizer`, label: "Products Visualizer", icon: Boxes },
   ];
 
-  // Parent group only — Sync stays the existing page; the rest are separate
-  // placeholder routes that will grow into full modules later.
+  // Parent group only — Store assistant is a top-level item, not nested here.
   const growthEngineChildren = [
     {
       href: hasIntegration ? `${basePath}/market-research` : "",
@@ -151,7 +160,13 @@ export default function WorkspaceLayout({
       disabled: !hasIntegration,
     },
     {
-      href: hasIntegration ? `${basePath}/sync` : "",
+      href: hasIntegration ? `${basePath}/customize` : "",
+      label: "Customize",
+      icon: Paintbrush,
+      disabled: !hasIntegration,
+    },
+    {
+      href: hasIntegration ? `${basePath}/growth-sync` : "",
       label: "Sync",
       icon: RefreshCw,
       disabled: !hasIntegration,
@@ -190,6 +205,12 @@ export default function WorkspaceLayout({
   ];
 
   const sidebarLinksAfterGrowthEngine = [
+    {
+      href: hasIntegration ? `${basePath}/sync` : "",
+      label: "Store assistant",
+      icon: Bot,
+      disabled: !hasIntegration,
+    },
     { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
     ...(permissions.canAdmin
       ? [{ href: `${basePath}/team`, label: "Team", icon: Users }]
@@ -517,7 +538,7 @@ export default function WorkspaceLayout({
                 </div>
               )}
 
-              {/* Growth engine group — parent only; Sync stays the existing page */}
+              {/* Growth engine group */}
               {sidebarCollapsed ? (
                 <button
                   onClick={() => {
@@ -595,7 +616,7 @@ export default function WorkspaceLayout({
               <SubscriptionGate subscription={subscription} isActive={isActive} isLoading={subLoading} role={role}>
                 <div
                   className={
-                    isEnrichPage || isMarketResearchPage
+                    isEnrichPage || isMarketResearchPage || isGrowthSyncPage
                       ? "flex-1 flex flex-col min-h-0 overflow-hidden h-full"
                       : "flex-1"
                   }

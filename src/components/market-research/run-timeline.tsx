@@ -23,24 +23,27 @@ export type StageReceipt = {
   detail: string;
 };
 
-/** Compact "Step X of 3" indicator for the results header. */
+/** Compact "Step X of 7" indicator for the results header. */
 export function StageStepper({
   current,
   steps,
+  totalStages = 7,
 }: {
   current: MarketResearchStage;
   steps: StageStep[];
+  totalStages?: number;
 }) {
   const doneCount = steps.filter((s) => s.status === "done").length;
+  const total = steps.length > 0 ? steps.length : totalStages;
   return (
     <div className="flex items-center gap-2">
       <span className="text-[10px] font-medium text-muted-foreground whitespace-nowrap">
-        Step {current} of 3
+        Step {current} of {total}
       </span>
       <Progress
-        value={(doneCount / 3) * 100}
+        value={(doneCount / total) * 100}
         className="h-1 w-16"
-        aria-label={`${doneCount} of 3 stages complete`}
+        aria-label={`${doneCount} of ${total} stages complete`}
       />
     </div>
   );
@@ -61,9 +64,10 @@ export function RunTimeline({
 }) {
   const running = steps.find((s) => s.status === "running");
   const doneCount = steps.filter((s) => s.status === "done").length;
+  const total = steps.length > 0 ? steps.length : 7;
   const summary = running
-    ? `Working on Stage ${running.stage} · ${STAGE_META[running.stage].shortLabel}`
-    : `Stage ${current} · ${doneCount} of 3 complete`;
+    ? `Working on Stage ${running.stage} · ${STAGE_META[running.stage]?.shortLabel ?? `Stage ${running.stage}`}`
+    : `Stage ${current} · ${doneCount} of ${total} complete`;
 
   return (
     <details className="group border-b border-border/60 bg-background/60">
@@ -94,7 +98,7 @@ export function RunTimeline({
                       : "text-foreground/90"
                   )}
                 >
-                  {step.stage}. {STAGE_META[step.stage].label}
+                  {step.stage}. {STAGE_META[step.stage]?.label ?? `Stage ${step.stage}`}
                 </p>
                 <p className="text-[10px] text-muted-foreground leading-relaxed">
                   {step.detail}

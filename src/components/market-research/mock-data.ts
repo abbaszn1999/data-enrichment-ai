@@ -3,6 +3,12 @@
  * Feels like a live store scan; no CMS/API calls yet.
  */
 
+import {
+  actualExtractCostUsd,
+  cappedKeywordEstimate,
+  formatUsd as formatUsdShared,
+} from "@/lib/market-research/cost";
+
 export type ScopeMatch = "Exact" | "Close" | "Broader" | "Ambiguous";
 
 export type VariationType =
@@ -51,7 +57,7 @@ export type MockSeedRow = {
   manual?: boolean;
 };
 
-export type MarketResearchStage = 1 | 2 | 3;
+export type MarketResearchStage = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export type MarketResearchProject = {
   id: string;
@@ -447,14 +453,22 @@ export const MOCK_SEED_ROWS: MockSeedRow[] = [
 
 /** Build Stage 3 rows only for Stage 2 selections (plan: one family per collection). */
 export function getSeedRowsForCollections(
-  collectionIds: string[]
+  collectionIds: string[],
+  niches?: MockNiche[],
+  overrideSeedRows?: MockSeedRow[]
 ): MockSeedRow[] {
   const selected = new Set(collectionIds);
+  if (overrideSeedRows && overrideSeedRows.length > 0) {
+    const matched = overrideSeedRows.filter((r) => selected.has(r.collectionId));
+    if (matched.length > 0) return matched;
+  }
+
+  const pool = niches && niches.length > 0 ? niches : MOCK_NICHES;
   const curated = MOCK_SEED_ROWS.filter((r) => selected.has(r.collectionId));
   const covered = new Set(curated.map((r) => r.collectionId));
 
   const synthesized: MockSeedRow[] = [];
-  for (const niche of MOCK_NICHES) {
+  for (const niche of pool) {
     for (const collection of niche.collections) {
       if (!selected.has(collection.id) || covered.has(collection.id)) continue;
       synthesized.push(
@@ -559,10 +573,14 @@ export function seedRowsToCsv(rows: MockSeedRow[]): string {
  * Unique products behind a Stage 2 selection. An "All X" collection already
  * contains its siblings, so summing parent + children would double count.
  */
-export function countProductsForCollections(collectionIds: string[]): number {
+export function countProductsForCollections(
+  collectionIds: string[],
+  niches?: MockNiche[]
+): number {
   const selected = new Set(collectionIds);
+  const pool = niches && niches.length > 0 ? niches : MOCK_NICHES;
   let total = 0;
-  for (const niche of MOCK_NICHES) {
+  for (const niche of pool) {
     const picked = niche.collections.filter((c) => selected.has(c.id));
     if (picked.length === 0) continue;
     if (picked.some((c) => c.coversNiche)) {
@@ -576,10 +594,14 @@ export function countProductsForCollections(collectionIds: string[]): number {
 }
 
 /** Raw sum before dedupe — used to explain the difference to the customer. */
-export function sumProductsForCollections(collectionIds: string[]): number {
+export function sumProductsForCollections(
+  collectionIds: string[],
+  niches?: MockNiche[]
+): number {
   const selected = new Set(collectionIds);
+  const pool = niches && niches.length > 0 ? niches : MOCK_NICHES;
   let total = 0;
-  for (const niche of MOCK_NICHES) {
+  for (const niche of pool) {
     for (const collection of niche.collections) {
       if (selected.has(collection.id)) total += collection.productCount;
     }
@@ -587,9 +609,13 @@ export function sumProductsForCollections(collectionIds: string[]): number {
   return total;
 }
 
-export function collectionNamesForIds(collectionIds: string[]): string[] {
+export function collectionNamesForIds(
+  collectionIds: string[],
+  niches?: MockNiche[]
+): string[] {
   const selected = new Set(collectionIds);
-  return MOCK_NICHES.flatMap((niche) =>
+  const pool = niches && niches.length > 0 ? niches : MOCK_NICHES;
+  return pool.flatMap((niche) =>
     niche.collections.filter((c) => selected.has(c.id)).map((c) => c.name)
   );
 }
@@ -620,21 +646,14 @@ export function marketLabel(code: string): string {
 }
 
 /**
- * Wallet pricing — Stage 3 bills USD from the customer's wallet, not platform credits.
- * $10 per 1,000 raw keywords covers extraction + intent + matching.
+ * Wallet pricing — Stage 4 bills actual Apify keyword rows ($0.01 each / $10 per 1,000 keywords).
+ * Stage 3 probe is $0.002 per seed. Agent stages are not billed.
  */
-export const USD_PER_1K_KEYWORDS = 10;
-
 export function usdForRawKeywords(rawKeywords: number): number {
-  return Math.round((rawKeywords / 1000) * USD_PER_1K_KEYWORDS * 100) / 100;
+  return actualExtractCostUsd(cappedKeywordEstimate(rawKeywords));
 }
 
-export function formatUsd(amount: number): string {
-  return `$${amount.toLocaleString("en-US", {
-    minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
+export const formatUsd = formatUsdShared;
 
 export const PROBE_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 export const PROBE_MS = 5_000;
@@ -724,48 +743,6 @@ const MARKET_SCALE: Record<string, number> = {
   "de-de": 0.36,
 };
 
-function rawKeywordsFor(row: MockSeedRow, market: string): number {
-  const key = row.broadSeedVariation.toLowerCase();
-  const base =
-    PROBE_RAW_BY_SEED[key] ??
-    (row.scopeMatch === "Broader"
-      ? 22000 + (hashString(key) % 18000)
-      : row.scopeMatch === "Ambiguous"
-        ? 12000 + (hashString(key) % 9000)
-        : 600 + (hashString(key) % 2400));
-  const scaled = base * (MARKET_SCALE[market] ?? 0.5);
-  return Math.max(60, Math.round(scaled / 10) * 10);
-}
-
-function sampleKeywordsFor(row: MockSeedRow): string[] {
-  const key = row.broadSeedVariation.toLowerCase();
-  const noise = PROBE_NOISE_SAMPLES[key];
-  if (noise) return noise;
-  const seed = row.broadSeedVariation.toLowerCase();
-  return [
-    `best ${seed}`,
-    `${seed} online`,
-    `buy ${seed}`,
-    `cheap ${seed}`,
-    `${seed} sale`,
-  ];
-}
-
-/** Deterministic stand-in for the Apify seed-term analysis actor. */
-export function buildSeedProbe(row: MockSeedRow, market: string): SeedProbe {
-  const rawKeywords = rawKeywordsFor(row, market);
-  const volumeFactor =
-    row.scopeMatch === "Exact" ? 3.4 : row.scopeMatch === "Close" ? 2.6 : 1.8;
-  return {
-    seedId: row.id,
-    market,
-    rawKeywords,
-    searchVolume: Math.round((rawKeywords * volumeFactor) / 10) * 10,
-    sampleKeywords: sampleKeywordsFor(row),
-    checkedAt: Date.now(),
-  };
-}
-
 export function isProbeStale(probe: SeedProbe, market: string): boolean {
   return probe.market !== market || Date.now() - probe.checkedAt > PROBE_STALE_MS;
 }
@@ -773,57 +750,40 @@ export function isProbeStale(probe: SeedProbe, market: string): boolean {
 export type SelectionEstimate = {
   rows: number;
   rawKeywords: number;
-  uniqueKeywords: number;
+  /** Rows we expect Apify to return once the per-seed page cap is applied. */
+  billedKeywords: number;
   searchVolume: number;
   usd: number;
-  usdIfNotDeduped: number;
 };
 
 /**
- * Variations inside one canonical family return heavily overlapping keyword
- * sets, so billing on the raw sum would charge the client twice. We keep the
- * largest seed in each family whole and discount its siblings.
+ * Every selected seed is its own Apify run and every returned row is billed,
+ * so overlapping synonyms are paid for twice. The estimate mirrors that: no
+ * dedupe discount, only the per-seed page cap.
  */
-const FAMILY_OVERLAP_DISCOUNT = 0.35;
-
 export function estimateSelection(
   rows: MockSeedRow[],
   probes: Record<string, SeedProbe>
 ): SelectionEstimate {
   const probed = rows.filter((row) => probes[row.id] && !probes[row.id].failed);
-  const byFamily = new Map<string, MockSeedRow[]>();
-  for (const row of probed) {
-    const key = `${row.collectionId}::${row.canonicalNicheSeed}`;
-    byFamily.set(key, [...(byFamily.get(key) ?? []), row]);
-  }
 
   let rawKeywords = 0;
-  let uniqueKeywords = 0;
   let searchVolume = 0;
+  let billedKeywords = 0;
 
-  for (const family of byFamily.values()) {
-    const sorted = [...family].sort(
-      (a, b) => probes[b.id].rawKeywords - probes[a.id].rawKeywords
-    );
-    sorted.forEach((row, index) => {
-      const probe = probes[row.id];
-      rawKeywords += probe.rawKeywords;
-      searchVolume += probe.searchVolume;
-      uniqueKeywords +=
-        index === 0
-          ? probe.rawKeywords
-          : Math.round(probe.rawKeywords * FAMILY_OVERLAP_DISCOUNT);
-    });
+  for (const row of probed) {
+    const probe = probes[row.id];
+    rawKeywords += probe.rawKeywords;
+    billedKeywords += cappedKeywordEstimate(probe.rawKeywords);
+    searchVolume += probe.searchVolume;
   }
 
-  const usd = usdForRawKeywords(uniqueKeywords);
   return {
     rows: probed.length,
     rawKeywords,
-    uniqueKeywords,
+    billedKeywords,
     searchVolume,
-    usd,
-    usdIfNotDeduped: usdForRawKeywords(rawKeywords),
+    usd: actualExtractCostUsd(billedKeywords),
   };
 }
 
@@ -899,6 +859,34 @@ export const STAGE_META: Record<
     agentPrompt: "I’ve prepared broad niche seed variations for the selected collections.",
     agentDetail:
       "Each row is a market wording we’ll validate later for demand. No styles, materials, brands, or long-tail niches here — those come after you pick a niche to go deep on.",
+  },
+  4: {
+    label: "Keyword extraction & classification",
+    shortLabel: "Extract",
+    agentPrompt: "Extracted keywords classified into commercial categories, informational guides, and excluded SKUs.",
+    agentDetail:
+      "Phrase match extraction with instant hold settlement and Gemini 3.7 Flash search intent classification.",
+  },
+  5: {
+    label: "Collection clustering",
+    shortLabel: "Collections",
+    agentPrompt: "Clustered high-demand commercial keywords into collection opportunities and matched with store catalog.",
+    agentDetail:
+      "Identifies new collection opportunities, existing collection improvements, and candidate merges.",
+  },
+  6: {
+    label: "On-page SEO copywriting",
+    shortLabel: "On-page",
+    agentPrompt: "Generated SEO titles, meta descriptions, collection copy, FAQs, and internal linking recommendations.",
+    agentDetail:
+      "High-converting search-optimized collection page copy respecting your custom instructions.",
+  },
+  7: {
+    label: "Content strategy & push",
+    shortLabel: "Strategy",
+    agentPrompt: "Comprehensive strategy roadmap and live collection publishing to your store.",
+    agentDetail:
+      "Review publishing status and content rollout action plan.",
   },
 };
 
@@ -1040,7 +1028,7 @@ export function probeAgentReady(
 ): string {
   return `Demand check done for ${seedCount} seed${seedCount === 1 ? "" : "s"} in ${marketLabel(market)}.
 
-Raw keywords across those terms: ${estimate.rawKeywords.toLocaleString("en-US")}. After removing the overlap between variations of the same canonical seed, you'd actually pay on about ${estimate.uniqueKeywords.toLocaleString("en-US")} — ${formatUsd(estimate.usd)} from your wallet.
+Raw keywords across those terms: ${estimate.rawKeywords.toLocaleString("en-US")}. Extract would pull about ${estimate.billedKeywords.toLocaleString("en-US")} rows after the per-seed cap — ${formatUsd(estimate.usd)} from your wallet, billed on rows actually returned.
 
 Open a row to see sample keywords. If a broad term looks like noise, drop it here — that's the whole point of this stage.`;
 }

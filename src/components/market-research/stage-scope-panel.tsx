@@ -76,18 +76,7 @@ export function StageScopePanel({
       setRevealedCount(0);
       return;
     }
-    if (readOnly) {
-      setRevealedCount(niches.length);
-      return;
-    }
-    setRevealedCount(0);
-    let i = 0;
-    const id = window.setInterval(() => {
-      i += 1;
-      setRevealedCount(i);
-      if (i >= niches.length) window.clearInterval(id);
-    }, 220);
-    return () => window.clearInterval(id);
+    setRevealedCount(niches.length);
   }, [phase, projectId, niches.length, readOnly]);
 
   if (phase === "pending") {

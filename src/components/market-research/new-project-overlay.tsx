@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 type NewProjectOverlayProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreate: (name: string) => void;
+  onCreate: (name: string) => void | Promise<void>;
   /** First-run: no close — naming is required to enter. */
   required?: boolean;
   storeLabel?: string;

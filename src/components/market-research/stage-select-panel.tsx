@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 
 type StageSelectPanelProps = {
   project: MarketResearchProject;
+  niches?: MockNiche[];
   preparing?: boolean;
   onChangeSelection: (collectionIds: string[]) => void;
   /** Stage 1 result carried into this stage (receipt line). */
@@ -38,6 +39,7 @@ type StageSelectPanelProps = {
 /** Stage 2 — interactive catalog scope from Stage 1 niches. */
 export function StageSelectPanel({
   project,
+  niches,
   preparing = false,
   onChangeSelection,
   lockedNicheCount,
@@ -49,6 +51,10 @@ export function StageSelectPanel({
 }: StageSelectPanelProps) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const activeNiches = useMemo(
+    () => (Array.isArray(niches) ? niches : MOCK_NICHES),
+    [niches]
+  );
   const selected = useMemo(
     () => new Set(project.highlightedCollectionIds),
     [project.highlightedCollectionIds]
@@ -56,29 +62,33 @@ export function StageSelectPanel({
 
   const visibleNiches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return MOCK_NICHES;
-    return MOCK_NICHES.map((niche) => ({
-      ...niche,
-      collections: niche.name.toLowerCase().includes(q)
-        ? niche.collections
-        : niche.collections.filter((c) => c.name.toLowerCase().includes(q)),
-    })).filter((niche) => niche.collections.length > 0);
-  }, [query]);
+    if (!q) return activeNiches;
+    return activeNiches
+      .map((niche) => ({
+        ...niche,
+        collections: niche.name.toLowerCase().includes(q)
+          ? niche.collections
+          : niche.collections.filter((c) => c.name.toLowerCase().includes(q)),
+      }))
+      .filter((niche) => niche.collections.length > 0);
+  }, [query, activeNiches]);
 
   const selectedLabels = useMemo(
     () =>
-      MOCK_NICHES.flatMap((niche) =>
+      activeNiches.flatMap((niche) =>
         niche.collections
           .filter((c) => selected.has(c.id))
           .map((c) => ({ id: c.id, niche: niche.name, name: c.name }))
       ),
-    [selected]
+    [selected, activeNiches]
   );
   const selectedProducts = countProductsForCollections(
-    project.highlightedCollectionIds
+    project.highlightedCollectionIds,
+    activeNiches
   );
   const summedProducts = sumProductsForCollections(
-    project.highlightedCollectionIds
+    project.highlightedCollectionIds,
+    activeNiches
   );
   const hasOverlap = summedProducts > selectedProducts;
 

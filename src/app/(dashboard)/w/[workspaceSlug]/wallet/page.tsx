@@ -9,7 +9,6 @@ import {
   Download,
   Loader2,
   Plus,
-  RotateCcw,
   ShieldCheck,
   Sparkles,
   TrendingDown,
@@ -45,26 +44,25 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/hooks/use-auth";
+import { useWallet, saveWalletAutoReloadApi, topUpWalletApi } from "@/hooks/use-wallet";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useWorkspaceStore } from "@/store/workspace-store";
 import {
   PAYMENT_METHODS,
   TOPUP_PRESETS,
-  chargeWallet,
   formatMoney,
-  resetWallet,
-  setAutoReload,
   spendByModule,
   spentSince,
-  topUpWallet,
   transactionsToCsv,
-  useMockWallet,
-  type WalletTx,
-} from "@/lib/mock-wallet";
+} from "@/lib/wallet/format";
+import type { WalletTx } from "@/lib/wallet/types";
 import { cn } from "@/lib/utils";
 
 type TxFilter = "all" | "topup" | "charge";
 
 const MODULE_TONE: Record<string, string> = {
+  "Market Research":
+    "bg-violet-500/12 text-violet-700 dark:text-violet-300 border-violet-500/25",
   "Market research":
     "bg-violet-500/12 text-violet-700 dark:text-violet-300 border-violet-500/25",
   Sync: "bg-sky-500/12 text-sky-700 dark:text-sky-300 border-sky-500/25",
@@ -92,8 +90,9 @@ export default function WalletPage() {
   const slug = params.workspaceSlug as string;
   const { user } = useAuth();
   const { workspace } = useWorkspace(slug, user);
-  const walletKey = workspace?.id ?? slug;
-  const wallet = useMockWallet(walletKey);
+  const workspaceId = workspace?.id ?? "";
+  const { wallet, isLoading } = useWallet(workspaceId || null);
+  const invalidateWallet = useWorkspaceStore((s) => s.invalidateWallet);
 
   const [topUpOpen, setTopUpOpen] = useState(false);
   const [amount, setAmount] = useState<string>("100");
@@ -116,7 +115,7 @@ export default function WalletPage() {
     });
   }, [wallet, filter, query]);
 
-  if (!wallet) {
+  if (isLoading || !wallet) {
     return (
       <div className="flex flex-1 items-center justify-center p-10">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -135,20 +134,49 @@ export default function WalletPage() {
   const parsedAmount = Number(amount);
   const amountValid = Number.isFinite(parsedAmount) && parsedAmount >= 5;
 
-  const confirmTopUp = () => {
-    if (!amountValid) return;
+  const confirmTopUp = async () => {
+    if (!amountValid || !workspaceId) return;
+    if (!wallet.allowDevTopup) {
+      toast.error("Card top-ups are not live yet", {
+        description: "The wallet is real; adding funds via card comes next.",
+      });
+      return;
+    }
     setProcessing(true);
-    // Fake the provider round-trip so the success state feels earned.
-    window.setTimeout(() => {
-      const label =
-        PAYMENT_METHODS.find((m) => m.id === method)?.label ?? "Card";
-      topUpWallet(walletKey, parsedAmount, label);
-      setProcessing(false);
+    const label =
+      PAYMENT_METHODS.find((m) => m.id === method)?.label ?? "Dev credit";
+    try {
+      await topUpWalletApi(workspaceId, parsedAmount, label);
+      invalidateWallet();
       setTopUpOpen(false);
       toast.success(`${formatMoney(parsedAmount)} added to your wallet`, {
-        description: `Charged to ${label}. Available immediately.`,
+        description: "Development credit — not a real card charge.",
       });
-    }, 900);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Top-up failed");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const persistAutoReload = async (
+    enabled: boolean,
+    threshold = wallet.autoReload.threshold,
+    amountValue = wallet.autoReload.amount
+  ) => {
+    if (!workspaceId) return;
+    try {
+      await saveWalletAutoReloadApi(workspaceId, {
+        enabled,
+        threshold,
+        amount: amountValue,
+      });
+      invalidateWallet();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not save auto-reload"
+      );
+    }
   };
 
   const exportCsv = () => {
@@ -162,22 +190,6 @@ export default function WalletPage() {
     link.click();
     URL.revokeObjectURL(url);
     toast.success("Statement exported");
-  };
-
-  const runDemoCharge = () => {
-    const ok = chargeWallet(
-      walletKey,
-      18.5,
-      "Deep market analysis · 1,850 keywords",
-      "Market research"
-    );
-    if (!ok) {
-      toast.error("Not enough balance", {
-        description: "Add funds to cover this run.",
-      });
-      return;
-    }
-    toast.success("Charged $18.50 from your wallet");
   };
 
   return (
@@ -322,14 +334,11 @@ export default function WalletPage() {
                   variant={wallet.autoReload.enabled ? "outline" : "default"}
                   className="h-7 text-[11px]"
                   onClick={() => {
-                    setAutoReload(walletKey, {
-                      ...wallet.autoReload,
-                      enabled: !wallet.autoReload.enabled,
-                    });
+                    void persistAutoReload(!wallet.autoReload.enabled);
                     toast.success(
                       wallet.autoReload.enabled
                         ? "Auto-reload turned off"
-                        : "Auto-reload turned on"
+                        : "Auto-reload preference saved"
                     );
                   }}
                 >
@@ -346,10 +355,11 @@ export default function WalletPage() {
                     min={5}
                     value={wallet.autoReload.threshold}
                     onChange={(e) =>
-                      setAutoReload(walletKey, {
-                        ...wallet.autoReload,
-                        threshold: Math.max(0, Number(e.target.value)),
-                      })
+                      void persistAutoReload(
+                        wallet.autoReload.enabled,
+                        Math.max(0, Number(e.target.value)),
+                        wallet.autoReload.amount
+                      )
                     }
                     className="h-8 text-xs"
                   />
@@ -363,18 +373,19 @@ export default function WalletPage() {
                     min={10}
                     value={wallet.autoReload.amount}
                     onChange={(e) =>
-                      setAutoReload(walletKey, {
-                        ...wallet.autoReload,
-                        amount: Math.max(0, Number(e.target.value)),
-                      })
+                      void persistAutoReload(
+                        wallet.autoReload.enabled,
+                        wallet.autoReload.threshold,
+                        Math.max(0, Number(e.target.value))
+                      )
                     }
                     className="h-8 text-xs"
                   />
                 </div>
               </div>
               <p className="text-[10px] leading-relaxed text-muted-foreground">
-                Charged to {PAYMENT_METHODS[0].label} whenever the balance drops
-                under your threshold.
+                Preference is saved now. Automatic card charges will use this
+                threshold once payments go live.
               </p>
             </CardContent>
           </Card>
@@ -515,29 +526,10 @@ export default function WalletPage() {
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-border/70 px-3 py-2.5">
           <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="text-[11px] text-muted-foreground">
-            Demo controls — this wallet is stored locally until billing goes
-            live.
+            {wallet.allowDevTopup
+              ? "This workspace wallet lives in the database. Add funds credits the balance for testing — not a card charge."
+              : "This workspace wallet lives in the database. Card top-ups will land here once payments go live."}
           </span>
-          <Button
-            size="sm"
-            variant="outline"
-            className="ml-auto h-7 text-[11px]"
-            onClick={runDemoCharge}
-          >
-            Simulate a run charge
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 gap-1.5 text-[11px]"
-            onClick={() => {
-              resetWallet(walletKey);
-              toast.success("Wallet reset to sample data");
-            }}
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            Reset
-          </Button>
         </div>
       </div>
 

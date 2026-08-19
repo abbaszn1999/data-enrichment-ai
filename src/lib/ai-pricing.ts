@@ -162,6 +162,14 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     searchPerQuery: 0.014,
     freeSearchQuota: 0,
   },
+  // Gemini 3.7 Flash official pricing
+  "gemini-3.7-flash": {
+    inputPerMillion: 0.075,
+    outputPerMillion: 0.30,
+    cachedInputPerMillion: 0.01875,
+    searchPerQuery: 0.035,
+    freeSearchQuota: 1500,
+  },
 };
 
 const DEFAULT_PRICING: ModelPricing = {

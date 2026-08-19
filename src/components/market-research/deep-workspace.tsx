@@ -1,17 +1,21 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { StageAnalyzePanel } from "./stage-analyze-panel";
 import { StageCollectionSheet } from "./stage-collection-sheet";
 import { StageContentPanel } from "./stage-content-panel";
 import { StageExtractPanel } from "./stage-extract-panel";
+import { StageStrategyPanel } from "./stage-strategy-panel";
 import { WorkspaceStepper } from "./workspace-stepper";
 import type {
   CollectionContent,
   ExtractedKeyword,
   FlowTab,
+  MarketResearchProduct,
+  OnPageInstructionField,
+  OnPageInstructions,
   ProposedCollection,
   SeedExtractProgress,
+  StrategyArticle,
   WorkspaceTab,
 } from "./workspace-data";
 import { isWorkspaceTab } from "./workspace-data";
@@ -33,14 +37,18 @@ export function DeepWorkspace({
   chargedUsd,
   onAnalyze,
   analyzeLoading,
+  analyzed,
   onNextCollections,
+  onCancelExtract,
+  keywordsCsvHref,
   collections,
+  products,
   clustering,
   selectedCollectionIds,
   onChangeSelected,
   collectionsPaid,
   onStartWorking,
-  instruction,
+  instructions,
   onInstruction,
   contentById,
   generating,
@@ -48,6 +56,14 @@ export function DeepWorkspace({
   pushed,
   onStartContent,
   onPush,
+  pushCostUsd,
+  onNextStrategy,
+  strategyArticles,
+  strategyLoading,
+  strategyReady,
+  strategyApproved,
+  onBuildStrategy,
+  onApproveStrategy,
 }: {
   projectName: string;
   storeLabel: string;
@@ -64,21 +80,33 @@ export function DeepWorkspace({
   chargedUsd: number;
   onAnalyze: () => void;
   analyzeLoading: boolean;
+  analyzed: boolean;
   onNextCollections: () => void;
+  onCancelExtract?: () => void;
+  keywordsCsvHref?: string;
   collections: ProposedCollection[];
+  products?: MarketResearchProduct[];
   clustering: boolean;
   selectedCollectionIds: string[];
   onChangeSelected: (ids: string[]) => void;
   collectionsPaid: boolean;
   onStartWorking: () => void;
-  instruction: string;
-  onInstruction: (value: string) => void;
+  instructions: OnPageInstructions;
+  onInstruction: (field: OnPageInstructionField, value: string) => void;
   contentById: Record<string, CollectionContent>;
   generating: boolean;
   contentReady: boolean;
   pushed: boolean;
   onStartContent: () => void;
   onPush: () => void;
+  pushCostUsd?: number;
+  onNextStrategy: () => void;
+  strategyArticles: StrategyArticle[];
+  strategyLoading: boolean;
+  strategyReady: boolean;
+  strategyApproved: boolean;
+  onBuildStrategy: () => void;
+  onApproveStrategy: () => void;
 }) {
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
@@ -108,18 +136,17 @@ export function DeepWorkspace({
             seedProgress={seedProgress}
             chargedUsd={chargedUsd}
             onAnalyze={onAnalyze}
-          />
-        ) : null}
-        {tab === "analyze" ? (
-          <StageAnalyzePanel
-            keywords={keywords}
-            loading={analyzeLoading}
-            onNext={onNextCollections}
+            analyzeLoading={analyzeLoading}
+            analyzed={analyzed}
+            onNextCollections={onNextCollections}
+            onCancelExtract={onCancelExtract}
+            csvHref={keywordsCsvHref}
           />
         ) : null}
         {tab === "collections" ? (
           <StageCollectionSheet
             collections={collections}
+            products={products}
             loading={clustering}
             selectedIds={selectedCollectionIds}
             onChangeSelected={onChangeSelected}
@@ -133,13 +160,25 @@ export function DeepWorkspace({
               selectedCollectionIds.includes(c.id)
             )}
             contentById={contentById}
-            instruction={instruction}
+            instructions={instructions}
             onInstruction={onInstruction}
             generating={generating}
             ready={contentReady}
             pushed={pushed}
             onStart={onStartContent}
             onPush={onPush}
+            pushCostUsd={pushCostUsd}
+            onNextStrategy={onNextStrategy}
+          />
+        ) : null}
+        {tab === "strategy" ? (
+          <StageStrategyPanel
+            articles={strategyArticles}
+            loading={strategyLoading}
+            ready={strategyReady}
+            approved={strategyApproved}
+            onBuild={onBuildStrategy}
+            onApprove={onApproveStrategy}
           />
         ) : null}
       </div>

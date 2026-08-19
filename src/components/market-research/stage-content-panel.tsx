@@ -3,7 +3,14 @@
 import { useState } from "react";
 import { Check, Eye, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Sheet,
   SheetContent,
@@ -19,46 +26,94 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type {
-  CollectionContent,
-  ProposedCollection,
-} from "./workspace-data";
 import { cn } from "@/lib/utils";
+import { formatUsd } from "@/lib/market-research/cost";
+import { OnPageShapePicker } from "@/components/customize/on-page-shape-picker";
+import {
+  USD_PER_COLLECTION,
+  type CollectionContent,
+  type OnPageInstructionField,
+  type OnPageInstructions,
+  type ProposedCollection,
+} from "./workspace-data";
+
+const FIELD_META: {
+  id: OnPageInstructionField;
+  label: string;
+  hint: string;
+  placeholder: string;
+}[] = [
+  {
+    id: "seoTitle",
+    label: "SEO title",
+    hint: "How the title tag should be written for every collection.",
+    placeholder: "e.g. Include the brand, keep under 60 characters…",
+  },
+  {
+    id: "seoDescription",
+    label: "SEO description",
+    hint: "How the meta description should sound.",
+    placeholder: "e.g. Mention shipping, avoid hype, include a CTA…",
+  },
+  {
+    id: "collectionDescription",
+    label: "Collection description",
+    hint: "How the on-page description should be written.",
+    placeholder: "e.g. Conversational, 80–120 words, no medical claims…",
+  },
+  {
+    id: "faq",
+    label: "FAQ",
+    hint: "How questions and answers should be written.",
+    placeholder: "e.g. 4 questions, answer for shoppers not Google…",
+  },
+];
 
 export function StageContentPanel({
   collections,
   contentById,
-  instruction,
+  instructions,
   onInstruction,
   generating,
   ready,
   pushed,
   onStart,
   onPush,
+  onNextStrategy,
+  pushCostUsd,
 }: {
   collections: ProposedCollection[];
   contentById: Record<string, CollectionContent>;
-  instruction: string;
-  onInstruction: (value: string) => void;
+  instructions: OnPageInstructions;
+  onInstruction: (field: OnPageInstructionField, value: string) => void;
   generating: boolean;
   ready: boolean;
   pushed: boolean;
   onStart: () => void;
   onPush: () => void;
+  onNextStrategy: () => void;
+  pushCostUsd?: number;
 }) {
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [openField, setOpenField] = useState<OnPageInstructionField | null>(
+    null
+  );
   const preview = previewId ? contentById[previewId] : undefined;
   const previewCol = collections.find((c) => c.id === previewId);
+  const fieldMeta = FIELD_META.find((f) => f.id === openField);
+  const locked = generating || ready;
+  const pushCost =
+    pushCostUsd ?? collections.length * USD_PER_COLLECTION;
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-3">
       <div className="shrink-0 space-y-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h2 className="text-base font-semibold tracking-tight">Content</h2>
+            <h2 className="text-base font-semibold tracking-tight">On-page</h2>
             <p className="text-[11px] text-muted-foreground">
-              Custom instruction applies to title tag, meta description,
-              collection description, and FAQ.
+              Click the sparkle on a column to add a custom instruction before
+              Start.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -82,7 +137,9 @@ export function StageContentPanel({
                   disabled={pushed}
                   onClick={onPush}
                 >
-                  {pushed ? "Pushed" : "Push"}
+                  {pushed
+                    ? "Pushed"
+                    : `Push · ${formatUsd(pushCost)}`}
                 </Button>
               </>
             ) : (
@@ -102,14 +159,6 @@ export function StageContentPanel({
             )}
           </div>
         </div>
-        <Input
-          value={instruction}
-          onChange={(e) => onInstruction(e.target.value)}
-          placeholder="Custom instruction — tone, brand voice, words to avoid…"
-          className="h-9 text-xs"
-          disabled={generating || ready}
-          aria-label="Custom instruction for SEO fields"
-        />
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/70">
@@ -117,10 +166,36 @@ export function StageContentPanel({
           <TableHeader>
             <TableRow>
               <TableHead className="text-xs">Collection</TableHead>
-              <TableHead className="text-xs">SEO title</TableHead>
-              <TableHead className="text-xs">SEO description</TableHead>
-              <TableHead className="text-xs">Collection description</TableHead>
-              <TableHead className="text-xs">FAQ</TableHead>
+              {FIELD_META.map((field) => {
+                const filled = Boolean(instructions[field.id].trim());
+                return (
+                  <TableHead key={field.id} className="text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setOpenField(field.id)}
+                      title={
+                        filled
+                          ? "Edit custom instruction"
+                          : "Add custom instruction"
+                      }
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-md px-1 py-0.5 -ml-1 text-left transition-colors hover:bg-muted/70",
+                        filled && "text-primary"
+                      )}
+                    >
+                      <span>{field.label}</span>
+                      <Sparkles
+                        className={cn(
+                          "h-3 w-3 shrink-0",
+                          filled
+                            ? "text-primary"
+                            : "text-muted-foreground/60"
+                        )}
+                      />
+                    </button>
+                  </TableHead>
+                );
+              })}
               <TableHead className="text-xs">Links</TableHead>
             </TableRow>
           </TableHeader>
@@ -175,25 +250,80 @@ export function StageContentPanel({
         </Table>
       </div>
 
-      {pushed ? (
-        <p className="flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-400 shrink-0">
-          <Check className="h-3.5 w-3.5" />
-          Collections queued to the storefront. Customize still opens a live
-          preview of FAQ and links.
-        </p>
+      {ready ? (
+        <div className="flex items-center justify-between gap-2 shrink-0">
+          {pushed ? (
+            <p className="flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-400">
+              <Check className="h-3.5 w-3.5" />
+              Collections queued to the storefront. Customize still lets you pick
+              FAQ and links shapes.
+            </p>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              Push queues collections to the storefront. Next opens the content
+              strategy plan.
+            </p>
+          )}
+          <Button
+            size="sm"
+            className="h-8 shrink-0 text-xs"
+            onClick={onNextStrategy}
+          >
+            Next · Content strategy
+          </Button>
+        </div>
       ) : null}
 
+      <Dialog
+        open={Boolean(openField)}
+        onOpenChange={(open) => !open && setOpenField(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          {fieldMeta ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-base">
+                  Custom instruction · {fieldMeta.label}
+                </DialogTitle>
+                <DialogDescription>{fieldMeta.hint}</DialogDescription>
+              </DialogHeader>
+              <textarea
+                value={instructions[fieldMeta.id]}
+                onChange={(e) => onInstruction(fieldMeta.id, e.target.value)}
+                placeholder={fieldMeta.placeholder}
+                disabled={locked}
+                rows={5}
+                className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 w-full resize-none rounded-md border bg-transparent px-3 py-2 text-xs shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <DialogFooter>
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setOpenField(null)}
+                >
+                  Done
+                </Button>
+              </DialogFooter>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
       <Sheet open={Boolean(preview)} onOpenChange={(open) => !open && setPreviewId(null)}>
-        <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
+        <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
           {preview && previewCol ? (
             <>
               <SheetHeader>
                 <SheetTitle>{previewCol.name}</SheetTitle>
                 <SheetDescription>
-                  How the FAQ and links will read on the collection page.
+                  Pick the FAQ and links shapes. Placement is fixed: FAQ above
+                  products, links below.
                 </SheetDescription>
               </SheetHeader>
-              <CollectionPreview content={preview} collection={previewCol} />
+              <OnPageShapePicker
+                collection={previewCol}
+                content={preview}
+              />
             </>
           ) : null}
         </SheetContent>
@@ -232,80 +362,4 @@ function ContentCell({
 
 function Pulse() {
   return <div className="h-3 w-28 animate-pulse rounded bg-muted" />;
-}
-
-function CollectionPreview({
-  content,
-  collection,
-}: {
-  content: CollectionContent;
-  collection: ProposedCollection;
-}) {
-  return (
-    <div className="space-y-5 px-4 pb-6">
-      <div className="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-3">
-        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          Title tag
-        </p>
-        <p className="text-sm font-semibold">{content.seoTitle}</p>
-        <p className="text-xs text-muted-foreground">{content.seoDescription}</p>
-      </div>
-
-      <div className="space-y-2">
-        <h3 className="text-lg font-semibold tracking-tight">{collection.name}</h3>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          {content.collectionDescription}
-        </p>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div
-            key={i}
-            className="aspect-square rounded-lg border border-border/70 bg-muted/40"
-          />
-        ))}
-      </div>
-      <p className="text-[10px] text-muted-foreground">
-        {collection.productCount.toLocaleString("en-US")} products in this
-        collection
-      </p>
-
-      <div className="space-y-2">
-        <h4 className="text-sm font-semibold">FAQ</h4>
-        <ul className="space-y-2">
-          {content.faqs.map((faq) => (
-            <li
-              key={faq.q}
-              className="rounded-lg border border-border/70 px-3 py-2"
-            >
-              <p className="text-xs font-medium">{faq.q}</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                {faq.a}
-              </p>
-            </li>
-          ))}
-        </ul>
-        <p className="text-[10px] text-muted-foreground">
-          Marked up as FAQPage alongside CollectionPage + ItemList.
-        </p>
-      </div>
-
-      <div className="space-y-1.5">
-        <h4 className="text-sm font-semibold">Links</h4>
-        <ul className="flex flex-wrap gap-1.5">
-          {content.links.map((link) => (
-            <li
-              key={link.href}
-              className={cn(
-                "rounded-full border border-border/70 px-2.5 py-0.5 text-[11px] text-muted-foreground"
-              )}
-            >
-              {link.label}
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
 }
