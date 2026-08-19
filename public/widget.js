@@ -532,6 +532,24 @@
   }
 
   // Render Internal Links inside container with customized styles
+  // A link pointing at the page we are already on is noise, so drop it.
+  function dropSelfLinks(links, currentHandle) {
+    if (!links || !currentHandle) return links || [];
+    var out = [];
+    for (var i = 0; i < links.length; i++) {
+      var href = String((links[i] && links[i].href) || "");
+      var handle = href
+        .replace(/[?#].*$/, "")
+        .replace(/\/+$/, "")
+        .split("/")
+        .pop();
+      if ((handle || "").toLowerCase() !== currentHandle.toLowerCase()) {
+        out.push(links[i]);
+      }
+    }
+    return out;
+  }
+
   function renderLinks(container, links, customStyle) {
     if (!links || links.length === 0) {
       container.innerHTML = "";
@@ -726,7 +744,11 @@
             if (kind === "faq") {
               renderFaq(targetEl, data.faqs || [], faqStyle);
             } else if (kind === "links") {
-              renderLinks(targetEl, data.links || [], linksStyle);
+              renderLinks(
+                targetEl,
+                dropSelfLinks(data.links || [], collectionHandle),
+                linksStyle
+              );
             }
           });
         })(el);

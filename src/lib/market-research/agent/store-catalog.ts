@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { IntegrationRecord } from "@/lib/sync/core/types";
-import { fetchShopifyCollections } from "@/lib/sync/providers/shopify/collections";
+import { fetchAllShopifyCollections } from "@/lib/sync/providers/shopify/collections";
 import { shopifyGraphQL } from "@/lib/sync/providers/shopify/graphql-client";
 import { fetchWooCommerceCategories } from "@/lib/sync/providers/woocommerce/categories";
 import { createWooClient } from "@/lib/sync/providers/woocommerce/client";
@@ -14,6 +14,12 @@ export type StoreCollectionItem = {
   description: string;
   productCount: number;
   plpPath: string;
+  /**
+   * False when the collection exists in the admin but is not on the storefront
+   * sales channel, in which case its URL answers 404 and it must never be used
+   * as an internal link target.
+   */
+  published?: boolean;
 };
 
 export type StoreCatalogResult = {
@@ -69,17 +75,15 @@ export async function fetchStoreCatalog(
 
   try {
     if (provider === "shopify") {
-      const sheet = await fetchShopifyCollections({
-        integration,
-        limit: 100,
-      });
-      const collections: StoreCollectionItem[] = sheet.rows.map((row) => {
+      const shopifyRows = await fetchAllShopifyCollections({ integration });
+      const collections: StoreCollectionItem[] = shopifyRows.map((row) => {
         const id = String(row.id ?? "");
         const name = String(row.title ?? "");
         const handle = String(row.handle ?? "");
         const description = stripHtml(String(row.description ?? ""));
         const productCount = Number(row.products_count) || 0;
         const plpPath = handle ? `/collections/${handle}` : "";
+        const publishedLabel = String(row.published ?? "");
         return {
           id: id || handle || name,
           name: name || handle,
@@ -87,6 +91,8 @@ export async function fetchStoreCatalog(
           description,
           productCount,
           plpPath,
+          published:
+            publishedLabel.length > 0 && publishedLabel !== "Not published",
         };
       });
 
@@ -102,7 +108,7 @@ export async function fetchStoreCatalog(
     } else if (provider === "woocommerce" || provider === "wordpress") {
       const sheet = await fetchWooCommerceCategories({
         integration,
-        limit: 100,
+        limit: 5000,
       });
       const collections: StoreCollectionItem[] = sheet.rows.map((row) => {
         const id = String(row.id ?? "");
@@ -118,6 +124,7 @@ export async function fetchStoreCatalog(
           description,
           productCount,
           plpPath,
+          published: true,
         };
       });
 

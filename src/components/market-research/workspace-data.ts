@@ -132,6 +132,9 @@ export type ProposedCollection = {
   matchedProductIds?: string[];
   productMatches?: CollectionProductMatch[];
   candidateMatches?: CollectionProductMatch[];
+  /** Real handle/slug assigned by the store after push. Source of truth for widget matching. */
+  storeHandle?: string;
+  storeCollectionId?: string;
 };
 
 export type CollectionFaq = { q: string; a: string };

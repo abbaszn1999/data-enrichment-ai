@@ -39,7 +39,6 @@ export function DeepWorkspace({
   analyzeLoading,
   analyzed,
   onNextCollections,
-  collectionsGenerated = false,
   onCancelExtract,
   keywordsCsvHref,
   collections,
@@ -89,8 +88,7 @@ export function DeepWorkspace({
   onAnalyze: () => void;
   analyzeLoading: boolean;
   analyzed: boolean;
-  onNextCollections: () => void;
-  collectionsGenerated?: boolean;
+  onNextCollections: (filteredCategoryKeywords?: ExtractedKeyword[]) => void;
   onCancelExtract?: () => void;
   keywordsCsvHref?: string;
   collections: ProposedCollection[];
@@ -155,7 +153,7 @@ export function DeepWorkspace({
             analyzeLoading={analyzeLoading}
             analyzed={analyzed}
             onNextCollections={onNextCollections}
-            collectionsGenerated={collectionsGenerated}
+            clustering={clustering}
             onCancelExtract={onCancelExtract}
             csvHref={keywordsCsvHref}
           />

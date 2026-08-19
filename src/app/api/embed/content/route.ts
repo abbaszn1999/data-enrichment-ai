@@ -128,7 +128,6 @@ export async function GET(request: NextRequest) {
       .maybeSingle();
 
     const prefix = (wsRow?.collection_prefix ?? "AI").trim() || "AI";
-    const prefixSlug = slugify(prefix);
     const widgetSettings = wsRow?.widget_settings;
 
     // 3. Find recent active projects in this workspace
@@ -147,7 +146,12 @@ export async function GET(request: NextRequest) {
     }
 
     let matchedContent: CollectionContent | null = null;
-    let fallbackContent: CollectionContent | null = null;
+
+    // A handle is required. Without it we cannot know which collection page the
+    // widget is running on, and guessing would leak content onto unrelated pages.
+    if (!cleanHandle || cleanHandle === "current") {
+      return NextResponse.json({ faqs: [], links: [] }, { headers: CORS_HEADERS });
+    }
 
     for (const proj of projects) {
       try {
@@ -170,65 +174,21 @@ export async function GET(request: NextRequest) {
         const contentMap =
           contentSlice && typeof contentSlice === "object" ? contentSlice : {};
 
-        const contentEntries = Object.entries(contentMap);
-        if (contentEntries.length === 0) continue;
+        if (Object.keys(contentMap).length === 0) continue;
 
-        // Keep first available content item as fallback in case collection handle wasn't passed or is generic
-        if (!fallbackContent && contentEntries.length > 0) {
-          fallbackContent = contentEntries[0][1];
-        }
-
-        // If no handle provided, or handle is "current" / template, use the first content item from newest project
-        if (!cleanHandle || cleanHandle === "current") {
-          matchedContent = contentEntries[0][1];
-          break;
-        }
-
-        // 1. Try matching with collection metadata in collections slice
+        // Exact-match only. `storeHandle` is the handle the store itself assigned
+        // at push time (including any "-1" dedupe suffix), so it is authoritative.
+        // The prefixed-slug comparison is a fallback for projects pushed before
+        // handles were persisted; it still requires a full exact match.
         for (const col of collections) {
-          const colSlug = slugify(col.name);
-          const headSlug = slugify(col.headKeyword || "");
-          const idSlug = slugify(col.id.replace(/^col-/, ""));
-          const prefixedSlug = slugify(`${prefix} ${col.name}`);
-          const handleWithoutPrefix = cleanHandle.replace(new RegExp(`^${prefixSlug}-?`), "");
+          const candidates = new Set<string>();
+          if (col.storeHandle) candidates.add(slugify(col.storeHandle));
+          candidates.add(slugify(`${prefix} ${col.name}`));
+          candidates.add(slugify(`${prefix} - ${col.name}`));
 
-          const isMatch =
-            cleanHandle === prefixedSlug ||
-            cleanHandle === colSlug ||
-            cleanHandle === headSlug ||
-            cleanHandle === idSlug ||
-            handleWithoutPrefix === colSlug ||
-            handleWithoutPrefix === headSlug ||
-            (colSlug && cleanHandle.includes(colSlug)) ||
-            (colSlug && colSlug.includes(cleanHandle)) ||
-            (headSlug && headSlug.includes(handleWithoutPrefix)) ||
-            (handleWithoutPrefix && headSlug.includes(handleWithoutPrefix));
-
-          if (isMatch && contentMap[col.id]) {
+          if (candidates.has(cleanHandle) && contentMap[col.id]) {
             matchedContent = contentMap[col.id];
             break;
-          }
-        }
-
-        // 2. Direct matching on content slice keys and fields
-        if (!matchedContent) {
-          for (const [colId, content] of contentEntries) {
-            const keySlug = slugify(colId.replace(/^col-/, ""));
-            const titleSlug = content.seoTitle ? slugify(content.seoTitle) : "";
-            const handleWithoutPrefix = cleanHandle.replace(new RegExp(`^${prefixSlug}-?`), "");
-
-            const isMatch =
-              cleanHandle === keySlug ||
-              handleWithoutPrefix === keySlug ||
-              cleanHandle.includes(keySlug) ||
-              keySlug.includes(cleanHandle) ||
-              (titleSlug && titleSlug.includes(handleWithoutPrefix)) ||
-              (titleSlug && handleWithoutPrefix.includes(titleSlug));
-
-            if (isMatch) {
-              matchedContent = content;
-              break;
-            }
           }
         }
 
@@ -236,11 +196,6 @@ export async function GET(request: NextRequest) {
       } catch (e) {
         console.error(`[embed/content] Error loading slices for project ${proj.id}:`, e);
       }
-    }
-
-    // If still no direct match and handle was not specific, use fallback
-    if (!matchedContent && (!cleanHandle || cleanHandle === "current")) {
-      matchedContent = fallbackContent;
     }
 
     if (!matchedContent) {

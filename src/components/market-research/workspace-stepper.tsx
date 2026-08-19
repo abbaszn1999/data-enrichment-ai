@@ -19,14 +19,18 @@ export function WorkspaceStepper({
   onChange: (tab: FlowTab) => void;
 }) {
   const openedIndex = tabIndex(opened);
+  const visibleTabs = FLOW_TABS.filter((tab) => {
+    if (!isWorkspaceTab(tab.id)) return true;
+    return tabIndex(tab.id) <= openedIndex;
+  });
+
   return (
     <div
       role="tablist"
       aria-label="Market research stages"
       className="flex items-center gap-1"
     >
-      {FLOW_TABS.map((tab) => {
-        const locked = isWorkspaceTab(tab.id) && tabIndex(tab.id) > openedIndex;
+      {visibleTabs.map((tab) => {
         const active = tab.id === current;
         return (
           <button
@@ -34,12 +38,9 @@ export function WorkspaceStepper({
             type="button"
             role="tab"
             aria-selected={active}
-            disabled={locked}
-            onClick={() => {
-              if (!locked) onChange(tab.id);
-            }}
+            onClick={() => onChange(tab.id)}
             className={cn(
-              "shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40",
+              "shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
               active
                 ? "bg-primary/10 text-primary"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground"

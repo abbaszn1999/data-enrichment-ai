@@ -51,7 +51,7 @@ export function StageExtractPanel({
   analyzeLoading,
   analyzed,
   onNextCollections,
-  collectionsGenerated = false,
+  clustering = false,
   onCancelExtract,
   csvHref,
 }: {
@@ -66,7 +66,7 @@ export function StageExtractPanel({
   analyzeLoading: boolean;
   analyzed: boolean;
   onNextCollections: (filteredCategoryKeywords: ExtractedKeyword[]) => void;
-  collectionsGenerated?: boolean;
+  clustering?: boolean;
   onCancelExtract?: () => void;
   /** Export of every archived row, not just the on-screen sample. */
   csvHref?: string;
@@ -410,25 +410,18 @@ export function StageExtractPanel({
         {analyzed ? (
           <>
             <p className="text-[11px] text-muted-foreground">
-              {collectionsGenerated
-                ? "Collections have already been clustered for this project. Navigate to Stage 5 from the top stepper to view and manage collections."
-                : `Informational queries and exclusions stay out. Next clusters the ${filteredCategoryKeywords.length} active filtered category keywords into collection candidates.`}
+              Informational queries and exclusions stay out. Next clusters the {filteredCategoryKeywords.length} active filtered category keywords into collection candidates.
             </p>
             <Button
               size="sm"
-              className={cn(
-                "h-8 text-xs font-medium gap-1.5 transition-all",
-                collectionsGenerated
-                  ? "bg-muted text-muted-foreground cursor-not-allowed border border-border/70 hover:bg-muted"
-                  : ""
-              )}
+              className="h-8 text-xs font-medium gap-1.5 transition-all"
               onClick={() => onNextCollections(filteredCategoryKeywords)}
-              disabled={filteredCategoryKeywords.length === 0 || collectionsGenerated}
+              disabled={filteredCategoryKeywords.length === 0 || clustering}
             >
-              {collectionsGenerated ? (
+              {clustering ? (
                 <>
-                  <Lock className="h-3 w-3 opacity-70" />
-                  <span>Collections Generated ({filteredCategoryKeywords.length})</span>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Clustering Collections…</span>
                 </>
               ) : (
                 <span>Next · Collections ({filteredCategoryKeywords.length})</span>

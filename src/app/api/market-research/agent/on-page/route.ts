@@ -4,7 +4,10 @@ import {
   jsonError,
   requireMrRead,
 } from "@/lib/market-research/api-schema";
-import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
+import {
+  fetchStoreCatalog,
+  type StoreCollectionItem,
+} from "@/lib/market-research/agent/store-catalog";
 import { runStage6OnPageGeneration } from "@/lib/market-research/agent/stage6-on-page-generator";
 import { saveProjectSliceAdmin } from "@/lib/market-research/storage-admin";
 
@@ -28,14 +31,26 @@ export async function POST(request: NextRequest) {
 
   try {
     let storeName = "Ecommerce Store";
-    let storeCollections: any[] = [];
+    let storeCollections: StoreCollectionItem[] = [];
+    let provider: string | undefined;
     try {
       const catalog = await fetchStoreCatalog(auth.admin, parsed.data.workspaceId);
       storeName = catalog.storeName || storeName;
       storeCollections = catalog.collections || [];
+      provider = catalog.provider;
     } catch {
       // Proceed even if catalog fetch fails
     }
+
+    // Internal links must match the handles the push step actually created, and
+    // those carry the workspace naming prefix.
+    const { data: workspaceRow } = await auth.admin
+      .from("workspaces")
+      .select("collection_prefix")
+      .eq("id", parsed.data.workspaceId)
+      .maybeSingle();
+    const collectionPrefix =
+      (workspaceRow?.collection_prefix ?? "AI").trim() || "AI";
 
     const result = await runStage6OnPageGeneration({
       storeName,
@@ -43,6 +58,8 @@ export async function POST(request: NextRequest) {
       collections: parsed.data.collections,
       allStoreCollections: storeCollections,
       customInstructions: parsed.data.customInstructions,
+      collectionPrefix,
+      provider,
     });
 
     if (parsed.data.projectId) {

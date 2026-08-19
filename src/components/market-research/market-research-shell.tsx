@@ -3196,11 +3196,6 @@ export function MarketResearchShell() {
                     analyzeLoading={analyzeLoading}
                     analyzed={analyzed}
                     onNextCollections={handleNextCollections}
-                    collectionsGenerated={Boolean(
-                      proposedCollections.length > 0 ||
-                        (activeProject &&
-                          (openedMaxByProject[activeProject.id] ?? 1) >= 5)
-                    )}
                     onCancelExtract={handleCancelExtract}
                     keywordsCsvHref={
                       workspaceId && committedForActive

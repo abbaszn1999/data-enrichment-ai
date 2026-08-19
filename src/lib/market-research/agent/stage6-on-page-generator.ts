@@ -8,6 +8,11 @@ import type {
 import { normalizeOnPageInstructions } from "@/components/market-research/workspace-data";
 import type { StoreCollectionItem } from "./store-catalog";
 import { runGeminiMarketResearch } from "./gemini-runner";
+import {
+  buildInternalLinkGraph,
+  stripCollectionPrefix,
+  type InternalLinkGraph,
+} from "./internal-links";
 
 export interface Stage6OnPageInput {
   storeName?: string;
@@ -15,6 +20,11 @@ export interface Stage6OnPageInput {
   collections: ProposedCollection[];
   allStoreCollections?: StoreCollectionItem[];
   customInstructions?: Partial<OnPageInstructions>;
+  /** Prefix the push step prepends to store collection titles, e.g. "AI". */
+  collectionPrefix?: string;
+  provider?: string;
+  /** Precomputed link graph, so batches share one embedding + judgement pass. */
+  internalLinks?: InternalLinkGraph;
 }
 
 export interface Stage6OnPageResult {
@@ -35,111 +45,22 @@ interface GeminiOnPageResponse {
   contents: GeminiCollectionContentItem[];
 }
 
-const STOP_WORDS = new Set([
-  "the", "and", "for", "with", "all", "our", "you", "your", "are", "from",
-  "that", "this", "these", "those", "have", "has", "more", "best", "top",
-  "shop", "store", "buy", "online", "get", "new", "collections", "collection",
-]);
-
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length > 1 && !STOP_WORDS.has(w));
-}
-
-function calculateCosineSimilarity(textA: string, textB: string): number {
-  const tokensA = tokenize(textA);
-  const tokensB = tokenize(textB);
-  if (tokensA.length === 0 || tokensB.length === 0) return 0;
-
-  const freqA = new Map<string, number>();
-  for (const t of tokensA) freqA.set(t, (freqA.get(t) ?? 0) + 1);
-
-  const freqB = new Map<string, number>();
-  for (const t of tokensB) freqB.set(t, (freqB.get(t) ?? 0) + 1);
-
-  let magASq = 0;
-  for (const f of freqA.values()) magASq += f * f;
-  const magA = Math.sqrt(magASq);
-
-  let magBSq = 0;
-  for (const f of freqB.values()) magBSq += f * f;
-  const magB = Math.sqrt(magBSq);
-
-  if (magA === 0 || magB === 0) return 0;
-
-  let dot = 0;
-  for (const [token, fA] of freqA) {
-    const fB = freqB.get(token);
-    if (fB) dot += fA * fB;
-  }
-
-  return dot / (magA * magB);
-}
-
 /**
- * Computes cosine similarity recommendations between a source collection and
- * all candidate collections (both newly proposed and existing store collections).
+ * Link targets that are guaranteed to resolve on the storefront. Used only when
+ * the engine found nothing verifiable to link to — an invented "guide" URL would
+ * be worse than a generic one that actually loads.
  */
-export function computeInternalLinks(
-  sourceCol: ProposedCollection,
-  allCandidates: Array<{
-    id: string;
-    name: string;
-    handle: string;
-    headKeyword?: string;
-    parentNiche?: string;
-    description?: string;
-    plpPath?: string;
-  }>,
-  linksPerPage = 4,
-  minSimilarity = 0.05
-): CollectionLink[] {
-  const sourceText = `${sourceCol.name} ${sourceCol.headKeyword} ${sourceCol.parentNiche || ""}`;
-  const scored: Array<{ label: string; href: string; score: number }> = [];
-
-  for (const cand of allCandidates) {
-    // Avoid self-link
-    if (
-      cand.id === sourceCol.id ||
-      cand.name.toLowerCase() === sourceCol.name.toLowerCase()
-    ) {
-      continue;
-    }
-
-    const candText = `${cand.name} ${cand.headKeyword || ""} ${cand.parentNiche || ""} ${cand.description || ""}`;
-    const score = calculateCosineSimilarity(sourceText, candText);
-
-    if (score >= minSimilarity) {
-      const href = cand.plpPath
-        ? cand.plpPath
-        : `/collections/${cand.handle || cand.id.replace(/^col-/, "")}`;
-
-      scored.push({
-        label: cand.name,
-        href,
-        score,
-      });
-    }
+function safeStoreLinks(provider?: string): CollectionLink[] {
+  const isWoo = provider === "woocommerce" || provider === "wordpress";
+  if (isWoo) {
+    return [
+      { label: "Browse all products", href: "/shop" },
+      { label: "Shop by category", href: "/shop" },
+    ];
   }
-
-  // Sort descending by score and pick top K
-  scored.sort((a, b) => b.score - a.score);
-
-  if (scored.length > 0) {
-    return scored.slice(0, linksPerPage).map(({ label, href }) => ({
-      label,
-      href,
-    }));
-  }
-
-  // Fallback if no candidate meets threshold
-  const slug = sourceCol.id.replace(/^col-/, "");
   return [
-    { label: sourceCol.parentNiche || "All Collections", href: "/collections" },
-    { label: "Buying Guide & Reviews", href: `/pages/${slug}-guide` },
+    { label: "Browse all collections", href: "/collections" },
+    { label: "Shop all products", href: "/collections/all" },
   ];
 }
 
@@ -153,27 +74,11 @@ export function runHeuristicStage6OnPage(
   const clip = (val: string) =>
     val.trim() ? ` (Follows custom instruction: “${val.trim().slice(0, 80)}”)` : "";
 
-  const allCandidates = [
-    ...input.collections.map((c) => ({
-      id: c.id,
-      name: c.name,
-      handle: c.id.replace(/^col-/, ""),
-      headKeyword: c.headKeyword,
-      parentNiche: c.parentNiche,
-    })),
-    ...(input.allStoreCollections || []).map((s) => ({
-      id: s.id,
-      name: s.name,
-      handle: s.handle,
-      description: s.description,
-      plpPath: s.plpPath,
-    })),
-  ];
-
   const contentById: Record<string, CollectionContent> = {};
+  const fallbackLinks = safeStoreLinks(input.provider);
 
   for (const col of input.collections) {
-    const name = col.name;
+    const name = stripCollectionPrefix(col.name, input.collectionPrefix) || col.name;
     const store = input.storeName || "Store";
     const head = col.headKeyword;
 
@@ -206,7 +111,7 @@ export function runHeuristicStage6OnPage(
       },
     ];
 
-    const links = computeInternalLinks(col, allCandidates, 3);
+    const links = input.internalLinks?.[col.id] ?? fallbackLinks;
 
     contentById[col.id] = {
       collectionId: col.id,
@@ -229,18 +134,10 @@ export function runHeuristicStage6OnPage(
  */
 async function generateBatchStage6(
   input: Stage6OnPageInput,
-  batchCollections: ProposedCollection[],
-  allCandidates: Array<{
-    id: string;
-    name: string;
-    handle: string;
-    headKeyword?: string;
-    parentNiche?: string;
-    description?: string;
-    plpPath?: string;
-  }>
+  batchCollections: ProposedCollection[]
 ): Promise<Record<string, CollectionContent>> {
   const instructions = normalizeOnPageInstructions(input.customInstructions);
+  const fallbackLinks = safeStoreLinks(input.provider);
 
   const customInstructionsContext = {
     seoTitle: instructions.seoTitle.trim() || undefined,
@@ -311,10 +208,6 @@ Output strictly valid JSON with this exact schema:
   if (parsed && Array.isArray(parsed.contents)) {
     for (const item of parsed.contents) {
       if (!item.collectionId) continue;
-      const sourceCol = batchCollections.find((c) => c.id === item.collectionId);
-      const computedLinks = sourceCol
-        ? computeInternalLinks(sourceCol, allCandidates, 4)
-        : [];
 
       batchContent[item.collectionId] = {
         collectionId: item.collectionId,
@@ -322,7 +215,7 @@ Output strictly valid JSON with this exact schema:
         seoDescription: item.seoDescription || "",
         collectionDescription: item.collectionDescription || "",
         faqs: Array.isArray(item.faqs) ? item.faqs : [],
-        links: computedLinks,
+        links: input.internalLinks?.[item.collectionId] ?? fallbackLinks,
       };
     }
   }
@@ -352,26 +245,31 @@ export async function runStage6OnPageGeneration(
   chunkSize = 10
 ): Promise<Stage6OnPageResult> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey || input.collections.length === 0) {
-    return runHeuristicStage6OnPage(input);
+
+  // The link graph is built once for the whole store so every batch shares the
+  // same embeddings, in-degree budget and orphan pass. Doing it per batch would
+  // let each chunk pile links onto the same few pages.
+  let internalLinks: InternalLinkGraph = input.internalLinks ?? {};
+  if (!input.internalLinks && input.collections.length > 0) {
+    try {
+      internalLinks = await buildInternalLinkGraph({
+        proposed: input.collections,
+        storeCollections: input.allStoreCollections,
+        collectionPrefix: input.collectionPrefix,
+        provider: input.provider,
+        disableAi: !apiKey,
+      });
+    } catch (err) {
+      console.error("[runStage6OnPageGeneration] Internal link graph failed:", err);
+      internalLinks = {};
+    }
   }
 
-  const allCandidates = [
-    ...input.collections.map((c) => ({
-      id: c.id,
-      name: c.name,
-      handle: c.id.replace(/^col-/, ""),
-      headKeyword: c.headKeyword,
-      parentNiche: c.parentNiche,
-    })),
-    ...(input.allStoreCollections || []).map((s) => ({
-      id: s.id,
-      name: s.name,
-      handle: s.handle,
-      description: s.description,
-      plpPath: s.plpPath,
-    })),
-  ];
+  const enrichedInput: Stage6OnPageInput = { ...input, internalLinks };
+
+  if (!apiKey || input.collections.length === 0) {
+    return runHeuristicStage6OnPage(enrichedInput);
+  }
 
   // Split collections into chunks of up to 10
   const chunks: ProposedCollection[][] = [];
@@ -384,13 +282,13 @@ export async function runStage6OnPageGeneration(
 
   for (const chunk of chunks) {
     try {
-      const batchResult = await generateBatchStage6(input, chunk, allCandidates);
+      const batchResult = await generateBatchStage6(enrichedInput, chunk);
       Object.assign(finalContentById, batchResult);
       anyAiGenerated = true;
     } catch (err) {
       console.error("[runStage6OnPageGeneration] Batch error, falling back to heuristic for chunk:", err);
       const fallback = runHeuristicStage6OnPage({
-        ...input,
+        ...enrichedInput,
         collections: chunk,
       });
       Object.assign(finalContentById, fallback.contentById);

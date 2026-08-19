@@ -7,7 +7,10 @@ import {
 import { collectionPushCostUsd } from "@/lib/market-research/cost";
 import { getMrProject } from "@/lib/market-research/server-persist";
 import { chargeMrWallet } from "@/lib/market-research/wallet-ops";
-import { loadProjectSliceAdmin } from "@/lib/market-research/storage-admin";
+import {
+  loadProjectSliceAdmin,
+  saveProjectSliceAdmin,
+} from "@/lib/market-research/storage-admin";
 import { createShopifyCollection } from "@/lib/sync/providers/shopify/collections";
 import { createWooCommerceCategory } from "@/lib/sync/providers/woocommerce/categories";
 import type { IntegrationRecord } from "@/lib/sync/core/types";
@@ -184,6 +187,7 @@ export async function POST(request: NextRequest) {
             id: colId,
             name: colName,
             storeTitle,
+            handle: res.slug ? String(res.slug) : undefined,
             storeCollectionId: String(res.id),
             success: true,
           });
@@ -199,6 +203,39 @@ export async function POST(request: NextRequest) {
           });
         }
       }
+    }
+  }
+
+  // Persist the real store handles back into the collections slice. The widget
+  // embed API matches on these exact handles, so without them it cannot tell
+  // an AI collection page apart from a pre-existing store collection page.
+  const handleUpdates = createdStoreResults.filter(
+    (r) => r.success && (r.handle || r.storeCollectionId)
+  );
+  if (handleUpdates.length > 0 && collections.length > 0) {
+    const byId = new Map(handleUpdates.map((r) => [r.id, r]));
+    const nextCollections = collections.map((col) => {
+      const update = byId.get(col.id);
+      if (!update) return col;
+      return {
+        ...col,
+        ...(update.handle ? { storeHandle: update.handle } : {}),
+        ...(update.storeCollectionId
+          ? { storeCollectionId: update.storeCollectionId }
+          : {}),
+      };
+    });
+
+    try {
+      await saveProjectSliceAdmin(
+        auth.admin,
+        parsed.data.workspaceId,
+        parsed.data.projectId,
+        "collections",
+        nextCollections
+      );
+    } catch (err) {
+      console.error("[push] Failed to persist store handles:", err);
     }
   }
 

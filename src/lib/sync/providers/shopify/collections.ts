@@ -307,6 +307,63 @@ export async function fetchShopifyCollections(params: {
   };
 }
 
+/**
+ * Fetch every collection in the store by walking the full cursor chain.
+ *
+ * `fetchShopifyCollections` returns a single page, which silently truncates
+ * large catalogs. Anything that reasons about the store as a whole (internal
+ * link graph, duplicate detection) needs the complete set or its decisions are
+ * made against an arbitrary slice.
+ */
+export async function fetchAllShopifyCollections(params: {
+  integration: IntegrationRecord;
+  query?: string;
+  /** Safety valve so a pathological catalog can't spin forever. */
+  maxCollections?: number;
+  pageSize?: number;
+}): Promise<SyncSheetRow[]> {
+  const pageSize = Math.min(Math.max(params.pageSize ?? 250, 1), 250);
+  const maxCollections = params.maxCollections ?? 5000;
+
+  type CollectionsPageData = {
+    collections: {
+      edges: Array<{ cursor: string; node: Record<string, unknown> }>;
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    };
+  };
+
+  const rows: SyncSheetRow[] = [];
+  let after: string | null = null;
+
+  while (rows.length < maxCollections) {
+    const res: Awaited<ReturnType<typeof shopifyGraphQL<CollectionsPageData>>> =
+      await shopifyGraphQL<CollectionsPageData>({
+      integration: params.integration,
+      query: COLLECTIONS_PAGE_QUERY,
+      variables: {
+        first: pageSize,
+        after,
+        query: params.query ?? null,
+      },
+      options: { estimatedCost: 2 + pageSize, tag: "collectionsPageAll" },
+    });
+    if (res.errors.length > 0) {
+      throw new Error(`collections query: ${res.errors[0].message}`);
+    }
+
+    const page = res.data?.collections;
+    const edges = page?.edges ?? [];
+    for (const edge of edges) {
+      rows.push(collectionNodeToRow(edge.node));
+    }
+
+    if (!page?.pageInfo?.hasNextPage || !page.pageInfo.endCursor) break;
+    after = page.pageInfo.endCursor;
+  }
+
+  return rows;
+}
+
 /** Resolve a collection by exact/partial title to its GID. Returns first match. */
 export async function resolveCollectionByName(params: {
   integration: IntegrationRecord;
