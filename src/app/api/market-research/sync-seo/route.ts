@@ -11,6 +11,7 @@ import {
   resolveCollectionByName,
   applyShopifyCollectionUpdates,
   createShopifyCollection,
+  publishCollectionToOnlineStore,
 } from "@/lib/sync/providers/shopify/collections";
 import {
   fetchWooCommerceCategories,
@@ -121,6 +122,13 @@ export async function POST(request: NextRequest) {
           });
 
           if (resolved?.id) {
+            // Collections pushed before publishing was wired up are invisible on
+            // the storefront, so repair them on every sync. The call is idempotent.
+            await publishCollectionToOnlineStore({
+              integration,
+              collectionId: resolved.id,
+            });
+
             const updateRes = await applyShopifyCollectionUpdates({
               integration,
               updates: [

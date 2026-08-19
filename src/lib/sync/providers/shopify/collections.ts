@@ -74,6 +74,26 @@ const COLLECTION_DELETE = /* GraphQL */ `
   }
 `;
 
+// Collections created through the Admin API are not attached to any sales
+// channel, so their storefront URL returns 404 until they are published to the
+// Online Store publication.
+//   docs: https://shopify.dev/docs/api/admin-graphql/latest/mutations/publishablePublish
+const PUBLICATIONS_QUERY = /* GraphQL */ `
+  query Publications {
+    publications(first: 25) {
+      edges { node { id name } }
+    }
+  }
+`;
+
+const PUBLISHABLE_PUBLISH = /* GraphQL */ `
+  mutation PublishablePublish($id: ID!, $input: [PublicationInput!]!) {
+    publishablePublish(id: $id, input: $input) {
+      userErrors { field message }
+    }
+  }
+`;
+
 const COLLECTION_ADD_PRODUCTS = /* GraphQL */ `
   mutation CollectionAddProducts($id: ID!, $productIds: [ID!]!) {
     collectionAddProducts(id: $id, productIds: $productIds) {
@@ -133,6 +153,83 @@ export type CreateCollectionInput = {
 };
 
 // ─── Functions ────────────────────────────────────────────────────────────────
+
+// Publication ids are stable per store, so resolving them once per process
+// avoids an extra round-trip on every collection we create.
+const onlineStorePublicationCache = new Map<string, string | null>();
+
+async function resolveOnlineStorePublicationId(
+  integration: IntegrationRecord
+): Promise<string | null> {
+  const cacheKey = String(integration.base_url ?? integration.integration_name ?? "default");
+  const cached = onlineStorePublicationCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let publicationId: string | null = null;
+  try {
+    const res = await shopifyGraphQL<{
+      publications: { edges: Array<{ node: { id: string; name: string } }> };
+    }>({
+      integration,
+      query: PUBLICATIONS_QUERY,
+      variables: {},
+      options: { estimatedCost: 5, tag: "publications" },
+    });
+    const nodes = (res.data?.publications?.edges ?? []).map((e) => e.node);
+    publicationId =
+      nodes.find((n) => (n.name ?? "").toLowerCase() === "online store")?.id ?? null;
+  } catch {
+    // Missing read_publications scope — caller falls back to skipping publish.
+    publicationId = null;
+  }
+
+  onlineStorePublicationCache.set(cacheKey, publicationId);
+  return publicationId;
+}
+
+/**
+ * Attach a collection to the Online Store sales channel so its storefront URL
+ * resolves. Never throws: an unpublished collection is still a usable result,
+ * and stores whose token lacks `write_publications` should not fail the push.
+ */
+export async function publishCollectionToOnlineStore(params: {
+  integration: IntegrationRecord;
+  collectionId: string;
+}): Promise<{ published: boolean; reason?: string }> {
+  const publicationId = await resolveOnlineStorePublicationId(params.integration);
+  if (!publicationId) {
+    return { published: false, reason: "Online Store publication not available" };
+  }
+
+  try {
+    const res = await shopifyGraphQL<{
+      publishablePublish: {
+        userErrors: Array<{ field: string[] | null; message: string }>;
+      };
+    }>({
+      integration: params.integration,
+      query: PUBLISHABLE_PUBLISH,
+      variables: {
+        id: params.collectionId,
+        input: [{ publicationId }],
+      },
+      options: { estimatedCost: 10, tag: "publishablePublish" },
+    });
+    if (res.errors.length > 0) {
+      return { published: false, reason: res.errors[0].message };
+    }
+    const userErrors = res.data?.publishablePublish?.userErrors ?? [];
+    if (userErrors.length > 0) {
+      return { published: false, reason: userErrors[0].message };
+    }
+    return { published: true };
+  } catch (error) {
+    return {
+      published: false,
+      reason: error instanceof Error ? error.message : "publishablePublish failed",
+    };
+  }
+}
 
 function collectionNodeToRow(node: Record<string, unknown>): SyncSheetRow {
   const ruleSet = node.ruleSet as { appliedDisjunctively?: boolean; rules?: unknown[] } | null;
@@ -303,6 +400,17 @@ export async function createShopifyCollection(params: {
   const c = payload.collection;
   if (!c?.id) throw new Error("collectionCreate returned no collection id");
   const createdId = String(c.id);
+
+  // Without this the collection exists in the admin but its storefront URL 404s.
+  const publishResult = await publishCollectionToOnlineStore({
+    integration: params.integration,
+    collectionId: createdId,
+  });
+  if (!publishResult.published) {
+    console.warn(
+      `[shopify] collection ${createdId} created but not published to Online Store: ${publishResult.reason}`
+    );
+  }
 
   // Second step: if the caller requested products in a manual collection,
   // add them now via the dedicated mutation.

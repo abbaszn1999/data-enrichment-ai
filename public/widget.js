@@ -42,6 +42,33 @@
 
   var API_BASE = getApiBaseUrl();
 
+  // Debug mode: append ?dea_debug=1 to the page URL to see a diagnostic panel
+  var DEBUG =
+    (window.location.search || "").indexOf("dea_debug=1") !== -1 ||
+    window.__dea_debug === true;
+
+  function debugLog() {
+    if (!DEBUG) return;
+    var args = ["[Autommerce Widget]"].concat(Array.prototype.slice.call(arguments));
+    console.log.apply(console, args);
+  }
+
+  function renderDebugPanel(info) {
+    if (!DEBUG) return;
+    var panel = document.getElementById("dea-debug-panel");
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.id = "dea-debug-panel";
+      panel.style.cssText =
+        "position:fixed;bottom:0;left:0;right:0;z-index:2147483647;max-height:45vh;overflow:auto;" +
+        "background:#0b1120;color:#a5f3fc;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;" +
+        "padding:12px 16px;border-top:2px solid #22d3ee;white-space:pre-wrap;";
+      document.body.appendChild(panel);
+    }
+    panel.textContent =
+      "Autommerce widget diagnostics\n" + JSON.stringify(info, null, 2);
+  }
+
   // Resolve Store Domain (Shopify store domain or current hostname)
   function getStoreDomain() {
     try {
@@ -341,11 +368,32 @@
 
         if (!collectionHandle) return;
 
+        debugLog("resolved", { kind: kind, domain: domain, handle: collectionHandle, apiBase: API_BASE });
+
         fetchCollectionContent(domain, collectionHandle, function (err, data) {
           if (err || !data) {
             console.warn("[Autommerce Widget] Failed to load content:", err || "No data");
+            renderDebugPanel({
+              apiBase: API_BASE,
+              storeDomain: domain,
+              collectionHandle: collectionHandle,
+              widgetKind: kind,
+              status: "request failed",
+              error: err ? String(err.message || err) : "no data",
+            });
             return;
           }
+
+          renderDebugPanel({
+            apiBase: API_BASE,
+            storeDomain: domain,
+            collectionHandle: collectionHandle,
+            widgetKind: kind,
+            status: "ok",
+            matchedCollectionId: data.collectionId || null,
+            faqCount: (data.faqs || []).length,
+            linkCount: (data.links || []).length,
+          });
 
           if (kind === "faq") {
             renderFaq(el, data.faqs || []);
