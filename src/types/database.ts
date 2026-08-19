@@ -36,6 +36,7 @@ export interface Database {
           description: string;
           logo_url: string | null;
           cms_type: string;
+          collection_prefix: string;
           owner_id: string;
           created_at: string;
           updated_at: string;
@@ -46,6 +47,7 @@ export interface Database {
           description?: string;
           logo_url?: string | null;
           cms_type?: string;
+          collection_prefix?: string;
           owner_id: string;
         };
         Update: {
@@ -53,6 +55,7 @@ export interface Database {
           description?: string;
           logo_url?: string | null;
           cms_type?: string;
+          collection_prefix?: string;
           updated_at?: string;
         };
       };

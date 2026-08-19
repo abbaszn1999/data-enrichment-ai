@@ -9,6 +9,7 @@ interface Workspace {
   description: string;
   logo_url: string | null;
   cms_type: string;
+  collection_prefix?: string;
   owner_id: string;
 }
 

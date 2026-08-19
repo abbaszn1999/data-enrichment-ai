@@ -39,6 +39,7 @@ export function DeepWorkspace({
   analyzeLoading,
   analyzed,
   onNextCollections,
+  collectionsGenerated = false,
   onCancelExtract,
   keywordsCsvHref,
   collections,
@@ -48,14 +49,21 @@ export function DeepWorkspace({
   onChangeSelected,
   collectionsPaid,
   onStartWorking,
+  onPushToStore,
+  pushingCollections = false,
+  walletBalance = null,
+  walletHref,
   instructions,
   onInstruction,
   contentById,
   generating,
   contentReady,
   pushed,
+  syncingSeo = false,
+  seoSynced = false,
   onStartContent,
   onPush,
+  onSyncSeo,
   pushCostUsd,
   onNextStrategy,
   strategyArticles,
@@ -82,6 +90,7 @@ export function DeepWorkspace({
   analyzeLoading: boolean;
   analyzed: boolean;
   onNextCollections: () => void;
+  collectionsGenerated?: boolean;
   onCancelExtract?: () => void;
   keywordsCsvHref?: string;
   collections: ProposedCollection[];
@@ -91,14 +100,21 @@ export function DeepWorkspace({
   onChangeSelected: (ids: string[]) => void;
   collectionsPaid: boolean;
   onStartWorking: () => void;
+  onPushToStore?: (selectedIds: string[]) => Promise<void> | void;
+  pushingCollections?: boolean;
+  walletBalance?: number | null;
+  walletHref?: string;
   instructions: OnPageInstructions;
   onInstruction: (field: OnPageInstructionField, value: string) => void;
   contentById: Record<string, CollectionContent>;
   generating: boolean;
   contentReady: boolean;
   pushed: boolean;
+  syncingSeo?: boolean;
+  seoSynced?: boolean;
   onStartContent: () => void;
   onPush: () => void;
+  onSyncSeo?: () => void;
   pushCostUsd?: number;
   onNextStrategy: () => void;
   strategyArticles: StrategyArticle[];
@@ -139,6 +155,7 @@ export function DeepWorkspace({
             analyzeLoading={analyzeLoading}
             analyzed={analyzed}
             onNextCollections={onNextCollections}
+            collectionsGenerated={collectionsGenerated}
             onCancelExtract={onCancelExtract}
             csvHref={keywordsCsvHref}
           />
@@ -152,6 +169,10 @@ export function DeepWorkspace({
             onChangeSelected={onChangeSelected}
             paid={collectionsPaid}
             onStart={onStartWorking}
+            onPushToStore={onPushToStore}
+            pushing={pushingCollections}
+            walletBalance={walletBalance}
+            walletHref={walletHref}
           />
         ) : null}
         {tab === "content" ? (
@@ -165,8 +186,11 @@ export function DeepWorkspace({
             generating={generating}
             ready={contentReady}
             pushed={pushed}
+            syncingSeo={syncingSeo}
+            seoSynced={seoSynced}
             onStart={onStartContent}
             onPush={onPush}
+            onSyncSeo={onSyncSeo}
             pushCostUsd={pushCostUsd}
             onNextStrategy={onNextStrategy}
           />

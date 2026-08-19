@@ -217,10 +217,14 @@ export function fontStack(font: FontChoice): string {
   return FONT_OPTIONS.find((option) => option.id === font)?.stack ?? FONT_OPTIONS[0].stack;
 }
 
-export function linksSnippet(handle = "current"): string {
-  return `<div data-dea="links" data-collection="${handle}"></div>\n<script async src="https://embed.data-enrichment.ai/widget.js"></script>`;
+export function linksSnippet(handle = "{{ collection.handle }}", appUrl?: string): string {
+  const base =
+    (appUrl || "").replace(/\/+$/, "") || "https://data-enrichment-ai.onrender.com";
+  return `<div data-dea="links" data-collection="${handle}"></div>\n<script async src="${base}/widget.js"></script>`;
 }
 
-export function faqSnippet(handle = "current"): string {
-  return `<div data-dea="faq" data-collection="${handle}"></div>\n<script async src="https://embed.data-enrichment.ai/widget.js"></script>`;
+export function faqSnippet(handle = "{{ collection.handle }}", appUrl?: string): string {
+  const base =
+    (appUrl || "").replace(/\/+$/, "") || "https://data-enrichment-ai.onrender.com";
+  return `<div data-dea="faq" data-collection="${handle}"></div>\n<script async src="${base}/widget.js"></script>`;
 }

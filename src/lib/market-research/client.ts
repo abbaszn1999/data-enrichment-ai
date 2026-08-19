@@ -200,6 +200,19 @@ export async function pushCollectionsApi(
   return readJson(response);
 }
 
+export async function syncSeoApi(
+  workspaceId: string,
+  projectId: string,
+  collectionIds?: string[]
+): Promise<{ ok: boolean; syncedCount: number; errors?: string[] }> {
+  const response = await fetch("/api/market-research/sync-seo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, projectId, collectionIds }),
+  });
+  return readJson(response);
+}
+
 export type AgentAnalyzeResponse = {
   storeName: string;
   provider: string;

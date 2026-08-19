@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { useWorkspaceContext } from "@/app/(dashboard)/w/[workspaceSlug]/layout";
 import {
   FAQ_TEMPLATES,
   FONT_OPTIONS,
@@ -24,10 +25,30 @@ import { CollectionPagePreview } from "./collection-page-preview";
 export function CustomizePage() {
   const params = useParams<{ workspaceSlug: string }>();
   const slug = params.workspaceSlug ?? "";
+  const { workspace } = useWorkspaceContext();
+
   const [kind, setKind] = useState<WidgetKind>("faq");
   const [links, setLinks] = useState<WidgetStyle | null>(null);
   const [faq, setFaq] = useState<WidgetStyle | null>(null);
   const [copied, setCopied] = useState<"faq" | "links" | null>(null);
+
+  // Collection naming prefix settings
+  const [namingPrefix, setNamingPrefix] = useState("AI");
+  const [storeUrl, setStoreUrl] = useState("");
+  const [storeProvider, setStoreProvider] = useState<string | null>(null);
+  const [savingPrefix, setSavingPrefix] = useState(false);
+  const [appOrigin, setAppOrigin] = useState("https://data-enrichment-ai.onrender.com");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const origin = window.location.origin;
+      if (origin && !origin.includes("localhost") && !origin.includes("127.0.0.1")) {
+        setAppOrigin(origin);
+      } else {
+        setAppOrigin("https://data-enrichment-ai.onrender.com");
+      }
+    }
+  }, []);
 
   useEffect(() => {
     const saved = loadCustomizeWidgets(slug);
@@ -39,6 +60,83 @@ export function CustomizePage() {
     if (!links || !faq) return;
     saveCustomizeWidgets(slug, { links, faq });
   }, [slug, links, faq]);
+
+  // Load naming prefix & store integration details
+  useEffect(() => {
+    if (!workspace?.id) return;
+    if (workspace.collection_prefix) {
+      setNamingPrefix(workspace.collection_prefix);
+    }
+
+    let cancelled = false;
+    async function loadPrefix() {
+      try {
+        const res = await fetch(
+          `/api/workspaces/naming-prefix?workspaceId=${encodeURIComponent(workspace!.id)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled) {
+            if (data.prefix) setNamingPrefix(data.prefix);
+            if (data.storeUrl) setStoreUrl(data.storeUrl);
+            if (data.provider) setStoreProvider(data.provider);
+          }
+        }
+      } catch (err) {
+        console.warn("[CustomizePage] Failed to fetch naming prefix:", err);
+      }
+    }
+    loadPrefix();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace?.id, workspace?.collection_prefix]);
+
+  const handleSavePrefix = async () => {
+    if (!workspace?.id) return;
+    setSavingPrefix(true);
+    try {
+      const res = await fetch("/api/workspaces/naming-prefix", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          prefix: namingPrefix,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save naming prefix");
+      setNamingPrefix(data.prefix || "AI");
+      toast.success("Naming prefix saved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save naming prefix");
+    } finally {
+      setSavingPrefix(false);
+    }
+  };
+
+  const exampleCollectionUrl = useMemo(() => {
+    const cleanPrefix = (namingPrefix || "AI").trim();
+    const slugifiedPrefix = cleanPrefix
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+
+    let base = (storeUrl || "").trim().replace(/\/+$/, "");
+    if (!base) {
+      base = "https://your-store.myshopify.com";
+    } else if (!base.startsWith("http://") && !base.startsWith("https://")) {
+      base = `https://${base}`;
+    }
+
+    const isWoo = storeProvider === "woocommerce" || storeProvider === "wordpress";
+    const pathPart = isWoo ? "product-category" : "collections";
+    const handlePart = slugifiedPrefix
+      ? `${slugifiedPrefix}-linen-beach-dresses`
+      : "linen-beach-dresses";
+
+    return `${base}/${pathPart}/${handlePart}`;
+  }, [namingPrefix, storeUrl, storeProvider]);
 
   const style = kind === "links" ? links : faq;
   const setStyle = kind === "links" ? setLinks : setFaq;
@@ -58,11 +156,15 @@ export function CustomizePage() {
   };
 
   if (!style) {
-    return <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Loading…</div>;
+    return (
+      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+        Loading…
+      </div>
+    );
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 p-5 sm:p-6">
+    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-5 sm:p-6">
       <div className="space-y-1">
         <h1 className="text-lg font-semibold tracking-tight">Customize</h1>
         <p className="max-w-2xl text-xs text-muted-foreground leading-relaxed">
@@ -147,6 +249,7 @@ export function CustomizePage() {
                 className="h-8 text-xs"
               />
             </div>
+
             <div className="space-y-1.5">
               <Label className="text-[11px] text-muted-foreground">Font</Label>
               <div className="flex gap-1">
@@ -172,6 +275,7 @@ export function CustomizePage() {
                 ))}
               </div>
             </div>
+
             <div className="space-y-1.5">
               <Label className="text-[11px] text-muted-foreground">Size</Label>
               <div className="flex gap-1">
@@ -194,6 +298,7 @@ export function CustomizePage() {
                 ))}
               </div>
             </div>
+
             <div className="grid grid-cols-2 gap-2">
               <ColorField
                 label="Heading"
@@ -260,25 +365,71 @@ export function CustomizePage() {
             {kind === "faq" ? (
               <SnippetBlock
                 label="FAQ"
-                value={faqSnippet("polarized-sunglasses")}
+                value={faqSnippet("{{ collection.handle }}", appOrigin)}
                 copied={copied === "faq"}
                 onCopy={() =>
-                  copySnippet("faq", faqSnippet("polarized-sunglasses"))
+                  copySnippet("faq", faqSnippet("{{ collection.handle }}", appOrigin))
                 }
               />
             ) : (
               <SnippetBlock
                 label="Internal links"
-                value={linksSnippet("polarized-sunglasses")}
+                value={linksSnippet("{{ collection.handle }}", appOrigin)}
                 copied={copied === "links"}
                 onCopy={() =>
-                  copySnippet("links", linksSnippet("polarized-sunglasses"))
+                  copySnippet("links", linksSnippet("{{ collection.handle }}", appOrigin))
                 }
               />
             )}
           </section>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* COLLECTION NAMING PREFIX SETTINGS                                         */}
+      {/* ========================================================================= */}
+      <section className="rounded-2xl border border-border/70 bg-card p-5 sm:p-6 space-y-4 shadow-xs">
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold tracking-tight text-foreground">
+            Collection naming prefix
+          </h2>
+        </div>
+
+        <div className="max-w-2xl space-y-2">
+          <Input
+            value={namingPrefix}
+            onChange={(e) => setNamingPrefix(e.target.value)}
+            placeholder="AI"
+            className="h-9 text-xs font-medium"
+          />
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Prepended to the title of every collection Push Live creates, always followed by &quot; - &quot;, so AI-generated collections stay visually distinct from ones you made by hand. Defaults to &quot;AI&quot; - it can never be turned off, only changed.
+          </p>
+        </div>
+
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={savingPrefix}
+            onClick={handleSavePrefix}
+            className="h-8 text-xs font-semibold gap-1.5"
+          >
+            {savingPrefix ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            <span>Save Naming Prefix</span>
+          </Button>
+        </div>
+
+        <div className="rounded-xl border border-border/70 bg-muted/30 p-3.5 space-y-1">
+          <p className="text-xs font-semibold text-foreground">
+            Example collection URL
+          </p>
+          <p className="text-xs font-mono text-muted-foreground break-all">
+            {exampleCollectionUrl}
+          </p>
+        </div>
+      </section>
     </div>
   );
 }

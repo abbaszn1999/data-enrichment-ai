@@ -8,6 +8,7 @@ import {
   HelpCircle,
   XCircle,
   Download,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ export function StageExtractPanel({
   analyzeLoading,
   analyzed,
   onNextCollections,
+  collectionsGenerated = false,
   onCancelExtract,
   csvHref,
 }: {
@@ -64,6 +66,7 @@ export function StageExtractPanel({
   analyzeLoading: boolean;
   analyzed: boolean;
   onNextCollections: (filteredCategoryKeywords: ExtractedKeyword[]) => void;
+  collectionsGenerated?: boolean;
   onCancelExtract?: () => void;
   /** Export of every archived row, not just the on-screen sample. */
   csvHref?: string;
@@ -407,16 +410,29 @@ export function StageExtractPanel({
         {analyzed ? (
           <>
             <p className="text-[11px] text-muted-foreground">
-              Informational queries and exclusions stay out. Next clusters
-              the {filteredCategoryKeywords.length} active filtered category keywords into collection candidates.
+              {collectionsGenerated
+                ? "Collections have already been clustered for this project. Navigate to Stage 5 from the top stepper to view and manage collections."
+                : `Informational queries and exclusions stay out. Next clusters the ${filteredCategoryKeywords.length} active filtered category keywords into collection candidates.`}
             </p>
             <Button
               size="sm"
-              className="h-8 text-xs font-medium"
+              className={cn(
+                "h-8 text-xs font-medium gap-1.5 transition-all",
+                collectionsGenerated
+                  ? "bg-muted text-muted-foreground cursor-not-allowed border border-border/70 hover:bg-muted"
+                  : ""
+              )}
               onClick={() => onNextCollections(filteredCategoryKeywords)}
-              disabled={filteredCategoryKeywords.length === 0}
+              disabled={filteredCategoryKeywords.length === 0 || collectionsGenerated}
             >
-              Next · Collections ({filteredCategoryKeywords.length})
+              {collectionsGenerated ? (
+                <>
+                  <Lock className="h-3 w-3 opacity-70" />
+                  <span>Collections Generated ({filteredCategoryKeywords.length})</span>
+                </>
+              ) : (
+                <span>Next · Collections ({filteredCategoryKeywords.length})</span>
+              )}
             </Button>
           </>
         ) : (

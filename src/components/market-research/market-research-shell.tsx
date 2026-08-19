@@ -34,6 +34,7 @@ import {
   pushCollectionsApi,
   saveMrStateApi,
   startExtractApi,
+  syncSeoApi,
 } from "@/lib/market-research/client";
 import {
   actualExtractCostUsd,
@@ -348,6 +349,14 @@ export function MarketResearchShell() {
   const [contentByIdByProject, setContentByIdByProject] = useState<
     Record<string, Record<string, CollectionContent>>
   >({});
+  const [pushingCollectionsByProject, setPushingCollectionsByProject] =
+    useState<Record<string, boolean>>({});
+  const [syncingSeoByProject, setSyncingSeoByProject] = useState<
+    Record<string, boolean>
+  >({});
+  const [seoSyncedProjectIds, setSeoSyncedProjectIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [reviewFlow, setReviewFlow] = useState<FlowTab | null>(null);
   const [probingIds, setProbingIds] = useState<string[]>([]);
   const probeGen = useRef(0);
@@ -2139,17 +2148,56 @@ export function MarketResearchShell() {
     }
   };
 
-  const handleStartWorking = () => {
-    if (!activeProject) return;
+  const handlePushToStore = async (ids?: string[]) => {
+    if (!activeProject || !workspaceId) return;
     const projectId = activeProject.id;
-    const count = clusterSelection.length;
-    if (count === 0) return;
-    setPaidCollectionProjectIds((prev) => {
-      const next = new Set(prev);
-      next.add(projectId);
-      return next;
-    });
-    unlockWorkspaceTab(projectId, "content");
+    const targetIds =
+      ids && ids.length > 0
+        ? ids
+        : clusterSelectionByProject[projectId] ?? [];
+    if (targetIds.length === 0) return;
+
+    setPushingCollectionsByProject((prev) => ({ ...prev, [projectId]: true }));
+    const usd = collectionPushCostUsd(targetIds.length);
+
+    try {
+      await pushCollectionsApi(workspaceId, projectId, targetIds);
+      invalidateWallet();
+
+      setPaidCollectionProjectIds((prev) => {
+        const next = new Set(prev);
+        next.add(projectId);
+        return next;
+      });
+      setPushedIds((prev) => {
+        const next = new Set(prev);
+        next.add(projectId);
+        return next;
+      });
+
+      window.setTimeout(() => {
+        setPushingCollectionsByProject((prev) => ({
+          ...prev,
+          [projectId]: false,
+        }));
+        unlockWorkspaceTab(projectId, "content");
+      }, 3200);
+    } catch (error) {
+      setPushingCollectionsByProject((prev) => ({
+        ...prev,
+        [projectId]: false,
+      }));
+      toast.error("Not enough wallet balance", {
+        description:
+          error instanceof Error
+            ? error.message
+            : `Publishing costs ${formatUsd(usd)}. Add funds or select fewer collections.`,
+      });
+    }
+  };
+
+  const handleStartWorking = () => {
+    handlePushToStore();
   };
 
   const handleStartContent = async () => {
@@ -2240,6 +2288,31 @@ export function MarketResearchShell() {
       if (contentGen.current === gen) {
         setGenerating(false);
       }
+    }
+  };
+
+  const handleSyncSeo = async () => {
+    if (!activeProject || !workspaceId) return;
+    const projectId = activeProject.id;
+    setSyncingSeoByProject((prev) => ({ ...prev, [projectId]: true }));
+    try {
+      const res = await syncSeoApi(workspaceId, projectId);
+      setSeoSyncedProjectIds((prev) => {
+        const next = new Set(prev);
+        next.add(projectId);
+        return next;
+      });
+      toast.success(
+        res.syncedCount > 0
+          ? `Synced SEO copy for ${res.syncedCount} collection${res.syncedCount === 1 ? "" : "s"} to store`
+          : "SEO copy and descriptions saved to store"
+      );
+    } catch (error) {
+      toast.error("Failed to sync SEO to store", {
+        description: error instanceof Error ? error.message : "Internal error",
+      });
+    } finally {
+      setSyncingSeoByProject((prev) => ({ ...prev, [projectId]: false }));
     }
   };
 
@@ -3123,6 +3196,11 @@ export function MarketResearchShell() {
                     analyzeLoading={analyzeLoading}
                     analyzed={analyzed}
                     onNextCollections={handleNextCollections}
+                    collectionsGenerated={Boolean(
+                      proposedCollections.length > 0 ||
+                        (activeProject &&
+                          (openedMaxByProject[activeProject.id] ?? 1) >= 5)
+                    )}
                     onCancelExtract={handleCancelExtract}
                     keywordsCsvHref={
                       workspaceId && committedForActive
@@ -3141,6 +3219,12 @@ export function MarketResearchShell() {
                     }
                     collectionsPaid={collectionsPaid}
                     onStartWorking={handleStartWorking}
+                    onPushToStore={handlePushToStore}
+                    pushingCollections={Boolean(
+                      pushingCollectionsByProject[activeProject.id]
+                    )}
+                    walletBalance={wallet?.balance ?? null}
+                    walletHref={`/w/${slug}/wallet`}
                     instructions={customInstructions}
                     onInstruction={(field, value) =>
                       setCustomInstructionByProject((prev) => ({
@@ -3156,8 +3240,15 @@ export function MarketResearchShell() {
                     generating={generating}
                     contentReady={contentReady}
                     pushed={contentPushed}
+                    syncingSeo={Boolean(
+                      activeProject && syncingSeoByProject[activeProject.id]
+                    )}
+                    seoSynced={Boolean(
+                      activeProject && seoSyncedProjectIds.has(activeProject.id)
+                    )}
                     onStartContent={handleStartContent}
                     onPush={handlePush}
+                    onSyncSeo={handleSyncSeo}
                     pushCostUsd={collectionPushCostUsd(clusterSelection.length)}
                     onNextStrategy={handleNextStrategy}
                     strategyArticles={strategyArticles}

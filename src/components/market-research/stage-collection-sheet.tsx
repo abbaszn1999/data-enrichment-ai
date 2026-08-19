@@ -1,16 +1,24 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import {
+  AlertCircle,
+  ArrowRight,
   Check,
+  CheckCircle2,
   ExternalLink,
   Filter,
   Layers,
   Loader2,
+  Lock,
   Package,
   Search,
+  ShieldCheck,
   Sparkles,
+  Store,
   Tag,
+  Wallet,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +27,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -37,6 +46,7 @@ import {
   type ProposedCollection,
 } from "./workspace-data";
 import { cn } from "@/lib/utils";
+import { FuturisticAiLoader } from "./futuristic-ai-loader";
 
 export function StageCollectionSheet({
   collections,
@@ -46,6 +56,10 @@ export function StageCollectionSheet({
   onChangeSelected,
   paid,
   onStart,
+  onPushToStore,
+  walletBalance = null,
+  walletHref,
+  pushing = false,
 }: {
   collections: ProposedCollection[];
   products?: MarketResearchProduct[];
@@ -54,6 +68,10 @@ export function StageCollectionSheet({
   onChangeSelected: (ids: string[]) => void;
   paid: boolean;
   onStart: () => void;
+  onPushToStore?: (selectedIds: string[]) => Promise<void> | void;
+  walletBalance?: number | null;
+  walletHref?: string;
+  pushing?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<"collections" | "products">("collections");
   const [activeModalCollection, setActiveModalCollection] = useState<ProposedCollection | null>(null);
@@ -61,6 +79,7 @@ export function StageCollectionSheet({
     product: MarketResearchProduct;
     type: "candidates" | "assigned";
   } | null>(null);
+  const [confirmPushOpen, setConfirmPushOpen] = useState(false);
 
   // Collections sheet filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -249,6 +268,22 @@ export function StageCollectionSheet({
     );
   }
 
+  if (pushing) {
+    return (
+      <FuturisticAiLoader
+        title="Pushing Collections to Storefront…"
+        subtitle={`Deploying ${selected.size} verified category collections to your store catalog and linking matched products.`}
+        durationMs={3200}
+      />
+    );
+  }
+
+  const selectedCollectionsList = visibleCollections.filter((c) => selected.has(c.id));
+  const pushTotalCost = selected.size * USD_PER_COLLECTION;
+  const canAffordPush = walletBalance == null || walletBalance >= pushTotalCost;
+  const remainingWalletBalance =
+    walletBalance != null ? walletBalance - pushTotalCost : null;
+
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-3">
       {/* Top Bar Header & Dual-Sheet Switcher */}
@@ -362,8 +397,10 @@ export function StageCollectionSheet({
                     <button
                       type="button"
                       onClick={toggleSelectAll}
+                      disabled={paid}
                       className={cn(
                         "flex h-4 w-4 items-center justify-center rounded border transition-colors",
+                        paid ? "cursor-not-allowed opacity-75" : "",
                         selected.size > 0 && selected.size === visibleCollections.length
                           ? "border-primary bg-primary text-primary-foreground"
                           : selected.size > 0
@@ -397,17 +434,23 @@ export function StageCollectionSheet({
                       <TableRow
                         key={row.id}
                         className={cn(
-                          "cursor-pointer transition-colors border-b border-border/40",
+                          paid
+                            ? "cursor-default border-b border-border/40"
+                            : "cursor-pointer transition-colors border-b border-border/40",
                           on ? "bg-primary/5 hover:bg-primary/10" : "hover:bg-muted/40"
                         )}
-                        onClick={() => toggleSelect(row.id)}
+                        onClick={() => {
+                          if (!paid) toggleSelect(row.id);
+                        }}
                       >
                         <TableCell className="px-3 py-3.5" onClick={(e) => e.stopPropagation()}>
                           <button
                             type="button"
                             onClick={() => toggleSelect(row.id)}
+                            disabled={paid}
                             className={cn(
                               "flex h-4 w-4 items-center justify-center rounded border transition-colors",
+                              paid ? "cursor-not-allowed opacity-75" : "",
                               on
                                 ? "border-primary bg-primary text-primary-foreground"
                                 : "border-border hover:border-primary/60"
@@ -457,9 +500,14 @@ export function StageCollectionSheet({
                         <TableCell className="text-center py-3.5 px-4">
                           <Badge
                             variant="outline"
-                            className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 text-[11px] font-semibold px-2.5 py-0.5 rounded-md"
+                            className={cn(
+                              "text-[11px] font-semibold px-2.5 py-0.5 rounded-md",
+                              paid
+                                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+                                : "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30"
+                            )}
                           >
-                            New
+                            {paid ? "Pushed" : "New"}
                           </Badge>
                         </TableCell>
                       </TableRow>
@@ -678,29 +726,202 @@ export function StageCollectionSheet({
       {/* BOTTOM ACTION BAR                                                         */}
       {/* ========================================================================= */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-card px-4 py-3 shrink-0 shadow-xs">
-        <div className="text-xs text-muted-foreground">
-          <strong className="font-semibold text-foreground">
-            {selected.size}
-          </strong>{" "}
-          of {collections.length} collections selected
-          {selected.size > 0 ? (
-            <span className="ml-2 font-medium text-foreground">
-              · Push cost: {formatUsd(selected.size * USD_PER_COLLECTION)} (billed on store push)
-            </span>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <div>
+            <strong className="font-semibold text-foreground">
+              {selected.size}
+            </strong>{" "}
+            of {collections.length} collections selected
+          </div>
+          {paid ? (
+            <>
+              <span>·</span>
+              <span className="inline-flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                <span>Pushed to Store</span>
+              </span>
+            </>
+          ) : selected.size > 0 ? (
+            <>
+              <span>·</span>
+              <span className="font-medium text-foreground">
+                ${USD_PER_COLLECTION.toFixed(2)} / collection
+              </span>
+              <span>·</span>
+              <span className="font-bold text-primary">
+                Total: {formatUsd(pushTotalCost)}
+              </span>
+            </>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            onClick={onStart}
-            disabled={selected.size === 0}
-            className="h-8 gap-1.5 px-4 text-xs font-semibold shadow-xs"
+            onClick={() => setConfirmPushOpen(true)}
+            disabled={selected.size === 0 || pushing || paid}
+            className={cn(
+              "h-8 gap-1.5 px-4 text-xs font-semibold shadow-xs transition-all",
+              paid
+                ? "bg-muted text-muted-foreground cursor-not-allowed border border-border/70 hover:bg-muted"
+                : "bg-primary hover:bg-primary/90 text-primary-foreground"
+            )}
           >
-            <span>Proceed to On-Page SEO (Stage 6)</span>
-            <span>→</span>
+            {paid ? (
+              <>
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                <span>Pushed to Store</span>
+              </>
+            ) : (
+              <>
+                <Store className="h-3.5 w-3.5" />
+                <span>Push to Store</span>
+                <span className="opacity-90 font-mono">
+                  ({formatUsd(pushTotalCost)})
+                </span>
+                <ArrowRight className="h-3.5 w-3.5 ml-0.5" />
+              </>
+            )}
           </Button>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* MODAL POP-UP: CONFIRM STORE PUSH & WALLET DEDUCTION                      */}
+      {/* ========================================================================= */}
+      <Dialog open={confirmPushOpen} onOpenChange={setConfirmPushOpen}>
+        <DialogContent className="max-w-lg p-0 overflow-hidden">
+          <DialogHeader className="p-5 border-b border-border/70 bg-muted/20">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Store className="h-4 w-4" />
+              </div>
+              <DialogTitle className="text-base font-semibold">
+                Confirm Storefront Push
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-xs text-muted-foreground mt-1">
+              Deploy {selected.size} verified category collections to your store catalog.
+              The amount is deducted directly from your workspace wallet.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-5 space-y-4 max-h-[60vh] overflow-y-auto">
+            {/* Selected Collections Preview List */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs font-medium text-muted-foreground">
+                <span>Selected Collections ({selected.size})</span>
+                <span>$5.00 each</span>
+              </div>
+              <div className="max-h-40 overflow-y-auto rounded-xl border border-border/70 bg-card p-2 space-y-1.5">
+                {selectedCollectionsList.map((col) => (
+                  <div
+                    key={col.id}
+                    className="flex items-center justify-between gap-2 rounded-lg bg-muted/30 px-2.5 py-1 text-xs"
+                  >
+                    <span className="font-medium text-foreground truncate">
+                      {col.name}
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] text-muted-foreground">
+                        {col.productCount} products
+                      </span>
+                      <Badge variant="outline" className="text-[10px] font-mono py-0">
+                        $5.00
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Pricing & Wallet Calculation Card */}
+            <div className="rounded-xl border border-border/70 bg-muted/30 p-3.5 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Current Wallet Balance</span>
+                <span className="font-semibold text-foreground tabular-nums">
+                  {walletBalance == null ? "—" : formatUsd(walletBalance)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between border-t border-border/50 pt-1.5">
+                <span className="text-muted-foreground">
+                  Total Push Cost ({selected.size} × $5.00)
+                </span>
+                <span className="font-bold text-destructive tabular-nums">
+                  -{formatUsd(pushTotalCost)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between border-t border-border/50 pt-1.5">
+                <span className="font-medium text-foreground">
+                  Estimated Remaining Balance
+                </span>
+                <span className="font-bold text-primary tabular-nums">
+                  {remainingWalletBalance != null
+                    ? formatUsd(remainingWalletBalance)
+                    : "—"}
+                </span>
+              </div>
+            </div>
+
+            {/* Insufficient Funds Warning Alert */}
+            {!canAffordPush && walletBalance != null ? (
+              <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+                <div className="flex items-center gap-2 font-semibold">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>Not enough wallet balance</span>
+                </div>
+                <p className="text-[11px] leading-relaxed opacity-90">
+                  You need {formatUsd(pushTotalCost)}, but your wallet currently has{" "}
+                  {formatUsd(walletBalance)}. Please top up your wallet or select fewer collections.
+                </p>
+                {walletHref ? (
+                  <div className="pt-1">
+                    <Link href={walletHref} target="_blank">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/15"
+                      >
+                        <Wallet className="h-3.5 w-3.5" />
+                        <span>Top Up Wallet</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </Button>
+                    </Link>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          <DialogFooter className="p-4 border-t border-border/70 bg-muted/20 flex flex-row items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmPushOpen(false)}
+              className="text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={selected.size === 0 || !canAffordPush}
+              onClick={() => {
+                setConfirmPushOpen(false);
+                if (onPushToStore) {
+                  onPushToStore(Array.from(selected));
+                } else {
+                  onStart();
+                }
+              }}
+              className="text-xs font-semibold gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>Confirm & Push ({formatUsd(pushTotalCost)})</span>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ========================================================================= */}
       {/* MODAL POP-UP: PRODUCTS FOR ACTIVE COLLECTION                             */}

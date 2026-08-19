@@ -16,6 +16,7 @@ export interface Workspace {
   description: string;
   logo_url: string | null;
   cms_type: string;
+  collection_prefix?: string;
   owner_id: string;
   enrichment_presets?: EnrichmentPreset[];
   created_at: string;
@@ -229,7 +230,7 @@ export async function createWorkspace(workspace: {
   return data as Workspace;
 }
 
-export async function updateWorkspace(id: string, updates: Partial<Pick<Workspace, "name" | "description" | "cms_type" | "logo_url">>) {
+export async function updateWorkspace(id: string, updates: Partial<Pick<Workspace, "name" | "description" | "cms_type" | "logo_url" | "collection_prefix">>) {
   const supabase = getClient();
   const { error } = await supabase.from("workspaces").update(updates).eq("id", id);
   if (error) throw error;

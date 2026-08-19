@@ -28,9 +28,11 @@ export async function POST(request: NextRequest) {
 
   try {
     let storeName = "Ecommerce Store";
+    let storeCollections: any[] = [];
     try {
       const catalog = await fetchStoreCatalog(auth.admin, parsed.data.workspaceId);
       storeName = catalog.storeName || storeName;
+      storeCollections = catalog.collections || [];
     } catch {
       // Proceed even if catalog fetch fails
     }
@@ -39,6 +41,7 @@ export async function POST(request: NextRequest) {
       storeName,
       parentNiches: parsed.data.parentNiches,
       collections: parsed.data.collections,
+      allStoreCollections: storeCollections,
       customInstructions: parsed.data.customInstructions,
     });
 
