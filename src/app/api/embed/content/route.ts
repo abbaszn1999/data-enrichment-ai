@@ -120,15 +120,16 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 2. Fetch workspace collection prefix if any
+    // 2. Fetch workspace collection prefix & custom widget settings if any
     const { data: wsRow } = await admin
       .from("workspaces")
-      .select("collection_prefix")
+      .select("collection_prefix, widget_settings")
       .eq("id", matchedWorkspaceId)
       .maybeSingle();
 
     const prefix = (wsRow?.collection_prefix ?? "AI").trim() || "AI";
     const prefixSlug = slugify(prefix);
+    const widgetSettings = wsRow?.widget_settings;
 
     // 3. Find recent active projects in this workspace
     const { data: projects } = await admin
@@ -257,6 +258,7 @@ export async function GET(request: NextRequest) {
         collectionDescription: matchedContent.collectionDescription,
         faqs: Array.isArray(matchedContent.faqs) ? matchedContent.faqs : [],
         links: Array.isArray(matchedContent.links) ? matchedContent.links : [],
+        widgetSettings: widgetSettings || null,
       },
       { headers: CORS_HEADERS }
     );

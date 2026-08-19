@@ -1,6 +1,6 @@
 export type WidgetKind = "links" | "faq";
-export type FontChoice = "sans" | "serif" | "rounded";
-export type SizeChoice = "sm" | "md" | "lg";
+export type FontChoice = "default" | "sans" | "serif" | "rounded";
+export type SizeChoice = "default" | "sm" | "md" | "lg";
 
 export type WidgetStyle = {
   template: string;
@@ -93,6 +93,11 @@ export const FAQ_TEMPLATES: {
 
 export const FONT_OPTIONS: { id: FontChoice; label: string; stack: string }[] = [
   {
+    id: "default",
+    label: "Default (Theme)",
+    stack: "inherit",
+  },
+  {
     id: "sans",
     label: "Sans",
     stack: "ui-sans-serif, system-ui, -apple-system, sans-serif",
@@ -113,31 +118,32 @@ export const SIZE_SCALE: Record<
   SizeChoice,
   { heading: number; item: number; pad: number }
 > = {
+  default: { heading: 18, item: 14, pad: 14 },
   sm: { heading: 14, item: 12, pad: 10 },
   md: { heading: 18, item: 14, pad: 14 },
-  lg: { heading: 24, item: 16, pad: 18 },
+  lg: { heading: 22, item: 16, pad: 18 },
 };
 
 export const DEFAULT_LINKS_STYLE: WidgetStyle = {
   template: "pills",
-  font: "sans",
+  font: "default",
   heading: "Shop related",
   headingColor: "#111111",
   textColor: "#444444",
   accentColor: "#111111",
   backgroundColor: "#ffffff",
-  size: "md",
+  size: "default",
 };
 
 export const DEFAULT_FAQ_STYLE: WidgetStyle = {
   template: "dividers",
-  font: "sans",
+  font: "default",
   heading: "Frequently asked questions",
   headingColor: "#111111",
   textColor: "#555555",
   accentColor: "#111111",
   backgroundColor: "#ffffff",
-  size: "md",
+  size: "default",
 };
 
 export const SAMPLE_LINKS = [
@@ -173,7 +179,7 @@ export const SAMPLE_COLLECTIONS = [
   { handle: "educational-toys", name: "Educational Toys" },
 ] as const;
 
-type Persisted = {
+export type PersistedWidgetSettings = {
   links: WidgetStyle;
   faq: WidgetStyle;
 };
@@ -182,8 +188,8 @@ function storageKey(workspaceSlug: string) {
   return `customize-widgets:v1:${workspaceSlug}`;
 }
 
-export function loadCustomizeWidgets(workspaceSlug: string): Persisted {
-  const fallback: Persisted = {
+export function loadCustomizeWidgets(workspaceSlug: string): PersistedWidgetSettings {
+  const fallback: PersistedWidgetSettings = {
     links: { ...DEFAULT_LINKS_STYLE },
     faq: { ...DEFAULT_FAQ_STYLE },
   };
@@ -191,7 +197,7 @@ export function loadCustomizeWidgets(workspaceSlug: string): Persisted {
   try {
     const raw = window.localStorage.getItem(storageKey(workspaceSlug));
     if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as Partial<Persisted>;
+    const parsed = JSON.parse(raw) as Partial<PersistedWidgetSettings>;
     return {
       links: { ...DEFAULT_LINKS_STYLE, ...parsed.links },
       faq: { ...DEFAULT_FAQ_STYLE, ...parsed.faq },
@@ -203,7 +209,7 @@ export function loadCustomizeWidgets(workspaceSlug: string): Persisted {
 
 export function saveCustomizeWidgets(
   workspaceSlug: string,
-  state: Persisted
+  state: PersistedWidgetSettings
 ) {
   if (typeof window === "undefined") return;
   try {
@@ -214,7 +220,8 @@ export function saveCustomizeWidgets(
 }
 
 export function fontStack(font: FontChoice): string {
-  return FONT_OPTIONS.find((option) => option.id === font)?.stack ?? FONT_OPTIONS[0].stack;
+  if (font === "default") return "inherit";
+  return FONT_OPTIONS.find((option) => option.id === font)?.stack ?? "inherit";
 }
 
 export function linksSnippet(handle = "{{ collection.handle }}", appUrl?: string): string {

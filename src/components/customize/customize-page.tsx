@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { Check, Copy, Loader2 } from "lucide-react";
+import { Check, Copy, Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,8 @@ import {
   saveCustomizeWidgets,
   type WidgetKind,
   type WidgetStyle,
+  type FontChoice,
+  type SizeChoice,
 } from "@/lib/customize-widgets";
 import { CollectionPagePreview } from "./collection-page-preview";
 
@@ -31,6 +33,7 @@ export function CustomizePage() {
   const [links, setLinks] = useState<WidgetStyle | null>(null);
   const [faq, setFaq] = useState<WidgetStyle | null>(null);
   const [copied, setCopied] = useState<"faq" | "links" | null>(null);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   // Collection naming prefix settings
   const [namingPrefix, setNamingPrefix] = useState("AI");
@@ -50,16 +53,39 @@ export function CustomizePage() {
     }
   }, []);
 
+  // Initial load from localStorage
   useEffect(() => {
     const saved = loadCustomizeWidgets(slug);
     setLinks(saved.links);
     setFaq(saved.faq);
   }, [slug]);
 
+  // Load custom widget settings from DB
   useEffect(() => {
-    if (!links || !faq) return;
-    saveCustomizeWidgets(slug, { links, faq });
-  }, [slug, links, faq]);
+    if (!workspace?.id) return;
+    let cancelled = false;
+    async function loadSettings() {
+      try {
+        const res = await fetch(
+          `/api/workspaces/widget-settings?workspaceId=${encodeURIComponent(workspace!.id)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled && data.settings) {
+            setLinks(data.settings.links);
+            setFaq(data.settings.faq);
+            saveCustomizeWidgets(slug, data.settings);
+          }
+        }
+      } catch (err) {
+        console.warn("[CustomizePage] Failed to fetch widget settings:", err);
+      }
+    }
+    loadSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace?.id, slug]);
 
   // Load naming prefix & store integration details
   useEffect(() => {
@@ -91,6 +117,29 @@ export function CustomizePage() {
       cancelled = true;
     };
   }, [workspace?.id, workspace?.collection_prefix]);
+
+  const handleSaveSettings = async () => {
+    if (!workspace?.id || !links || !faq) return;
+    setSavingSettings(true);
+    try {
+      const res = await fetch("/api/workspaces/widget-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          settings: { links, faq },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save widget settings");
+      saveCustomizeWidgets(slug, { links, faq });
+      toast.success("Widget styles saved! Live store will update automatically.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save widget settings");
+    } finally {
+      setSavingSettings(false);
+    }
+  };
 
   const handleSavePrefix = async () => {
     if (!workspace?.id) return;
@@ -165,13 +214,27 @@ export function CustomizePage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-5 sm:p-6">
-      <div className="space-y-1">
-        <h1 className="text-lg font-semibold tracking-tight">Customize</h1>
-        <p className="max-w-2xl text-xs text-muted-foreground leading-relaxed">
-          Style how FAQ and internal links look on collection pages. FAQ sits
-          above the product grid, related links below it. Copy the HTML snippet
-          for each widget when you place them on the store.
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border/70 pb-4">
+        <div className="space-y-1">
+          <h1 className="text-lg font-semibold tracking-tight">Customize Widgets</h1>
+          <p className="max-w-2xl text-xs text-muted-foreground leading-relaxed">
+            Style how FAQ and internal links look on collection pages. Choose templates,
+            fonts, sizes and colors, then click Save to apply immediately on your live store.
+          </p>
+        </div>
+        <Button
+          onClick={handleSaveSettings}
+          disabled={savingSettings || !links || !faq}
+          size="sm"
+          className="gap-2 shadow-sm font-medium"
+        >
+          {savingSettings ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Save className="h-4 w-4" />
+          )}
+          Save Changes
+        </Button>
       </div>
 
       <div className="grid min-h-0 gap-5 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
@@ -221,7 +284,7 @@ export function CustomizePage() {
                     className={cn(
                       "rounded-xl border px-3 py-2.5 text-left transition-colors",
                       active
-                        ? "border-primary/40 bg-primary/5"
+                        ? "border-primary/40 bg-primary/5 shadow-xs"
                         : "border-border/70 hover:bg-muted/40"
                     )}
                   >
@@ -236,7 +299,8 @@ export function CustomizePage() {
           </section>
 
           <section className="space-y-3 rounded-xl border border-border/70 p-3">
-            <h2 className="text-sm font-semibold tracking-tight">Basics</h2>
+            <h2 className="text-sm font-semibold tracking-tight">Basics & Style</h2>
+
             <div className="space-y-1.5">
               <Label className="text-[11px] text-muted-foreground">Heading</Label>
               <Input
@@ -251,22 +315,22 @@ export function CustomizePage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-[11px] text-muted-foreground">Font</Label>
-              <div className="flex gap-1">
+              <Label className="text-[11px] text-muted-foreground">Font Family</Label>
+              <div className="grid grid-cols-2 gap-1.5">
                 {FONT_OPTIONS.map((option) => (
                   <button
                     key={option.id}
                     type="button"
                     onClick={() =>
                       setStyle((prev) =>
-                        prev ? { ...prev, font: option.id } : prev
+                        prev ? { ...prev, font: option.id as FontChoice } : prev
                       )
                     }
                     className={cn(
-                      "flex-1 rounded-lg border py-1.5 text-[11px] font-medium",
+                      "rounded-lg border py-1.5 px-2 text-[11px] font-medium text-center truncate",
                       style.font === option.id
-                        ? "border-primary/40 bg-primary/10 text-primary"
-                        : "border-border/70 text-muted-foreground"
+                        ? "border-primary/40 bg-primary/10 text-primary font-semibold"
+                        : "border-border/70 text-muted-foreground hover:text-foreground"
                     )}
                     style={{ fontFamily: option.stack }}
                   >
@@ -279,21 +343,30 @@ export function CustomizePage() {
             <div className="space-y-1.5">
               <Label className="text-[11px] text-muted-foreground">Size</Label>
               <div className="flex gap-1">
-                {(["sm", "md", "lg"] as const).map((size) => (
+                {(
+                  [
+                    ["default", "Default"],
+                    ["sm", "SM"],
+                    ["md", "MD"],
+                    ["lg", "LG"],
+                  ] as const
+                ).map(([sizeId, label]) => (
                   <button
-                    key={size}
+                    key={sizeId}
                     type="button"
                     onClick={() =>
-                      setStyle((prev) => (prev ? { ...prev, size } : prev))
+                      setStyle((prev) =>
+                        prev ? { ...prev, size: sizeId as SizeChoice } : prev
+                      )
                     }
                     className={cn(
-                      "flex-1 rounded-lg border py-1.5 text-[11px] font-medium uppercase",
-                      style.size === size
-                        ? "border-primary/40 bg-primary/10 text-primary"
-                        : "border-border/70 text-muted-foreground"
+                      "flex-1 rounded-lg border py-1.5 text-[11px] font-medium uppercase text-center",
+                      style.size === sizeId
+                        ? "border-primary/40 bg-primary/10 text-primary font-semibold"
+                        : "border-border/70 text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    {size}
+                    {label}
                   </button>
                 ))}
               </div>
@@ -331,6 +404,22 @@ export function CustomizePage() {
                 }
               />
             </div>
+
+            <div className="pt-2">
+              <Button
+                onClick={handleSaveSettings}
+                disabled={savingSettings}
+                className="w-full gap-2 shadow-xs"
+                size="sm"
+              >
+                {savingSettings ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                Save Changes
+              </Button>
+            </div>
           </section>
         </div>
 
@@ -342,9 +431,9 @@ export function CustomizePage() {
             <div className="rounded-xl border border-border/50 bg-background p-4 shadow-sm">
               {links && faq ? (
                 <CollectionPagePreview
-                  title="Polarized Sunglasses"
-                  description="Polarized Sunglasses for every budget and style. This collection groups products your catalog already carries."
-                  productCount={4200}
+                  title="Android Tablets with Pen Support"
+                  description="Unlock your creativity and boost productivity with our selection of tablets with pen support."
+                  productCount={42}
                   faqStyle={faq}
                   linksStyle={links}
                   focus={kind}
@@ -385,49 +474,51 @@ export function CustomizePage() {
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* COLLECTION NAMING PREFIX SETTINGS                                         */}
-      {/* ========================================================================= */}
-      <section className="rounded-2xl border border-border/70 bg-card p-5 sm:p-6 space-y-4 shadow-xs">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold tracking-tight text-foreground">
-            Collection naming prefix
-          </h2>
-        </div>
-
-        <div className="max-w-2xl space-y-2">
-          <Input
-            value={namingPrefix}
-            onChange={(e) => setNamingPrefix(e.target.value)}
-            placeholder="AI"
-            className="h-9 text-xs font-medium"
-          />
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Prepended to the title of every collection Push Live creates, always followed by &quot; - &quot;, so AI-generated collections stay visually distinct from ones you made by hand. Defaults to &quot;AI&quot; - it can never be turned off, only changed.
-          </p>
-        </div>
-
-        <div>
+      {/* Collection naming prefix & URL structure section */}
+      <section className="space-y-3 rounded-2xl border border-border/70 bg-muted/10 p-5 sm:p-6 mt-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold tracking-tight">
+              Collection Naming Prefix
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Customize the prefix automatically prepended to newly pushed AI collections
+              in your store.
+            </p>
+          </div>
           <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={savingPrefix}
             onClick={handleSavePrefix}
-            className="h-8 text-xs font-semibold gap-1.5"
+            disabled={savingPrefix}
+            size="sm"
+            className="self-start sm:self-auto gap-2"
           >
-            {savingPrefix ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            <span>Save Naming Prefix</span>
+            {savingPrefix ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Check className="h-3.5 w-3.5" />
+            )}
+            Save Prefix
           </Button>
         </div>
 
-        <div className="rounded-xl border border-border/70 bg-muted/30 p-3.5 space-y-1">
-          <p className="text-xs font-semibold text-foreground">
-            Example collection URL
+        <div className="max-w-xs space-y-1.5 pt-1">
+          <Label className="text-xs text-muted-foreground">Prefix keyword</Label>
+          <Input
+            value={namingPrefix}
+            onChange={(e) => setNamingPrefix(e.target.value)}
+            placeholder="e.g. AI, Smart, Trend"
+            className="h-9 text-xs font-medium"
+          />
+        </div>
+
+        <div className="mt-4 rounded-xl border border-border/60 bg-background/80 p-3.5 space-y-2">
+          <p className="text-[11px] font-semibold text-foreground">
+            Live URL Structure Preview
           </p>
-          <p className="text-xs font-mono text-muted-foreground break-all">
-            {exampleCollectionUrl}
-          </p>
+          <div className="flex items-center gap-2 text-xs font-mono bg-muted/50 rounded-lg px-3 py-2 border border-border/50 break-all select-all">
+            <span className="text-muted-foreground">URL:</span>
+            <span className="text-primary font-medium">{exampleCollectionUrl}</span>
+          </div>
         </div>
       </section>
     </div>
@@ -441,26 +532,26 @@ function ColorField({
 }: {
   label: string;
   value: string;
-  onChange: (value: string) => void;
+  onChange: (hex: string) => void;
 }) {
   return (
-    <label className="space-y-1">
-      <span className="text-[11px] text-muted-foreground">{label}</span>
-      <span className="flex items-center gap-2 rounded-lg border border-border/70 px-2 py-1">
+    <div className="space-y-1">
+      <Label className="text-[10px] text-muted-foreground">{label}</Label>
+      <div className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-background p-1">
         <input
           type="color"
-          value={value}
+          value={value.startsWith("#") && value.length === 7 ? value : "#000000"}
           onChange={(e) => onChange(e.target.value)}
-          className="h-6 w-6 cursor-pointer rounded border-0 bg-transparent p-0"
-          aria-label={label}
+          className="h-5 w-5 cursor-pointer rounded border-0 bg-transparent p-0"
         />
         <input
+          type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="min-w-0 flex-1 bg-transparent text-[11px] uppercase outline-none"
+          className="w-full bg-transparent font-mono text-[11px] outline-none"
         />
-      </span>
-    </label>
+      </div>
+    </div>
   );
 }
 
@@ -476,25 +567,30 @@ function SnippetBlock({
   onCopy: () => void;
 }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
         <Button
           type="button"
-          size="sm"
           variant="ghost"
-          className="h-7 gap-1.5 text-[11px]"
+          size="sm"
           onClick={onCopy}
+          className="h-6 gap-1 px-2 text-[11px]"
         >
           {copied ? (
-            <Check className="h-3.5 w-3.5" />
+            <>
+              <Check className="h-3 w-3 text-emerald-600" />
+              Copied
+            </>
           ) : (
-            <Copy className="h-3.5 w-3.5" />
+            <>
+              <Copy className="h-3 w-3" />
+              Copy
+            </>
           )}
-          {copied ? "Copied" : "Copy"}
         </Button>
       </div>
-      <pre className="overflow-x-auto rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap">
+      <pre className="overflow-x-auto rounded-lg border border-border/70 bg-background p-3 font-mono text-[11px] text-foreground leading-relaxed">
         {value}
       </pre>
     </div>
