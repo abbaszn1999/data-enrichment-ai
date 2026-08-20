@@ -334,7 +334,7 @@ export default function UsagePage() {
               },
               {
                 label: "AI Column Mapping",
-                desc: "Per import",
+                desc: "Per project",
                 icon: Columns3,
                 style: "bg-amber-500/10 text-amber-600",
               },

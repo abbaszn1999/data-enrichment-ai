@@ -89,7 +89,7 @@ export default function DemoNewImportPage() {
     <div className="p-6 max-w-3xl mx-auto space-y-6">
       <div>
         <h1 className="text-xl font-bold flex items-center gap-2">
-          <Upload className="h-5 w-5" /> New Import
+          <Upload className="h-5 w-5" /> New catalog intelligence project
         </h1>
         <p className="text-xs text-muted-foreground mt-0.5">Upload a supplier sheet to start matching and enrichment</p>
       </div>

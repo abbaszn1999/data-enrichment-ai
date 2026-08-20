@@ -146,7 +146,7 @@ export default function WorkspaceLayout({
   const canAccessAdminPages = role === "owner" || role === "admin";
 
   const mediaChildren = [
-    { href: `${basePath}/image-classify`, label: "AI Classify", icon: ImageIcon },
+    { href: `${basePath}/image-classify`, label: "Image Classification", icon: ImageIcon },
     { href: `${basePath}/products-gallery`, label: "Products Gallery", icon: LayoutGrid },
     { href: `${basePath}/products-visualizer`, label: "Products Visualizer", icon: Boxes },
   ];
@@ -201,7 +201,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}`, label: "Dashboard", icon: LayoutDashboard },
     { href: `${basePath}/products`, label: "Products", icon: Package },
     { href: `${basePath}/categories`, label: "Categories", icon: FolderTree },
-    { href: `${basePath}/import`, label: "Import", icon: Upload },
+    { href: `${basePath}/import`, label: "Catalog Intelligence", icon: Upload },
   ];
 
   const sidebarLinksAfterGrowthEngine = [
@@ -508,7 +508,7 @@ export default function WorkspaceLayout({
                       ? "bg-primary/10 text-primary"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   }`}
-                  title="Media"
+                  title="Visual Intelligence"
                 >
                   <Images className="h-4 w-4 shrink-0" />
                 </button>
@@ -523,7 +523,7 @@ export default function WorkspaceLayout({
                     }`}
                   >
                     <Images className="h-4 w-4 shrink-0" />
-                    <span className="flex-1 text-left">Media</span>
+                    <span className="flex-1 text-left">Visual Intelligence</span>
                     <ChevronRight
                       className={`h-3.5 w-3.5 shrink-0 transition-transform ${
                         mediaOpen ? "rotate-90" : ""

@@ -170,7 +170,7 @@ export default function NewImportPage() {
       router.push(`/w/${slug}/import/${session.id}/rules`);
     } catch (err: any) {
       const msg = typeof err === "string" ? err : err?.message || err?.error_description || JSON.stringify(err);
-      alert(msg || "Failed to create import");
+      alert(msg || "Failed to create catalog intelligence project");
       setLoading(false);
     }
   };
@@ -185,7 +185,7 @@ export default function NewImportPage() {
               <Upload className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight">New import project</h1>
+              <h1 className="text-xl font-bold tracking-tight">New catalog intelligence project</h1>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Upload a supplier worksheet to start matching and enrichment.
               </p>
@@ -255,7 +255,7 @@ export default function NewImportPage() {
                 <textarea
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Add any notes about this import..."
+                  placeholder="Add any notes about this project..."
                   rows={2}
                   className="w-full resize-none rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 />
@@ -448,7 +448,7 @@ export default function NewImportPage() {
                     >
                       <div className="text-[11px] font-medium">{s.name}</div>
                       <div className="mt-0.5 flex items-center gap-3 text-[9px] text-muted-foreground">
-                        <span>{s.import_count} imports</span>
+                        <span>{s.import_count} projects</span>
                       </div>
                     </button>
                   ))}

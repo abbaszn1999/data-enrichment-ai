@@ -37,7 +37,7 @@ const sidebarLinks = [
   { href: "/demo/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/demo/products", label: "Products", icon: Package },
   { href: "/demo/categories", label: "Categories", icon: FolderTree },
-  { href: "/demo/import", label: "Import", icon: Upload },
+  { href: "/demo/import", label: "Catalog Intelligence", icon: Upload },
   { href: "/demo/usage", label: "Usage", icon: CreditCard },
   { href: "/demo/team", label: "Team", icon: Users },
   { href: "/demo/settings", label: "Settings", icon: Settings },

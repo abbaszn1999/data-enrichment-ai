@@ -198,7 +198,7 @@ export default function ImportPage() {
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight">
-                Product Import
+                Catalog Intelligence
               </h1>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Upload worksheets, match products, and enrich catalog data.
@@ -272,7 +272,7 @@ export default function ImportPage() {
 
         <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
           <ProjectListToolbar
-            title="Import projects"
+            title="Catalog Intelligence projects"
             description="Open a project to continue matching, review, or enrichment."
             search={projectSearch}
             onSearchChange={setProjectSearch}
@@ -303,7 +303,7 @@ export default function ImportPage() {
                 <Upload className="h-5 w-5" />
               </div>
               <h3 className="text-sm font-semibold">
-                Create your first import project
+                Create your first catalog intelligence project
               </h3>
               <p className="mt-1 max-w-sm text-xs text-muted-foreground">
                 Upload an Excel or CSV product worksheet to start matching and

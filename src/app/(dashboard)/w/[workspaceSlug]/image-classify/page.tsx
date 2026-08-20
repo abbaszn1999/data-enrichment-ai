@@ -168,7 +168,7 @@ export default function ImageClassifyPage() {
               <ImageIcon className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight">AI Classify</h1>
+              <h1 className="text-xl font-bold tracking-tight">Image Classification</h1>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Group product images automatically with AI.
               </p>
@@ -239,7 +239,7 @@ export default function ImageClassifyPage() {
 
         <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
           <ProjectListToolbar
-            title="Classify projects"
+            title="Image classification projects"
             description="Open a project to review image groups and classification results."
             search={projectSearch}
             onSearchChange={setProjectSearch}

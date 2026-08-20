@@ -60,7 +60,7 @@ export default function SessionOverviewPage() {
       <div className="flex flex-col items-center justify-center h-64 gap-2">
         <p className="text-sm text-muted-foreground">Session not found</p>
         <Button variant="outline" size="sm" onClick={() => router.push(`/w/${slug}/import`)}>
-          Back to Imports
+          Back to Catalog Intelligence
         </Button>
       </div>
     );

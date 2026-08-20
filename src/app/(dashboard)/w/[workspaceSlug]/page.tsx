@@ -246,7 +246,7 @@ export default function WorkspaceDashboardPage() {
       accentColor: "text-emerald-500",
     },
     {
-      label: "Imports",
+      label: "Catalog Intelligence",
       value: animImports,
       rawValue: stats?.recentImports ?? 0,
       icon: FileSpreadsheet,
@@ -552,7 +552,7 @@ export default function WorkspaceDashboardPage() {
                   <Calendar className="h-4 w-4 text-emerald-500" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold">Import Activity</h2>
+                  <h2 className="text-sm font-bold">Catalog Intelligence Activity</h2>
                   <p className="text-[9px] text-muted-foreground">Sessions per week — last 4 weeks</p>
                 </div>
               </div>
@@ -570,7 +570,7 @@ export default function WorkspaceDashboardPage() {
                 <div>
                   <div className="flex items-baseline gap-2 mb-4">
                     <span className="text-2xl font-black tabular-nums">{totalImports}</span>
-                    <span className="text-[10px] text-muted-foreground">imports this month</span>
+                    <span className="text-[10px] text-muted-foreground">projects this month</span>
                   </div>
                   <div className="flex items-end gap-3 h-32">
                     {data.map((d, i) => {

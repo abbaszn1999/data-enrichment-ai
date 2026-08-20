@@ -147,13 +147,13 @@ export default function DemoImportPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2">
-            <Upload className="h-5 w-5" /> Import Sessions
+            <Upload className="h-5 w-5" /> Catalog Intelligence
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">{totalSessions} import sessions</p>
+          <p className="text-xs text-muted-foreground mt-0.5">{totalSessions} catalog intelligence projects</p>
         </div>
         <Link href="/demo/import/new">
           <Button size="sm" className="gap-1.5 text-xs">
-            <Plus className="h-3.5 w-3.5" /> New Import
+            <Plus className="h-3.5 w-3.5" /> New project
           </Button>
         </Link>
       </div>

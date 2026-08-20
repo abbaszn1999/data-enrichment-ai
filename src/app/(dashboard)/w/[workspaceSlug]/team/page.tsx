@@ -595,8 +595,8 @@ export default function TeamPage() {
                   ["Edit / select products", true, true, true, false],
                   ["Delete all products", true, true, false, false],
                   ["Upload files", true, true, true, false],
-                  ["New import / enrichment", true, true, true, false],
-                  ["Delete import sessions", true, true, false, false],
+                  ["New catalog intelligence / enrichment", true, true, true, false],
+                  ["Delete catalog intelligence sessions", true, true, false, false],
                   ["View data", true, true, true, true],
                 ].map(([label, ...vals]) => (
                   <tr

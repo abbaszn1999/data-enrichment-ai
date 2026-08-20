@@ -105,7 +105,7 @@ export default function EnrichPage() {
         loadProject(
           workspace!.id,
           sessionId,
-          session.name || "Import Session",
+          session.name || "Catalog Intelligence Session",
           project.columns,
           productRows,
           project.sourceColumns?.length > 0 ? project.sourceColumns : [...project.columns],

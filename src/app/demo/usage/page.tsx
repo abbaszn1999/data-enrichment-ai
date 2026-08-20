@@ -223,7 +223,7 @@ export default function DemoUsagePage() {
               </div>
               <div>
                 <div className="text-lg font-bold">8</div>
-                <div className="text-[10px] text-muted-foreground">Import sessions this month</div>
+                <div className="text-[10px] text-muted-foreground">Catalog intelligence projects this month</div>
               </div>
             </div>
           </Card>

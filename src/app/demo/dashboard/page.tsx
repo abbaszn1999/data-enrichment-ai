@@ -67,7 +67,7 @@ export default function DemoDashboardPage() {
           </Link>
           <Link href="/demo/import/new">
             <Button size="sm" className="gap-1.5 text-xs">
-              <FileSpreadsheet className="h-3.5 w-3.5" /> New Import
+              <FileSpreadsheet className="h-3.5 w-3.5" /> New catalog intelligence
             </Button>
           </Link>
         </div>
@@ -114,7 +114,7 @@ export default function DemoDashboardPage() {
         {/* Recent Imports */}
         <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Recent Imports</h2>
+            <h2 className="text-sm font-semibold">Recent Catalog Intelligence</h2>
             <Link href="/demo/import" className="text-xs text-primary hover:underline flex items-center gap-1">
               View all <ArrowUpRight className="h-3 w-3" />
             </Link>
