@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { signIn, signInWithGoogle } from "@/lib/auth";
+import { PageLoader } from "@/components/brand/page-loader";
 
 function LoginForm() {
   const router = useRouter();
@@ -171,7 +172,7 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="flex justify-center py-12"><div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>}>
+    <Suspense fallback={<PageLoader size="sm" className="min-h-0 py-12 bg-transparent" />}>
       <LoginForm />
     </Suspense>
   );

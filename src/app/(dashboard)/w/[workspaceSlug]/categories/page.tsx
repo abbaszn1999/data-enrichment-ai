@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspaceContext } from "../workspace-context";
+import { PageLoader } from "@/components/brand/page-loader";
 import { useRole } from "@/hooks/use-role";
 import { loadCategoriesJson, saveCategoriesJson, saveCategoriesRawJson, type CategoryJson } from "@/lib/storage-helpers";
 
@@ -616,11 +617,7 @@ export default function CategoriesPage() {
   const selectedCat = categories.find((c) => c.id === selected);
 
   if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   return (

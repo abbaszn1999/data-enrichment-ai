@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -1215,11 +1216,7 @@ export default function ProductsVisualizerPage() {
 
   if (projectId) {
     if (loadingProject || !session || !worksheet) {
-      return (
-        <div className="flex min-h-[50vh] items-center justify-center">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        </div>
-      );
+      return <PageLoader />;
     }
 
     return (
@@ -2456,9 +2453,7 @@ export default function ProductsVisualizerPage() {
           />
 
           {loadingList ? (
-            <div className="flex h-56 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
+            <PageLoader className="h-56" size="sm" />
           ) : sessions.length === 0 ? (
             <div className="flex flex-col items-center px-6 py-16 text-center">
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F76D01]/15 to-[#400095]/15">

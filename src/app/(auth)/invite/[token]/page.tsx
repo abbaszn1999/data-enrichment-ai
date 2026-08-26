@@ -3,9 +3,10 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
-import { Loader2, CheckCircle2, AlertCircle, Building2, Mail, LogOut } from "lucide-react";
+import { CheckCircle2, AlertCircle, Building2, Mail, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageLoader } from "@/components/brand/page-loader";
 import { useAuth } from "@/hooks/use-auth";
 import { signOut } from "@/lib/auth";
 
@@ -85,9 +86,11 @@ export default function InvitePage() {
 
   if (loading || accepting) {
     return (
-      <Card className="p-8 flex flex-col items-center gap-3">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">{accepting ? "Accepting invite..." : "Loading invite..."}</p>
+      <Card className="p-8">
+        <PageLoader
+          label={accepting ? "Accepting invite..." : "Loading invite..."}
+          className="min-h-0 bg-transparent"
+        />
       </Card>
     );
   }

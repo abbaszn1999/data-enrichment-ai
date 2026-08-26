@@ -24,6 +24,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useWorkspaceContext } from "../workspace-context";
+import { PageLoader } from "@/components/brand/page-loader";
 import { useRole } from "@/hooks/use-role";
 import { loadProductsJson, saveProductsJson, type MasterProductJson } from "@/lib/storage-helpers";
 
@@ -345,13 +346,8 @@ export default function ProductsPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={totalColSpan} className="py-20 text-center">
-                      <div className="inline-flex flex-col items-center gap-3">
-                        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#400095]/10 dark:bg-[#F76D01]/10">
-                          <Loader2 className="h-5 w-5 animate-spin text-[#400095] dark:text-[#F76D01]" />
-                        </span>
-                        <span className="text-[10px] text-muted-foreground">Loading catalog…</span>
-                      </div>
+                    <td colSpan={totalColSpan} className="py-16">
+                      <PageLoader size="sm" label="Loading catalog…" className="min-h-0 bg-transparent" />
                     </td>
                   </tr>
                 ) : products.length === 0 ? (

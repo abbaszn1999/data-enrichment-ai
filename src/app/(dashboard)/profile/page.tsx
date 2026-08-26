@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
+import { PageLoader } from "@/components/brand/page-loader";
 import { updateProfile } from "@/lib/supabase";
 import { updatePassword, signOut } from "@/lib/auth";
 
@@ -86,11 +87,7 @@ export default function ProfilePage() {
   };
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <PageLoader className="min-h-screen" />;
   }
 
   const initials = fullName

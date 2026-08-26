@@ -34,6 +34,7 @@ import {
   Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageLoader } from "@/components/brand/page-loader";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -1652,14 +1653,7 @@ export default function SyncPage() {
   // ─── Render States ─────────────────────────────────
 
   if (loading) {
-    return (
-      <div className="autommerce-dashboard flex-1 flex items-center justify-center [font-family:var(--brand-font)]">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="h-6 w-6 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-          <p className="text-sm text-muted-foreground">Loading Sync workspace...</p>
-        </div>
-      </div>
-    );
+    return <PageLoader />;
   }
 
   if (!integration) {

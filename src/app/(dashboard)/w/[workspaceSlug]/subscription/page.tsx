@@ -21,6 +21,7 @@ import {
   Minus,
   Plus,
 } from "lucide-react";
+import { PageLoader } from "@/components/brand/page-loader";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -103,11 +104,7 @@ export default function SubscriptionPage() {
   };
 
   if (isLoading) {
-    return (
-      <div className="autommerce-dashboard h-full flex items-center justify-center [font-family:var(--brand-font)]">
-        <Loader2 className="h-6 w-6 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   const currentPlanName = currentPlan?.name;

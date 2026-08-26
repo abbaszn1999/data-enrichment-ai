@@ -23,6 +23,7 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PageLoader } from "@/components/brand/page-loader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -282,12 +283,7 @@ export function SyncDashboard() {
   };
 
   if (loading) {
-    return (
-      <div className="autommerce-dashboard flex items-center justify-center p-16 text-xs text-muted-foreground [font-family:var(--brand-font)]">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-        Loading Sync
-      </div>
-    );
+    return <PageLoader />;
   }
 
   return (

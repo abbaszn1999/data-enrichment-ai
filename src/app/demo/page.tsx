@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { PageLoader } from "@/components/brand/page-loader";
 
 export default function DemoPage() {
   const router = useRouter();
@@ -9,9 +10,5 @@ export default function DemoPage() {
     router.replace("/demo/login");
   }, [router]);
 
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-    </div>
-  );
+  return <PageLoader className="min-h-screen" />;
 }

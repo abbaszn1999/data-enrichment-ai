@@ -16,7 +16,6 @@ import {
   Images,
   LayoutGrid,
   LayoutTemplate,
-  Loader2,
   Lock,
   Package,
   Paintbrush,
@@ -40,6 +39,7 @@ import { useDashboardSummary } from "@/hooks/use-dashboard";
 import { formatCredits } from "@/lib/format-credits";
 import { formatMoney } from "@/lib/wallet/format";
 import { matchesQuery, visibleTools } from "@/components/dashboard/tools-catalog";
+import { PageLoader } from "@/components/brand/page-loader";
 
 type MissionTool = {
   name: string;
@@ -453,14 +453,7 @@ export default function WorkspaceDashboardPage() {
   ];
 
   if (wsLoading || isLoading) {
-    return (
-      <div className="flex h-full min-h-96 items-center justify-center bg-[#080a0f]">
-        <div className="text-center text-white">
-          <Loader2 className="mx-auto h-6 w-6 animate-spin text-[#F76D01]" />
-          <p className="mt-3 text-xs text-white/40">Starting the AI core…</p>
-        </div>
-      </div>
-    );
+    return <PageLoader />;
   }
 
   return (

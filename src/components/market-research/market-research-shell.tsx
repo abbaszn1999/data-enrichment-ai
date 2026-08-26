@@ -10,9 +10,10 @@ import {
 } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Loader2, Settings, Store, Unplug } from "lucide-react";
+import { Settings, Store, Unplug } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { PageLoader } from "@/components/brand/page-loader";
 import { useAuth } from "@/hooks/use-auth";
 import { useWallet } from "@/hooks/use-wallet";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -3023,11 +3024,7 @@ export function MarketResearchShell() {
   };
 
   if (wsLoading || !hydrated) {
-    return (
-      <div className="autommerce-dashboard flex flex-1 items-center justify-center [font-family:var(--brand-font)]">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   if (!hasIntegration) {

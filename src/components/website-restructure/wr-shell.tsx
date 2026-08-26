@@ -12,6 +12,7 @@ import {
 import { useParams, useRouter } from "next/navigation";
 import { Loader2, Plus, Settings, Unplug } from "lucide-react";
 import { toast } from "sonner";
+import { PageLoader } from "@/components/brand/page-loader";
 import { useAuth } from "@/hooks/use-auth";
 import { useWorkspace } from "@/hooks/use-workspace";
 import {
@@ -507,11 +508,7 @@ export function WebsiteRestructureShell() {
   };
 
   if (wsLoading || loading) {
-    return (
-      <div className="autommerce-dashboard flex h-full min-h-0 items-center justify-center [font-family:var(--brand-font)]">
-        <Loader2 className="h-5 w-5 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   if (!hasIntegration) {

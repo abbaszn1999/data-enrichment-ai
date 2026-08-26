@@ -22,7 +22,6 @@ import {
   Building2,
   Plus,
   Check,
-  Loader2,
   Coins,
   Crown,
   Image as ImageIcon,
@@ -54,6 +53,7 @@ import { useWorkspaceStore } from "@/store/workspace-store";
 import { useSyncStore } from "@/store/sync-store";
 import { SubscriptionGate, SubscriptionBanner } from "@/components/subscription-gate";
 import { AutommerceLogo } from "@/components/brand/autommerce-logo";
+import { PageLoader } from "@/components/brand/page-loader";
 import { WorkspaceContext } from "./workspace-context";
 import { JobInbox } from "@/components/job-inbox";
 
@@ -398,30 +398,15 @@ export default function WorkspaceLayout({
   }, [wsLoading, workspace, requiresAdminAccess, canAccessAdminPages, router, basePath]);
 
   if (!wsLoading && (error || !workspace)) {
-    return (
-      <div className="h-screen flex flex-col items-center justify-center gap-4">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Redirecting...</p>
-      </div>
-    );
+    return <PageLoader label="Redirecting…" className="min-h-screen" />;
   }
 
   if (!wsLoading && workspace && isSubscriptionPage && role !== "owner") {
-    return (
-      <div className="h-screen flex flex-col items-center justify-center gap-4">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Redirecting...</p>
-      </div>
-    );
+    return <PageLoader label="Redirecting…" className="min-h-screen" />;
   }
 
   if (!wsLoading && workspace && requiresAdminAccess && !canAccessAdminPages) {
-    return (
-      <div className="h-screen flex flex-col items-center justify-center gap-4">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Redirecting...</p>
-      </div>
-    );
+    return <PageLoader label="Redirecting…" className="min-h-screen" />;
   }
 
   const handleSignOut = async () => {
@@ -682,14 +667,16 @@ export default function WorkspaceLayout({
               />
             )}
             {isSubscriptionPage || isSyncPage ? (
-              <div className={isSyncPage ? "flex-1 flex flex-col min-h-0 overflow-hidden" : "flex-1"}>{children}</div>
+              <div className={isSyncPage ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "flex min-h-0 flex-1 flex-col"}>
+                {children}
+              </div>
             ) : (
               <SubscriptionGate subscription={subscription} isActive={isActive} isLoading={subLoading} role={role}>
                 <div
                   className={
                     isEnrichPage || isMarketResearchPage || isWebsiteRestructurePage
-                      ? "flex-1 flex flex-col min-h-0 overflow-hidden h-full"
-                      : "flex-1"
+                      ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden"
+                      : "flex min-h-0 flex-1 flex-col"
                   }
                 >
                   {children}

@@ -43,6 +43,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PageLoader } from "@/components/brand/page-loader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -2202,11 +2203,7 @@ export default function ProductsGalleryPage() {
   // ── Project detail view ──────────────────────────────────────────────
   if (projectId) {
     if (sessionLoading && !worksheet) {
-      return (
-        <div className="flex h-[calc(100vh-3rem)] items-center justify-center">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        </div>
-      );
+      return <PageLoader />;
     }
 
     if (sessionError && !worksheet) {
@@ -3987,9 +3984,7 @@ export default function ProductsGalleryPage() {
           />
 
           {listLoading ? (
-            <div className="flex h-56 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
+            <PageLoader className="h-56" size="sm" />
           ) : listError ? (
             <div className="m-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
               {listError}

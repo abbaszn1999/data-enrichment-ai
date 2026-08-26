@@ -7,7 +7,6 @@ import {
   Sparkles,
   TrendingUp,
   Clock,
-  Loader2,
   AlertTriangle,
   Zap,
   ArrowUpRight,
@@ -29,6 +28,7 @@ import { useParams } from "next/navigation";
 import { useWorkspaceContext } from "../workspace-context";
 import { useUsage } from "@/hooks/use-usage";
 import { formatCredits } from "@/lib/format-credits";
+import { PageLoader } from "@/components/brand/page-loader";
 
 const OP_LABELS: Record<string, { label: string; icon: any; color: string }> = {
   ai_enrichment: { label: "AI Enrichment", icon: Sparkles, color: "text-[#6B358D] dark:text-[#F76D01]" },
@@ -69,11 +69,7 @@ export default function UsagePage() {
   );
 
   if (loading) {
-    return (
-      <div className="autommerce-dashboard flex h-64 items-center justify-center [font-family:var(--brand-font)]">
-        <Loader2 className="h-5 w-5 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   const usagePercent =

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
+import { PageLoader } from "@/components/brand/page-loader";
 import {
   Users,
   Mail,
@@ -174,11 +175,7 @@ export default function TeamPage() {
   const loading = subscriptionLoading || teamLoading;
 
   if (loading && members.length === 0) {
-    return (
-      <div className="autommerce-dashboard flex h-64 items-center justify-center [font-family:var(--brand-font)]">
-        <Loader2 className="h-5 w-5 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   const adminCount = members.filter(

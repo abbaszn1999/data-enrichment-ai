@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "@/app/(dashboard)/w/[workspaceSlug]/workspace-context";
 import {
   FAQ_TEMPLATES,
@@ -169,12 +170,7 @@ export function CustomizePage() {
   const templates = kind === "links" ? LINK_TEMPLATES : FAQ_TEMPLATES;
 
   if (!style) {
-    return (
-      <div className="autommerce-dashboard flex flex-1 items-center justify-center text-sm text-muted-foreground [font-family:var(--brand-font)]">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-        Loading…
-      </div>
-    );
+    return <PageLoader />;
   }
 
   return (

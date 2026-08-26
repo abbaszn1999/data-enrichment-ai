@@ -19,6 +19,7 @@ import {
   Wallet as WalletIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PageLoader } from "@/components/brand/page-loader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -230,11 +231,7 @@ export default function WalletPage() {
   );
 
   if (isLoading || !wallet) {
-    return (
-      <div className="autommerce-dashboard flex flex-1 items-center justify-center p-10 [font-family:var(--brand-font)]">
-        <Loader2 className="h-5 w-5 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   const spent30 = spentSince(wallet, 30);

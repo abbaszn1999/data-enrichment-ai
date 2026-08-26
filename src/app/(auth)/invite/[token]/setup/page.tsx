@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
+import { PageLoader } from "@/components/brand/page-loader";
 import { createClient } from "@/lib/supabase-browser";
 
 export default function InviteSetupPage() {
@@ -114,9 +115,8 @@ export default function InviteSetupPage() {
 
   if (loading) {
     return (
-      <Card className="p-8 flex flex-col items-center gap-3">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Loading...</p>
+      <Card className="p-8">
+        <PageLoader className="min-h-0 bg-transparent" />
       </Card>
     );
   }

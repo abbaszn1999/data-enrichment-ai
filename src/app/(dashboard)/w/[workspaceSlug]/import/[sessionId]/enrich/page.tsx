@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
+import { ArrowLeft, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageLoader } from "@/components/brand/page-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getImportSession, type ImportSession } from "@/lib/supabase";
 import { loadProjectJson } from "@/lib/storage-helpers";
@@ -125,14 +126,7 @@ export default function EnrichPage() {
   }, [sessionId, workspace, loadProject]);
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center space-y-3">
-          <Loader2 className="h-6 w-6 animate-spin text-primary mx-auto" />
-          <p className="text-xs text-muted-foreground">Loading enrichment tool...</p>
-        </div>
-      </div>
-    );
+    return <PageLoader />;
   }
 
   if (error) {

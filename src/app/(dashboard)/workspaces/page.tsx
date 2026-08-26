@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "motion/react";
+import { PageLoader } from "@/components/brand/page-loader";
 import {
   Plus,
   Building2,
@@ -123,11 +124,7 @@ export default function WorkspacesPage() {
   };
 
   if (loading) {
-    return (
-      <div className="autommerce-dashboard flex min-h-screen items-center justify-center bg-background [font-family:var(--brand-font)]">
-        <Loader2 className="h-6 w-6 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
-      </div>
-    );
+    return <PageLoader className="min-h-screen" />;
   }
 
   const canCreate = workspaces.some((ws) => ws.owner_id === user?.id) || workspaces.length === 0;

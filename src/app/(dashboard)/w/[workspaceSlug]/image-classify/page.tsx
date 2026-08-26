@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageLoader } from "@/components/brand/page-loader";
 import { Badge } from "@/components/ui/badge";
 import {
   ProjectListPagination,
@@ -262,9 +263,7 @@ export default function ImageClassifyPage() {
           />
 
           {loading ? (
-            <div className="flex h-56 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
+            <PageLoader className="h-56" size="sm" />
           ) : sessions.length === 0 ? (
             <div className="flex flex-col items-center px-6 py-16 text-center">
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F76D01]/15 to-[#400095]/15">

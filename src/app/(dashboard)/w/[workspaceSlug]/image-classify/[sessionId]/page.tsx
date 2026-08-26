@@ -7,7 +7,6 @@ import { motion } from "motion/react";
 import {
   ArrowLeft,
   Download,
-  Loader2,
   ImageIcon,
   Layers,
   AlertCircle,
@@ -16,6 +15,7 @@ import {
   Cpu,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageLoader } from "@/components/brand/page-loader";
 import { Badge } from "@/components/ui/badge";
 import {
   AnalyzingProductsCard,
@@ -215,11 +215,7 @@ export default function ImageClassifyDetailPage() {
   };
 
   if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <PageLoader />;
   }
   if (!session) {
     return (
