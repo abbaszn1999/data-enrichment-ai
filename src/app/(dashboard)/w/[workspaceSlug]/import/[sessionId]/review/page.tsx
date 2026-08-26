@@ -23,12 +23,7 @@ import {
 import { loadProjectJson, loadProductsJson, saveProjectJson, type ProjectRow } from "@/lib/storage-helpers";
 import { useWorkspaceContext } from "../../../workspace-context";
 import { normalizeValue, generateDiff, type MatchingRule } from "@/lib/matching";
-import {
-  applyMatchTypes,
-  guessPlpSourceColumn,
-  resolveTargetCategoryNames,
-  PLP_MATCHING_RULES,
-} from "@/lib/import-matching";
+import { applyMatchTypes, resolveTargetCategoryNames } from "@/lib/import-matching";
 import { ImportStepper } from "@/components/import/import-stepper";
 import type { SessionKind } from "@/types";
 
@@ -73,24 +68,14 @@ export default function ReviewPage() {
 
       // Re-run matching client-side so the review never depends on stale storage
       const projectRows = project?.rows ?? [];
-      const supplierMatchCol =
-        s?.supplier_match_column ||
-        (sessionKind === "plp"
-          ? guessPlpSourceColumn(project?.columns ?? [])
-          : (project?.columns?.[0] ?? ""));
+      const supplierMatchCol = s?.supplier_match_column || (project?.columns?.[0] ?? "");
 
-      // "Skip matching" is a decision, not a cache — re-deriving would undo it.
-      if (project?.matchingSkipped) {
+      // PLP has no matching step at all — every page is always "new".
+      if (sessionKind === "plp") {
+        for (const row of projectRows) row.matchType = "new";
+      } else if (project?.matchingSkipped) {
+        // "Skip matching" is a decision, not a cache — re-deriving would undo it.
         for (const row of projectRows) row.matchType = row.matchType ?? "new";
-      } else if (sessionKind === "plp") {
-        await applyMatchTypes({
-          kind: "plp",
-          workspaceId: workspace.id,
-          rows: projectRows,
-          sourceColumn: supplierMatchCol,
-          masterColumn: s?.master_match_column || "name",
-          rules: PLP_MATCHING_RULES,
-        });
       } else {
         const matchRules: MatchingRule[] = (s?.matching_rules as MatchingRule[]) || [];
         const masterMatchCol = s?.master_match_column || "sku";
@@ -241,28 +226,35 @@ export default function ReviewPage() {
       </section>
 
       <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
-      <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={3} kind={kind} /></section>
+      <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={isPlp ? 2 : 3} kind={kind} /></section>
 
-      {/* Tabs */}
+      {/* Tabs — PLP has no "existing" concept, so it always shows one unified table */}
       <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:flex-row sm:items-center">
-        <div className="flex gap-1 rounded-xl bg-muted/50 p-1">
-          <button
-            onClick={() => setActiveTab("existing")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === "existing" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground hover:bg-background"
-            }`}
-          >
-            {isPlp ? "Existing pages" : "Existing"} ({existingRows.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("new")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === "new" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground hover:bg-background"
-            }`}
-          >
-            {isPlp ? "New pages" : "New"} ({newRows.length})
-          </button>
-        </div>
+        {!isPlp && (
+          <div className="flex gap-1 rounded-xl bg-muted/50 p-1">
+            <button
+              onClick={() => setActiveTab("existing")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "existing" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground hover:bg-background"
+              }`}
+            >
+              Existing ({existingRows.length})
+            </button>
+            <button
+              onClick={() => setActiveTab("new")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "new" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground hover:bg-background"
+              }`}
+            >
+              New ({newRows.length})
+            </button>
+          </div>
+        )}
+        {isPlp && (
+          <div className="text-xs font-medium text-muted-foreground">
+            {rows.length} {rows.length === 1 ? "page" : "pages"} ready for enrichment
+          </div>
+        )}
         <div className="flex-1" />
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50" />
@@ -282,7 +274,7 @@ export default function ReviewPage() {
       </div>
 
       {/* Existing Products Table */}
-      {activeTab === "existing" && (
+      {!isPlp && activeTab === "existing" && (
         <Card className="overflow-hidden rounded-[24px] border-border/60 shadow-[0_15px_50px_rgba(15,23,42,.05)]">
           <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <div className="overflow-x-auto max-h-[calc(100vh-400px)]">
@@ -340,8 +332,8 @@ export default function ReviewPage() {
         </Card>
       )}
 
-      {/* New Products Table */}
-      {activeTab === "new" && (
+      {/* New Products Table — for PLP this is the single unified table of all pages */}
+      {(isPlp || activeTab === "new") && (
         <Card className="overflow-hidden rounded-[24px] border-border/60 shadow-[0_15px_50px_rgba(15,23,42,.05)]">
           <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <div className="overflow-x-auto max-h-[calc(100vh-400px)]">
@@ -355,7 +347,7 @@ export default function ReviewPage() {
               </thead>
               <tbody>
                 {filteredNew.length === 0 ? (
-                  <tr><td colSpan={supplierColumns.length} className="text-center py-8 text-xs text-muted-foreground">No new products</td></tr>
+                  <tr><td colSpan={supplierColumns.length} className="text-center py-8 text-xs text-muted-foreground">{isPlp ? "No pages" : "No new products"}</td></tr>
                 ) : (
                   filteredNew.map((row) => {
                     const d = row.mapped_data || {};
@@ -377,7 +369,9 @@ export default function ReviewPage() {
       {/* Footer */}
       <div className="flex items-center justify-between pt-2">
         <div className="text-xs text-muted-foreground">
-          {existingRows.length} existing, {newRows.length} new — {rows.length} total
+          {isPlp
+            ? `${rows.length} total`
+            : `${existingRows.length} existing, ${newRows.length} new — ${rows.length} total`}
         </div>
         <div className="flex items-center gap-3">
           <Button variant="outline" size="sm" className="text-xs" onClick={() => router.back()}>Back</Button>

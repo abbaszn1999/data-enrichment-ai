@@ -27,8 +27,28 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { ExportDialog } from "@/components/export-dialog";
@@ -109,8 +129,15 @@ export function Sidebar() {
   } = useSheetStore();
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const isPlp = sessionKind === "plp";
 
   const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
+
+  // Functions (Math, Generate, Clean, Copy & Fill) act on matched product
+  // rows — PLP has none of that, so it only ever gets the AI tab.
+  useEffect(() => {
+    if (isPlp) setSidebarTab("ai");
+  }, [isPlp]);
   const [lastError, setLastError] = useState<string | null>(null);
   const [enrichSectionOpen, setEnrichSectionOpen] = useState(true);
   const [sourceSectionOpen, setSourceSectionOpen] = useState(true);
@@ -147,6 +174,11 @@ export function Sidebar() {
     refreshPresets();
   }, [refreshPresets]);
 
+  const [pendingPreset, setPendingPreset] = useState<EnrichmentPreset | null>(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [savePresetName, setSavePresetName] = useState("AI Setting");
+  const [savingPreset, setSavingPreset] = useState(false);
+
   const handleSelectPreset = useCallback(
     (presetId: string) => {
       if (presetId === "") {
@@ -160,17 +192,18 @@ export function Sidebar() {
       const preset = kindPresets.find((p) => p.id === presetId);
       if (!preset) return;
 
-      const confirmed = window.confirm(
-        `Apply "${preset.name}"?\n\nThis replaces your current AI column configuration. Enriched cells are kept — columns you turn off keep their data and it reappears if you re-enable them.`
-      );
-      if (!confirmed) return;
-
-      setSelectedPresetId(presetId);
-      applyEnrichmentPreset(preset.settings);
-      toast.success("Setting applied", { description: preset.name });
+      setPendingPreset(preset);
     },
     [kindPresets, applyEnrichmentPreset, sessionKind]
   );
+
+  const confirmApplyPreset = useCallback(() => {
+    if (!pendingPreset) return;
+    setSelectedPresetId(pendingPreset.id);
+    applyEnrichmentPreset(pendingPreset.settings);
+    toast.success("Setting applied", { description: pendingPreset.name });
+    setPendingPreset(null);
+  }, [pendingPreset, applyEnrichmentPreset]);
 
   const enabledColumns = enrichmentColumns
     .filter((col) => col.enabled)
@@ -526,19 +559,29 @@ export function Sidebar() {
     }
   }, [rows, setRowStatus]);
 
-  const handleSavePreset = useCallback(async () => {
+  const handleSavePreset = useCallback(() => {
     if (!workspace?.id) return;
     const selectedColumns = enrichmentColumns.filter((col) => col.enabled);
     if (selectedColumns.length === 0) {
       toast.error("Select at least one AI output column");
       return;
     }
-    const name = window.prompt("Setting name", "AI Setting");
-    if (!name?.trim()) return;
+    setSavePresetName("AI Setting");
+    setSaveDialogOpen(true);
+  }, [workspace?.id, enrichmentColumns]);
+
+  const confirmSavePreset = useCallback(async () => {
+    if (!workspace?.id || savingPreset) return;
+    const name = savePresetName.trim();
+    if (!name) {
+      toast.error("Enter a setting name");
+      return;
+    }
+    setSavingPreset(true);
     const now = new Date().toISOString();
     const preset: EnrichmentPreset = {
       id: crypto.randomUUID(),
-      name: name.trim(),
+      name,
       createdAt: now,
       updatedAt: now,
       kind: sessionKind,
@@ -552,14 +595,19 @@ export function Sidebar() {
       await saveEnrichmentPreset(workspace.id, preset);
       setSelectedPresetId(preset.id);
       await refreshPresets();
+      setSaveDialogOpen(false);
       toast.success("Setting saved", { description: preset.name });
     } catch (error) {
       toast.error("Failed to save setting", {
         description: error instanceof Error ? error.message : "Unknown error",
       });
+    } finally {
+      setSavingPreset(false);
     }
   }, [
     workspace?.id,
+    savingPreset,
+    savePresetName,
     enrichmentColumns,
     sourceColumns,
     enrichmentSettings,
@@ -619,6 +667,12 @@ export function Sidebar() {
             <div className="flex items-center gap-1.5 flex-1 mr-2 px-2 py-1.5 rounded-lg bg-muted/60 border border-border/50">
               <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <span className="text-[11px] font-semibold text-muted-foreground">View Only</span>
+            </div>
+          ) : isPlp ? (
+            // PLP has nothing for Functions to act on, so there's no tab to switch.
+            <div className="flex flex-1 items-center gap-1.5 px-2 py-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              <span className="text-[11px] font-semibold">AI Enrichment</span>
             </div>
           ) : (
           <div className="flex items-center bg-muted rounded-lg p-0.5 flex-1 mr-2">
@@ -1650,6 +1704,89 @@ export function Sidebar() {
         <ExportDialog />
       </div>
       )}
+
+      <AlertDialog open={!!pendingPreset} onOpenChange={(open) => !open && setPendingPreset(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apply &quot;{pendingPreset?.name}&quot;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This replaces your current AI column configuration. Enriched cells
+              are kept — columns you turn off keep their data and it reappears if
+              you re-enable them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingPreset(null)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                confirmApplyPreset();
+              }}
+            >
+              Apply
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog
+        open={saveDialogOpen}
+        onOpenChange={(open) => {
+          if (savingPreset) return;
+          setSaveDialogOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save setting</DialogTitle>
+            <DialogDescription>
+              Name this AI column configuration so you can reuse it on later
+              projects of the same type.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="save-preset-name" className="text-xs">
+              Setting name
+            </Label>
+            <Input
+              id="save-preset-name"
+              autoFocus
+              value={savePresetName}
+              onChange={(e) => setSavePresetName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void confirmSavePreset();
+                }
+              }}
+              placeholder="e.g. PLP SEO defaults"
+              disabled={savingPreset}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={savingPreset}
+              onClick={() => setSaveDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={savingPreset || !savePresetName.trim()}
+              onClick={() => void confirmSavePreset()}
+            >
+              {savingPreset ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

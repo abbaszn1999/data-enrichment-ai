@@ -15,19 +15,20 @@ export interface ImportStep {
  * stepper header and the session overview page so numbering never drifts.
  */
 export function getImportSteps(kind: SessionKind = "product"): ImportStep[] {
+  if (kind === "plp") {
+    // PLP pages are always matched against categories.json automatically —
+    // there is no user-facing matching step to show or number.
+    return [
+      { num: 1, label: "Upload File", segment: null },
+      { num: 2, label: "Review Results", segment: "review" },
+      { num: 3, label: "PLP Workspace", segment: "enrich" },
+    ];
+  }
   return [
     { num: 1, label: "Upload File", segment: null },
-    {
-      num: 2,
-      label: kind === "plp" ? "Match Categories" : "Matching Rules",
-      segment: "rules",
-    },
+    { num: 2, label: "Matching Rules", segment: "rules" },
     { num: 3, label: "Review Results", segment: "review" },
-    {
-      num: 4,
-      label: kind === "plp" ? "PLP Workspace" : "Enrichment Tool",
-      segment: "enrich",
-    },
+    { num: 4, label: "Enrichment Tool", segment: "enrich" },
   ];
 }
 

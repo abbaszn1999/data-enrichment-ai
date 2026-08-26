@@ -3,6 +3,7 @@
 import * as React from "react"
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogHeader,
   DialogFooter,
@@ -66,6 +67,7 @@ function AlertDialogAction({
 }: React.ComponentProps<"button">) {
   return (
     <button
+      type="button"
       className={cn(buttonVariants(), className)}
       onClick={onClick}
       {...props}
@@ -82,13 +84,16 @@ function AlertDialogCancel({
   ...props
 }: React.ComponentProps<"button">) {
   return (
-    <button
-      className={cn(buttonVariants({ variant: "outline" }), className)}
-      onClick={onClick}
-      {...props}
-    >
-      {children}
-    </button>
+    <DialogClose asChild>
+      <button
+        type="button"
+        className={cn(buttonVariants({ variant: "outline" }), className)}
+        onClick={onClick}
+        {...props}
+      >
+        {children}
+      </button>
+    </DialogClose>
   );
 }
 

@@ -196,6 +196,8 @@ export default function NewImportPage() {
 
       // Saved settings are now applied inside the workspace (step 4), so a new
       // session always starts from the defaults for its kind.
+      // PLP has no matching step at all — every page starts as "new" and the
+      // user always supplies the categories to enrich in this very upload.
       const projectJson: ProjectJson = {
         kind,
         columns: fileData.columns,
@@ -204,17 +206,22 @@ export default function NewImportPage() {
         enrichmentColumns: getDefaultEnrichmentColumns(kind),
         enrichmentSettings: {},
         columnVisibility: {},
+        matchingSkipped: isPlp,
       };
 
       const storagePath = await saveProjectJson(workspace.id, session.id, projectJson);
 
-      // 5. Update session with storage path
+      // 5. Update session with storage path (PLP also skips straight to Review)
       await updateImportSession(session.id, {
         storage_path: storagePath,
+        ...(isPlp ? { status: "review", new_count: fileData.totalRows, existing_count: 0 } : {}),
       } as any);
 
-      // Navigate to matching rules page
-      router.push(`/w/${slug}/import/${session.id}/rules`);
+      router.push(
+        isPlp
+          ? `/w/${slug}/import/${session.id}/review`
+          : `/w/${slug}/import/${session.id}/rules`
+      );
     } catch (err: any) {
       const msg = typeof err === "string" ? err : err?.message || err?.error_description || JSON.stringify(err);
       alert(msg || "Failed to create catalog intelligence project");
@@ -548,7 +555,7 @@ export default function NewImportPage() {
                 {loading
                   ? "Processing file..."
                   : isPlp
-                    ? "Continue to Match Categories"
+                    ? "Continue to Review Results"
                     : "Continue to Matching Rules"}
               </Button>
             </motion.section>

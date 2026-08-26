@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { motion } from "motion/react";
 import {
@@ -40,12 +40,7 @@ import {
   generateDiff,
   type MatchingRule,
 } from "@/lib/matching";
-import {
-  applyMatchTypes,
-  guessPlpSourceColumn,
-  PLP_MATCH_COLUMNS,
-  PLP_MATCHING_RULES,
-} from "@/lib/import-matching";
+import { applyMatchTypes } from "@/lib/import-matching";
 import { ImportStepper } from "@/components/import/import-stepper";
 import type { SessionKind } from "@/types";
 
@@ -82,8 +77,6 @@ export default function MatchingRulesPage() {
   const [masterProducts, setMasterProducts] = useState<MasterProductJson[]>([]);
   const [kind, setKind] = useState<SessionKind>("product");
 
-  const isPlp = kind === "plp";
-
   useEffect(() => {
     if (!workspace || !sessionId) return;
     Promise.all([
@@ -91,28 +84,35 @@ export default function MatchingRulesPage() {
       loadCategoriesJson(workspace.id),
       loadProductsJson(workspace.id),
       loadProjectJson(workspace.id, sessionId),
-    ]).then(([s, cats, prods, project]) => {
+    ]).then(async ([s, cats, prods, project]) => {
       const sessionKind: SessionKind =
         (s?.kind as SessionKind) ?? project?.kind ?? "product";
+
+      // PLP has no matching step — categories are always matched
+      // automatically. Any session that still lands here (e.g. an older
+      // in-flight session) is bounced straight to Review instead.
+      if (sessionKind === "plp") {
+        if (s && workspace && project) {
+          project.matchingSkipped = true;
+          for (const row of project.rows) row.matchType = row.matchType ?? "new";
+          await saveProjectJson(workspace.id, s.id, project);
+          await updateImportSession(s.id, { status: "review" } as any).catch(() => {});
+        }
+        router.replace(`/w/${slug}/import/${sessionId}/review`);
+        return;
+      }
+
       setKind(sessionKind);
 
-      if (sessionKind === "plp") {
-        // Category pages are matched against categories.json by name/slug/URL,
-        // so the master column list is fixed rather than derived from products.
-        setMasterColumns([...PLP_MATCH_COLUMNS]);
-        setMasterMatchColumn(s?.master_match_column || "name");
-        setRules(PLP_MATCHING_RULES);
-      } else {
-        // Extract unique data keys from master products as master columns
-        const colSet = new Set<string>(["sku"]);
-        for (const p of prods) {
-          if (p.data) Object.keys(p.data).forEach((k) => colSet.add(k));
-        }
-        setMasterColumns(Array.from(colSet));
-        if (s?.master_match_column) setMasterMatchColumn(s.master_match_column);
-        if (s?.matching_rules && (s.matching_rules as any[]).length > 0) {
-          setRules(s.matching_rules as MatchingRule[]);
-        }
+      // Extract unique data keys from master products as master columns
+      const colSet = new Set<string>(["sku"]);
+      for (const p of prods) {
+        if (p.data) Object.keys(p.data).forEach((k) => colSet.add(k));
+      }
+      setMasterColumns(Array.from(colSet));
+      if (s?.master_match_column) setMasterMatchColumn(s.master_match_column);
+      if (s?.matching_rules && (s.matching_rules as any[]).length > 0) {
+        setRules(s.matching_rules as MatchingRule[]);
       }
 
       setMasterProducts(prods);
@@ -120,12 +120,7 @@ export default function MatchingRulesPage() {
       // Extract supplier columns from the project JSON
       if (project?.columns) {
         setSupplierColumns(project.columns);
-        setSupplierMatchColumn(
-          s?.supplier_match_column ||
-            (sessionKind === "plp"
-              ? guessPlpSourceColumn(project.columns)
-              : (project.columns[0] ?? ""))
-        );
+        setSupplierMatchColumn(s?.supplier_match_column || (project.columns[0] ?? ""));
       }
 
       setSession(s);
@@ -133,7 +128,7 @@ export default function MatchingRulesPage() {
       if (s?.target_category_ids) setSelectedCategories(s.target_category_ids);
       setLoading(false);
     });
-  }, [workspace, sessionId]);
+  }, [workspace, sessionId, router, slug]);
 
   const toggleRule = (index: number) => {
     const updated = [...rules];
@@ -176,89 +171,6 @@ export default function MatchingRulesPage() {
       }
     }
     setTestResult({ normalized, matched, matchedWith });
-  };
-
-  /** PLP: count matches against categories.json without mutating storage. */
-  const runPlpPreview = useCallback(async () => {
-    if (!workspace || !sessionId || !supplierMatchColumn) return;
-    setPreviewLoading(true);
-    try {
-      const project = await loadProjectJson(workspace.id, sessionId);
-      if (!project) return;
-      const { existingCount, newCount } = await applyMatchTypes({
-        kind: "plp",
-        workspaceId: workspace.id,
-        rows: project.rows.map((r) => ({ originalData: r.originalData })),
-        sourceColumn: supplierMatchColumn,
-        masterColumn: masterMatchColumn,
-        rules: PLP_MATCHING_RULES,
-      });
-      setPreviewResult({ existing: existingCount, new: newCount, ambiguous: 0 });
-      setShowPreview(true);
-    } catch (err) {
-      console.error("PLP preview error:", err);
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, [workspace, sessionId, supplierMatchColumn, masterMatchColumn]);
-
-  // PLP matching needs no configuration, so run it as soon as we know the columns.
-  useEffect(() => {
-    if (!isPlp || loading || !supplierMatchColumn) return;
-    runPlpPreview();
-  }, [isPlp, loading, supplierMatchColumn, masterMatchColumn, runPlpPreview]);
-
-  /** Persist matchType for every row and advance to review. */
-  const finishPlp = async (skipMatching: boolean) => {
-    if (!session || !workspace) return;
-    setMatchLoading(true);
-    try {
-      await updateImportSession(session.id, {
-        matching_rules: PLP_MATCHING_RULES as any,
-        supplier_match_column: supplierMatchColumn,
-        master_match_column: masterMatchColumn,
-      } as any);
-
-      const project = await loadProjectJson(workspace.id, session.id);
-      if (!project || project.rows.length === 0) {
-        throw new Error("No rows found in storage.");
-      }
-
-      let existingCount = 0;
-      let newCount = project.rows.length;
-
-      // Recorded so review and the workspace don't re-derive matchType and
-      // silently undo the user's choice.
-      project.matchingSkipped = skipMatching;
-
-      if (skipMatching) {
-        // Treat every page as new rather than leaving matchType unset.
-        for (const row of project.rows) row.matchType = "new";
-      } else {
-        const outcome = await applyMatchTypes({
-          kind: "plp",
-          workspaceId: workspace.id,
-          rows: project.rows,
-          sourceColumn: supplierMatchColumn,
-          masterColumn: masterMatchColumn,
-          rules: PLP_MATCHING_RULES,
-        });
-        existingCount = outcome.existingCount;
-        newCount = outcome.newCount;
-      }
-
-      await saveProjectJson(workspace.id, session.id, project);
-      await updateImportSession(session.id, {
-        existing_count: existingCount,
-        new_count: newCount,
-        status: "review",
-      } as any);
-
-      router.push(`/w/${slug}/import/${session.id}/review`);
-    } catch (err: any) {
-      alert(err?.message || "Failed to match categories");
-      setMatchLoading(false);
-    }
   };
 
   /** Names of the categories the master catalog is narrowed to, if any. */
@@ -394,13 +306,11 @@ export default function MatchingRulesPage() {
         </Button>
         <div>
           <div className="mb-1 text-[9px] font-black uppercase tracking-[.2em] text-[#400095] dark:text-[#F76D01]">
-            {isPlp ? "Step 02 · Match categories" : "Step 02 · Matching engine"}
+            Step 02 · Matching engine
           </div>
           <h1 className="text-2xl font-black tracking-tight">{session.name}</h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            {isPlp
-              ? "We check which of these pages already exist in your store, so we know which to update and which to create."
-              : "Configure how supplier identifiers map to your master catalog."}
+            Configure how supplier identifiers map to your master catalog.
           </p>
         </div>
       </motion.div>
@@ -409,122 +319,6 @@ export default function MatchingRulesPage() {
       <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
       <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={2} kind={kind} /></section>
 
-      {isPlp ? (
-        <div className="mx-auto max-w-2xl space-y-4">
-          <Card className="rounded-2xl border-border/60 p-5 shadow-sm">
-            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-              <Settings2 className="h-4 w-4" /> Match Configuration
-            </h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Your file column
-                </label>
-                <select
-                  value={supplierMatchColumn}
-                  onChange={(e) => setSupplierMatchColumn(e.target.value)}
-                  className="mt-1 h-8 w-full rounded border bg-background px-2.5 text-xs"
-                >
-                  {supplierColumns.map((col) => (
-                    <option key={col} value={col}>{col}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Compare against
-                </label>
-                <select
-                  value={masterMatchColumn}
-                  onChange={(e) => setMasterMatchColumn(e.target.value)}
-                  className="mt-1 h-8 w-full rounded border bg-background px-2.5 text-xs"
-                >
-                  {masterColumns.map((col) => (
-                    <option key={col} value={col}>{col}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">
-              Values are compared ignoring case, surrounding spaces, and a trailing
-              slash — so <code className="font-mono">/shoes</code> and{" "}
-              <code className="font-mono">/Shoes/</code> count as the same page.
-            </p>
-          </Card>
-
-          <Card className="rounded-2xl border-border/60 p-5 shadow-sm">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="flex items-center gap-2 text-sm font-semibold">
-                <BarChart3 className="h-4 w-4" /> Match Result
-              </h3>
-              {previewLoading && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-              )}
-            </div>
-            {previewResult ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-xl border border-green-200 bg-green-50/50 p-4 dark:border-green-800 dark:bg-green-950/10">
-                  <div className="text-2xl font-bold text-green-700 dark:text-green-400">
-                    {previewResult.existing}
-                  </div>
-                  <div className="text-xs text-green-600">
-                    Existing pages (will update)
-                  </div>
-                </div>
-                <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-800 dark:bg-blue-950/10">
-                  <div className="text-2xl font-bold text-blue-700 dark:text-blue-400">
-                    {previewResult.new}
-                  </div>
-                  <div className="text-xs text-blue-600">New pages</div>
-                </div>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Matching your categories against the store…
-              </p>
-            )}
-            {previewResult?.existing === 0 && !previewLoading && (
-              <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-50/50 p-2.5 dark:bg-amber-950/10">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
-                <p className="text-[10px] leading-relaxed text-muted-foreground">
-                  Nothing matched. Try a different column pair above, or skip
-                  matching and treat every row as a new page.
-                </p>
-              </div>
-            )}
-          </Card>
-
-          <div className="flex items-center justify-between pt-2">
-            <Button variant="outline" size="sm" className="text-xs" onClick={() => router.back()}>
-              Back
-            </Button>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 rounded-xl px-4 text-xs"
-                onClick={() => finishPlp(true)}
-                disabled={matchLoading}
-              >
-                Skip matching
-              </Button>
-              <Button
-                size="sm"
-                className="h-9 gap-1.5 rounded-xl bg-[#400095] px-4 text-xs text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
-                onClick={() => finishPlp(false)}
-                disabled={matchLoading || previewLoading}
-              >
-                {matchLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ArrowRight className="h-3.5 w-3.5" />
-                )}
-                {matchLoading ? "Matching..." : "Confirm & Review Results"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : (
       <>
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-4">
@@ -796,7 +590,6 @@ export default function MatchingRulesPage() {
         </Button>
       </div>
       </>
-      )}
       </main>
     </div>
   );

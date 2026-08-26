@@ -10,12 +10,7 @@ import { loadProjectJson } from "@/lib/storage-helpers";
 import { useWorkspaceContext } from "../../../workspace-context";
 import { useSheetStore } from "@/store/sheet-store";
 import type { MatchingRule } from "@/lib/matching";
-import {
-  applyMatchTypes,
-  guessPlpSourceColumn,
-  resolveTargetCategoryNames,
-  PLP_MATCHING_RULES,
-} from "@/lib/import-matching";
+import { applyMatchTypes, resolveTargetCategoryNames } from "@/lib/import-matching";
 import { Sidebar } from "@/components/sidebar";
 import { DataTable } from "@/components/data-table";
 import {
@@ -64,27 +59,22 @@ export default function EnrichPage() {
           (session.kind as SessionKind) ?? project.kind ?? "product";
         const isPlp = kind === "plp";
 
-        // A skipped step 2 is a decision the workspace must respect.
-        if (!project.matchingSkipped) {
+        // PLP has no matching step at all — every page is always "new".
+        if (isPlp) {
+          for (const row of project.rows) row.matchType = "new";
+        } else if (!project.matchingSkipped) {
+          // A skipped step 2 is a decision the workspace must respect.
           await applyMatchTypes({
             kind,
             workspaceId: workspace!.id,
             rows: project.rows,
-            sourceColumn:
-              session.supplier_match_column ||
-              (isPlp
-                ? guessPlpSourceColumn(project.columns ?? [])
-                : (project.columns?.[0] ?? "")),
-            masterColumn: session.master_match_column || (isPlp ? "name" : "sku"),
-            rules: isPlp
-              ? PLP_MATCHING_RULES
-              : ((session.matching_rules as MatchingRule[]) || []),
-            targetCategoryNames: isPlp
-              ? []
-              : await resolveTargetCategoryNames(
-                  workspace!.id,
-                  session.target_category_ids
-                ),
+            sourceColumn: session.supplier_match_column || (project.columns?.[0] ?? ""),
+            masterColumn: session.master_match_column || "sku",
+            rules: (session.matching_rules as MatchingRule[]) || [],
+            targetCategoryNames: await resolveTargetCategoryNames(
+              workspace!.id,
+              session.target_category_ids
+            ),
           });
         }
 

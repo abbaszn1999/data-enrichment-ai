@@ -1769,10 +1769,11 @@ export function DataTable() {
   const { role } = useWorkspaceStore();
   const isViewer = role === "viewer";
 
-  const sheetLabels =
-    sessionKind === "plp"
-      ? { existing: "Existing pages", new: "New pages" }
-      : { existing: "Existing", new: "New" };
+  const isPlp = sessionKind === "plp";
+
+  const sheetLabels = isPlp
+    ? { existing: "Existing pages", new: "New pages" }
+    : { existing: "Existing", new: "New" };
 
   const [globalFilter, setGlobalFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -2253,38 +2254,40 @@ export function DataTable() {
               })}
             </div>
 
-            {/* Sheet toggle tabs */}
-            <div className="flex items-center border rounded-lg overflow-hidden mx-2">
-              <button
-                onClick={() => setActiveSheet("existing")}
-                disabled={sheetCounts.existing === 0}
-                className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-medium transition-colors ${
-                  activeSheet === "existing"
-                    ? "bg-primary text-primary-foreground"
-                    : sheetCounts.existing === 0
-                    ? "bg-background text-muted-foreground/40 cursor-not-allowed"
-                    : "bg-background text-muted-foreground hover:bg-muted/50"
-                }`}
-              >
-                <Package className="h-3 w-3" />
-                {sheetLabels.existing} ({sheetCounts.existing})
-              </button>
-              <div className="w-px h-5 bg-border" />
-              <button
-                onClick={() => setActiveSheet("new")}
-                disabled={sheetCounts.new === 0}
-                className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-medium transition-colors ${
-                  activeSheet === "new"
-                    ? "bg-primary text-primary-foreground"
-                    : sheetCounts.new === 0
-                    ? "bg-background text-muted-foreground/40 cursor-not-allowed"
-                    : "bg-background text-muted-foreground hover:bg-muted/50"
-                }`}
-              >
-                <FileSpreadsheet className="h-3 w-3" />
-                {sheetLabels.new} ({sheetCounts.new})
-              </button>
-            </div>
+            {/* Sheet toggle tabs — PLP has no "existing" concept, so it never shows this */}
+            {!isPlp && (
+              <div className="flex items-center border rounded-lg overflow-hidden mx-2">
+                <button
+                  onClick={() => setActiveSheet("existing")}
+                  disabled={sheetCounts.existing === 0}
+                  className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-medium transition-colors ${
+                    activeSheet === "existing"
+                      ? "bg-primary text-primary-foreground"
+                      : sheetCounts.existing === 0
+                      ? "bg-background text-muted-foreground/40 cursor-not-allowed"
+                      : "bg-background text-muted-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  <Package className="h-3 w-3" />
+                  {sheetLabels.existing} ({sheetCounts.existing})
+                </button>
+                <div className="w-px h-5 bg-border" />
+                <button
+                  onClick={() => setActiveSheet("new")}
+                  disabled={sheetCounts.new === 0}
+                  className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-medium transition-colors ${
+                    activeSheet === "new"
+                      ? "bg-primary text-primary-foreground"
+                      : sheetCounts.new === 0
+                      ? "bg-background text-muted-foreground/40 cursor-not-allowed"
+                      : "bg-background text-muted-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  <FileSpreadsheet className="h-3 w-3" />
+                  {sheetLabels.new} ({sheetCounts.new})
+                </button>
+              </div>
+            )}
 
             {/* Row count */}
             <span className="text-[10px] text-muted-foreground font-mono">

@@ -24,13 +24,14 @@ import { getImportSteps } from "@/components/import/import-stepper";
 import type { SessionKind } from "@/types";
 import { useWorkspaceContext } from "../../workspace-context";
 
-/** `step` matches the numbering in getImportSteps (upload is 1). */
-const STATUS_INFO: Record<string, { label: string; color: string; step: number }> = {
-  matching: { label: "Matching Rules", color: "text-purple-600", step: 2 },
-  review: { label: "Review Results", color: "text-amber-600", step: 3 },
-  enriching: { label: "Enrichment", color: "text-indigo-600", step: 4 },
-  completed: { label: "Completed", color: "text-green-600", step: 5 },
-  cancelled: { label: "Cancelled", color: "text-gray-600", step: 0 },
+/** `step` matches the numbering in getImportSteps (upload is 1). PLP skips
+ * the matching step entirely, so its steps are numbered one lower. */
+const STATUS_INFO: Record<string, { label: string; color: string; step: number; plpStep: number }> = {
+  matching: { label: "Matching Rules", color: "text-purple-600", step: 2, plpStep: 1 },
+  review: { label: "Review Results", color: "text-amber-600", step: 3, plpStep: 2 },
+  enriching: { label: "Enrichment", color: "text-indigo-600", step: 4, plpStep: 3 },
+  completed: { label: "Completed", color: "text-green-600", step: 5, plpStep: 4 },
+  cancelled: { label: "Cancelled", color: "text-gray-600", step: 0, plpStep: 0 },
 };
 
 export default function SessionOverviewPage() {
@@ -69,10 +70,12 @@ export default function SessionOverviewPage() {
     );
   }
 
-  const info = STATUS_INFO[session.status] || STATUS_INFO.matching;
+  const statusInfo = STATUS_INFO[session.status] || STATUS_INFO.matching;
   const basePath = `/w/${slug}/import/${session.id}`;
 
   const kind: SessionKind = (session.kind as SessionKind) ?? "product";
+  const isPlp = kind === "plp";
+  const info = { ...statusInfo, step: isPlp ? statusInfo.plpStep : statusInfo.step };
   const steps = getImportSteps(kind)
     .filter((step) => step.segment !== null)
     .map((step) => ({
@@ -82,13 +85,13 @@ export default function SessionOverviewPage() {
       done: info.step > step.num,
     }));
 
-  // Determine the current step link
+  // Determine the current step link. PLP has no matching/rules step at all.
   const currentStepHref =
-    session.status === "matching" ? `${basePath}/rules` :
+    session.status === "matching" ? `${basePath}/${isPlp ? "review" : "rules"}` :
     session.status === "review" ? `${basePath}/review` :
     session.status === "enriching" ? `${basePath}/enrich` :
     session.status === "completed" ? `${basePath}/enrich` :
-    `${basePath}/rules`;
+    `${basePath}/${isPlp ? "review" : "rules"}`;
 
   return (
     <div className="p-6 space-y-6">
@@ -144,22 +147,22 @@ export default function SessionOverviewPage() {
           </div>
         )}
 
-        {/* Stats */}
-        <div className="grid grid-cols-4 gap-3 pt-2 border-t">
+        {/* Stats — PLP has no "existing" concept, so it drops that column */}
+        <div className={`grid gap-3 pt-2 border-t ${isPlp ? "grid-cols-3" : "grid-cols-4"}`}>
           <div className="text-center">
             <div className="text-lg font-bold">{session.total_rows}</div>
             <div className="text-[9px] text-muted-foreground">Total Rows</div>
           </div>
-          <div className="text-center">
-            <div className="text-lg font-bold text-green-600">{session.existing_count}</div>
-            <div className="text-[9px] text-muted-foreground">
-              {kind === "plp" ? "Existing pages" : "Existing"}
+          {!isPlp && (
+            <div className="text-center">
+              <div className="text-lg font-bold text-green-600">{session.existing_count}</div>
+              <div className="text-[9px] text-muted-foreground">Existing</div>
             </div>
-          </div>
+          )}
           <div className="text-center">
             <div className="text-lg font-bold text-blue-600">{session.new_count}</div>
             <div className="text-[9px] text-muted-foreground">
-              {kind === "plp" ? "New pages" : "New"}
+              {isPlp ? "Pages" : "New"}
             </div>
           </div>
           <div className="text-center">
