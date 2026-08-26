@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "motion/react";
 import {
   Settings,
   Loader2,
@@ -265,16 +266,33 @@ export default function SettingsPage() {
     : null;
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-              <Settings className="h-5 w-5 text-primary" />
-            </div>
+    <div className="autommerce-dashboard flex-1 overflow-auto bg-background [font-family:var(--brand-font)]">
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="absolute -bottom-28 -right-16 h-64 w-64 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-7xl px-6 py-7">
+          <motion.header
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex flex-wrap items-end justify-between gap-4"
+          >
             <div>
-              <h1 className="text-xl font-bold tracking-tight">Settings</h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01]">
+                  <Settings className="h-4 w-4" />
+                </span>
+                <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
+                  Workspace
+                </span>
+              </div>
+              <h1 className="text-3xl font-black tracking-[-0.035em] sm:text-4xl">
+                Workspace
+                <span className="block bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">
+                  settings.
+                </span>
+              </h1>
+              <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
                 Manage workspace configuration for{" "}
                 <span className="font-medium text-foreground">
                   {workspace.name}
@@ -282,24 +300,26 @@ export default function SettingsPage() {
                 .
               </p>
             </div>
-          </div>
-          {permissions.canAdmin && (
-            <Button
-              size="sm"
-              className="gap-1.5 self-start shadow-sm sm:self-auto"
-              onClick={handleSave}
-              disabled={saving}
-            >
-              {saving ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
-              Save changes
-            </Button>
-          )}
-        </header>
+            {permissions.canAdmin && (
+              <Button
+                size="sm"
+                className="h-9 gap-1.5 self-start rounded-xl bg-[#400095] px-4 text-xs text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90 sm:self-auto"
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
+                Save changes
+              </Button>
+            )}
+          </motion.header>
+        </div>
+      </section>
 
+      <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         {(error || integrationError || integrationSuccess || saved) && (
           <div className="space-y-2">
             {error && (
@@ -331,7 +351,7 @@ export default function SettingsPage() {
               label: "Workspace",
               value: workspace.name,
               icon: Building2,
-              style: "bg-primary/10 text-primary",
+              style: "bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]",
             },
             {
               label: "CMS",
@@ -358,10 +378,13 @@ export default function SettingsPage() {
               icon: ShieldAlert,
               style: "bg-violet-500/10 text-violet-600",
             },
-          ].map((stat) => (
-            <div
+          ].map((stat, i) => (
+            <motion.div
               key={stat.label}
-              className="flex min-w-0 items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: i * 0.04 }}
+              className="flex min-w-0 items-center gap-3 rounded-2xl border border-border/60 bg-card p-3.5 shadow-sm"
             >
               <div
                 className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${stat.style}`}
@@ -376,18 +399,18 @@ export default function SettingsPage() {
                   {stat.label}
                 </p>
               </div>
-            </div>
+            </motion.div>
           ))}
         </section>
 
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
           <div className="border-b bg-muted/20 px-5 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]">
                 <Building2 className="h-4 w-4" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold">General</h2>
+                <h2 className="text-sm font-bold">General</h2>
                 <p className="text-[11px] text-muted-foreground">
                   Basic workspace information
                 </p>
@@ -439,7 +462,11 @@ export default function SettingsPage() {
 
             {permissions.canAdmin && (
               <div className="flex items-center gap-3 border-t pt-4">
-                <Button onClick={handleSave} disabled={saving} className="gap-2">
+                <Button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                >
                   {saving ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
@@ -452,14 +479,14 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
           <div className="border-b bg-muted/20 px-5 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]">
                 <PlugZap className="h-4 w-4" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold">Integrations</h2>
+                <h2 className="text-sm font-bold">Integrations</h2>
                 <p className="text-[11px] text-muted-foreground">
                   Connect one store platform to this workspace
                 </p>
@@ -477,7 +504,7 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Store className="h-4 w-4 text-primary" />
+                      <Store className="h-4 w-4 text-[#6B358D] dark:text-[#F76D01]" />
                       <span className="text-sm font-semibold">
                         {integration.integration_name}
                       </span>
@@ -520,7 +547,10 @@ export default function SettingsPage() {
                     Connect Shopify or WooCommerce to enable product sync.
                   </p>
                 </div>
-                <Button onClick={handleOpenIntegrationDialog} className="gap-2">
+                <Button
+                  onClick={handleOpenIntegrationDialog}
+                  className="gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                >
                   <PlugZap className="h-4 w-4" />
                   Connect
                 </Button>
@@ -530,14 +560,14 @@ export default function SettingsPage() {
         </section>
 
         {permissions.isOwner && (
-          <section className="overflow-hidden rounded-xl border border-destructive/30 bg-card shadow-sm">
+          <section className="overflow-hidden rounded-2xl border border-destructive/30 bg-card shadow-sm">
             <div className="border-b border-destructive/20 bg-destructive/5 px-5 py-4">
               <div className="flex items-center gap-3">
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
                   <ShieldAlert className="h-4 w-4" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-semibold text-destructive">
+                  <h2 className="text-sm font-bold text-destructive">
                     Danger zone
                   </h2>
                   <p className="text-[11px] text-muted-foreground">
@@ -624,13 +654,13 @@ export default function SettingsPage() {
                     disabled={!provider.available}
                     className={`rounded-xl border p-4 text-left transition-colors ${
                       provider.available
-                        ? "border-border hover:border-primary/40"
+                        ? "border-border hover:border-[#6B358D]/40 dark:hover:border-[#F76D01]/40"
                         : "cursor-not-allowed bg-muted/20 opacity-50"
                     }`}
                   >
                     <div className="mb-1 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        <Store className="h-4 w-4 text-primary" />
+                        <Store className="h-4 w-4 text-[#6B358D] dark:text-[#F76D01]" />
                         <span className="text-sm font-semibold">
                           {provider.label}
                         </span>
@@ -779,7 +809,7 @@ export default function SettingsPage() {
                 <Button
                   onClick={handleSaveIntegration}
                   disabled={!testedConnection || savingIntegration}
-                  className="gap-2"
+                  className="gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                 >
                   {savingIntegration ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   FolderTree,
   Plus,
@@ -20,9 +21,9 @@ import {
   AlertCircle,
   AlertTriangle,
   Save,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -623,154 +624,166 @@ export default function CategoriesPage() {
   }
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-              <FolderTree className="h-5 w-5 text-primary" />
-            </div>
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
+      {/* Branded taxonomy masthead */}
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="absolute -right-16 -bottom-28 h-64 w-64 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-[1500px] px-5 py-7 sm:px-7 lg:px-10">
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between"
+          >
             <div>
-              <h1 className="text-xl font-bold tracking-tight">Categories</h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Organize your catalog tree and keep product taxonomy consistent.
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01]">
+                  <FolderTree className="h-4 w-4" />
+                </span>
+                <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
+                  Taxonomy system
+                </span>
+              </div>
+              <h1 className="text-3xl font-black tracking-[-0.035em] sm:text-4xl">
+                Category intelligence,
+                <span className="block bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">
+                  organized for every agent.
+                </span>
+              </h1>
+              <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
+                The shared category tree every Autommerce agent reads from. Build it by hand, drag
+                to reorganize, or upload a sheet to bootstrap it in seconds.
               </p>
             </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 self-start">
-            {permissions.canAdmin && categories.length > 0 && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
-                onClick={() => setShowDeleteAll(true)}
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Delete All
-              </Button>
-            )}
-            {permissions.canAdmin && hasUnsavedChanges && (
-              <Button
-                size="sm"
-                variant="outline"
-                className={`gap-1.5 text-xs ${
-                  hasUnsavedChanges
-                    ? "border-emerald-500 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 animate-pulse"
-                    : ""
-                }`}
-                onClick={() => persistToStorage()}
-                disabled={saving}
-              >
-                {saving ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Save className="h-3.5 w-3.5" />
-                )}
-                {saving ? "Saving..." : "Save"}
-              </Button>
-            )}
-            {permissions.canAdmin && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5 text-xs"
-                onClick={() => setShowUpload(true)}
-              >
-                <Upload className="h-3.5 w-3.5" /> Upload Sheet
-              </Button>
-            )}
-            {permissions.canAdmin && (
-              <Button
-                size="sm"
-                className="gap-1.5 text-xs shadow-sm"
-                onClick={() => openForm()}
-              >
-                <Plus className="h-3.5 w-3.5" /> New category
-              </Button>
-            )}
-          </div>
-        </header>
 
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[
-            {
-              label: "Categories",
-              value: categories.length,
-              icon: FolderTree,
-              style: "bg-primary/10 text-primary",
-            },
-            {
-              label: "Root",
-              value: rootCount,
-              icon: FolderOpen,
-              style: "bg-amber-500/10 text-amber-600",
-            },
-            {
-              label: "With products",
-              value: 0,
-              icon: Package,
-              style: "bg-emerald-500/10 text-emerald-600",
-            },
-            {
-              label: "Max depth",
-              value: maxDepth,
-              icon: BarChart3,
-              style: "bg-blue-500/10 text-blue-600",
-            },
-          ].map((stat) => (
-            <div
-              key={stat.label}
-              className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
-            >
-              <div
-                className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
-              >
-                <stat.icon className="h-4 w-4" />
-              </div>
-              <div>
-                <p className="text-lg font-bold leading-none">{stat.value}</p>
-                <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {stat.label}
-                </p>
-              </div>
-            </div>
-          ))}
-        </section>
-
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
-          <div className="flex flex-col gap-3 border-b bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold">Category tree</h2>
-              <p className="text-[11px] text-muted-foreground">
-                Search, expand, and manage categories in one place.
-              </p>
-            </div>
-            <div className="relative w-full sm:w-64">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search categories..."
-                className="h-8 bg-background pl-8 pr-8 text-xs"
-              />
-              {search ? (
-                <button
-                  type="button"
-                  onClick={() => setSearch("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear search"
+            <div className="flex flex-wrap items-center gap-2">
+              {permissions.canAdmin && categories.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 gap-1.5 rounded-xl border-destructive/25 bg-background/70 px-3 text-[10px] text-destructive backdrop-blur hover:bg-destructive/10"
+                  onClick={() => setShowDeleteAll(true)}
                 >
-                  <X className="h-3 w-3" />
-                </button>
-              ) : null}
+                  <Trash2 className="h-3.5 w-3.5" /> Delete all
+                </Button>
+              )}
+              {permissions.canAdmin && hasUnsavedChanges && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 gap-1.5 rounded-xl border-emerald-500/50 bg-background/70 px-3 text-[10px] text-emerald-600 backdrop-blur animate-pulse hover:bg-emerald-50 dark:hover:bg-emerald-950/20"
+                  onClick={() => persistToStorage()}
+                  disabled={saving}
+                >
+                  {saving ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  {saving ? "Saving..." : "Save"}
+                </Button>
+              )}
+              {permissions.canAdmin && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 gap-1.5 rounded-xl border-border/60 bg-background/70 px-3 text-[10px] backdrop-blur"
+                  onClick={() => setShowUpload(true)}
+                >
+                  <Upload className="h-3.5 w-3.5" /> Upload sheet
+                </Button>
+              )}
+              {permissions.canAdmin && (
+                <Button
+                  size="sm"
+                  className="h-9 gap-2 rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                  onClick={() => openForm()}
+                >
+                  <Plus className="h-3.5 w-3.5" /> New category
+                </Button>
+              )}
             </div>
-          </div>
+          </motion.div>
 
+          {/* Taxonomy pulse — real values, no invented health score. */}
+          <div className="mt-7 grid max-w-2xl grid-cols-2 overflow-hidden rounded-2xl border border-border/60 bg-background/70 shadow-sm backdrop-blur sm:grid-cols-4">
+            {[
+              { label: "Categories", value: categories.length, icon: FolderTree },
+              { label: "Root", value: rootCount, icon: FolderOpen },
+              { label: "With products", value: 0, icon: Package },
+              { label: "Max depth", value: maxDepth, icon: BarChart3 },
+            ].map((metric, index) => (
+              <motion.div
+                key={metric.label}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 + index * 0.08 }}
+                className="flex items-center gap-3 border-r border-border/60 px-4 py-3.5 last:border-r-0"
+              >
+                <metric.icon className="h-4 w-4 shrink-0 text-[#6B358D] dark:text-[#C8A8D2]" />
+                <span>
+                  <span className="block text-lg font-black tabular-nums leading-none">
+                    {metric.value}
+                  </span>
+                  <span className="mt-1 block text-[8px] font-bold uppercase tracking-[.16em] text-muted-foreground">
+                    {metric.label}
+                  </span>
+                </span>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <main className="mx-auto max-w-[1500px] space-y-4 p-5 sm:p-7 lg:p-10">
+        {/* Search command bar */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div>
+            <h2 className="text-sm font-black">Category tree</h2>
+            <p className="text-[10px] text-muted-foreground">
+              Search, expand, drag to reorganize, and manage categories in one place.
+            </p>
+          </div>
+          <div className="relative min-w-[240px] sm:w-72">
+            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B358D] dark:text-[#C8A8D2]" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search categories…"
+              className="h-10 rounded-xl border-transparent bg-muted/60 pl-10 pr-10 text-xs shadow-none focus-visible:border-[#6B358D]/35 focus-visible:ring-[#6B358D]/10"
+            />
+            {search ? (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-background"
+                aria-label="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        </motion.div>
+
+        <motion.section
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.16 }}
+          className="relative overflow-hidden rounded-[24px] border border-border/60 bg-card shadow-[0_15px_50px_rgba(15,23,42,.05)]"
+        >
+          <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <div className="grid grid-cols-1 gap-0 lg:grid-cols-3">
             <div className="border-b p-3 lg:col-span-2 lg:border-b-0 lg:border-r">
               <div
                 className={`min-h-[300px] rounded-xl transition-all ${
                   dragId && dropTargetId === "__root__"
-                    ? "ring-2 ring-primary/50 bg-primary/5"
+                    ? "ring-2 ring-[#400095]/40 bg-[#400095]/5 dark:ring-[#F76D01]/40 dark:bg-[#F76D01]/5"
                     : ""
                 }`}
                 onDragOver={(e) => {
@@ -788,15 +801,15 @@ export default function CategoriesPage() {
               >
                 {filteredTree.length === 0 ? (
                   <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-                    <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                      <FolderTree className="h-5 w-5" />
-                    </div>
-                    <p className="text-sm font-medium">
+                    <span className="mb-2 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F76D01]/15 to-[#400095]/15">
+                      <FolderTree className="h-6 w-6 text-[#6B358D]" />
+                    </span>
+                    <p className="text-sm font-black">
                       {search
                         ? "No categories match your search"
                         : "No categories yet"}
                     </p>
-                    <p className="max-w-sm text-xs text-muted-foreground">
+                    <p className="max-w-sm text-[11px] leading-relaxed text-muted-foreground">
                       {search
                         ? "Try a different search term."
                         : "Add a category or upload a sheet to build your tree."}
@@ -804,7 +817,7 @@ export default function CategoriesPage() {
                     {!search && permissions.canAdmin && (
                       <Button
                         size="sm"
-                        className="mt-3 gap-1.5"
+                        className="mt-3 gap-1.5 rounded-xl bg-[#400095] text-[10px] text-white dark:bg-[#F76D01]"
                         onClick={() => openForm()}
                       >
                         <Plus className="h-3.5 w-3.5" /> New category
@@ -818,7 +831,7 @@ export default function CategoriesPage() {
                       <div
                         className={`mt-1 rounded-lg border-2 border-dashed py-2 text-center text-[10px] transition-all ${
                           dropTargetId === "__root__"
-                            ? "border-primary bg-primary/5 text-primary"
+                            ? "border-[#400095] bg-[#400095]/5 text-[#400095] dark:border-[#F76D01] dark:bg-[#F76D01]/5 dark:text-[#F76D01]"
                             : "border-muted-foreground/20 text-muted-foreground/40"
                         }`}
                         onDragOver={(e) => {
@@ -837,74 +850,109 @@ export default function CategoriesPage() {
             </div>
 
             <div className="p-4">
-              {selectedCat ? (
-                <div className="space-y-3 rounded-xl border bg-background p-4">
-                  <h3 className="text-sm font-semibold break-words">
-                    {selectedCat.name}
-                  </h3>
-                  {selectedCat.description && (
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {selectedCat.description}
-                    </p>
-                  )}
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">Slug</span>
-                      <span className="truncate font-mono">{selectedCat.slug}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">Products</span>
-                      <span>0</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">Subcategories</span>
-                      <span>
-                        {
-                          categories.filter((c) => c.parent_id === selectedCat.id)
-                            .length
-                        }
+              <AnimatePresence mode="wait">
+                {selectedCat ? (
+                  <motion.div
+                    key={selectedCat.id}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="space-y-3 rounded-2xl border border-border/60 bg-background p-4"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[#F76D01]/15 to-[#400095]/15">
+                        <Layers className="h-4 w-4 text-[#6B358D] dark:text-[#C8A8D2]" />
                       </span>
+                      <h3 className="text-sm font-black break-words">
+                        {selectedCat.name}
+                      </h3>
                     </div>
-                  </div>
-                  {permissions.canAdmin && (
-                    <div className="flex gap-2 pt-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="flex-1 gap-1 text-xs"
-                        onClick={() => openForm(undefined, selectedCat)}
-                      >
-                        <Pencil className="h-3 w-3" /> Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="gap-1 text-xs text-destructive"
-                        onClick={() => handleDelete(selectedCat.id)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
+                    {selectedCat.description && (
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {selectedCat.description}
+                      </p>
+                    )}
+                    <div className="space-y-2 rounded-xl bg-muted/30 p-3 text-xs">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Slug</span>
+                        <span className="truncate font-mono">{selectedCat.slug}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Products</span>
+                        <span className="font-bold">0</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Subcategories</span>
+                        <span className="font-bold">
+                          {
+                            categories.filter((c) => c.parent_id === selectedCat.id)
+                              .length
+                          }
+                        </span>
+                      </div>
                     </div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed px-4 py-12 text-center">
-                  <Folder className="h-8 w-8 text-muted-foreground/30" />
-                  <p className="text-xs text-muted-foreground">
-                    Select a category to view details
-                  </p>
-                </div>
-              )}
+                    {permissions.canAdmin && (
+                      <div className="flex gap-2 pt-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1 gap-1 rounded-lg text-xs"
+                          onClick={() => openForm(undefined, selectedCat)}
+                        >
+                          <Pencil className="h-3 w-3" /> Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1 rounded-lg text-xs text-destructive"
+                          onClick={() => handleDelete(selectedCat.id)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )}
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="empty"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border/60 px-4 py-12 text-center"
+                  >
+                    <Folder className="h-8 w-8 text-muted-foreground/30" />
+                    <p className="text-xs text-muted-foreground">
+                      Select a category to view details
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
-        </section>
-      </div>
+        </motion.section>
+      </main>
 
       {/* Add/Edit Form Dialog */}
+      <AnimatePresence>
       {showForm && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowForm(false)}>
-          <Card className="w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold">{editId ? "Edit Category" : "Add Category"}</h3>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-[#170710]/70 backdrop-blur-md z-50 flex items-center justify-center p-4"
+          onClick={() => setShowForm(false)}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 18, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.97 }}
+            transition={{ type: "spring", stiffness: 340, damping: 26 }}
+            className="w-full max-w-md overflow-hidden rounded-[24px] border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+            <div className="space-y-4 p-5">
+            <h3 className="text-sm font-black">{editId ? "Edit Category" : "Add Category"}</h3>
             {formError && (
               <div className="flex items-center gap-2 p-2 rounded-lg bg-destructive/10 text-destructive text-xs">
                 <AlertCircle className="h-3.5 w-3.5" /> {formError}
@@ -912,14 +960,14 @@ export default function CategoriesPage() {
             )}
             <div className="space-y-2">
               <Label className="text-xs">Name</Label>
-              <Input value={formName} onChange={(e) => setFormName(e.target.value)} className="h-9" autoFocus />
+              <Input value={formName} onChange={(e) => setFormName(e.target.value)} className="h-9 rounded-xl" autoFocus />
             </div>
             <div className="space-y-2">
               <Label className="text-xs">Parent Category</Label>
               <select
                 value={formParent}
                 onChange={(e) => setFormParent(e.target.value)}
-                className="w-full h-9 px-2.5 text-xs rounded-md border bg-background"
+                className="w-full h-9 px-2.5 text-xs rounded-xl border bg-background"
               >
                 <option value="">None (root)</option>
                 {categories.filter((c) => c.id !== editId).map((c) => (
@@ -933,27 +981,49 @@ export default function CategoriesPage() {
                 value={formDesc}
                 onChange={(e) => setFormDesc(e.target.value)}
                 rows={2}
-                className="w-full px-3 py-2 text-xs rounded-md border bg-background resize-none"
+                className="w-full px-3 py-2 text-xs rounded-xl border bg-background resize-none"
               />
             </div>
-            <div className="flex justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={() => setShowForm(false)} className="text-xs">Cancel</Button>
-              <Button size="sm" onClick={handleSave} disabled={formLoading} className="text-xs gap-1">
+            <div className="flex justify-end gap-2 pt-1">
+              <Button size="sm" variant="ghost" onClick={() => setShowForm(false)} className="text-xs">Cancel</Button>
+              <Button
+                size="sm"
+                onClick={handleSave}
+                disabled={formLoading}
+                className="gap-1 rounded-xl bg-[#400095] text-xs text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+              >
                 {formLoading && <Loader2 className="h-3 w-3 animate-spin" />}
                 {editId ? "Save" : "Create"}
               </Button>
             </div>
-          </Card>
-        </div>
+            </div>
+          </motion.div>
+        </motion.div>
       )}
+      </AnimatePresence>
       {/* Upload Sheet Dialog */}
+      <AnimatePresence>
       {showUpload && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={resetUpload}>
-          <Card className="w-full max-w-2xl p-0 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-[#170710]/70 backdrop-blur-md z-50 flex items-center justify-center p-4"
+          onClick={resetUpload}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 18, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.97 }}
+            transition={{ type: "spring", stiffness: 340, damping: 26 }}
+            className="w-full max-w-2xl overflow-hidden rounded-[24px] border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3 border-b bg-muted/30">
-              <h3 className="text-sm font-semibold flex items-center gap-2">
-                <Upload className="h-4 w-4" /> Upload Categories Sheet
+              <h3 className="text-sm font-black flex items-center gap-2">
+                <Upload className="h-4 w-4 text-[#6B358D] dark:text-[#C8A8D2]" /> Upload Categories Sheet
               </h3>
               <button onClick={resetUpload}>
                 <X className="h-4 w-4 text-muted-foreground hover:text-foreground" />
@@ -966,7 +1036,7 @@ export default function CategoriesPage() {
                 <div key={s} className="flex items-center gap-2">
                   <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium ${
                     uploadStep > i + 1 ? "bg-green-100 dark:bg-green-900/30 text-green-700" :
-                    uploadStep === i + 1 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                    uploadStep === i + 1 ? "bg-[#400095] text-white dark:bg-[#F76D01]" : "bg-muted text-muted-foreground"
                   }`}>
                     {uploadStep > i + 1 ? <CheckCircle2 className="h-3 w-3" /> : <span>{i + 1}</span>}
                     <span>{s}</span>
@@ -1141,18 +1211,33 @@ export default function CategoriesPage() {
                 </div>
               )}
             </div>
-          </Card>
-        </div>
+          </motion.div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       {/* Delete All Confirmation Dialog */}
+      <AnimatePresence>
       {showDeleteAll && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center"
+        >
+          <motion.div
+            className="fixed inset-0 bg-[#170710]/70 backdrop-blur-md"
             onClick={() => { setShowDeleteAll(false); setDeleteConfirmText(""); }}
           />
-          <div className="relative bg-background border rounded-xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-4">
+          <motion.div
+            initial={{ opacity: 0, y: 18, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.97 }}
+            transition={{ type: "spring", stiffness: 340, damping: 26 }}
+            className="relative mx-4 w-full max-w-md overflow-hidden rounded-[24px] border bg-background shadow-2xl"
+          >
+            <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+            <div className="space-y-4 p-6">
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
                 <AlertTriangle className="h-5 w-5 text-destructive" />
@@ -1207,9 +1292,11 @@ export default function CategoriesPage() {
                 {deletingAll ? "Deleting..." : "Delete All Categories"}
               </Button>
             </div>
-          </div>
-        </div>
+            </div>
+          </motion.div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }

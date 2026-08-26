@@ -2,7 +2,6 @@
 
 import { useState, useEffect, createContext, useContext, type ComponentType } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname, useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   LayoutDashboard,
@@ -17,7 +16,6 @@ import {
   LogOut,
   User,
   PanelLeftClose,
-  PanelLeft,
   FileSpreadsheet,
   Sun,
   Moon,
@@ -39,6 +37,7 @@ import {
   Wallet,
   Bot,
 } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/hooks/use-auth";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -54,17 +53,20 @@ import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useSyncStore } from "@/store/sync-store";
 import { SubscriptionGate, SubscriptionBanner } from "@/components/subscription-gate";
+import { AutommerceLogo } from "@/components/brand/autommerce-logo";
 
 interface WorkspaceContextType {
   workspace: Workspace | null;
   role: Role | null;
   wsLoading: boolean;
+  hasIntegration: boolean;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextType>({
   workspace: null,
   role: null,
   wsLoading: true,
+  hasIntegration: false,
 });
 
 export const useWorkspaceContext = () => useContext(WorkspaceContext);
@@ -120,6 +122,7 @@ export default function WorkspaceLayout({
     pathname === `${basePath}/growth-sync` ||
     pathname.startsWith(`${basePath}/growth-sync/`);
   const isMarketResearchPage = pathname.includes("/market-research");
+  const isWebsiteRestructurePage = pathname.includes("/website-restructure");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
   const isProductsGalleryProject = isProductsGalleryPage && searchParams.has("project");
   const isProductsVisualizerPage = pathname.includes("/products-visualizer");
@@ -130,12 +133,13 @@ export default function WorkspaceLayout({
     isProductsGalleryProject ||
     isProductsVisualizerProject ||
     isMarketResearchPage ||
+    isWebsiteRestructurePage ||
     (isSyncPage && syncFocusMode);
   // Immersive mode hides the top header — keep false so Enrich shows it
   const isImmersive = false;
   // Lock main content height so tool UIs (Enrich sidebar/table) scroll internally
   const lockContentHeight =
-    isEnrichPage || isSyncPage || isMarketResearchPage || isGrowthSyncPage;
+    isEnrichPage || isSyncPage || isMarketResearchPage || isGrowthSyncPage || isWebsiteRestructurePage;
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage =
     pathname === `${basePath}/subscription` ||
@@ -151,7 +155,8 @@ export default function WorkspaceLayout({
     { href: `${basePath}/products-visualizer`, label: "Products Visualizer", icon: Boxes },
   ];
 
-  // Parent group only — Store assistant is a top-level item, not nested here.
+  // Parent group only — Store assistant and Website restructure are
+  // top-level items, not nested here.
   const growthEngineChildren = [
     {
       href: hasIntegration ? `${basePath}/market-research` : "",
@@ -170,11 +175,6 @@ export default function WorkspaceLayout({
       label: "Sync",
       icon: RefreshCw,
       disabled: !hasIntegration,
-    },
-    {
-      href: `${basePath}/website-restructure`,
-      label: "Website restructure",
-      icon: LayoutTemplate,
     },
     { href: `${basePath}/wallet`, label: "Wallet", icon: Wallet },
   ];
@@ -204,7 +204,13 @@ export default function WorkspaceLayout({
     { href: `${basePath}/import`, label: "Catalog Intelligence", icon: Upload },
   ];
 
-  const sidebarLinksAfterGrowthEngine = [
+  const toolsLinksAfterGrowthEngine = [
+    {
+      href: hasIntegration ? `${basePath}/website-restructure` : "",
+      label: "Website restructure",
+      icon: LayoutTemplate,
+      disabled: !hasIntegration,
+    },
     {
       href: hasIntegration ? `${basePath}/sync` : "",
       label: "Store assistant",
@@ -212,6 +218,9 @@ export default function WorkspaceLayout({
       disabled: !hasIntegration,
     },
     { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
+  ];
+
+  const accountLinks = [
     ...(permissions.canAdmin
       ? [{ href: `${basePath}/team`, label: "Team", icon: Users }]
       : []),
@@ -223,6 +232,29 @@ export default function WorkspaceLayout({
       : []),
   ];
 
+  const isLinkActive = (href: string) =>
+    pathname === href ||
+    (href !== basePath && pathname.startsWith(href + "/")) ||
+    (href === basePath && pathname === basePath);
+
+  // Section label — small uppercase caption above a group of nav links.
+  // Fades out (rather than disappearing instantly) when the sidebar collapses.
+  const SectionLabel = ({ children }: { children: React.ReactNode }) => (
+    <AnimatePresence initial={false}>
+      {!sidebarCollapsed && (
+        <motion.p
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          exit={{ opacity: 0, height: 0 }}
+          transition={{ duration: 0.15 }}
+          className="px-2.5 pt-3.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/50 overflow-hidden"
+        >
+          {children}
+        </motion.p>
+      )}
+    </AnimatePresence>
+  );
+
   const renderNavLink = (link: {
     href: string;
     label: string;
@@ -233,7 +265,7 @@ export default function WorkspaceLayout({
       return (
         <div
           key={link.label}
-          className={`flex items-center gap-2.5 rounded-lg text-xs font-medium cursor-not-allowed text-muted-foreground/40 select-none ${
+          className={`relative flex items-center gap-2.5 rounded-lg text-xs font-medium cursor-not-allowed text-muted-foreground/35 select-none ${
             opts?.nested ? "px-2.5 py-1.5 pl-8" : "px-2.5 py-2"
           }`}
           title={sidebarCollapsed ? link.label : undefined}
@@ -243,26 +275,122 @@ export default function WorkspaceLayout({
         </div>
       );
     }
-    const isActive =
-      pathname === link.href ||
-      (link.href !== basePath && pathname.startsWith(link.href + "/")) ||
-      (link.href === basePath && pathname === basePath);
+    const isActive = isLinkActive(link.href);
     return (
       <Link
         key={link.href}
         href={link.href}
-        className={`flex items-center gap-2.5 rounded-lg text-xs font-medium transition-colors ${
-          opts?.nested ? "px-2.5 py-1.5 pl-8" : "px-2.5 py-2"
+        title={sidebarCollapsed ? link.label : undefined}
+        className={`group relative flex items-center gap-2.5 rounded-lg text-xs font-medium transition-colors duration-150 ${
+          opts?.nested ? "py-1.5 pl-8 pr-2.5" : "px-2.5 py-2"
         } ${
           isActive
-            ? "bg-primary/10 text-primary"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            ? "text-primary"
+            : "text-muted-foreground hover:text-foreground"
         }`}
-        title={sidebarCollapsed ? link.label : undefined}
       >
-        <link.icon className="h-4 w-4 shrink-0" />
-        {!sidebarCollapsed && <span>{link.label}</span>}
+        {isActive && (
+          <motion.span
+            layoutId="sidebar-active-pill"
+            className="absolute inset-0 rounded-lg bg-primary/10 ring-1 ring-primary/15"
+            transition={{ type: "spring", stiffness: 500, damping: 38, mass: 0.9 }}
+          />
+        )}
+        {!isActive && (
+          <span className="absolute inset-0 rounded-lg bg-muted/0 group-hover:bg-muted transition-colors duration-150" />
+        )}
+        <motion.span
+          className="relative z-10 shrink-0 flex items-center justify-center"
+          whileHover={{ scale: 1.12 }}
+          whileTap={{ scale: 0.92 }}
+          transition={{ type: "spring", stiffness: 400, damping: 15 }}
+        >
+          <link.icon className="h-4 w-4" />
+        </motion.span>
+        {!sidebarCollapsed && <span className="relative z-10">{link.label}</span>}
+        {isActive && sidebarCollapsed && (
+          <motion.span
+            layoutId="sidebar-active-dot"
+            className="absolute right-1 top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-primary"
+          />
+        )}
       </Link>
+    );
+  };
+
+  // Collapsible group header (Visual Intelligence / Growth engine) — animates
+  // its chevron rotation and the height of its child list smoothly.
+  const renderNavGroup = (opts: {
+    label: string;
+    icon: ComponentType<{ className?: string }>;
+    isOpen: boolean;
+    setOpen: (v: boolean) => void;
+    isActive: boolean;
+    children: { href: string; label: string; icon: ComponentType<{ className?: string }>; disabled?: boolean }[];
+  }) => {
+    const { label, icon: Icon, isOpen, setOpen, isActive, children } = opts;
+    if (sidebarCollapsed) {
+      return (
+        <button
+          onClick={() => {
+            setSidebarCollapsed(false);
+            setOpen(true);
+          }}
+          className={`relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors duration-150 ${
+            isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
+          }`}
+          title={label}
+        >
+          {isActive && (
+            <motion.span
+              layoutId="sidebar-active-pill"
+              className="absolute inset-0 rounded-lg bg-primary/10 ring-1 ring-primary/15"
+              transition={{ type: "spring", stiffness: 500, damping: 38, mass: 0.9 }}
+            />
+          )}
+          {!isActive && (
+            <span className="absolute inset-0 rounded-lg bg-muted/0 hover:bg-muted transition-colors duration-150" />
+          )}
+          <Icon className="relative z-10 h-4 w-4 shrink-0" />
+        </button>
+      );
+    }
+    return (
+      <div>
+        <button
+          onClick={() => setOpen(!isOpen)}
+          className={`group relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors duration-150 ${
+            isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <span className="absolute inset-0 rounded-lg bg-muted/0 group-hover:bg-muted transition-colors duration-150" />
+          <Icon className="relative z-10 h-4 w-4 shrink-0" />
+          <span className="relative z-10 flex-1 text-left">{label}</span>
+          <motion.span
+            className="relative z-10 shrink-0 flex items-center justify-center"
+            animate={{ rotate: isOpen ? 90 : 0 }}
+            transition={{ type: "spring", stiffness: 400, damping: 26 }}
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </motion.span>
+        </button>
+        <AnimatePresence initial={false}>
+          {isOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+              className="overflow-hidden"
+            >
+              <div className="relative mt-0.5 space-y-0.5">
+                <div className="absolute left-[19px] top-0.5 bottom-0.5 w-px bg-border/60" />
+                {children.map((child) => renderNavLink(child, { nested: true }))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     );
   };
 
@@ -328,7 +456,7 @@ export default function WorkspaceLayout({
     : "??";
 
   return (
-    <WorkspaceContext.Provider value={{ workspace, role, wsLoading }}>
+    <WorkspaceContext.Provider value={{ workspace, role, wsLoading, hasIntegration: !!hasIntegration }}>
       <div className="h-screen flex flex-col bg-background overflow-hidden">
         {/* Top Header — hidden in immersive mode */}
         <header className={`border-b bg-background/95 backdrop-blur-sm sticky top-0 z-50 shrink-0 transition-all duration-300 ${
@@ -337,18 +465,16 @@ export default function WorkspaceLayout({
           <div className="flex items-center justify-between h-12 px-4">
             {/* Left: Logo + Workspace Name */}
             <div className="flex items-center gap-3">
-              <Link href={basePath} className="flex items-center gap-2">
-                <div className="relative w-6 h-6 rounded-md overflow-hidden bg-white flex items-center justify-center border border-border/40">
-                  <Image
-                    src="/autommerce.png"
-                    alt="Autommerce Logo"
-                    fill
-                    sizes="24px"
-                    className="object-contain p-0.5"
-                    priority
-                  />
-                </div>
-                <span className="font-bold text-sm tracking-tight text-foreground">Data Entry</span>
+              <Link href={basePath} className="group flex items-center gap-2.5">
+                <AutommerceLogo size={28} priority className="transition-transform duration-300 group-hover:scale-105" />
+                <span className="leading-none">
+                  <span className="block text-sm font-black tracking-tight text-foreground [font-family:var(--brand-font)]">
+                    Autommerce
+                  </span>
+                  <span className="mt-0.5 block text-[8px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Data Entry
+                  </span>
+                </span>
               </Link>
 
               <span className="text-muted-foreground/30">|</span>
@@ -488,117 +614,76 @@ export default function WorkspaceLayout({
         <div className="flex-1 flex min-h-0">
           {/* Sidebar — hidden in enrich and Sync focused mode */}
           {!hideWorkspaceSidebar && (
-          <aside
-            className={`border-r bg-muted/30 shrink-0 flex flex-col transition-all duration-200 ${
-              sidebarCollapsed ? "w-14" : "w-52"
-            }`}
+          <motion.aside
+            animate={{ width: sidebarCollapsed ? 60 : 216 }}
+            transition={{ type: "spring", stiffness: 380, damping: 32 }}
+            className="relative border-r border-border/70 bg-sidebar text-sidebar-foreground shrink-0 flex flex-col shadow-[1px_0_0_0_rgba(0,0,0,0.02)]"
           >
-            <nav className="flex-1 py-2 px-2 space-y-0.5">
+            <nav className="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto overflow-x-hidden custom-scrollbar">
+              <SectionLabel>Overview</SectionLabel>
               {sidebarLinksBeforeMedia.map((link) => renderNavLink(link))}
 
-              {/* Media group */}
-              {sidebarCollapsed ? (
-                <button
-                  onClick={() => {
-                    setSidebarCollapsed(false);
-                    setMediaOpen(true);
-                  }}
-                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors ${
-                    isMediaActive
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  }`}
-                  title="Visual Intelligence"
-                >
-                  <Images className="h-4 w-4 shrink-0" />
-                </button>
-              ) : (
-                <div>
-                  <button
-                    onClick={() => setMediaOpen(!mediaOpen)}
-                    className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors ${
-                      isMediaActive
-                        ? "text-primary"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }`}
-                  >
-                    <Images className="h-4 w-4 shrink-0" />
-                    <span className="flex-1 text-left">Visual Intelligence</span>
-                    <ChevronRight
-                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${
-                        mediaOpen ? "rotate-90" : ""
-                      }`}
-                    />
-                  </button>
-                  {mediaOpen && (
-                    <div className="mt-0.5 space-y-0.5">
-                      {mediaChildren.map((child) => renderNavLink(child, { nested: true }))}
-                    </div>
-                  )}
-                </div>
-              )}
+              <SectionLabel>Visual Intelligence</SectionLabel>
+              {renderNavGroup({
+                label: "Visual Intelligence",
+                icon: Images,
+                isOpen: mediaOpen,
+                setOpen: setMediaOpen,
+                isActive: isMediaActive,
+                children: mediaChildren,
+              })}
 
-              {/* Growth engine group */}
-              {sidebarCollapsed ? (
-                <button
-                  onClick={() => {
-                    setSidebarCollapsed(false);
-                    setGrowthEngineOpen(true);
-                  }}
-                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors ${
-                    isGrowthEngineActive
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  }`}
-                  title="Growth engine"
-                >
-                  <Rocket className="h-4 w-4 shrink-0" />
-                </button>
-              ) : (
-                <div>
-                  <button
-                    onClick={() => setGrowthEngineOpen(!growthEngineOpen)}
-                    className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium w-full transition-colors ${
-                      isGrowthEngineActive
-                        ? "text-primary"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }`}
-                  >
-                    <Rocket className="h-4 w-4 shrink-0" />
-                    <span className="flex-1 text-left">Growth engine</span>
-                    <ChevronRight
-                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${
-                        growthEngineOpen ? "rotate-90" : ""
-                      }`}
-                    />
-                  </button>
-                  {growthEngineOpen && (
-                    <div className="mt-0.5 space-y-0.5">
-                      {growthEngineChildren.map((child) =>
-                        renderNavLink(child, { nested: true })
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
+              <SectionLabel>Growth engine</SectionLabel>
+              {renderNavGroup({
+                label: "Growth engine",
+                icon: Rocket,
+                isOpen: growthEngineOpen,
+                setOpen: setGrowthEngineOpen,
+                isActive: isGrowthEngineActive,
+                children: growthEngineChildren,
+              })}
 
-              {sidebarLinksAfterGrowthEngine.map((link) => renderNavLink(link))}
+              <SectionLabel>Tools</SectionLabel>
+              {toolsLinksAfterGrowthEngine.map((link) => renderNavLink(link))}
+
+              {accountLinks.length > 0 && (
+                <>
+                  <SectionLabel>Account</SectionLabel>
+                  {accountLinks.map((link) => renderNavLink(link))}
+                </>
+              )}
             </nav>
 
-            <div className="p-2 border-t">
-              <button
+            <div className="p-2 border-t border-border/70">
+              <motion.button
                 onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.96 }}
                 className="flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs text-muted-foreground hover:bg-muted hover:text-foreground w-full transition-colors"
               >
-                {sidebarCollapsed ? (
-                  <PanelLeft className="h-4 w-4" />
-                ) : (
+                <motion.span
+                  animate={{ rotate: sidebarCollapsed ? 180 : 0 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                  className="flex items-center justify-center shrink-0"
+                >
                   <PanelLeftClose className="h-4 w-4" />
-                )}
-                {!sidebarCollapsed && <span>Collapse</span>}
-              </button>
+                </motion.span>
+                <AnimatePresence initial={false}>
+                  {!sidebarCollapsed && (
+                    <motion.span
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: "auto" }}
+                      exit={{ opacity: 0, width: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="overflow-hidden whitespace-nowrap"
+                    >
+                      Collapse
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </motion.button>
             </div>
-          </aside>
+          </motion.aside>
           )}
 
           {/* Main Content */}
@@ -616,7 +701,7 @@ export default function WorkspaceLayout({
               <SubscriptionGate subscription={subscription} isActive={isActive} isLoading={subLoading} role={role}>
                 <div
                   className={
-                    isEnrichPage || isMarketResearchPage || isGrowthSyncPage
+                    isEnrichPage || isMarketResearchPage || isGrowthSyncPage || isWebsiteRestructurePage
                       ? "flex-1 flex flex-col min-h-0 overflow-hidden h-full"
                       : "flex-1"
                   }

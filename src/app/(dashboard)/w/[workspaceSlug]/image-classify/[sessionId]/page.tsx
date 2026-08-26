@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { motion } from "motion/react";
 import {
   ArrowLeft,
   Download,
@@ -250,15 +251,17 @@ export default function ImageClassifyDetailPage() {
   }
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-[1500px] px-5 py-7 sm:px-7 lg:px-10">
+        <motion.header initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex min-w-0 items-start gap-3">
             <Button
               type="button"
               variant="outline"
               size="icon"
-              className="h-10 w-10 shrink-0 rounded-xl border bg-background shadow-sm"
+              className="h-9 w-9 shrink-0 rounded-xl border border-border/60 bg-background/70"
               asChild
             >
               <Link href={`/w/${slug}/image-classify`} aria-label="Back">
@@ -266,11 +269,12 @@ export default function ImageClassifyDetailPage() {
               </Link>
             </Button>
             <div className="flex min-w-0 items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-                <Layers className="h-5 w-5 text-primary" />
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#400095] text-white dark:bg-[#F76D01]">
+                <Layers className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <h1 className="truncate text-xl font-bold tracking-tight">
+                <div className="mb-1 text-[9px] font-black uppercase tracking-[.2em] text-[#400095] dark:text-[#F76D01]">Classification result</div>
+                <h1 className="truncate text-3xl font-black tracking-[-.035em]">
                   {session.name}
                 </h1>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -300,20 +304,24 @@ export default function ImageClassifyDetailPage() {
                 size="sm"
                 variant="outline"
                 onClick={() => handleExport("csv")}
-                className="gap-1.5 text-xs"
+                className="h-9 gap-1.5 rounded-xl border-border/60 bg-background/70 text-xs"
               >
                 <Download className="h-3.5 w-3.5" /> CSV
               </Button>
               <Button
                 size="sm"
                 onClick={() => handleExport("json")}
-                className="gap-1.5 text-xs"
+                className="h-9 gap-1.5 rounded-xl bg-[#400095] px-4 text-xs text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
               >
                 <Download className="h-3.5 w-3.5" /> JSON
               </Button>
             </div>
           )}
-        </header>
+        </motion.header>
+        </div>
+      </section>
+
+      <main className="mx-auto max-w-[1500px] space-y-6 p-5 sm:p-7 lg:p-10">
 
         {session.status === "failed" && (
           <div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4">
@@ -332,49 +340,43 @@ export default function ImageClassifyDetailPage() {
 
         {result && (
           <>
-            <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <section className="grid grid-cols-2 overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm lg:grid-cols-4">
               {[
                 {
                   label: "Images",
                   value: result.totalImages,
                   icon: ImageIcon,
-                  style: "bg-primary/10 text-primary",
                 },
                 {
                   label: "Groups",
                   value: result.groups.length,
                   icon: Layers,
-                  style: "bg-blue-500/10 text-blue-600",
                 },
                 {
                   label: "Credits",
                   value: result.usage.totalCredits.toFixed(3),
                   icon: Coins,
-                  style: "bg-amber-500/10 text-amber-600",
                 },
                 {
                   label: "Tokens",
                   value: result.usage.totalTokens.toLocaleString(),
                   icon: Cpu,
-                  style: "bg-emerald-500/10 text-emerald-600",
                 },
               ].map((stat) => (
-                <div
+                <motion.div
                   key={stat.label}
-                  className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex items-center gap-3 border-r border-border/60 px-4 py-4 last:border-r-0"
                 >
-                  <div
-                    className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
-                  >
-                    <stat.icon className="h-4 w-4" />
-                  </div>
+                    <stat.icon className="h-4 w-4 text-[#6B358D] dark:text-[#C8A8D2]" />
                   <div>
-                    <p className="text-lg font-bold leading-none">{stat.value}</p>
-                    <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <p className="text-lg font-black leading-none">{stat.value}</p>
+                    <p className="mt-1 text-[8px] font-bold uppercase tracking-[.16em] text-muted-foreground">
                       {stat.label}
                     </p>
                   </div>
-                </div>
+                </motion.div>
               ))}
             </section>
 
@@ -390,9 +392,10 @@ export default function ImageClassifyDetailPage() {
                 return (
                   <article
                     key={group.id}
-                    className="overflow-hidden rounded-xl border bg-card shadow-sm"
+                    className="group overflow-hidden rounded-[24px] border border-border/60 bg-card shadow-[0_15px_50px_rgba(15,23,42,.05)]"
                   >
-                    <div className="space-y-3 border-b bg-muted/20 p-4 sm:p-5">
+                    <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+                    <div className="space-y-3 border-b bg-gradient-to-r from-[#400095]/[0.04] to-[#F76D01]/[0.04] p-4 sm:p-5">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <h2 className="flex items-start gap-2 text-sm font-semibold">
@@ -415,7 +418,7 @@ export default function ImageClassifyDetailPage() {
                             <Badge
                               key={sku}
                               variant="outline"
-                              className="max-w-full break-all font-mono text-[10px] font-semibold text-primary"
+                              className="max-w-full break-all border-[#6B358D]/25 font-mono text-[10px] font-semibold text-[#6B358D] dark:text-[#C8A8D2]"
                             >
                               SKU: {sku}
                             </Badge>
@@ -430,7 +433,7 @@ export default function ImageClassifyDetailPage() {
                         return (
                           <div key={it.id} className="min-w-0 space-y-1.5">
                             <div
-                              className="relative aspect-square overflow-hidden rounded-lg border bg-muted"
+                              className="relative aspect-square overflow-hidden rounded-xl border border-border/60 bg-muted shadow-sm transition-all group-hover:shadow-md"
                               title={`${it.filename}${
                                 it.confidence != null
                                   ? ` (${(it.confidence * 100).toFixed(0)}%)`
@@ -476,7 +479,7 @@ export default function ImageClassifyDetailPage() {
             </div>
           </>
         )}
-      </div>
+      </main>
     </div>
   );
 }

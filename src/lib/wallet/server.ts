@@ -120,6 +120,7 @@ function mapTx(row: {
   method: string | null;
   status: string;
   created_at: string;
+  details?: Record<string, unknown> | null;
 }): WalletTx {
   return {
     id: row.id,
@@ -130,6 +131,7 @@ function mapTx(row: {
     method: row.method ?? undefined,
     status: row.status as WalletTxStatus,
     createdAt: new Date(row.created_at).getTime(),
+    details: row.details ?? undefined,
   };
 }
 
@@ -148,7 +150,7 @@ export async function readWorkspaceWallet(
     admin
       .from("wallet_transactions")
       .select(
-        "id, kind, amount_usd, description, module, method, status, created_at"
+        "id, kind, amount_usd, description, module, method, status, created_at, details"
       )
       .eq("workspace_id", workspaceId)
       .order("created_at", { ascending: false })

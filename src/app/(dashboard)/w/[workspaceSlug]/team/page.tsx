@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "motion/react";
 import {
   Users,
   Mail,
@@ -174,8 +175,8 @@ export default function TeamPage() {
 
   if (loading && members.length === 0) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <div className="autommerce-dashboard flex h-64 items-center justify-center [font-family:var(--brand-font)]">
+        <Loader2 className="h-5 w-5 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
       </div>
     );
   }
@@ -187,39 +188,58 @@ export default function TeamPage() {
   const viewerCount = members.filter((m) => m.role === "viewer").length;
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-              <Users className="h-5 w-5 text-primary" />
-            </div>
+    <div className="autommerce-dashboard flex-1 overflow-auto bg-background [font-family:var(--brand-font)]">
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="absolute -bottom-28 -right-16 h-64 w-64 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-7xl px-6 py-7">
+          <motion.header
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex flex-wrap items-end justify-between gap-4"
+          >
             <div>
-              <h1 className="text-xl font-bold tracking-tight">Team</h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01]">
+                  <Users className="h-4 w-4" />
+                </span>
+                <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
+                  Workspace
+                </span>
+              </div>
+              <h1 className="text-3xl font-black tracking-[-0.035em] sm:text-4xl">
+                Team
+                <span className="block bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">
+                  members & roles.
+                </span>
+              </h1>
+              <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
                 Manage members, roles, and invitations for this workspace.
               </p>
             </div>
-          </div>
-          {permissions.canAdmin && (
-            <Button
-              size="sm"
-              className="gap-1.5 self-start shadow-sm sm:self-auto"
-              onClick={handleOpenInvite}
-              disabled={subscriptionLoading}
-            >
-              <UserPlus className="h-3.5 w-3.5" /> Invite member
-            </Button>
-          )}
-        </header>
+            {permissions.canAdmin && (
+              <Button
+                size="sm"
+                className="h-9 gap-1.5 self-start rounded-xl bg-[#400095] px-4 text-xs text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90 sm:self-auto"
+                onClick={handleOpenInvite}
+                disabled={subscriptionLoading}
+              >
+                <UserPlus className="h-3.5 w-3.5" /> Invite member
+              </Button>
+            )}
+          </motion.header>
+        </div>
+      </section>
 
+      <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[
             {
               label: "Members",
               value: members.length,
               icon: Users,
-              style: "bg-primary/10 text-primary",
+              style: "bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]",
             },
             {
               label: "Admins",
@@ -241,10 +261,13 @@ export default function TeamPage() {
               icon: Crown,
               style: "bg-blue-500/10 text-blue-600",
             },
-          ].map((stat) => (
-            <div
+          ].map((stat, i) => (
+            <motion.div
               key={stat.label}
-              className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: i * 0.04 }}
+              className="flex items-center gap-3 rounded-2xl border border-border/60 bg-card p-3.5 shadow-sm"
             >
               <div
                 className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
@@ -252,24 +275,24 @@ export default function TeamPage() {
                 <stat.icon className="h-4 w-4" />
               </div>
               <div>
-                <p className="text-lg font-bold leading-none">{stat.value}</p>
+                <p className="text-lg font-black leading-none">{stat.value}</p>
                 <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
                   {stat.label}
                 </p>
               </div>
-            </div>
+            </motion.div>
           ))}
         </section>
 
         {showInvite && permissions.canAdmin && (
-          <section className="overflow-hidden rounded-xl border border-primary/20 bg-card shadow-sm">
+          <section className="overflow-hidden rounded-2xl border border-[#6B358D]/20 bg-card shadow-sm dark:border-[#F76D01]/20">
             <div className="border-b bg-muted/20 px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]">
                   <Mail className="h-4 w-4" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-semibold">Send invite</h2>
+                  <h2 className="text-sm font-bold">Send invite</h2>
                   <p className="text-[11px] text-muted-foreground">
                     Invite a new member to your workspace
                   </p>
@@ -333,7 +356,7 @@ export default function TeamPage() {
                   </select>
                 </div>
                 <Button
-                  className="h-10 gap-2"
+                  className="h-10 gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                   onClick={handleInvite}
                   disabled={inviteLoading || !inviteEmail}
                 >
@@ -350,10 +373,10 @@ export default function TeamPage() {
         )}
 
         {invites.length > 0 && (
-          <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+          <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
             <div className="flex items-center gap-2 border-b bg-muted/20 px-5 py-4">
               <Clock className="h-4 w-4 text-amber-500" />
-              <h2 className="text-sm font-semibold">Pending invites</h2>
+              <h2 className="text-sm font-bold">Pending invites</h2>
               <Badge className="border-amber-500/20 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-600 dark:text-amber-400">
                 {invites.length}
               </Badge>
@@ -384,11 +407,11 @@ export default function TeamPage() {
                     type="button"
                     onClick={() => handleResendInvite(inv.id)}
                     disabled={resendingInvite === inv.id}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-primary/10"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-[#400095]/10 dark:hover:bg-[#F76D01]/10"
                     title="Resend invite email"
                   >
                     <RefreshCw
-                      className={`h-3 w-3 text-primary ${
+                      className={`h-3 w-3 text-[#6B358D] dark:text-[#F76D01] ${
                         resendingInvite === inv.id ? "animate-spin" : ""
                       }`}
                     />
@@ -419,14 +442,14 @@ export default function TeamPage() {
           </section>
         )}
 
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
           <div className="flex flex-col gap-1 border-b bg-muted/20 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]">
                 <Users className="h-4 w-4" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold">Members</h2>
+                <h2 className="text-sm font-bold">Members</h2>
                 <p className="text-[11px] text-muted-foreground">
                   {members.length} total · {editorCount} editors · {viewerCount}{" "}
                   viewers
@@ -476,8 +499,8 @@ export default function TeamPage() {
                     >
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-3">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                            <span className="text-[10px] font-bold text-primary">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#400095]/10 dark:bg-[#F76D01]/10">
+                            <span className="text-[10px] font-bold text-[#6B358D] dark:text-[#F76D01]">
                               {initials}
                             </span>
                           </div>
@@ -505,7 +528,7 @@ export default function TeamPage() {
                                 e.target.value as Role
                               )
                             }
-                            className="h-7 cursor-pointer rounded-md border bg-background px-2.5 text-[11px] font-semibold outline-none hover:border-primary/50 focus:ring-1 focus:ring-ring"
+                            className="h-7 cursor-pointer rounded-md border bg-background px-2.5 text-[11px] font-semibold outline-none hover:border-[#6B358D]/50 dark:hover:border-[#F76D01]/50 focus:ring-1 focus:ring-ring"
                           >
                             <option value="admin">Admin</option>
                             <option value="editor">Editor</option>
@@ -548,13 +571,13 @@ export default function TeamPage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
           <div className="flex items-center gap-3 border-b bg-muted/20 px-5 py-4">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600">
               <ShieldCheck className="h-4 w-4" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold">Role permissions</h2>
+              <h2 className="text-sm font-bold">Role permissions</h2>
               <p className="text-[11px] text-muted-foreground">
                 What each role can do in this workspace
               </p>
@@ -717,6 +740,7 @@ export default function TeamPage() {
               Close
             </Button>
             <Button
+              className="rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
               onClick={() =>
                 router?.push(`/w/${workspace?.slug}/subscription`)
               }

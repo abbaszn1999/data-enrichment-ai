@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getImportSession, type ImportSession } from "@/lib/supabase";
@@ -28,7 +28,7 @@ export default function EnrichPage() {
   const [error, setError] = useState<string | null>(null);
   const loadedRef = useRef(false);
 
-  const { loadProject, rows } = useSheetStore();
+  const { loadProject, rows, fileName } = useSheetStore();
 
   useEffect(() => {
     if (!sessionId || !workspace || loadedRef.current) return;
@@ -148,9 +148,35 @@ export default function EnrichPage() {
   // Render the original big enrichment tool: Sidebar (left) + DataTable (center)
   return (
     <TooltipProvider>
-      <div className="flex h-full min-h-0 overflow-hidden">
-        <Sidebar />
-        <DataTable />
+      <div className="autommerce-dashboard flex h-full min-h-0 flex-col overflow-hidden bg-background [font-family:var(--brand-font)]">
+        <div className="h-1 shrink-0 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+        <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border/60 bg-background/95 px-3 backdrop-blur-xl">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 rounded-lg p-0"
+            onClick={() => router.back()}
+            aria-label="Back to review"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#400095] text-white dark:bg-[#F76D01]">
+            <Sparkles className="h-3.5 w-3.5" />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-xs font-black">{fileName || "Catalog enrichment"}</div>
+            <div className="text-[8px] font-bold uppercase tracking-[.16em] text-[#6B358D] dark:text-[#C8A8D2]">
+              Step 04 · Enrichment workspace
+            </div>
+          </div>
+          <div className="ml-auto rounded-lg border border-border/60 bg-muted/35 px-2 py-1 text-[9px] text-muted-foreground">
+            <strong className="text-foreground">{rows.length}</strong> rows loaded
+          </div>
+        </header>
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <Sidebar />
+          <DataTable />
+        </div>
       </div>
     </TooltipProvider>
   );

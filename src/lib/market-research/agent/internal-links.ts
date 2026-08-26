@@ -1,4 +1,5 @@
 import type {
+  ArticleLinkTarget,
   CollectionLink,
   ProposedCollection,
 } from "@/components/market-research/workspace-data";
@@ -348,19 +349,23 @@ function buildRegistry(input: InternalLinkInput): {
       continue;
     }
 
-    // Not pushed yet, so its storefront URL does not exist. It is registered as
-    // unresolved and is excluded as a link target until the handle is real.
-    const predictedHandle = slugify(
-      input.collectionPrefix
-        ? `${input.collectionPrefix} ${cleanName || collection.name}`
-        : cleanName || collection.name
-    );
+    // A handle only exists once the collection has been pushed. Until then its
+    // storefront URL is a guess, so the node is registered as unresolved and is
+    // excluded as a link target rather than risking a 404.
+    const pushedHandle = collection.storeHandle?.trim();
+    const predictedHandle =
+      pushedHandle ||
+      slugify(
+        input.collectionPrefix
+          ? `${input.collectionPrefix} ${cleanName || collection.name}`
+          : cleanName || collection.name
+      );
     const node = makeNode({
       key: `proposed:${collection.id}`,
       rawTitle: cleanName || collection.name,
       href: `/collections/${predictedHandle}`,
-      resolved: false,
-      published: false,
+      resolved: Boolean(pushedHandle),
+      published: Boolean(pushedHandle),
       productCount: collection.productCount ?? 0,
       volume: collection.volume ?? 0,
       extraText: [collection.headKeyword, collection.parentNiche]
@@ -765,11 +770,11 @@ export async function buildInternalLinkGraph(
     }
   }
 
-  const fallback = safeFallbackLinks(input.provider);
+  const fallbackLinks = safeFallbackLinks(input.provider);
   for (const item of perSource) {
     const chosen = assembled.get(item.collectionId) ?? [];
     if (chosen.length === 0) {
-      graph[item.collectionId] = fallback;
+      graph[item.collectionId] = fallbackLinks;
       continue;
     }
 
@@ -781,4 +786,170 @@ export async function buildInternalLinkGraph(
   }
 
   return graph;
+}
+
+// ─── article link targets (Stage 7) ───────────────────────────────────────────
+
+/** Minimum hybrid relevance before a collection is worth linking from an article. */
+const ARTICLE_LINK_THRESHOLD = 0.12;
+
+/**
+ * Every collection gets at least this many inbound article links before the
+ * proportional cap kicks in, so a small plan is not spread uselessly thin.
+ */
+const MIN_INBOUND_PER_COLLECTION = 5;
+
+/**
+ * How far a popular collection may exceed its fair share of inbound links. A
+ * broad page like "Cables and Chargers" is the best match for a large slice of
+ * the plan, and pretending otherwise would produce worse links — but without a
+ * ceiling it absorbs the entire plan and the long tail gets nothing.
+ */
+const INBOUND_SLACK = 1.5;
+
+export interface ArticleLinkInput {
+  /** The planned articles, keyed so the caller can map results back. */
+  articles: Array<{ id: string; title: string; keyword: string }>;
+  storeCollections?: StoreCollectionItem[];
+  /** Proposed collections; only the pushed ones (with a storeHandle) are linkable. */
+  proposed?: ProposedCollection[];
+  collectionPrefix?: string;
+  linksPerArticle?: number;
+}
+
+/**
+ * Resolves, for each planned article, the collection pages it should link out
+ * to. It reuses the same registry, IDF and embedding machinery as the
+ * collection graph so an article can only ever point at a verified storefront
+ * URL — the handle is read from the store, never minted from the title.
+ */
+export async function buildArticleLinkTargets(
+  input: ArticleLinkInput
+): Promise<Record<string, ArticleLinkTarget[]>> {
+  const result: Record<string, ArticleLinkTarget[]> = {};
+  if (input.articles.length === 0) return result;
+
+  const linksPerArticle = Math.max(1, input.linksPerArticle ?? 4);
+
+  const { nodes } = buildRegistry({
+    proposed: input.proposed ?? [],
+    storeCollections: input.storeCollections,
+    collectionPrefix: input.collectionPrefix,
+  });
+
+  const linkable = nodes.filter(
+    (node) => node.resolved && node.published && node.productCount > 0
+  );
+  if (linkable.length === 0) {
+    for (const article of input.articles) result[article.id] = [];
+    return result;
+  }
+
+  const idf = buildIdf(nodes);
+  const linkableSparse = new Map<string, Map<string, number>>();
+  for (const node of linkable) {
+    linkableSparse.set(node.key, tfIdfVector(node.tokens, idf));
+  }
+
+  // Embed the collections and the article intents in one pass each.
+  let useDense = false;
+  if (linkable.length <= MAX_EMBEDDED_NODES) {
+    const vectors = await embedTexts(linkable.map((node) => node.embedText));
+    linkable.forEach((node, index) => {
+      node.vector = vectors[index];
+    });
+    useDense = vectors.some((vector) => Array.isArray(vector));
+  }
+
+  const articleTexts = input.articles.map((article) =>
+    [article.title, article.keyword].filter(Boolean).join(". ")
+  );
+  const articleVectors = useDense ? await embedTexts(articleTexts) : [];
+
+  const maxProducts = Math.max(
+    10,
+    ...linkable.map((node) => node.productCount || 0)
+  );
+
+  // Score every (article, collection) pair once, then allocate globally. Letting
+  // each article pick its own top matches independently makes the broadest
+  // collection the winner for hundreds of articles at once, which wastes the
+  // whole point of internal linking.
+  const candidates: Array<{
+    articleId: string;
+    node: LinkNode;
+    score: number;
+  }> = [];
+
+  input.articles.forEach((article, index) => {
+    const tokens = tokenize(`${article.title} ${article.keyword}`);
+    const sparse = tfIdfVector(tokens, idf);
+    const vector = articleVectors[index];
+
+    for (const node of linkable) {
+      const dense =
+        vector && node.vector ? cosineSimilarity(vector, node.vector) : null;
+      const lexical = sparseCosine(
+        sparse,
+        linkableSparse.get(node.key) ?? tfIdfVector(node.tokens, idf)
+      );
+      const relevance = dense !== null ? 0.7 * dense + 0.3 * lexical : lexical;
+      if (relevance < ARTICLE_LINK_THRESHOLD) continue;
+
+      // A small commercial nudge: between two equally relevant pages, send the
+      // reader to the one that can actually fulfil the intent.
+      const score =
+        0.85 * relevance + 0.15 * normalizeLog(node.productCount, maxProducts);
+      candidates.push({ articleId: article.id, node, score });
+    }
+  });
+
+  candidates.sort((a, b) => b.score - a.score);
+
+  const inboundCap = Math.max(
+    MIN_INBOUND_PER_COLLECTION,
+    Math.ceil(
+      ((input.articles.length * linksPerArticle) / linkable.length) *
+        INBOUND_SLACK
+    )
+  );
+
+  const chosen = new Map<string, Array<{ node: LinkNode; score: number }>>();
+  const inbound = new Map<string, number>();
+
+  const take = (entry: (typeof candidates)[number]) => {
+    const list = chosen.get(entry.articleId) ?? [];
+    list.push({ node: entry.node, score: entry.score });
+    chosen.set(entry.articleId, list);
+    inbound.set(entry.node.key, (inbound.get(entry.node.key) ?? 0) + 1);
+  };
+
+  // Best pairs first, so a collection's quota goes to the articles that fit it
+  // most closely rather than to whichever article happened to be processed first.
+  for (const entry of candidates) {
+    const list = chosen.get(entry.articleId);
+    if (list && list.length >= linksPerArticle) continue;
+    if ((inbound.get(entry.node.key) ?? 0) >= inboundCap) continue;
+    take(entry);
+  }
+
+  // An article left with no links at all is worse than a collection one link
+  // over its share, so starved articles get their best match regardless.
+  for (const entry of candidates) {
+    if ((chosen.get(entry.articleId)?.length ?? 0) > 0) continue;
+    take(entry);
+  }
+
+  for (const article of input.articles) {
+    const usedAnchors = new Set<string>();
+    result[article.id] = (chosen.get(article.id) ?? [])
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => ({
+        anchor: sanitizeAnchor(undefined, entry.node, usedAnchors),
+        url: entry.node.href,
+        collectionName: entry.node.title,
+      }));
+  }
+
+  return result;
 }

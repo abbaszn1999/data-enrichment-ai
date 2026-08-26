@@ -5,7 +5,10 @@ import { applyWooCommerceChanges } from "./apply";
 import {
   resolveWooCategoryByName,
   assignProductsToWooCategory,
+  unassignProductsFromWooCategory,
   deleteWooCategories,
+  listAllWooCategories,
+  detectNewWooCategoryProducts,
 } from "./categories";
 import { WOOCOMMERCE_CORE_PRODUCT_COLUMNS } from "./columns";
 import {
@@ -38,6 +41,18 @@ export const WooCommerceProvider: SyncProvider = {
     assign: ({ integration, taxonomyId, productIds }) =>
       assignProductsToWooCategory({ integration, categoryId: taxonomyId, productIds }),
     delete: ({ integration, ids }) => deleteWooCategories({ integration, ids }),
+    list: ({ integration, max }) => listAllWooCategories({ integration, max }),
+    unassign: ({ integration, taxonomyId, productIds }) =>
+      unassignProductsFromWooCategory({ integration, categoryId: taxonomyId, productIds }),
+  },
+  growthSync: {
+    detectNewProducts: ({ integration, taxonomyId, since, maxPages }) =>
+      detectNewWooCategoryProducts({
+        integration,
+        categoryId: taxonomyId,
+        since,
+        maxPages,
+      }),
   },
   configFields: [
     {

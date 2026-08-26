@@ -3,8 +3,11 @@ import type { SearchIntent } from "./providers/semrush-codes";
 import type { MarketResearchPersisted } from "@/components/market-research/persistence";
 import type { MarketResearchProject } from "@/components/market-research/mock-data";
 import type {
+  GeneratedArticle,
   MarketResearchProduct,
   ProposedCollection,
+  StoreBlog,
+  StrategyArticle,
 } from "@/components/market-research/workspace-data";
 
 export type ProbeSeedInput = { id: string; term: string };
@@ -204,7 +207,12 @@ export async function syncSeoApi(
   workspaceId: string,
   projectId: string,
   collectionIds?: string[]
-): Promise<{ ok: boolean; syncedCount: number; errors?: string[] }> {
+): Promise<{
+  ok: boolean;
+  syncedCount: number;
+  results?: Array<{ collectionId: string; ok: boolean; error?: string }>;
+  errors?: string[];
+}> {
   const response = await fetch("/api/market-research/sync-seo", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -479,5 +487,132 @@ export async function generateOnPageApi(
     }),
   });
   return readJson<AgentOnPageResponse>(response);
+}
+
+// ─── Stage 7: content plan and articles ──────────────────────────────────────
+
+export type AgentStrategyResponse = {
+  articles: StrategyArticle[];
+  isAiGenerated: boolean;
+  droppedByCap: number;
+  mergedByIntent: number;
+};
+
+export async function buildContentPlanApi(
+  workspaceId: string,
+  projectId: string | undefined,
+  keywords: Array<{
+    id: string;
+    keyword: string;
+    sheet?: string;
+    volume?: number;
+    difficulty?: number;
+    seedId?: string;
+    seed?: string;
+  }>,
+  context?: {
+    parentNiches?: string[];
+    collections?: Array<{
+      id: string;
+      name: string;
+      headKeyword?: string;
+      parentNiche?: string;
+      volume?: number;
+      productCount?: number;
+      storeHandle?: string;
+    }>;
+  }
+): Promise<AgentStrategyResponse> {
+  const response = await fetch("/api/market-research/agent/strategy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspaceId,
+      projectId,
+      keywords,
+      parentNiches: context?.parentNiches,
+      collections: context?.collections,
+    }),
+  });
+  return readJson<AgentStrategyResponse>(response);
+}
+
+export type StoreBlogsResponse = {
+  blogs: StoreBlog[];
+  provider: string | null;
+  /** Storefront origin, used to render clickable absolute collection links. */
+  storeUrl: string;
+  /** False when the store's token cannot read or write blog content. */
+  contentAccess: boolean;
+  scopeWarning?: string | null;
+};
+
+export async function fetchStoreBlogsApi(
+  workspaceId: string
+): Promise<StoreBlogsResponse> {
+  const response = await fetch(
+    `/api/market-research/blogs?workspaceId=${encodeURIComponent(workspaceId)}`
+  );
+  return readJson<StoreBlogsResponse>(response);
+}
+
+export async function writeArticleApi(
+  workspaceId: string,
+  projectId: string | undefined,
+  article: {
+    id: string;
+    title: string;
+    keyword: string;
+    type: "guide" | "comparison" | "faq" | "roundup";
+    volume?: number;
+    difficulty?: number;
+    linksOut?: Array<{ anchor: string; url: string; collectionName: string }>;
+  },
+  blogs?: StoreBlog[]
+): Promise<{ article: GeneratedArticle; cost: number }> {
+  const response = await fetch("/api/market-research/agent/article", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, projectId, article, blogs }),
+  });
+  return readJson<{ article: GeneratedArticle; cost: number }>(response);
+}
+
+export type ArticleSyncResponse = {
+  ok: boolean;
+  syncedCount: number;
+  timeZone: string;
+  results: Array<{
+    articleId: string;
+    ok: boolean;
+    scheduledAt?: string;
+    storeArticleId?: string;
+    storeHandle?: string;
+    coverApplied?: boolean;
+    /** The article was already on the store's calendar, so it was not re-created. */
+    alreadySynced?: boolean;
+    error?: string;
+  }>;
+};
+
+export async function syncArticlesApi(
+  workspaceId: string,
+  projectId: string,
+  articles: Array<{
+    articleId: string;
+    title: string;
+    seoTitle?: string;
+    seoDescription?: string;
+    blogTitle?: string;
+    bodyHtml: string;
+    featuredImage?: { url: string; alt: string };
+  }>
+): Promise<ArticleSyncResponse> {
+  const response = await fetch("/api/market-research/articles/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, projectId, articles }),
+  });
+  return readJson<ArticleSyncResponse>(response);
 }
 

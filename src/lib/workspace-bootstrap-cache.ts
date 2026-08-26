@@ -29,7 +29,6 @@ export interface BootstrapSubscriptionShape {
   subscription: unknown | null;
   currentPlan: unknown | null;
   availablePlans: unknown[];
-  creditPacks: unknown[];
   credits: unknown | null;
   isActive: boolean;
 }

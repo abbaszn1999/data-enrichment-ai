@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
-import { stripe, getOrCreateStripeCustomer } from "@/lib/stripe";
+import { stripe, getOrCreateStripeCustomer, creditsToUsd, CREDIT_TOPUP_MIN_CREDITS } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 
 export async function POST(request: NextRequest) {
@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
     if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
     const body = await request.json();
-    const { type, planId, packId, billingCycle, workspaceSlug } = body;
+    const { type, planId, credits, billingCycle, workspaceSlug } = body;
 
     const admin = createAdminClient();
     const customerId = await getOrCreateStripeCustomer(user.id, user.email!);
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({ url: session.url });
 
-    } else if (type === "credit_pack") {
+    } else if (type === "credit_topup") {
       // Check user has active subscription
       const { data: sub } = await admin
         .from("user_subscriptions")
@@ -67,28 +67,41 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (!sub || !["active", "trialing"].includes(sub.status)) {
-        return NextResponse.json({ error: "Active subscription required to purchase credit packs" }, { status: 403 });
+        return NextResponse.json({ error: "Active subscription required to buy extra credits" }, { status: 403 });
       }
 
-      // Get pack details
-      const { data: pack } = await admin.from("credit_packs").select("*").eq("id", packId).single();
-      if (!pack) return NextResponse.json({ error: "Credit pack not found" }, { status: 404 });
-
-      if (!pack.stripe_price_id) {
-        return NextResponse.json({ error: "Stripe price not configured for this pack" }, { status: 400 });
+      const creditsNum = Math.floor(Number(credits));
+      if (!Number.isFinite(creditsNum) || creditsNum < CREDIT_TOPUP_MIN_CREDITS) {
+        return NextResponse.json(
+          { error: `Minimum top-up is ${CREDIT_TOPUP_MIN_CREDITS} credits` },
+          { status: 400 }
+        );
       }
+
+      const amountUsd = creditsToUsd(creditsNum);
 
       const session = await stripe.checkout.sessions.create({
         customer: customerId,
         mode: "payment",
-        line_items: [{ price: pack.stripe_price_id, quantity: 1 }],
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              unit_amount: Math.round(amountUsd * 100),
+              product_data: {
+                name: `${creditsNum.toLocaleString()} AI credits`,
+                description: "One-time credit top-up",
+              },
+            },
+            quantity: 1,
+          },
+        ],
         success_url: successUrl,
         cancel_url: cancelUrl,
         allow_promotion_codes: true,
         metadata: {
           userId: user.id,
-          packId: pack.id,
-          credits: pack.credits.toString(),
+          credits: creditsNum.toString(),
         },
       });
 

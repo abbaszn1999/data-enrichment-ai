@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
+import { motion } from "motion/react";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -1652,9 +1653,9 @@ export default function SyncPage() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="autommerce-dashboard flex-1 flex items-center justify-center [font-family:var(--brand-font)]">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <Loader2 className="h-6 w-6 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
           <p className="text-sm text-muted-foreground">Loading Sync workspace...</p>
         </div>
       </div>
@@ -1663,19 +1664,22 @@ export default function SyncPage() {
 
   if (!integration) {
     return (
-      <div className="flex-1 flex items-center justify-center p-8">
+      <div className="autommerce-dashboard flex-1 flex items-center justify-center p-8 [font-family:var(--brand-font)]">
         <div className="max-w-md text-center space-y-6">
-          <div className="mx-auto h-16 w-16 rounded-2xl bg-muted/60 flex items-center justify-center">
-            <Unplug className="h-8 w-8 text-muted-foreground" />
+          <div className="mx-auto h-16 w-16 rounded-2xl bg-gradient-to-br from-[#400095]/10 to-[#F76D01]/10 flex items-center justify-center">
+            <Unplug className="h-8 w-8 text-[#6B358D] dark:text-[#F76D01]" />
           </div>
           <div className="space-y-2">
-            <h2 className="text-xl font-bold">Integration Required</h2>
+            <h2 className="text-xl font-black">Integration Required</h2>
             <p className="text-sm text-muted-foreground leading-relaxed">
               Connect a platform in Settings to start using Sync. Once connected, you can
               import, compare, and manage your data with AI.
             </p>
           </div>
-          <Button onClick={() => router.push(`${basePath}/settings`)} className="gap-2">
+          <Button
+            onClick={() => router.push(`${basePath}/settings`)}
+            className="gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+          >
             <Settings className="h-4 w-4" />
             Go to Settings
           </Button>
@@ -1692,7 +1696,7 @@ export default function SyncPage() {
     <div className="fixed bottom-24 right-6 z-50 w-80 rounded-xl border bg-background/95 backdrop-blur shadow-lg p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#6B358D] dark:text-[#F76D01] shrink-0" />
           <div className="text-xs font-medium truncate">
             {liveProgress.tool === "sync_images_search"
               ? "Finding images"
@@ -1711,7 +1715,7 @@ export default function SyncPage() {
       </div>
       <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
         <div
-          className="h-full bg-primary transition-all duration-300 ease-out"
+          className="h-full bg-[#400095] dark:bg-[#F76D01] transition-all duration-300 ease-out"
           style={{ width: `${liveProgress.percent}%` }}
         />
       </div>
@@ -1740,7 +1744,7 @@ export default function SyncPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {chatBlockedReason === "NO_SUBSCRIPTION" ? (
-                <Crown className="h-4 w-4 text-primary" />
+                <Crown className="h-4 w-4 text-[#6B358D] dark:text-[#F76D01]" />
               ) : (
                 <AlertTriangle className="h-4 w-4 text-amber-500" />
               )}
@@ -1806,7 +1810,7 @@ export default function SyncPage() {
             placeholder="Describe what you want to do..."
             rows={1}
             disabled={isStreaming || !!chatBlockedReason}
-            className="w-full resize-none rounded-xl border bg-muted/30 px-4 py-3 pr-12 text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 disabled:opacity-50 transition-all"
+            className="w-full resize-none rounded-xl border bg-muted/30 px-4 py-3 pr-12 text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-[#6B358D]/30 focus:border-[#6B358D]/40 dark:focus:ring-[#F76D01]/30 dark:focus:border-[#F76D01]/40 disabled:opacity-50 transition-all"
             style={{ maxHeight: 200 }}
           />
         </div>
@@ -1815,7 +1819,7 @@ export default function SyncPage() {
           size="icon"
           onClick={isStreaming ? handleStopStreaming : handleSend}
           disabled={!!chatBlockedReason || (!isStreaming && !input.trim() && pendingAttachments.length === 0)}
-          className="h-10 w-10 rounded-xl shrink-0"
+          className="h-10 w-10 rounded-xl shrink-0 bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
         >
           {isStreaming ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -1852,7 +1856,7 @@ export default function SyncPage() {
           onClick={toggleWebEnabled}
           className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
             webEnabled
-              ? "bg-primary/10 text-primary"
+              ? "bg-[#400095]/10 text-[#400095] dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
               : "text-muted-foreground hover:bg-muted hover:text-foreground"
           }`}
           aria-label={webEnabled ? "Web research enabled" : "Enable web research"}
@@ -1870,7 +1874,7 @@ export default function SyncPage() {
             onClick={() => setMode("fast")}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
               mode === "fast"
-                ? "bg-background shadow-sm text-foreground"
+                ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -1881,7 +1885,7 @@ export default function SyncPage() {
             onClick={() => setMode("pro")}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
               mode === "pro"
-                ? "bg-background shadow-sm text-foreground"
+                ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -1926,7 +1930,7 @@ export default function SyncPage() {
                 <div className="flex items-center gap-2 w-full">
                   <span className="text-xs font-semibold">{opt.label}</span>
                   {thinkingLevel === opt.value && (
-                    <Check className="h-3.5 w-3.5 ml-auto text-primary" />
+                    <Check className="h-3.5 w-3.5 ml-auto text-[#6B358D] dark:text-[#F76D01]" />
                   )}
                 </div>
                 <span className="text-[10px] text-muted-foreground">{opt.desc}</span>
@@ -1957,7 +1961,7 @@ export default function SyncPage() {
 
   if (messages.length > 0) {
     return (
-      <div className="flex flex-col h-full min-h-0 overflow-hidden bg-background">
+      <div className="autommerce-dashboard flex flex-col h-full min-h-0 overflow-hidden bg-background [font-family:var(--brand-font)]">
         {liveProgressWidget}
         {/* Split Workspace */}
         <div className="flex-1 flex min-h-0 overflow-hidden">
@@ -1973,12 +1977,12 @@ export default function SyncPage() {
                   <div
                     className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
                       msg.role === "user"
-                        ? "bg-primary/10"
+                        ? "bg-[#400095] text-white dark:bg-[#F76D01]"
                         : "bg-muted"
                     }`}
                   >
                     {msg.role === "user" ? (
-                      <UserIcon className="h-3.5 w-3.5 text-primary" />
+                      <UserIcon className="h-3.5 w-3.5" />
                     ) : (
                       <Bot className="h-3.5 w-3.5 text-muted-foreground" />
                     )}
@@ -2038,7 +2042,7 @@ export default function SyncPage() {
                         <div className="space-y-1.5">
                           {msg.progress?.map((step, index) => (
                             <div key={`${msg.id}-progress-${index}`} className="flex items-start gap-2 text-xs text-muted-foreground">
-                              <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-primary/70 shrink-0" />
+                              <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-[#6B358D]/70 dark:bg-[#F76D01]/70 shrink-0" />
                               <span>{step}</span>
                             </div>
                           ))}
@@ -2085,8 +2089,8 @@ export default function SyncPage() {
                     {msg.role === "assistant" && msg.content && (
                       <>
                         <Separator className="my-3" />
-                        <div className="rounded-lg border border-primary/10 bg-primary/5 px-3 py-2">
-                          <div className="text-[10px] font-semibold uppercase tracking-wide text-primary/80 mb-1">
+                        <div className="rounded-lg border border-[#6B358D]/15 bg-[#400095]/5 px-3 py-2 dark:border-[#F76D01]/15 dark:bg-[#F76D01]/5">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide text-[#6B358D] dark:text-[#F76D01] mb-1">
                             Action summary
                           </div>
                           <StreamingMarkdown
@@ -2117,7 +2121,7 @@ export default function SyncPage() {
                           </span>
                         )}
                         {msg.actionReceipt.toolsExecuted.map((tool, idx) => (
-                          <span key={`${msg.id}-tool-${idx}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-[10px] font-medium text-primary/70">
+                          <span key={`${msg.id}-tool-${idx}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#400095]/10 text-[10px] font-medium text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]">
                             {TOOL_LABELS[tool] || tool}
                           </span>
                         ))}
@@ -2141,7 +2145,7 @@ export default function SyncPage() {
                       <div className="mt-3 flex items-center gap-2">
                         <Button
                           size="sm"
-                          className="h-7 px-3 text-xs gap-1.5"
+                          className="h-7 px-3 text-xs gap-1.5 rounded-lg bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                           onClick={handleConfirmPlan}
                         >
                           <ChevronRight className="h-3.5 w-3.5" />
@@ -2179,7 +2183,11 @@ export default function SyncPage() {
                       type="button"
                       size="sm"
                       variant={sheetView === view.key ? "secondary" : "ghost"}
-                      className="h-7 px-2.5 text-[11px]"
+                      className={`h-7 px-2.5 text-[11px] ${
+                        sheetView === view.key
+                          ? "bg-[#400095]/10 text-[#400095] dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
+                          : ""
+                      }`}
                       onClick={() => {
                         setSheetView(view.key);
                         setColumnProfile(view.key);
@@ -2278,7 +2286,10 @@ export default function SyncPage() {
                   entity={currentEntity}
                   disabled={isStreaming || isApplying}
                 />
-                <Badge variant={pendingChangeCount > 0 ? "default" : "secondary"} className="text-[10px]">
+                <Badge
+                  variant={pendingChangeCount > 0 ? "default" : "secondary"}
+                  className={`text-[10px] ${pendingChangeCount > 0 ? "bg-[#400095] text-white dark:bg-[#F76D01]" : ""}`}
+                >
                   {pendingChangeCount > 0 ? `${pendingChangeCount} pending change${pendingChangeCount === 1 ? "" : "s"}` : "No pending changes"}
                 </Badge>
                 <Dialog>
@@ -2356,13 +2367,22 @@ export default function SyncPage() {
                     </div>
 
                     <DialogFooter showCloseButton>
-                      <Button disabled={pendingChangeCount === 0 || isApplying} onClick={handleApplySync}>
+                      <Button
+                        className="rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                        disabled={pendingChangeCount === 0 || isApplying}
+                        onClick={handleApplySync}
+                      >
                         {isApplying ? "Syncing..." : "Sync"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
-                <Button size="sm" className="h-7 px-3 text-[11px]" disabled={pendingChangeCount === 0 || isApplying} onClick={handleApplySync}>
+                <Button
+                  size="sm"
+                  className="h-7 px-3 text-[11px] rounded-lg bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                  disabled={pendingChangeCount === 0 || isApplying}
+                  onClick={handleApplySync}
+                >
                   {isApplying ? "Syncing..." : "Sync"}
                 </Button>
               </div>
@@ -2371,15 +2391,15 @@ export default function SyncPage() {
               <div className="flex-1 min-h-0 overflow-auto p-4">
                 {/* Filter bar: shown when a row filter is active */}
                 {filteredRowIndexes && (
-                  <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
-                    <span className="text-primary font-medium">
+                  <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-[#6B358D]/20 bg-[#400095]/5 px-3 py-2 text-xs dark:border-[#F76D01]/20 dark:bg-[#F76D01]/5">
+                    <span className="text-[#6B358D] dark:text-[#F76D01] font-medium">
                       {filterDescription || "Filter active"} — showing {displayRows.length} of {resultRows.length} rows
                     </span>
                     <Button
                       type="button"
                       size="sm"
                       variant="ghost"
-                      className="h-6 px-2 text-[11px] text-primary hover:text-primary/80"
+                      className="h-6 px-2 text-[11px] text-[#6B358D] hover:text-[#6B358D]/80 dark:text-[#F76D01] dark:hover:text-[#F76D01]/80"
                       onClick={() => {
                         setFilteredRowIndexes(null);
                         setFilterDescription(null);
@@ -2482,55 +2502,72 @@ export default function SyncPage() {
   // ─── Onboarding State (before first message) ──────────
 
   return (
-    <div className="flex-1 min-h-0 overflow-auto">
+    <div className="autommerce-dashboard flex-1 min-h-0 overflow-auto bg-background [font-family:var(--brand-font)]">
       {liveProgressWidget}
-      <div className="min-h-full flex flex-col items-center justify-center px-6 py-10">
-        <div className="w-full max-w-4xl flex flex-col items-center">
-          <div className="text-center space-y-4 mb-10 max-w-xl">
-            <div className="mx-auto h-14 w-14 rounded-2xl bg-primary/10 flex items-center justify-center mb-2">
-              <Sparkles className="h-7 w-7 text-primary" />
+      <div className="relative min-h-full overflow-hidden">
+        <div className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 -right-16 h-72 w-72 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative flex min-h-full flex-col items-center justify-center px-6 py-10">
+          <div className="w-full max-w-4xl flex flex-col items-center">
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45 }}
+              className="text-center space-y-4 mb-10 max-w-xl"
+            >
+              <div className="mx-auto h-14 w-14 rounded-2xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01] flex items-center justify-center mb-2">
+                <Sparkles className="h-7 w-7" />
+              </div>
+              <h1 className="text-3xl font-black tracking-[-0.035em]">
+                Sync
+                <span className="block bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">
+                  Workspace
+                </span>
+              </h1>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Your AI-powered data operations center. Import, compare, transform, and sync your data — all through conversation.
+              </p>
+            </motion.div>
+
+            <div className="grid grid-cols-2 gap-3 w-full max-w-2xl mb-8">
+              {quickPrompts.map((qp, i) => (
+                <motion.button
+                  key={qp.title}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.35, delay: i * 0.03 }}
+                  onClick={() => handleQuickPrompt(qp.prompt)}
+                  className="group flex items-start gap-3 p-3.5 rounded-xl border border-border/60 hover:border-[#6B358D]/40 hover:bg-[#400095]/5 dark:hover:border-[#F76D01]/40 dark:hover:bg-[#F76D01]/5 text-left transition-all"
+                >
+                  <div className="h-8 w-8 rounded-lg bg-muted flex items-center justify-center shrink-0 group-hover:bg-[#400095]/10 dark:group-hover:bg-[#F76D01]/10 transition-colors">
+                    <qp.icon className="h-4 w-4 text-muted-foreground group-hover:text-[#6B358D] dark:group-hover:text-[#F76D01] transition-colors" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold mb-0.5 flex items-center gap-1">
+                      {qp.title}
+                      <ChevronRight className="h-3 w-3 text-muted-foreground/40 group-hover:text-[#6B358D]/60 dark:group-hover:text-[#F76D01]/60 transition-colors" />
+                    </div>
+                    <div className="text-[11px] text-muted-foreground leading-snug">
+                      {qp.description}
+                    </div>
+                  </div>
+                </motion.button>
+              ))}
             </div>
-            <h1 className="text-2xl font-bold tracking-tight">Sync Workspace</h1>
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              Your AI-powered data operations center. Import, compare, transform, and sync your data — all through conversation.
-            </p>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3 w-full max-w-2xl mb-8">
-            {quickPrompts.map((qp) => (
-              <button
-                key={qp.title}
-                onClick={() => handleQuickPrompt(qp.prompt)}
-                className="group flex items-start gap-3 p-3.5 rounded-xl border border-border/60 hover:border-primary/30 hover:bg-primary/5 text-left transition-all"
-              >
-                <div className="h-8 w-8 rounded-lg bg-muted flex items-center justify-center shrink-0 group-hover:bg-primary/10 transition-colors">
-                  <qp.icon className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold mb-0.5 flex items-center gap-1">
-                    {qp.title}
-                    <ChevronRight className="h-3 w-3 text-muted-foreground/40 group-hover:text-primary/60 transition-colors" />
-                  </div>
-                  <div className="text-[11px] text-muted-foreground leading-snug">
-                    {qp.description}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 border border-border/40 mb-8">
+              <Store className="h-3.5 w-3.5 text-[#6B358D] dark:text-[#F76D01]" />
+              <span className="text-xs font-medium">
+                Connected: {integration.integration_name}
+              </span>
+              <Badge variant="secondary" className="text-[9px]">
+                {integration.provider}
+              </Badge>
+            </div>
 
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 border border-border/40 mb-8">
-            <Store className="h-3.5 w-3.5 text-primary" />
-            <span className="text-xs font-medium">
-              Connected: {integration.integration_name}
-            </span>
-            <Badge variant="secondary" className="text-[9px]">
-              {integration.provider}
-            </Badge>
-          </div>
-
-          <div className="w-full max-w-4xl rounded-2xl border bg-background/60 backdrop-blur-sm overflow-hidden">
-            {composerElement}
+            <div className="w-full max-w-4xl rounded-2xl border bg-background/60 backdrop-blur-sm overflow-hidden">
+              {composerElement}
+            </div>
           </div>
         </div>
       </div>

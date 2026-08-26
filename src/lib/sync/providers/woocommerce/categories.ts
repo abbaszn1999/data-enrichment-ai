@@ -1,8 +1,10 @@
 import type {
+  DetectedProduct,
   IntegrationRecord,
   ResolvedTaxonomy,
   SyncSheet,
   SyncSheetRow,
+  TaxonomySummary,
 } from "@/lib/sync/core/types";
 import { ValidationError } from "@/lib/sync/core/errors";
 import { createWooClient } from "./client";
@@ -23,6 +25,9 @@ type WooCategory = {
   image?: { id?: number; src?: string; name?: string; alt?: string } | null;
   menu_order?: number;
   count?: number;
+  /** Storefront category URL. Present on live WooCommerce responses even
+   *  though it isn't listed in the official schema docs. */
+  link?: string;
 };
 
 export type CreateWooCategoryInput = {
@@ -253,6 +258,190 @@ export async function updateWooCommerceCategories(input: {
     }
   }
   return { updatedCount, errors };
+}
+
+/**
+ * Remove products from a WooCommerce category.
+ *
+ * WooCommerce has no "remove from category" endpoint: categories live on the
+ * product as a whole array, and a write replaces it. So the product's current
+ * categories are read and written back minus the one being removed — dropping
+ * that read would silently wipe every other category the product belongs to.
+ */
+export async function unassignProductsFromWooCategory(input: {
+  integration: IntegrationRecord;
+  categoryId: string;
+  productIds: string[];
+}): Promise<{ removedCount: number }> {
+  const client = createWooClient(input.integration);
+  const catId = Number(input.categoryId);
+  if (!Number.isInteger(catId)) {
+    throw new ValidationError(`Invalid WooCommerce category id: ${input.categoryId}`, {
+      provider: "woocommerce",
+    });
+  }
+  const ids = input.productIds.map(Number).filter((n) => Number.isInteger(n));
+  if (ids.length === 0) return { removedCount: 0 };
+
+  let removedCount = 0;
+  for (const idChunk of chunk(ids, 100)) {
+    const products = await client.get<Array<{ id: number; categories?: Array<{ id: number }> }>>(
+      "/products",
+      { include: idChunk.join(","), per_page: 100 }
+    );
+    const update: Array<{ id: number; categories: Array<{ id: number }> }> = [];
+    for (const p of Array.isArray(products) ? products : []) {
+      const current = (p.categories ?? [])
+        .map((c) => c.id)
+        .filter((n) => Number.isInteger(n));
+      if (!current.includes(catId)) continue; // already absent
+      update.push({
+        id: p.id,
+        categories: current.filter((cid) => cid !== catId).map((cid) => ({ id: cid })),
+      });
+    }
+    if (update.length === 0) continue;
+    await client.post("/products/batch", { update });
+    removedCount += update.length;
+  }
+  return { removedCount };
+}
+
+/** Every product category in the store, walked page by page. */
+export async function listAllWooCategories(input: {
+  integration: IntegrationRecord;
+  max?: number;
+}): Promise<TaxonomySummary[]> {
+  const client = createWooClient(input.integration);
+  const max = input.max ?? 5000;
+  const out: TaxonomySummary[] = [];
+  let page = 1;
+
+  while (out.length < max) {
+    const response = await client.get<WooCategory[]>("/products/categories", {
+      per_page: 100,
+      page,
+      hide_empty: false,
+      orderby: "name",
+      order: "asc",
+    });
+    if (!Array.isArray(response) || response.length === 0) break;
+    for (const category of response) {
+      if (!category.id) continue;
+      out.push({
+        id: String(category.id),
+        title: category.name ?? "",
+        handle: category.slug,
+        productCount: category.count ?? 0,
+        // WooCommerce categories are always hand-editable; it has no notion of
+        // a rule-driven category the API refuses to write to.
+        manual: true,
+        parent: category.parent && category.parent > 0 ? String(category.parent) : undefined,
+        url: category.link || undefined,
+      });
+    }
+    if (response.length < 100) break;
+    page += 1;
+  }
+  return out;
+}
+
+/**
+ * Products created after `since` inside one category, newest first.
+ *
+ * Unlike Shopify, WooCommerce filters by creation date server-side, so this is
+ * a single request that returns only new products — no walking, no watermark
+ * comparison in application code.
+ *
+ * Docs: https://developer.woocommerce.com/docs/apis/rest-api/v3/products/
+ */
+export async function detectNewWooCategoryProducts(input: {
+  integration: IntegrationRecord;
+  categoryId: string;
+  since: string | null;
+  maxPages?: number;
+}): Promise<{
+  products: DetectedProduct[];
+  newestCreatedAt: string | null;
+  truncated?: boolean;
+}> {
+  // A fresh rule owns the future only; without this guard the first tick would
+  // pull the entire category.
+  if (!input.since) return { products: [], newestCreatedAt: null };
+
+  const client = createWooClient(input.integration);
+  const catId = Number(input.categoryId);
+  if (!Number.isInteger(catId)) {
+    throw new ValidationError(`Invalid WooCommerce category id: ${input.categoryId}`, {
+      provider: "woocommerce",
+    });
+  }
+
+  // Generous on purpose: `after` already narrows the set to new products, so
+  // the ceiling only guards against a bulk import turning one detection into an
+  // unbounded crawl.
+  const maxPages = Math.max(input.maxPages ?? 20, 1);
+  const products: DetectedProduct[] = [];
+  let page = 1;
+  let sawFullPage = false;
+
+  while (page <= maxPages) {
+    const response = await client.get<
+      Array<{
+        id?: number;
+        name?: string;
+        permalink?: string;
+        date_created_gmt?: string;
+        date_created?: string;
+        type?: string;
+        description?: string;
+        short_description?: string;
+        tags?: Array<{ name?: string }>;
+        images?: Array<{ src?: string }>;
+      }>
+    >("/products", {
+      category: catId,
+      // `after` is compared against the creation date; the GMT flag keeps it
+      // aligned with the ISO watermark instead of the store's local timezone.
+      after: input.since,
+      dates_are_gmt: true,
+      // `after` already narrows the set, but the ordering is what makes the
+      // first element the newest, which is how the watermark advances.
+      orderby: "date",
+      order: "desc",
+      per_page: 100,
+      page,
+      status: "any",
+    });
+    if (!Array.isArray(response) || response.length === 0) break;
+
+    for (const p of response) {
+      if (!p.id) continue;
+      const createdAt = p.date_created_gmt
+        ? `${p.date_created_gmt}Z`
+        : (p.date_created ?? "");
+      products.push({
+        id: String(p.id),
+        title: p.name ?? "",
+        createdAt,
+        url: p.permalink,
+        imageUrl: p.images?.[0]?.src,
+        productType: p.type ?? undefined,
+        tags: p.tags?.map((t) => t.name ?? "").filter(Boolean),
+        description: p.short_description || p.description || undefined,
+      });
+    }
+
+    sawFullPage = response.length >= 100;
+    if (!sawFullPage) break;
+    page += 1;
+  }
+
+  return {
+    products,
+    newestCreatedAt: products[0]?.createdAt ?? null,
+    truncated: sawFullPage && page > maxPages ? true : undefined,
+  };
 }
 
 /** Permanently delete WooCommerce product categories (force=true). */

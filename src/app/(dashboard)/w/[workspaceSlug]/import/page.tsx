@@ -3,14 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { motion } from "motion/react";
 import {
+  ArrowRight,
   Check,
   Clock3,
+  Database,
   FileSpreadsheet,
   FolderOpen,
   Loader2,
-  Package,
   Plus,
+  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -189,88 +192,90 @@ export default function ImportPage() {
   };
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-              <Upload className="h-5 w-5 text-primary" />
-            </div>
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="absolute -bottom-28 -right-16 h-64 w-64 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-[1500px] px-5 py-7 sm:px-7 lg:px-10">
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between"
+          >
             <div>
-              <h1 className="text-xl font-bold tracking-tight">
-                Catalog Intelligence
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01]">
+                  <Sparkles className="h-4 w-4" />
+                </span>
+                <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
+                  Catalog intelligence
+                </span>
+              </div>
+              <h1 className="text-3xl font-black tracking-[-0.035em] sm:text-4xl">
+                Raw worksheets in.
+                <span className="block bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">
+                  Agent-ready product data out.
+                </span>
               </h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Upload worksheets, match products, and enrich catalog data.
+              <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
+                Upload, match, review, and enrich product data through one guided workflow.
+                Every project preserves its progress so your team can continue at any time.
               </p>
             </div>
-          </div>
-          {canEdit && (
-            <Button
-              size="sm"
-              className="gap-1.5 self-start shadow-sm sm:self-auto"
-              asChild
-            >
-              <Link href={`/w/${slug}/import/new`}>
-                <Plus className="h-3.5 w-3.5" /> New project
-              </Link>
-            </Button>
-          )}
-        </header>
-
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[
-            {
-              label: "Projects",
-              value: projectStats.total,
-              icon: FolderOpen,
-              style: "bg-primary/10 text-primary",
-            },
-            {
-              label: "Ready",
-              value: projectStats.ready,
-              icon: Check,
-              style: "bg-emerald-500/10 text-emerald-600",
-            },
-            {
-              label: "Processing",
-              value: projectStats.processing,
-              icon: Loader2,
-              style: "bg-amber-500/10 text-amber-600",
-            },
-            {
-              label: "Products",
-              value: projectStats.products.toLocaleString(),
-              icon: Package,
-              style: "bg-blue-500/10 text-blue-600",
-            },
-          ].map((stat) => (
-            <div
-              key={stat.label}
-              className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
-            >
-              <div
-                className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
+            {canEdit && (
+              <Button
+                size="sm"
+                className="h-9 gap-2 self-start rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90 lg:self-auto"
+                asChild
               >
-                <stat.icon
-                  className={`h-4 w-4 ${
-                    stat.label === "Processing" && stat.value
-                      ? "animate-spin"
-                      : ""
+                <Link href={`/w/${slug}/import/new`}>
+                  <Plus className="h-3.5 w-3.5" /> New project
+                  <ArrowRight className="h-3 w-3" />
+                </Link>
+              </Button>
+            )}
+          </motion.div>
+
+          <div className="mt-7 grid max-w-3xl grid-cols-2 overflow-hidden rounded-2xl border border-border/60 bg-background/70 shadow-sm backdrop-blur sm:grid-cols-4">
+            {[
+              { label: "Projects", value: projectStats.total, icon: FolderOpen },
+              { label: "Ready", value: projectStats.ready, icon: Check },
+              { label: "Processing", value: projectStats.processing, icon: Loader2 },
+              { label: "Products", value: projectStats.products.toLocaleString(), icon: Database },
+            ].map((metric, index) => (
+              <motion.div
+                key={metric.label}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 + index * 0.08 }}
+                className="flex items-center gap-3 border-r border-border/60 px-4 py-3.5 last:border-r-0"
+              >
+                <metric.icon
+                  className={`h-4 w-4 shrink-0 text-[#6B358D] dark:text-[#C8A8D2] ${
+                    metric.label === "Processing" && projectStats.processing ? "animate-spin" : ""
                   }`}
                 />
-              </div>
-              <div>
-                <p className="text-lg font-bold leading-none">{stat.value}</p>
-                <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {stat.label}
-                </p>
-              </div>
-            </div>
-          ))}
-        </section>
+                <span>
+                  <span className="block text-lg font-black tabular-nums leading-none">{metric.value}</span>
+                  <span className="mt-1 block text-[8px] font-bold uppercase tracking-[.16em] text-muted-foreground">
+                    {metric.label}
+                  </span>
+                </span>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
 
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      <main className="mx-auto max-w-[1500px] space-y-4 p-5 sm:p-7 lg:p-10">
+        <motion.section
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.12 }}
+          className="overflow-hidden rounded-[24px] border border-border/60 bg-card shadow-[0_15px_50px_rgba(15,23,42,.05)]"
+        >
+          <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <ProjectListToolbar
             title="Catalog Intelligence projects"
             description="Open a project to continue matching, review, or enrichment."
@@ -294,15 +299,17 @@ export default function ImportPage() {
           />
 
           {loading ? (
-            <div className="flex h-56 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <div className="flex h-64 items-center justify-center">
+              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#400095]/10 dark:bg-[#F76D01]/10">
+                <Loader2 className="h-5 w-5 animate-spin text-[#400095] dark:text-[#F76D01]" />
+              </span>
             </div>
           ) : sessions.length === 0 ? (
             <div className="flex flex-col items-center px-6 py-16 text-center">
-              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                <Upload className="h-5 w-5" />
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F76D01]/15 to-[#400095]/15">
+                <Upload className="h-7 w-7 text-[#6B358D]" />
               </div>
-              <h3 className="text-sm font-semibold">
+              <h3 className="text-sm font-black">
                 Create your first catalog intelligence project
               </h3>
               <p className="mt-1 max-w-sm text-xs text-muted-foreground">
@@ -310,7 +317,7 @@ export default function ImportPage() {
                 enrichment.
               </p>
               {canEdit && (
-                <Button size="sm" className="mt-5 gap-1.5" asChild>
+                <Button size="sm" className="mt-5 gap-1.5 rounded-xl bg-[#400095] text-white dark:bg-[#F76D01]" asChild>
                   <Link href={`/w/${slug}/import/new`}>
                     <Plus className="h-3.5 w-3.5" /> New project
                   </Link>
@@ -323,16 +330,19 @@ export default function ImportPage() {
             </div>
           ) : (
             <>
-              <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
-                {pagedProjects.map((session) => {
+              <div className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
+                {pagedProjects.map((session, index) => {
                   const statusLabel =
                     STATUS_LABEL[session.status] ?? session.status;
                   const isReady = session.status === "completed";
                   const progress = sessionProgress(session);
 
                   return (
-                    <article
+                    <motion.article
                       key={session.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: Math.min(index * 0.04, 0.2) }}
                       role="button"
                       tabIndex={0}
                       onClick={() => openProject(session)}
@@ -341,15 +351,16 @@ export default function ImportPage() {
                           openProject(session);
                         }
                       }}
-                      className="group relative cursor-pointer rounded-xl border bg-background p-4 outline-none transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-primary/40"
+                      className="group relative cursor-pointer overflow-hidden rounded-2xl border border-border/60 bg-background p-4 outline-none transition-all hover:-translate-y-1 hover:border-[#6B358D]/35 hover:shadow-[0_16px_40px_rgba(64,0,149,.08)] focus-visible:ring-2 focus-visible:ring-[#6B358D]/30"
                     >
+                      <div className="absolute inset-x-0 top-0 h-0.5 origin-left scale-x-0 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] transition-transform duration-300 group-hover:scale-x-100" />
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-muted/40 text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#F76D01]/10 to-[#400095]/10 text-[#6B358D] transition-transform group-hover:scale-105 dark:text-[#C8A8D2]">
                             <FileSpreadsheet className="h-4 w-4" />
                           </div>
                           <div className="min-w-0">
-                            <h3 className="truncate text-sm font-semibold group-hover:text-primary">
+                            <h3 className="truncate text-sm font-black transition-colors group-hover:text-[#400095] dark:group-hover:text-[#F76D01]">
                               {session.name}
                             </h3>
                           </div>
@@ -398,9 +409,9 @@ export default function ImportPage() {
                           <span>Project progress</span>
                           <span>{progress}%</span>
                         </div>
-                        <div className="h-1 overflow-hidden rounded-full bg-muted">
+                        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                           <div
-                            className="h-full rounded-full bg-primary transition-all"
+                            className="h-full rounded-full bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] transition-all"
                             style={{ width: `${Math.min(100, progress)}%` }}
                           />
                         </div>
@@ -424,7 +435,7 @@ export default function ImportPage() {
                           </button>
                         )}
                       </div>
-                    </article>
+                    </motion.article>
                   );
                 })}
               </div>
@@ -436,8 +447,8 @@ export default function ImportPage() {
               />
             </>
           )}
-        </section>
-      </div>
+        </motion.section>
+      </main>
 
       <DeleteProjectDialog
         open={!!deleteTarget}

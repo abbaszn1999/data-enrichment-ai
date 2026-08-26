@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { Check, Copy, Loader2, Save } from "lucide-react";
+import { motion } from "motion/react";
+import { Check, Loader2, Paintbrush, Save, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,12 @@ import {
   type FontChoice,
   type SizeChoice,
 } from "@/lib/customize-widgets";
+import {
+  fetchWidgetSettings,
+  saveWidgetSettings,
+} from "@/lib/widget-settings-api";
 import { CollectionPagePreview } from "./collection-page-preview";
+import { SnippetBlock, useAppOrigin } from "./snippet-block";
 
 export function CustomizePage() {
   const params = useParams<{ workspaceSlug: string }>();
@@ -32,7 +38,6 @@ export function CustomizePage() {
   const [kind, setKind] = useState<WidgetKind>("faq");
   const [links, setLinks] = useState<WidgetStyle | null>(null);
   const [faq, setFaq] = useState<WidgetStyle | null>(null);
-  const [copied, setCopied] = useState<"faq" | "links" | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
 
   // Collection naming prefix settings
@@ -40,18 +45,7 @@ export function CustomizePage() {
   const [storeUrl, setStoreUrl] = useState("");
   const [storeProvider, setStoreProvider] = useState<string | null>(null);
   const [savingPrefix, setSavingPrefix] = useState(false);
-  const [appOrigin, setAppOrigin] = useState("https://data-enrichment-ai.onrender.com");
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const origin = window.location.origin;
-      if (origin && !origin.includes("localhost") && !origin.includes("127.0.0.1")) {
-        setAppOrigin(origin);
-      } else {
-        setAppOrigin("https://data-enrichment-ai.onrender.com");
-      }
-    }
-  }, []);
+  const appOrigin = useAppOrigin();
 
   // Initial load from localStorage
   useEffect(() => {
@@ -62,26 +56,19 @@ export function CustomizePage() {
 
   // Load custom widget settings from DB
   useEffect(() => {
-    if (!workspace?.id) return;
+    const workspaceId = workspace?.id;
+    if (!workspaceId) return;
     let cancelled = false;
-    async function loadSettings() {
-      try {
-        const res = await fetch(
-          `/api/workspaces/widget-settings?workspaceId=${encodeURIComponent(workspace!.id)}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (!cancelled && data.settings) {
-            setLinks(data.settings.links);
-            setFaq(data.settings.faq);
-            saveCustomizeWidgets(slug, data.settings);
-          }
-        }
-      } catch (err) {
-        console.warn("[CustomizePage] Failed to fetch widget settings:", err);
-      }
-    }
-    loadSettings();
+    fetchWidgetSettings(workspaceId)
+      .then((settings) => {
+        if (cancelled || !settings) return;
+        setLinks(settings.links);
+        setFaq(settings.faq);
+        saveCustomizeWidgets(slug, settings);
+      })
+      .catch((err) =>
+        console.warn("[CustomizePage] Failed to fetch widget settings:", err)
+      );
     return () => {
       cancelled = true;
     };
@@ -122,17 +109,7 @@ export function CustomizePage() {
     if (!workspace?.id || !links || !faq) return;
     setSavingSettings(true);
     try {
-      const res = await fetch("/api/workspaces/widget-settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workspaceId: workspace.id,
-          settings: { links, faq },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save widget settings");
-      saveCustomizeWidgets(slug, { links, faq });
+      await saveWidgetSettings(workspace.id, slug, { links, faq });
       toast.success("Widget styles saved! Live store will update automatically.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save widget settings");
@@ -191,57 +168,69 @@ export function CustomizePage() {
   const setStyle = kind === "links" ? setLinks : setFaq;
   const templates = kind === "links" ? LINK_TEMPLATES : FAQ_TEMPLATES;
 
-  const copySnippet = async (which: "faq" | "links", text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(which);
-      toast.success(
-        which === "faq" ? "FAQ snippet copied" : "Links snippet copied"
-      );
-      window.setTimeout(() => setCopied(null), 1600);
-    } catch {
-      toast.error("Couldn’t copy");
-    }
-  };
-
   if (!style) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+      <div className="autommerce-dashboard flex flex-1 items-center justify-center text-sm text-muted-foreground [font-family:var(--brand-font)]">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
         Loading…
       </div>
     );
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-5 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border/70 pb-4">
-        <div className="space-y-1">
-          <h1 className="text-lg font-semibold tracking-tight">Customize Widgets</h1>
-          <p className="max-w-2xl text-xs text-muted-foreground leading-relaxed">
-            Style how FAQ and internal links look on collection pages. Choose templates,
-            fonts, sizes and colors, then click Save to apply immediately on your live store.
-          </p>
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="absolute -bottom-28 -right-16 h-64 w-64 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-[1500px] px-5 py-7 sm:px-7 lg:px-10">
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex flex-wrap items-end justify-between gap-4"
+          >
+            <div>
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01]">
+                  <Paintbrush className="h-4 w-4" />
+                </span>
+                <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
+                  Storefront widgets
+                </span>
+              </div>
+              <h1 className="text-3xl font-black tracking-[-0.035em] sm:text-4xl">
+                Widgets styled,
+                <span className="block bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">
+                  matched to your brand.
+                </span>
+              </h1>
+              <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
+                Style how FAQ and internal links look on collection pages, then publish changes to your live store instantly.
+              </p>
+            </div>
+            <Button
+              onClick={handleSaveSettings}
+              disabled={savingSettings || !links || !faq}
+              size="sm"
+              className="h-9 gap-2 rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+            >
+              {savingSettings ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              Save Changes
+            </Button>
+          </motion.div>
         </div>
-        <Button
-          onClick={handleSaveSettings}
-          disabled={savingSettings || !links || !faq}
-          size="sm"
-          className="gap-2 shadow-sm font-medium"
-        >
-          {savingSettings ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Save className="h-4 w-4" />
-          )}
-          Save Changes
-        </Button>
-      </div>
+      </section>
 
+      <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
       <div className="grid min-h-0 gap-5 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
         <div className="space-y-4 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto">
           <div
             role="tablist"
-            className="grid grid-cols-2 rounded-xl border border-border/70 p-1"
+            className="grid grid-cols-2 rounded-xl border border-border/60 bg-card p-1 shadow-sm"
           >
             {(
               [
@@ -258,7 +247,7 @@ export function CustomizePage() {
                 className={cn(
                   "rounded-lg px-2 py-2 text-xs font-semibold transition-colors",
                   kind === id
-                    ? "bg-primary/10 text-primary shadow-sm"
+                    ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
@@ -267,8 +256,8 @@ export function CustomizePage() {
             ))}
           </div>
 
-          <section className="space-y-2">
-            <h2 className="text-sm font-semibold tracking-tight">Templates</h2>
+          <section className="space-y-2 rounded-2xl border border-border/60 bg-card p-4 shadow-sm">
+            <h2 className="text-sm font-black tracking-tight">Templates</h2>
             <div className="grid grid-cols-1 gap-2">
               {templates.map((template) => {
                 const active = style.template === template.id;
@@ -284,7 +273,7 @@ export function CustomizePage() {
                     className={cn(
                       "rounded-xl border px-3 py-2.5 text-left transition-colors",
                       active
-                        ? "border-primary/40 bg-primary/5 shadow-xs"
+                        ? "border-[#400095]/40 bg-[#400095]/5 shadow-xs dark:border-[#F76D01]/40 dark:bg-[#F76D01]/5"
                         : "border-border/70 hover:bg-muted/40"
                     )}
                   >
@@ -298,8 +287,8 @@ export function CustomizePage() {
             </div>
           </section>
 
-          <section className="space-y-3 rounded-xl border border-border/70 p-3">
-            <h2 className="text-sm font-semibold tracking-tight">Basics & Style</h2>
+          <section className="space-y-3 rounded-2xl border border-border/60 bg-card p-4 shadow-sm">
+            <h2 className="text-sm font-black tracking-tight">Basics & Style</h2>
 
             <div className="space-y-1.5">
               <Label className="text-[11px] text-muted-foreground">Heading</Label>
@@ -329,7 +318,7 @@ export function CustomizePage() {
                     className={cn(
                       "rounded-lg border py-1.5 px-2 text-[11px] font-medium text-center truncate",
                       style.font === option.id
-                        ? "border-primary/40 bg-primary/10 text-primary font-semibold"
+                        ? "border-[#400095]/40 bg-[#400095]/10 text-[#400095] font-semibold dark:border-[#F76D01]/40 dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
                         : "border-border/70 text-muted-foreground hover:text-foreground"
                     )}
                     style={{ fontFamily: option.stack }}
@@ -362,7 +351,7 @@ export function CustomizePage() {
                     className={cn(
                       "flex-1 rounded-lg border py-1.5 text-[11px] font-medium uppercase text-center",
                       style.size === sizeId
-                        ? "border-primary/40 bg-primary/10 text-primary font-semibold"
+                        ? "border-[#400095]/40 bg-[#400095]/10 text-[#400095] font-semibold dark:border-[#F76D01]/40 dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
                         : "border-border/70 text-muted-foreground hover:text-foreground"
                     )}
                   >
@@ -409,7 +398,7 @@ export function CustomizePage() {
               <Button
                 onClick={handleSaveSettings}
                 disabled={savingSettings}
-                className="w-full gap-2 shadow-xs"
+                className="w-full gap-2 rounded-xl bg-[#400095] text-white shadow-xs hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                 size="sm"
               >
                 {savingSettings ? (
@@ -424,8 +413,10 @@ export function CustomizePage() {
         </div>
 
         <div className="space-y-4 min-w-0">
-          <div className="rounded-2xl border border-border/70 bg-muted/20 p-4 sm:p-5">
-            <p className="mb-3 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <div className="overflow-hidden rounded-[24px] border border-border/60 bg-card shadow-[0_15px_50px_rgba(15,23,42,.05)]">
+            <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+            <div className="bg-gradient-to-br from-[#400095]/[0.04] to-[#F76D01]/[0.04] p-4 sm:p-5">
+            <p className="mb-3 text-[9px] font-bold uppercase tracking-[.16em] text-[#6B358D] dark:text-[#C8A8D2]">
               Collection page · {kind === "faq" ? "FAQ" : "Internal links"}
             </p>
             <div className="rounded-xl border border-border/50 bg-background p-4 shadow-sm">
@@ -440,11 +431,12 @@ export function CustomizePage() {
                 />
               ) : null}
             </div>
+            </div>
           </div>
 
-          <section className="space-y-3 rounded-xl border border-border/70 p-4">
+          <section className="space-y-3 rounded-2xl border border-border/60 bg-card p-4 shadow-sm">
             <div>
-              <h2 className="text-sm font-semibold tracking-tight">HTML snippet</h2>
+              <h2 className="text-sm font-black tracking-tight">HTML snippet</h2>
               <p className="text-[11px] text-muted-foreground">
                 {kind === "faq"
                   ? "Place this above the product grid on the collection page."
@@ -455,19 +447,11 @@ export function CustomizePage() {
               <SnippetBlock
                 label="FAQ"
                 value={faqSnippet("{{ collection.handle }}", appOrigin)}
-                copied={copied === "faq"}
-                onCopy={() =>
-                  copySnippet("faq", faqSnippet("{{ collection.handle }}", appOrigin))
-                }
               />
             ) : (
               <SnippetBlock
                 label="Internal links"
                 value={linksSnippet("{{ collection.handle }}", appOrigin)}
-                copied={copied === "links"}
-                onCopy={() =>
-                  copySnippet("links", linksSnippet("{{ collection.handle }}", appOrigin))
-                }
               />
             )}
           </section>
@@ -475,10 +459,13 @@ export function CustomizePage() {
       </div>
 
       {/* Collection naming prefix & URL structure section */}
-      <section className="space-y-3 rounded-2xl border border-border/70 bg-muted/10 p-5 sm:p-6 mt-4">
+      <section className="space-y-3 rounded-2xl border border-[#6B358D]/20 bg-gradient-to-br from-[#400095]/[0.06] to-[#F76D01]/[0.04] p-5 sm:p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold tracking-tight">
+            <div className="mb-1 flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[.16em] text-[#6B358D] dark:text-[#C8A8D2]">
+              <Sparkles className="h-3 w-3" /> Naming
+            </div>
+            <h2 className="text-sm font-black tracking-tight">
               Collection Naming Prefix
             </h2>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -490,7 +477,7 @@ export function CustomizePage() {
             onClick={handleSavePrefix}
             disabled={savingPrefix}
             size="sm"
-            className="self-start sm:self-auto gap-2"
+            className="self-start sm:self-auto gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
           >
             {savingPrefix ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -507,7 +494,7 @@ export function CustomizePage() {
             value={namingPrefix}
             onChange={(e) => setNamingPrefix(e.target.value)}
             placeholder="e.g. AI, Smart, Trend"
-            className="h-9 text-xs font-medium"
+            className="h-9 rounded-xl bg-background text-xs font-medium"
           />
         </div>
 
@@ -517,10 +504,11 @@ export function CustomizePage() {
           </p>
           <div className="flex items-center gap-2 text-xs font-mono bg-muted/50 rounded-lg px-3 py-2 border border-border/50 break-all select-all">
             <span className="text-muted-foreground">URL:</span>
-            <span className="text-primary font-medium">{exampleCollectionUrl}</span>
+            <span className="font-medium text-[#400095] dark:text-[#F76D01]">{exampleCollectionUrl}</span>
           </div>
         </div>
       </section>
+      </main>
     </div>
   );
 }
@@ -551,48 +539,6 @@ function ColorField({
           className="w-full bg-transparent font-mono text-[11px] outline-none"
         />
       </div>
-    </div>
-  );
-}
-
-function SnippetBlock({
-  label,
-  value,
-  copied,
-  onCopy,
-}: {
-  label: string;
-  value: string;
-  copied: boolean;
-  onCopy: () => void;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onCopy}
-          className="h-6 gap-1 px-2 text-[11px]"
-        >
-          {copied ? (
-            <>
-              <Check className="h-3 w-3 text-emerald-600" />
-              Copied
-            </>
-          ) : (
-            <>
-              <Copy className="h-3 w-3" />
-              Copy
-            </>
-          )}
-        </Button>
-      </div>
-      <pre className="overflow-x-auto rounded-lg border border-border/70 bg-background p-3 font-mono text-[11px] text-foreground leading-relaxed">
-        {value}
-      </pre>
     </div>
   );
 }

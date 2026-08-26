@@ -105,6 +105,13 @@ export async function POST(request: NextRequest) {
 
     let syncedCount = 0;
     const errors: string[] = [];
+    // Per-collection outcome, so the table can show which rows are actually
+    // live instead of one aggregate count for the whole batch.
+    const results: Array<{
+      collectionId: string;
+      ok: boolean;
+      error?: string;
+    }> = [];
 
     if (provider === "shopify") {
       for (const colId of targetCollectionIds) {
@@ -113,7 +120,14 @@ export async function POST(request: NextRequest) {
         const storeTitle = `${prefix} - ${colName}`;
         const content = contentById[colId];
 
-        if (!content) continue;
+        if (!content) {
+          results.push({
+            collectionId: colId,
+            ok: false,
+            error: "No copy generated for this collection",
+          });
+          continue;
+        }
 
         try {
           const resolved = await resolveCollectionByName({
@@ -146,8 +160,18 @@ export async function POST(request: NextRequest) {
             });
             if (updateRes.updatedCount > 0) {
               syncedCount += 1;
+              results.push({ collectionId: colId, ok: true });
             } else if (updateRes.errors.length > 0) {
               errors.push(...updateRes.errors);
+              results.push({
+                collectionId: colId,
+                ok: false,
+                error: updateRes.errors[0],
+              });
+            } else {
+              // Shopify already held this exact copy: nothing changed, but the
+              // store is up to date, which is what the row is reporting.
+              results.push({ collectionId: colId, ok: true });
             }
           } else {
             // If not found on Shopify, create it
@@ -189,10 +213,12 @@ export async function POST(request: NextRequest) {
               ],
             });
             syncedCount += 1;
+            results.push({ collectionId: colId, ok: true });
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Shopify sync error";
           errors.push(`[${storeTitle}] ${msg}`);
+          results.push({ collectionId: colId, ok: false, error: msg });
         }
       }
     } else if (provider === "woocommerce" || provider === "wordpress") {
@@ -205,7 +231,14 @@ export async function POST(request: NextRequest) {
         const storeTitle = `${prefix} - ${colName}`;
         const content = contentById[colId];
 
-        if (!content) continue;
+        if (!content) {
+          results.push({
+            collectionId: colId,
+            ok: false,
+            error: "No copy generated for this collection",
+          });
+          continue;
+        }
 
         try {
           const matched = wooRows.find(
@@ -226,8 +259,17 @@ export async function POST(request: NextRequest) {
                 },
               ],
             });
-            if (updateRes.updatedCount > 0) syncedCount += 1;
-            if (updateRes.errors.length > 0) errors.push(...updateRes.errors);
+            if (updateRes.errors.length > 0) {
+              errors.push(...updateRes.errors);
+              results.push({
+                collectionId: colId,
+                ok: false,
+                error: updateRes.errors[0],
+              });
+            } else {
+              if (updateRes.updatedCount > 0) syncedCount += 1;
+              results.push({ collectionId: colId, ok: true });
+            }
           } else {
             await createWooCommerceCategory({
               integration,
@@ -237,10 +279,12 @@ export async function POST(request: NextRequest) {
               },
             });
             syncedCount += 1;
+            results.push({ collectionId: colId, ok: true });
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "WooCommerce sync error";
           errors.push(`[${storeTitle}] ${msg}`);
+          results.push({ collectionId: colId, ok: false, error: msg });
         }
       }
     }
@@ -248,6 +292,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       syncedCount,
+      results,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {

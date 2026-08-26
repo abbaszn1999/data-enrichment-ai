@@ -28,7 +28,7 @@ export function LinksWidgetPreview({
   } as const;
 
   return (
-    <section style={css} className="rounded-xl">
+    <section style={css} className="cp-preview-surface rounded-xl">
       <h3
         style={{
           color: style.headingColor,

@@ -223,6 +223,83 @@ export const agentOnPageBodySchema = z.object({
     .max(100),
 });
 
+const proposedCollectionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  headKeyword: z.string().optional(),
+  parentNiche: z.string().optional(),
+  volume: z.number().optional(),
+  productCount: z.number().optional(),
+  storeHandle: z.string().optional(),
+});
+
+export const agentStrategyBodySchema = z.object({
+  workspaceId: workspaceIdSchema,
+  projectId: projectIdSchema.optional(),
+  parentNiches: z.array(z.string()).optional(),
+  collections: z.array(proposedCollectionSchema).max(500).optional(),
+  keywords: z
+    .array(
+      z.object({
+        id: z.string(),
+        keyword: z.string().min(1),
+        sheet: z.string().optional(),
+        volume: z.number().optional(),
+        difficulty: z.number().optional(),
+        /** Needed so the article quota can be dealt across seeds, not by volume alone. */
+        seedId: z.string().optional(),
+        seed: z.string().optional(),
+      })
+    )
+    .min(1)
+    .max(5000),
+});
+
+const articleLinkSchema = z.object({
+  anchor: z.string(),
+  url: z.string(),
+  collectionName: z.string(),
+});
+
+export const agentArticleBodySchema = z.object({
+  workspaceId: workspaceIdSchema,
+  projectId: projectIdSchema.optional(),
+  article: z.object({
+    id: z.string(),
+    title: z.string().min(1),
+    keyword: z.string().min(1),
+    type: z.enum(["guide", "comparison", "faq", "roundup"]),
+    volume: z.number().optional(),
+    difficulty: z.number().optional(),
+    linksOut: z.array(articleLinkSchema).max(12).optional(),
+  }),
+  blogs: z
+    .array(z.object({ id: z.string(), handle: z.string(), title: z.string() }))
+    .max(100)
+    .optional(),
+});
+
+export const articleSyncBodySchema = z.object({
+  workspaceId: workspaceIdSchema,
+  projectId: projectIdSchema,
+  articles: z
+    .array(
+      z.object({
+        articleId: z.string(),
+        title: z.string().min(1),
+        seoTitle: z.string().optional(),
+        seoDescription: z.string().optional(),
+        blogTitle: z.string().optional(),
+        bodyHtml: z.string().min(1),
+        featuredImage: z
+          .object({ url: z.string().min(1), alt: z.string().default("") })
+          .optional(),
+      })
+    )
+    .min(1)
+    .max(50),
+});
+
 export async function requireMrWrite(workspaceId: string) {
   return requireGalleryAuth({ workspaceId, requireWrite: true });
 }

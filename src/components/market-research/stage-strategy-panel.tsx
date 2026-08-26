@@ -1,7 +1,13 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { Check, ChevronRight, Sparkles } from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  CalendarClock,
+  Eye,
+  Loader2,
+  Sparkles,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,10 +19,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import type {
-  StrategyArticle,
-  StrategyArticleType,
-  StrategyPriority,
+import { ArticleDrawer } from "./article-drawer";
+import {
+  ARTICLE_GENERATION_CONCURRENCY,
+  type GeneratedArticle,
+  type StoreBlog,
+  type StrategyArticle,
+  type StrategyArticleType,
+  type StrategyPriority,
 } from "./workspace-data";
 
 const TYPE_LABEL: Record<StrategyArticleType, string> = {
@@ -32,29 +42,57 @@ const PRIORITY_CLASS: Record<StrategyPriority, string> = {
   low: "bg-muted text-muted-foreground border-border/70",
 };
 
+/**
+ * Link targets are stored as store-relative paths, which is what belongs in a
+ * published article. In the dashboard they must be resolved against the
+ * storefront, otherwise the browser sends the merchant to our own app.
+ */
+export function storefrontHref(storeUrl: string, path: string): string {
+  const url = (path || "").trim();
+  if (!url) return "";
+  if (/^https?:\/\//i.test(url)) return url;
+  const origin = (storeUrl || "").trim().replace(/\/+$/, "");
+  if (!origin) return "";
+  return `${origin}${url.startsWith("/") ? url : `/${url}`}`;
+}
+
 export function StageStrategyPanel({
   articles,
+  generatedById,
+  blogs,
+  storeUrl,
+  scopeWarning,
   loading,
   ready,
-  approved,
+  syncing,
+  syncProgress,
   onBuild,
-  onApprove,
+  onGenerate,
+  onSync,
+  onArticleChange,
+  onTitleChange,
 }: {
   articles: StrategyArticle[];
+  generatedById: Record<string, GeneratedArticle>;
+  blogs: StoreBlog[];
+  storeUrl: string;
+  scopeWarning?: string | null;
   loading: boolean;
   ready: boolean;
-  approved: boolean;
+  syncing: boolean;
+  /** Batch progress while a large plan is uploaded in chunks. */
+  syncProgress?: { done: number; total: number } | null;
   onBuild: () => void;
-  onApprove: () => void;
+  onGenerate: (ids: string[]) => void;
+  onSync: (ids: string[]) => void;
+  onArticleChange: (articleId: string, patch: Partial<GeneratedArticle>) => void;
+  onTitleChange: (articleId: string, title: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [type, setType] = useState<StrategyArticleType | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
-
-  useEffect(() => {
-    setSelected(articles.map((row) => row.id));
-  }, [articles]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -63,14 +101,35 @@ export function StageStrategyPanel({
       if (!q) return true;
       return (
         row.title.toLowerCase().includes(q) ||
-        row.keyword.toLowerCase().includes(q) ||
-        row.collectionName.toLowerCase().includes(q)
+        row.keyword.toLowerCase().includes(q)
       );
     });
   }, [articles, query, type]);
 
-  const selectedSet = new Set(selected);
-  const selectedVisible = visible.filter((row) => selectedSet.has(row.id));
+  // Derived rather than pruned in an effect: a row that reached the store's
+  // calendar simply stops counting as selected.
+  const selectedSet = useMemo(() => {
+    const actionable = new Set(
+      articles.filter((row) => row.status !== "scheduled").map((row) => row.id)
+    );
+    return new Set(selected.filter((id) => actionable.has(id)));
+  }, [articles, selected]);
+
+  const readyCount = articles.filter((row) => row.status === "ready").length;
+  const generatingCount = articles.filter(
+    (row) => row.status === "generating"
+  ).length;
+
+  const selectedRows = articles.filter((row) => selectedSet.has(row.id));
+  const selectedReady = selectedRows.filter((row) => row.status === "ready");
+  const selectedPending = selectedRows.filter(
+    (row) => row.status === "pending" || row.status === "failed"
+  );
+  // Once the selection is written, the same button becomes the upload action.
+  const mode: "generate" | "sync" =
+    selectedPending.length === 0 && selectedReady.length > 0
+      ? "sync"
+      : "generate";
 
   const toggle = (id: string) => {
     setSelected((prev) =>
@@ -78,26 +137,28 @@ export function StageStrategyPanel({
     );
   };
 
+  const toggleAll = () => {
+    const selectable = visible.filter((row) => row.status !== "scheduled");
+    const allOn = selectable.every((row) => selectedSet.has(row.id));
+    setSelected(allOn ? [] : selectable.map((row) => row.id));
+  };
+
   if (!ready && !loading) {
     return (
-      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 text-center px-6">
-        <div className="space-y-1 max-w-md">
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center">
+        <div className="max-w-md space-y-1">
           <h2 className="text-base font-semibold tracking-tight">
-            Content strategy
+            Content plan
           </h2>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Turn informational keywords into articles to write — titles, type,
-            which collection they serve, and the internal links to place. This
-            is a publishing plan, not the articles themselves.
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Every informational keyword becomes one article: the title to
+            publish, the format, and the collection pages it links out to. The
+            copy is written in the next step.
           </p>
         </div>
-        <Button
-          size="sm"
-          className="h-8 gap-1.5 text-xs"
-          onClick={onBuild}
-        >
+        <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={onBuild}>
           <Sparkles className="h-3.5 w-3.5" />
-          Build strategy
+          Build plan
         </Button>
       </div>
     );
@@ -111,16 +172,17 @@ export function StageStrategyPanel({
             Building the plan
           </h2>
           <p className="text-xs text-muted-foreground">
-            Clustering informational queries into guides, comparisons, and FAQ
-            hubs per collection.
+            Writing titles for each informational keyword and matching them to
+            the collections they should send readers to.
           </p>
         </div>
-        <div className="rounded-xl border border-border/70 divide-y divide-border/60">
+        <div className="divide-y divide-border/60 rounded-xl border border-border/70">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="grid grid-cols-5 gap-3 px-4 py-3">
+            <div key={i} className="grid grid-cols-6 gap-3 px-4 py-3">
               <div className="h-3 w-48 animate-pulse rounded bg-muted" />
               <div className="h-3 w-20 animate-pulse rounded bg-muted" />
-              <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+              <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+              <div className="h-3 w-10 animate-pulse rounded bg-muted" />
               <div className="h-3 w-10 animate-pulse rounded bg-muted" />
               <div className="h-3 w-12 animate-pulse rounded bg-muted" />
             </div>
@@ -130,16 +192,21 @@ export function StageStrategyPanel({
     );
   }
 
+  const openRow = openId
+    ? articles.find((row) => row.id === openId) ?? null
+    : null;
+  const openArticle = openId ? generatedById[openId] ?? null : null;
+
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-3">
-      <div className="flex flex-wrap items-end justify-between gap-2 shrink-0">
+      <div className="flex shrink-0 flex-wrap items-end justify-between gap-2">
         <div>
           <h2 className="text-base font-semibold tracking-tight">
-            Content strategy
+            Content plan
           </h2>
           <p className="text-[11px] text-muted-foreground">
-            {articles.length} articles to write · titles and link map only —
-            copy is written later.
+            {articles.length} articles · {readyCount} written
+            {generatingCount > 0 ? ` · ${generatingCount} in progress` : ""}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -169,10 +236,20 @@ export function StageStrategyPanel({
         </div>
       </div>
 
+      {scopeWarning ? (
+        <div className="flex shrink-0 items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">
+            {scopeWarning} You can still write and review articles now — only
+            uploading them needs this permission.
+          </p>
+        </div>
+      ) : null}
+
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Filter titles, keywords, collections…"
+        placeholder="Filter titles or keywords…"
         className="h-8 w-full max-w-sm rounded-lg border border-border/70 bg-background px-3 text-xs outline-none focus:border-foreground/30"
         aria-label="Filter articles"
       />
@@ -181,20 +258,31 @@ export function StageStrategyPanel({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-9" />
-              <TableHead className="text-xs">Title to write</TableHead>
+              <TableHead className="w-9">
+                <button
+                  type="button"
+                  onClick={toggleAll}
+                  className="text-[10px] text-muted-foreground hover:text-foreground"
+                  aria-label="Select all articles"
+                >
+                  All
+                </button>
+              </TableHead>
+              <TableHead className="text-xs">Title</TableHead>
+              <TableHead className="text-xs">Informational</TableHead>
               <TableHead className="text-xs">Type</TableHead>
-              <TableHead className="text-xs">Collection</TableHead>
+              <TableHead className="text-xs">Category</TableHead>
               <TableHead className="text-xs text-right">Volume</TableHead>
               <TableHead className="text-xs text-right">KD</TableHead>
               <TableHead className="text-xs">Priority</TableHead>
+              <TableHead className="w-16 text-xs text-center">Status</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {visible.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={9}
                   className="py-10 text-center text-xs text-muted-foreground"
                 >
                   No articles match this filter.
@@ -204,55 +292,56 @@ export function StageStrategyPanel({
               visible.map((row) => {
                 const on = selectedSet.has(row.id);
                 const expanded = expandedId === row.id;
+                const locked = row.status === "scheduled";
                 return (
                   <Fragment key={row.id}>
                     <TableRow
                       className={cn("cursor-pointer", on && "bg-primary/5")}
-                      onClick={() =>
-                        setExpandedId(expanded ? null : row.id)
-                      }
+                      onClick={() => setExpandedId(expanded ? null : row.id)}
                     >
                       <TableCell
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggle(row.id);
+                          if (!locked) toggle(row.id);
                         }}
                       >
                         <span
                           className={cn(
-                            "flex h-4 w-4 items-center justify-center rounded border",
-                            on
-                              ? "border-primary bg-primary text-primary-foreground"
-                              : "border-border"
+                            "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
+                            locked
+                              ? "border-border/50 bg-muted text-muted-foreground"
+                              : on
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-border"
                           )}
                         >
-                          {on ? "✓" : ""}
+                          {on && !locked ? "✓" : ""}
                         </span>
                       </TableCell>
-                      <TableCell className="text-sm">
-                        <span className="inline-flex items-center gap-1.5">
-                          <ChevronRight
-                            className={cn(
-                              "h-3 w-3 text-muted-foreground transition-transform",
-                              expanded && "rotate-90"
-                            )}
-                          />
-                          <span className="font-medium">{row.title}</span>
-                        </span>
-                        <span className="mt-0.5 block text-[10px] text-muted-foreground">
-                          {row.keyword}
-                        </span>
+                      <TableCell className="text-sm font-medium">
+                        {row.title}
                       </TableCell>
-                      <TableCell className="text-[11px] text-muted-foreground whitespace-nowrap">
+                      <TableCell className="max-w-[16rem] text-xs text-muted-foreground">
+                        <span className="block truncate">{row.keyword}</span>
+                        {row.mergedCount ? (
+                          <span
+                            className="text-[10px] text-muted-foreground/70"
+                            title="Near-duplicate keywords covered by this same article"
+                          >
+                            +{row.mergedCount} similar
+                          </span>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-[11px] text-muted-foreground">
                         {TYPE_LABEL[row.type]}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                        {row.collectionName}
+                      <TableCell className="whitespace-nowrap text-[11px] text-muted-foreground">
+                        {row.category || "-"}
                       </TableCell>
-                      <TableCell className="text-xs tabular-nums text-right">
+                      <TableCell className="text-right text-xs tabular-nums">
                         {row.volume.toLocaleString("en-US")}
                       </TableCell>
-                      <TableCell className="text-xs tabular-nums text-right">
+                      <TableCell className="text-right text-xs tabular-nums">
                         {row.difficulty}
                       </TableCell>
                       <TableCell>
@@ -266,29 +355,65 @@ export function StageStrategyPanel({
                           {row.priority}
                         </Badge>
                       </TableCell>
+                      <TableCell
+                        className="text-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <StatusCell
+                          row={row}
+                          onOpen={() => setOpenId(row.id)}
+                        />
+                      </TableCell>
                     </TableRow>
                     {expanded ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="bg-muted/20">
-                          <div className="grid gap-3 py-1 sm:grid-cols-2 text-[11px]">
-                            <div>
-                              <p className="font-medium text-foreground">
-                                Links in
+                        <TableCell colSpan={9} className="bg-muted/20">
+                          <div className="py-1 text-[11px]">
+                            <p className="font-medium text-foreground">
+                              Links out
+                            </p>
+                            {row.linksOut.length === 0 ? (
+                              <p className="mt-1 text-muted-foreground">
+                                No collection page matched this topic closely
+                                enough to link to.
                               </p>
-                              <p className="mt-1 text-muted-foreground leading-relaxed">
-                                Place links to this article from:{" "}
-                                {row.linksIn.join(" · ")}
+                            ) : (
+                              <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                                {row.linksOut.map((link) => {
+                                  const href = storefrontHref(
+                                    storeUrl,
+                                    link.url
+                                  );
+                                  return (
+                                    <li key={link.url}>
+                                      {href ? (
+                                        <a
+                                          href={href}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
+                                          title={`${link.collectionName} · ${href}`}
+                                        >
+                                          {link.anchor}
+                                        </a>
+                                      ) : (
+                                        <span
+                                          className="text-foreground"
+                                          title={link.collectionName}
+                                        >
+                                          {link.anchor}
+                                        </span>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
+                            {row.error ? (
+                              <p className="mt-2 text-destructive">
+                                {row.error}
                               </p>
-                            </div>
-                            <div>
-                              <p className="font-medium text-foreground">
-                                Links out
-                              </p>
-                              <p className="mt-1 text-muted-foreground leading-relaxed">
-                                This article should link to:{" "}
-                                {row.linksOut.join(" · ")}
-                              </p>
-                            </div>
+                            ) : null}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -301,28 +426,106 @@ export function StageStrategyPanel({
         </Table>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border/70 bg-muted/30 px-4 py-3 shrink-0">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-2xl border border-border/70 bg-muted/30 px-4 py-3">
         <p className="text-[11px] text-muted-foreground">
-          {selectedVisible.length} of {visible.length} shown ·{" "}
-          {selected.length} in the plan. Approving locks the titles and link
-          map — it does not push copy to the store.
+          {selectedSet.size} selected ·{" "}
+          {mode === "sync"
+            ? "articles publish one per day, at a different time each day."
+            : `written ${ARTICLE_GENERATION_CONCURRENCY} at a time.`}
         </p>
-        {approved ? (
-          <p className="flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-400">
-            <Check className="h-3.5 w-3.5" />
-            Plan approved
-          </p>
-        ) : (
-          <Button
-            size="sm"
-            className="h-8 text-xs"
-            disabled={selected.length === 0}
-            onClick={onApprove}
-          >
-            Approve plan
-          </Button>
-        )}
+        <Button
+          size="sm"
+          className="h-8 text-xs"
+          disabled={
+            selectedSet.size === 0 ||
+            syncing ||
+            generatingCount > 0 ||
+            (mode === "generate" && selectedPending.length === 0)
+          }
+          onClick={() =>
+            mode === "sync"
+              ? onSync(selectedReady.map((row) => row.id))
+              : onGenerate(selectedPending.map((row) => row.id))
+          }
+        >
+          {syncing ? (
+            <>
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              {syncProgress && syncProgress.total > 1
+                ? `Syncing ${syncProgress.done + 1} of ${syncProgress.total}`
+                : "Syncing"}
+            </>
+          ) : mode === "sync" ? (
+            `Sync to store (${selectedReady.length})`
+          ) : (
+            `Generate (${selectedPending.length})`
+          )}
+        </Button>
       </div>
+
+      <ArticleDrawer
+        row={openRow}
+        article={openArticle}
+        blogs={blogs}
+        storeUrl={storeUrl}
+        syncing={syncing}
+        onOpenChange={(open) => {
+          if (!open) setOpenId(null);
+        }}
+        onChange={onArticleChange}
+        onTitleChange={onTitleChange}
+        onSync={(articleId) => onSync([articleId])}
+      />
     </div>
   );
+}
+
+function StatusCell({
+  row,
+  onOpen,
+}: {
+  row: StrategyArticle;
+  onOpen: () => void;
+}) {
+  if (row.status === "generating") {
+    return (
+      <Loader2
+        className="mx-auto h-3.5 w-3.5 animate-spin text-muted-foreground"
+        aria-label="Writing"
+      />
+    );
+  }
+  if (row.status === "failed") {
+    return (
+      <AlertCircle
+        className="mx-auto h-3.5 w-3.5 text-destructive"
+        aria-label={row.error || "Failed"}
+      />
+    );
+  }
+  if (row.status === "scheduled") {
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        className="mx-auto flex text-emerald-600 dark:text-emerald-400"
+        aria-label="Open scheduled article"
+      >
+        <CalendarClock className="h-3.5 w-3.5" />
+      </button>
+    );
+  }
+  if (row.status === "ready" || row.status === "syncing") {
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        className="mx-auto flex text-muted-foreground hover:text-foreground"
+        aria-label="Open article"
+      >
+        <Eye className="h-3.5 w-3.5" />
+      </button>
+    );
+  }
+  return <span className="text-[10px] text-muted-foreground">—</span>;
 }

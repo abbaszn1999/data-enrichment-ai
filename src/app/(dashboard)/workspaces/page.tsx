@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "motion/react";
 import {
   Plus,
   Building2,
@@ -16,9 +18,10 @@ import {
   CheckCircle2,
   Lock,
   Crown,
+  ArrowRight,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -121,43 +124,90 @@ export default function WorkspacesPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className="autommerce-dashboard flex min-h-screen items-center justify-center bg-background [font-family:var(--brand-font)]">
+        <Loader2 className="h-6 w-6 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
       </div>
     );
   }
 
+  const canCreate = workspaces.some((ws) => ws.owner_id === user?.id) || workspaces.length === 0;
+
   return (
-    <div className="min-h-screen bg-background">
-      <div className="max-w-4xl mx-auto p-6 space-y-6">
-        <div className="flex items-center justify-between">
+    <div className="autommerce-dashboard relative min-h-screen overflow-hidden bg-background [font-family:var(--brand-font)]">
+      <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-[#400095]/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-[#F76D01]/10 blur-3xl" />
+
+      <div className="relative mx-auto max-w-5xl space-y-8 px-6 py-12 sm:py-16">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45 }}
+          className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between"
+        >
           <div>
-            <h1 className="text-2xl font-bold">Workspaces</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Select a workspace or create a new one
+            <div className="mb-4 flex items-center gap-3">
+              <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl border border-border/40 bg-white shadow-[0_8px_25px_rgba(64,0,149,.15)]">
+                <Image
+                  src="/autommerce.png"
+                  alt="Autommerce Logo"
+                  fill
+                  sizes="44px"
+                  className="object-contain p-1.5"
+                  priority
+                />
+              </div>
+              <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
+                Autommerce Data Entry
+              </span>
+            </div>
+            <h1 className="text-3xl font-black tracking-[-0.035em] sm:text-4xl">
+              Your
+              <span className="ml-2 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">
+                Workspaces
+              </span>
+            </h1>
+            <p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">
+              Select a workspace to continue, or create a new one to connect a store and start enriching data.
             </p>
           </div>
-          {workspaces.some((ws) => ws.owner_id === user?.id) || workspaces.length === 0 ? (
-            <Button className="gap-2" onClick={handleNewWorkspaceClick} disabled={checkingLimit}>
-              {checkingLimit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} New Workspace
+          {canCreate && (
+            <Button
+              className="h-10 gap-2 self-start rounded-xl bg-[#400095] px-4 text-sm text-white shadow-[0_8px_24px_rgba(64,0,149,.22)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90 sm:self-auto"
+              onClick={handleNewWorkspaceClick}
+              disabled={checkingLimit}
+            >
+              {checkingLimit ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
+              New Workspace
             </Button>
-          ) : null}
-        </div>
+          )}
+        </motion.div>
 
         {/* Pending invites banner */}
         {pendingInvites.length > 0 && (
-          <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-              <Mail className="h-4 w-4" /> Pending Invitations
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35 }}
+            className="space-y-3"
+          >
+            <h2 className="flex items-center gap-2 text-sm font-bold text-muted-foreground">
+              <Mail className="h-4 w-4 text-[#6B358D] dark:text-[#F76D01]" /> Pending Invitations
             </h2>
             {pendingInvites.map((inv) => (
-              <Card key={inv.id} className="p-4 flex items-center justify-between gap-4 border-primary/30 bg-primary/5">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                    <Building2 className="h-5 w-5 text-primary" />
+              <div
+                key={inv.id}
+                className="flex items-center justify-between gap-4 rounded-2xl border border-[#6B358D]/25 bg-[#400095]/5 p-4 dark:border-[#F76D01]/25 dark:bg-[#F76D01]/5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#400095]/10 dark:bg-[#F76D01]/10">
+                    <Building2 className="h-5 w-5 text-[#6B358D] dark:text-[#F76D01]" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">
+                    <p className="truncate text-sm font-semibold">
                       {inv.workspace?.name || "Workspace"}
                     </p>
                     <p className="text-xs text-muted-foreground">
@@ -167,7 +217,7 @@ export default function WorkspacesPage() {
                 </div>
                 <Button
                   size="sm"
-                  className="gap-1.5 shrink-0"
+                  className="shrink-0 gap-1.5 rounded-lg bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                   disabled={acceptingInvite === inv.id}
                   onClick={() => handleAcceptInvite(inv.id, inv.workspace?.slug)}
                 >
@@ -178,59 +228,73 @@ export default function WorkspacesPage() {
                   )}
                   Accept
                 </Button>
-              </Card>
+              </div>
             ))}
-          </div>
+          </motion.div>
         )}
 
         {workspaces.length === 0 && pendingInvites.length === 0 && (
-          <Card className="p-12 flex flex-col items-center gap-4 text-center">
-            <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center">
-              <Building2 className="h-8 w-8 text-primary" />
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, delay: 0.1 }}
+            className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border/60 bg-card p-12 text-center shadow-sm"
+          >
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#400095]/10 to-[#F76D01]/10">
+              <Building2 className="h-8 w-8 text-[#6B358D] dark:text-[#F76D01]" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold">No workspaces yet</h2>
-              <p className="text-sm text-muted-foreground mt-1">
+              <h2 className="text-lg font-black">No workspaces yet</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
                 Create your first workspace to get started
               </p>
             </div>
-            <Button className="gap-2" onClick={handleNewWorkspaceClick} disabled={checkingLimit}>
+            <Button
+              className="gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+              onClick={handleNewWorkspaceClick}
+              disabled={checkingLimit}
+            >
               {checkingLimit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Create Workspace
             </Button>
-          </Card>
+          </motion.div>
         )}
 
         {workspaces.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {workspaces.map((ws) => (
-              <Card
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {workspaces.map((ws, i) => (
+              <motion.div
                 key={ws.id}
-                className="group relative hover:border-primary/40 hover:shadow-md transition-all cursor-pointer"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, delay: i * 0.05 }}
+                className="group relative overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#6B358D]/40 hover:shadow-lg dark:hover:border-[#F76D01]/40"
               >
+                <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] opacity-0 transition-opacity group-hover:opacity-100" />
                 <Link href={`/w/${ws.slug}`} className="block p-5">
                   <div className="flex items-start gap-4">
-                    <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-                      <Building2 className="h-6 w-6 text-primary" />
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#400095]/10 to-[#F76D01]/10">
+                      <Building2 className="h-6 w-6 text-[#6B358D] dark:text-[#F76D01]" />
                     </div>
-                    <div className="flex-1 min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <h3 className="font-semibold truncate">{ws.name}</h3>
-                        <Badge variant="secondary" className="text-[9px] shrink-0">
+                        <h3 className="truncate text-base font-bold">{ws.name}</h3>
+                        <Badge variant="secondary" className="shrink-0 text-[9px]">
                           {ws.cms_type}
                         </Badge>
                       </div>
                       {ws.description && (
-                        <p className="text-xs text-muted-foreground mt-1 line-clamp-1">
+                        <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
                           {ws.description}
                         </p>
                       )}
-                      <div className="flex items-center gap-3 mt-3 text-[10px] text-muted-foreground">
+                      <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <Package className="h-3 w-3" /> Products
                         </span>
                         <span className="flex items-center gap-1">
                           <Users className="h-3 w-3" /> Team
                         </span>
+                        <ArrowRight className="ml-auto h-3.5 w-3.5 text-muted-foreground/30 transition-all group-hover:translate-x-0.5 group-hover:text-[#6B358D] dark:group-hover:text-[#F76D01]" />
                       </div>
                     </div>
                   </div>
@@ -244,42 +308,77 @@ export default function WorkspacesPage() {
                         e.stopPropagation();
                         setMenuOpen(menuOpen === ws.id ? null : ws.id);
                       }}
-                      className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
                     >
                       <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
                     </button>
-                    {menuOpen === ws.id && (
-                      <>
-                        <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(null)} />
-                        <div className="absolute right-0 top-8 w-40 bg-popover border rounded-lg shadow-lg py-1 z-40">
-                          <button
-                            onClick={() => {
-                              setMenuOpen(null);
-                              router.push(`/w/${ws.slug}/settings`);
-                            }}
-                            className="w-full px-3 py-2 text-xs text-left hover:bg-muted flex items-center gap-2"
+                    <AnimatePresence>
+                      {menuOpen === ws.id && (
+                        <>
+                          <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(null)} />
+                          <motion.div
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -4 }}
+                            transition={{ duration: 0.15 }}
+                            className="absolute right-0 top-8 z-40 w-40 rounded-lg border bg-popover py-1 shadow-lg"
                           >
-                            <Settings className="h-3.5 w-3.5" /> Settings
-                          </button>
-                          <div className="border-t my-1" />
-                          <button
-                            onClick={() => {
-                              setMenuOpen(null);
-                              handleDelete(ws.id);
-                            }}
-                            className="w-full px-3 py-2 text-xs text-left hover:bg-destructive/10 text-destructive flex items-center gap-2"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" /> Delete
-                          </button>
-                        </div>
-                      </>
-                    )}
+                            <button
+                              onClick={() => {
+                                setMenuOpen(null);
+                                router.push(`/w/${ws.slug}/settings`);
+                              }}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted"
+                            >
+                              <Settings className="h-3.5 w-3.5" /> Settings
+                            </button>
+                            <div className="my-1 border-t" />
+                            <button
+                              onClick={() => {
+                                setMenuOpen(null);
+                                handleDelete(ws.id);
+                              }}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-destructive hover:bg-destructive/10"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" /> Delete
+                            </button>
+                          </motion.div>
+                        </>
+                      )}
+                    </AnimatePresence>
                   </div>
                 )}
-              </Card>
+              </motion.div>
             ))}
+
+            {canCreate && (
+              <motion.button
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, delay: workspaces.length * 0.05 }}
+                onClick={handleNewWorkspaceClick}
+                disabled={checkingLimit}
+                className="group flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border/60 bg-transparent p-5 text-center transition-colors hover:border-[#6B358D]/40 hover:bg-[#400095]/5 dark:hover:border-[#F76D01]/40 dark:hover:bg-[#F76D01]/5"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted transition-colors group-hover:bg-[#400095]/10 dark:group-hover:bg-[#F76D01]/10">
+                  {checkingLimit ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  ) : (
+                    <Plus className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-[#6B358D] dark:group-hover:text-[#F76D01]" />
+                  )}
+                </div>
+                <span className="text-xs font-semibold text-muted-foreground transition-colors group-hover:text-foreground">
+                  New Workspace
+                </span>
+              </motion.button>
+            )}
           </div>
         )}
+
+        <p className="flex items-center justify-center gap-1.5 pt-2 text-[11px] text-muted-foreground/70">
+          <Sparkles className="h-3 w-3 text-[#6B358D]/60 dark:text-[#F76D01]/60" />
+          Powered by Autommerce AI
+        </p>
 
         <Dialog open={limitDialogOpen} onOpenChange={setLimitDialogOpen}>
           <DialogContent>
@@ -292,9 +391,9 @@ export default function WorkspacesPage() {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="rounded-xl border bg-muted/40 p-4 space-y-3">
+            <div className="space-y-3 rounded-xl border bg-muted/40 p-4">
               <div className="flex items-start gap-3">
-                <div className="h-10 w-10 rounded-xl bg-amber-500/10 flex items-center justify-center shrink-0">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/10">
                   <Crown className="h-5 w-5 text-amber-500" />
                 </div>
                 <div className="space-y-1">
@@ -307,7 +406,7 @@ export default function WorkspacesPage() {
                 </div>
               </div>
 
-              <div className="text-sm text-muted-foreground leading-6">
+              <div className="text-sm leading-6 text-muted-foreground">
                 {workspaceLimit?.hasActiveSubscription
                   ? "Upgrade your plan to create more workspaces."
                   : "You can create only one workspace without an active subscription. Upgrade your plan to create more."}
@@ -318,7 +417,10 @@ export default function WorkspacesPage() {
               <Button variant="outline" onClick={() => setLimitDialogOpen(false)}>
                 Close
               </Button>
-              <Button onClick={() => router.push(workspaces[0] ? `/w/${workspaces[0].slug}/subscription` : "/workspaces")}>
+              <Button
+                className="rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                onClick={() => router.push(workspaces[0] ? `/w/${workspaces[0].slug}/subscription` : "/workspaces")}
+              >
                 Upgrade Plan
               </Button>
             </DialogFooter>

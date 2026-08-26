@@ -1,17 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { Check, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { useWorkspaceContext } from "@/app/(dashboard)/w/[workspaceSlug]/layout";
 import {
   FAQ_TEMPLATES,
   LINK_TEMPLATES,
+  faqSnippet,
+  linksSnippet,
   loadCustomizeWidgets,
   saveCustomizeWidgets,
   type WidgetStyle,
 } from "@/lib/customize-widgets";
+import {
+  fetchWidgetSettings,
+  saveWidgetSettings,
+} from "@/lib/widget-settings-api";
 import { cn } from "@/lib/utils";
 import { FaqWidgetPreview } from "./faq-widget";
 import { LinksWidgetPreview } from "./links-widget";
+import { SnippetBlock, useAppOrigin } from "./snippet-block";
 import type {
   CollectionContent,
   ProposedCollection,
@@ -25,21 +35,83 @@ export function OnPageShapePicker({
 }) {
   const params = useParams<{ workspaceSlug: string }>();
   const slug = params.workspaceSlug ?? "";
-  const [links, setLinks] = useState<WidgetStyle | null>(null);
-  const [faq, setFaq] = useState<WidgetStyle | null>(null);
+  const { workspace } = useWorkspaceContext();
+  const workspaceId = workspace?.id;
+  const appOrigin = useAppOrigin();
 
+  // Seeded from localStorage so the sheet paints the merchant's real shape on
+  // the first frame; the database load below corrects it if they differ.
+  const [links, setLinks] = useState<WidgetStyle>(
+    () => loadCustomizeWidgets(slug).links
+  );
+  const [faq, setFaq] = useState<WidgetStyle>(
+    () => loadCustomizeWidgets(slug).faq
+  );
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(0);
+
+  // The database is the version the storefront actually serves, so it wins over
+  // whatever this browser happens to have cached.
   useEffect(() => {
-    const saved = loadCustomizeWidgets(slug);
-    setLinks(saved.links);
-    setFaq(saved.faq);
-  }, [slug]);
+    if (!workspaceId) return;
+    let cancelled = false;
+    fetchWidgetSettings(workspaceId)
+      .then((settings) => {
+        if (cancelled || !settings) return;
+        setLinks(settings.links);
+        setFaq(settings.faq);
+        saveCustomizeWidgets(slug, settings);
+      })
+      .catch((err) =>
+        console.warn("[OnPageShapePicker] Could not load widget settings:", err)
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, slug]);
 
-  useEffect(() => {
-    if (!links || !faq) return;
-    saveCustomizeWidgets(slug, { links, faq });
-  }, [slug, links, faq]);
+  // Rapid template clicking would otherwise fire a write per click.
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) window.clearTimeout(timer.current);
+    },
+    []
+  );
 
-  if (!links || !faq) return null;
+  const persist = useCallback(
+    (next: { links: WidgetStyle; faq: WidgetStyle }) => {
+      saveCustomizeWidgets(slug, next);
+      if (!workspaceId) return;
+
+      if (timer.current) window.clearTimeout(timer.current);
+      setSaving(true);
+      timer.current = window.setTimeout(() => {
+        saveWidgetSettings(workspaceId, slug, next)
+          .then(() => setSavedAt(Date.now()))
+          .catch((err) => {
+            console.error("[OnPageShapePicker] Save failed:", err);
+            toast.error(
+              err instanceof Error ? err.message : "Could not save the shape"
+            );
+          })
+          .finally(() => setSaving(false));
+      }, 500);
+    },
+    [slug, workspaceId]
+  );
+
+  const chooseFaq = (template: string) => {
+    const nextFaq = { ...faq, template };
+    setFaq(nextFaq);
+    persist({ links, faq: nextFaq });
+  };
+
+  const chooseLinks = (template: string) => {
+    const nextLinks = { ...links, template };
+    setLinks(nextLinks);
+    persist({ links: nextLinks, faq });
+  };
 
   const linkItems = content.links.map((link, i) => ({
     id: link.href || `l-${i}`,
@@ -48,10 +120,14 @@ export function OnPageShapePicker({
 
   return (
     <div className="space-y-6 px-4 pb-6">
-      <p className="text-[11px] text-muted-foreground leading-relaxed">
-        Choose a shape only. Font, color and size are edited in Customize.
-        FAQ injects above the product grid, internal links below it.
-      </p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Choose a shape only. Font, color and size are edited in Customize, and
+          the shape you pick here is the one saved there. FAQ injects above the
+          product grid, internal links below it.
+        </p>
+        <SaveState saving={saving} savedAt={savedAt} />
+      </div>
 
       <div className="rounded-xl border border-border/70 p-3">
         <p className="mb-3 text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -68,9 +144,7 @@ export function OnPageShapePicker({
           label="FAQ shape · above products"
           templates={FAQ_TEMPLATES}
           value={faq.template}
-          onChange={(template) =>
-            setFaq((prev) => (prev ? { ...prev, template } : prev))
-          }
+          onChange={chooseFaq}
         />
         <div className="rounded-xl border border-border/70 p-3">
           <FaqWidgetPreview style={faq} items={content.faqs} quiet />
@@ -82,16 +156,52 @@ export function OnPageShapePicker({
           label="Links shape · below products"
           templates={LINK_TEMPLATES}
           value={links.template}
-          onChange={(template) =>
-            setLinks((prev) => (prev ? { ...prev, template } : prev))
-          }
+          onChange={chooseLinks}
         />
         <div className="rounded-xl border border-border/70 p-3">
           <LinksWidgetPreview style={links} items={linkItems} quiet />
         </div>
       </div>
+
+      <section className="space-y-3 rounded-xl border border-border/70 p-3">
+        <div>
+          <p className="text-xs font-semibold tracking-tight">HTML snippet</p>
+          <p className="text-[11px] text-muted-foreground">
+            Paste each block into the collection template: FAQ above the product
+            grid, internal links below it.
+          </p>
+        </div>
+        <SnippetBlock
+          label="FAQ"
+          value={faqSnippet("{{ collection.handle }}", appOrigin)}
+        />
+        <SnippetBlock
+          label="Internal links"
+          value={linksSnippet("{{ collection.handle }}", appOrigin)}
+        />
+      </section>
     </div>
   );
+}
+
+function SaveState({ saving, savedAt }: { saving: boolean; savedAt: number }) {
+  if (saving) {
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Saving
+      </span>
+    );
+  }
+  if (savedAt > 0) {
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+        <Check className="h-3 w-3" />
+        Saved
+      </span>
+    );
+  }
+  return null;
 }
 
 function ShapeRow({

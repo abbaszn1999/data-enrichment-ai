@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { motion } from "motion/react";
 import {
   ArrowLeft,
   Plus,
@@ -288,7 +289,7 @@ export default function NewImageClassifyPage() {
   }
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
       {phase === "preparing" || phase === "uploading" ? (
         <UploadingImagesCard
           percent={uploadPercent}
@@ -303,37 +304,45 @@ export default function NewImageClassifyPage() {
           footerNote="Please keep this page open · redirecting when ready"
         />
       ) : (
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <>
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-[1500px] px-5 py-7 sm:px-7 lg:px-10">
+        <motion.header initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex items-start gap-3">
             <Button
               type="button"
               variant="outline"
               size="icon"
-              className="h-10 w-10 shrink-0 rounded-xl border bg-background shadow-sm"
+              className="h-9 w-9 shrink-0 rounded-xl border border-border/60 bg-background/70"
               asChild
             >
               <Link href={`/w/${slug}/image-classify`} aria-label="Back">
                 <ArrowLeft className="h-4 w-4" />
               </Link>
             </Button>
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-                <Sparkles className="h-5 w-5 text-primary" />
+            <div>
+              <div className="mb-2 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white dark:bg-[#F76D01]"><Sparkles className="h-4 w-4" /></span>
+                <span className="text-[9px] font-black uppercase tracking-[.22em] text-[#400095] dark:text-[#F76D01]">Multimodal intake</span>
               </div>
-              <div>
-                <h1 className="text-xl font-bold tracking-tight">
+                <h1 className="text-3xl font-black tracking-[-.035em]">
                   New Image Classification
                 </h1>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  All images are sent to AI in a single multimodal request.
+                <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
+                  Prepare a visual batch, guide the grouping logic, and send every image through one coordinated multimodal analysis.
                 </p>
-              </div>
             </div>
           </div>
-        </header>
+        </motion.header>
+        </div>
+      </section>
 
-            <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
+        <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="space-y-5">
+            <section className="overflow-hidden rounded-[24px] border border-border/60 bg-card shadow-[0_15px_50px_rgba(15,23,42,.05)]">
+              <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
               <div className="border-b bg-muted/20 px-5 py-4">
                 <h2 className="text-sm font-semibold">Project details</h2>
                 <p className="text-[11px] text-muted-foreground">
@@ -353,7 +362,7 @@ export default function NewImageClassifyPage() {
                     placeholder="e.g. New supplier batch — May"
                     disabled={busy}
                     maxLength={120}
-                    className="h-9"
+                    className="h-10 rounded-xl bg-muted/35"
                   />
                 </div>
 
@@ -368,7 +377,7 @@ export default function NewImageClassifyPage() {
                     placeholder="e.g. Follow the customer's notes: group by brand first, keep damaged packaging separate, or use specific group names."
                     disabled={busy}
                     rows={3}
-                    className="w-full resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+                    className="w-full resize-none rounded-xl border border-border/60 bg-muted/35 px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#6B358D]/40 disabled:opacity-60"
                   />
                 </div>
 
@@ -383,7 +392,7 @@ export default function NewImageClassifyPage() {
                       setThinkingLevel(e.target.value as typeof thinkingLevel)
                     }
                     disabled={busy}
-                    className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+                    className="h-10 w-full rounded-xl border border-border/60 bg-muted/35 px-3 text-sm outline-none focus:ring-1 focus:ring-[#6B358D]/40 disabled:opacity-60"
                   >
                     <option value="minimal">
                       Minimal — fastest, lowest cost
@@ -407,8 +416,8 @@ export default function NewImageClassifyPage() {
               }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={busy ? undefined : handleDrop}
-              className={`overflow-hidden rounded-xl border bg-card shadow-sm transition-colors ${
-                isDragging ? "border-primary ring-1 ring-primary/30" : ""
+              className={`overflow-hidden rounded-[24px] border bg-card shadow-sm transition-colors ${
+                isDragging ? "border-[#400095] ring-1 ring-[#400095]/30 dark:border-[#F76D01]" : ""
               }`}
             >
               <div className="border-b bg-muted/20 px-5 py-4">
@@ -437,12 +446,12 @@ export default function NewImageClassifyPage() {
                   <div
                     className={`flex flex-col items-center rounded-xl border-2 border-dashed px-6 py-14 text-center transition-colors ${
                       isDragging
-                        ? "border-primary bg-primary/5"
+                        ? "border-[#400095] bg-[#400095]/5 dark:border-[#F76D01] dark:bg-[#F76D01]/5"
                         : "border-muted-foreground/20 bg-muted/10"
                     }`}
                   >
-                    <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                      <Upload className="h-5 w-5" />
+                    <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F76D01]/15 to-[#400095]/15">
+                      <Upload className="h-6 w-6 text-[#6B358D]" />
                     </div>
                     <p className="text-sm font-medium">
                       Drop product images here, or click to browse
@@ -501,6 +510,24 @@ export default function NewImageClassifyPage() {
                 )}
               </div>
             </section>
+          </div>
+
+          <aside className="space-y-4">
+            <section className="rounded-2xl border border-[#6B358D]/20 bg-gradient-to-br from-[#400095]/[0.06] to-[#F76D01]/[0.04] p-5">
+              <div className="text-[9px] font-black uppercase tracking-[.18em] text-[#6B358D] dark:text-[#C8A8D2]">Batch readiness</div>
+              <div className="mt-3 text-3xl font-black tabular-nums">{images.length}<span className="ml-1 text-sm text-muted-foreground">/ {MAX_IMAGES}</span></div>
+              <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">Images are resized locally to protect speed and reduce processing cost before upload.</p>
+            </section>
+            <section className="rounded-2xl border border-border/60 bg-card p-5">
+              <h3 className="text-xs font-black">How this run works</h3>
+              <ol className="mt-3 space-y-3 text-[10px] text-muted-foreground">
+                <li><strong className="text-foreground">01.</strong> Prepare and resize the selected images.</li>
+                <li><strong className="text-foreground">02.</strong> Upload the optimized visual batch.</li>
+                <li><strong className="text-foreground">03.</strong> Classify everything in one multimodal request.</li>
+              </ol>
+            </section>
+          </aside>
+        </motion.div>
 
         {error && (
           <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
@@ -511,7 +538,7 @@ export default function NewImageClassifyPage() {
           </div>
         )}
 
-        <div className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <ImageIcon className="h-3.5 w-3.5" />
             {images.length} image{images.length === 1 ? "" : "s"} ready
@@ -520,13 +547,14 @@ export default function NewImageClassifyPage() {
             size="sm"
             disabled={!canSubmit}
             onClick={handleSubmit}
-            className="gap-1.5 self-stretch sm:self-auto"
+            className="h-10 gap-1.5 self-stretch rounded-xl bg-[#400095] px-5 text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] sm:self-auto"
           >
             <Sparkles className="h-3.5 w-3.5" />
             Classify images
           </Button>
         </div>
-      </div>
+      </main>
+      </>
       )}
     </div>
   );

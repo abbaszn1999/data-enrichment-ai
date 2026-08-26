@@ -11,9 +11,11 @@ import {
   normalizeOnPageInstructions,
   type CollectionContent,
   type ExtractedKeyword,
+  type GeneratedArticle,
   type MarketResearchProduct,
   type OnPageInstructions,
   type ProposedCollection,
+  type StrategyArticle,
   type WorkspaceTab,
 } from "./workspace-data";
 
@@ -62,6 +64,10 @@ export type MarketResearchPersisted = {
   extractChargeByProject: Record<string, number>;
   extractRowsByProject: Record<string, number>;
   keywordsByProject: Record<string, ExtractedKeyword[]>;
+  /** Stage 7 article plan rows. */
+  strategyByProject: Record<string, StrategyArticle[]>;
+  /** Stage 7 generated article bodies keyed by article id. */
+  articlesByProject: Record<string, Record<string, GeneratedArticle>>;
 };
 
 function storageKey(workspaceSlug: string) {
@@ -105,6 +111,8 @@ export function emptyMarketResearchState(): MarketResearchPersisted {
     extractChargeByProject: {},
     extractRowsByProject: {},
     keywordsByProject: {},
+    strategyByProject: {},
+    articlesByProject: {},
   };
 }
 
@@ -184,6 +192,8 @@ export function loadMarketResearchState(
         extractChargeByProject: {},
         extractRowsByProject: {},
         keywordsByProject: {},
+        strategyByProject: {},
+        articlesByProject: {},
       };
     }
     const parsed = JSON.parse(raw) as MarketResearchPersisted;
@@ -247,6 +257,8 @@ export function loadMarketResearchState(
       extractChargeByProject: isNumberMap(parsed.extractChargeByProject),
       extractRowsByProject: isNumberMap(parsed.extractRowsByProject),
       keywordsByProject: isKeywordMap(parsed.keywordsByProject),
+      strategyByProject: isArrayMap<StrategyArticle>(parsed.strategyByProject),
+      articlesByProject: isObjectMap<GeneratedArticle>(parsed.articlesByProject),
     };
   } catch {
     return null;
@@ -293,10 +305,25 @@ function isNumberMap(raw: unknown): Record<string, number> {
 }
 
 function isKeywordMap(raw: unknown): Record<string, ExtractedKeyword[]> {
+  return isArrayMap<ExtractedKeyword>(raw);
+}
+
+function isArrayMap<T>(raw: unknown): Record<string, T[]> {
   if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, ExtractedKeyword[]> = {};
+  const out: Record<string, T[]> = {};
   for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (Array.isArray(value)) out[id] = value as ExtractedKeyword[];
+    if (Array.isArray(value)) out[id] = value as T[];
+  }
+  return out;
+}
+
+function isObjectMap<T>(raw: unknown): Record<string, Record<string, T>> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, Record<string, T>> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      out[id] = value as Record<string, T>;
+    }
   }
   return out;
 }

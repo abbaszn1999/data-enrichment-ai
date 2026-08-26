@@ -12,7 +12,8 @@ export type MrSliceName =
   | "keywords"
   | "collections"
   | "content"
-  | "strategy";
+  | "strategy"
+  | "articles";
 
 export function mrProjectPath(workspaceId: string, projectId: string): string {
   return `${workspaceId}/market-research/${projectId}`;

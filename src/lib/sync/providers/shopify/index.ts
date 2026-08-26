@@ -5,7 +5,10 @@ import { applyShopifyChanges } from "./apply";
 import {
   resolveCollectionByName,
   assignProductsToCollection,
+  removeProductsFromCollection,
   deleteShopifyCollection,
+  detectNewCollectionProducts,
+  fetchAllShopifyCollections,
 } from "./collections";
 import { SHOPIFY_CORE_PRODUCT_COLUMNS } from "./columns";
 import {
@@ -14,6 +17,7 @@ import {
   SERVER_FILTER_KEYS,
   CLIENT_PREDICATE_KINDS,
 } from "./schema-catalog";
+import { fetchShopifyNavigationMenus } from "./navigation";
 
 export const ShopifyProvider: SyncProvider = {
   id: "shopify",
@@ -58,6 +62,43 @@ export const ShopifyProvider: SyncProvider = {
         }
       }
       return { deletedIds, failed };
+    },
+    async list({ integration, max }) {
+      const rows = await fetchAllShopifyCollections({
+        integration,
+        maxCollections: max,
+      });
+      return rows.map((row) => ({
+        id: String(row.id ?? ""),
+        title: String(row.title ?? ""),
+        handle: String(row.handle ?? ""),
+        productCount: Number(row.products_count ?? 0),
+        // A smart collection derives membership from its ruleSet, so
+        // collectionAddProducts is rejected on it.
+        manual: row.type !== "smart",
+      }));
+    },
+    async unassign({ integration, taxonomyId, productIds }) {
+      return removeProductsFromCollection({
+        integration,
+        collectionId: taxonomyId,
+        productIds,
+      });
+    },
+  },
+  growthSync: {
+    async detectNewProducts({ integration, taxonomyId, since, maxPages }) {
+      return detectNewCollectionProducts({
+        integration,
+        collectionId: taxonomyId,
+        since,
+        maxPages,
+      });
+    },
+  },
+  navigation: {
+    async list({ integration }) {
+      return fetchShopifyNavigationMenus({ integration });
     },
   },
   configFields: [

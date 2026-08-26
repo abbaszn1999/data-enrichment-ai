@@ -353,42 +353,10 @@ export interface Database {
           updated_at?: string;
         };
       };
-      credit_packs: {
-        Row: {
-          id: string;
-          name: string;
-          display_name: string;
-          credits: number;
-          price: number;
-          currency: string;
-          stripe_product_id: string | null;
-          stripe_price_id: string | null;
-          is_active: boolean;
-          sort_order: number;
-          created_at: string;
-        };
-        Insert: {
-          name: string;
-          display_name: string;
-          credits: number;
-          price: number;
-          stripe_product_id?: string | null;
-          stripe_price_id?: string | null;
-        };
-        Update: {
-          display_name?: string;
-          credits?: number;
-          price?: number;
-          stripe_product_id?: string | null;
-          stripe_price_id?: string | null;
-          is_active?: boolean;
-        };
-      };
       credit_purchases: {
         Row: {
           id: string;
           user_id: string;
-          pack_id: string | null;
           credits: number;
           amount_paid: number;
           currency: string;
@@ -399,7 +367,6 @@ export interface Database {
         };
         Insert: {
           user_id: string;
-          pack_id?: string | null;
           credits: number;
           amount_paid: number;
           stripe_checkout_session_id?: string | null;

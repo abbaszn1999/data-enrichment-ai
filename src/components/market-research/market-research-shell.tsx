@@ -20,12 +20,14 @@ import { useWorkspaceStore } from "@/store/workspace-store";
 import { previewBalance } from "@/lib/market-research/billing";
 import {
   analyzeStoreApi,
+  buildContentPlanApi,
   cancelExtractApi,
   chatAgentApi,
   classifyIntentApi,
   clusterCollectionsApi,
   createMrProjectApi,
   deleteMrProjectApi,
+  fetchStoreBlogsApi,
   generateOnPageApi,
   generateSeedsApi,
   loadMrStateApi,
@@ -34,7 +36,10 @@ import {
   pushCollectionsApi,
   saveMrStateApi,
   startExtractApi,
+  syncArticlesApi,
   syncSeoApi,
+  writeArticleApi,
+  type ArticleSyncResponse,
 } from "@/lib/market-research/client";
 import {
   actualExtractCostUsd,
@@ -121,7 +126,6 @@ import {
   STRATEGY_MS,
   USD_PER_COLLECTION,
   buildCollectionContent,
-  buildContentStrategy,
   buildExtractedKeywords,
   buildProposedCollections,
   EMPTY_ON_PAGE_INSTRUCTIONS,
@@ -131,9 +135,14 @@ import {
   maxTab,
   pulledCountForSeed,
   type FlowTab,
+  type GeneratedArticle,
   type OnPageInstructions,
   type SeedExtractProgress,
+  type StoreBlog,
+  type StrategyArticle,
   type WorkspaceTab,
+  ARTICLE_GENERATION_CONCURRENCY,
+  ARTICLE_SYNC_BATCH_SIZE,
 } from "./workspace-data";
 
 const DEFAULT_STORE = "Demo Shopify store";
@@ -349,6 +358,20 @@ export function MarketResearchShell() {
   const [contentByIdByProject, setContentByIdByProject] = useState<
     Record<string, Record<string, CollectionContent>>
   >({});
+  const [strategyByProject, setStrategyByProject] = useState<
+    Record<string, StrategyArticle[]>
+  >({});
+  const [articlesByProject, setArticlesByProject] = useState<
+    Record<string, Record<string, GeneratedArticle>>
+  >({});
+  const [storeBlogs, setStoreBlogs] = useState<StoreBlog[]>([]);
+  const [storeUrl, setStoreUrl] = useState("");
+  const [blogScopeWarning, setBlogScopeWarning] = useState<string | null>(null);
+  const [articlesSyncing, setArticlesSyncing] = useState(false);
+  const [articlesSyncProgress, setArticlesSyncProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [pushingCollectionsByProject, setPushingCollectionsByProject] =
     useState<Record<string, boolean>>({});
   const [syncingSeoByProject, setSyncingSeoByProject] = useState<
@@ -404,6 +427,8 @@ export function MarketResearchShell() {
     setClusterSelectionByProject(saved.clusterSelectionByProject ?? {});
     setProposedCollectionsByProject(saved.proposedCollectionsByProject ?? {});
     setContentByIdByProject(saved.contentByIdByProject ?? {});
+    setStrategyByProject(saved.strategyByProject ?? {});
+    setArticlesByProject(saved.articlesByProject ?? {});
     setPaidCollectionProjectIds(new Set(saved.paidCollectionProjectIds ?? []));
     setContentReadyIds(new Set(saved.contentReadyIds ?? []));
     setPushedIds(new Set(saved.pushedIds ?? []));
@@ -523,6 +548,8 @@ export function MarketResearchShell() {
       clusterSelectionByProject,
       proposedCollectionsByProject,
       contentByIdByProject,
+      strategyByProject,
+      articlesByProject,
       paidCollectionProjectIds: Array.from(paidCollectionProjectIds),
       contentReadyIds: Array.from(contentReadyIds),
       pushedIds: Array.from(pushedIds),
@@ -557,6 +584,8 @@ export function MarketResearchShell() {
       clusterSelectionByProject,
       proposedCollectionsByProject,
       contentByIdByProject,
+      strategyByProject,
+      articlesByProject,
       paidCollectionProjectIds,
       contentReadyIds,
       pushedIds,
@@ -812,21 +841,49 @@ export function MarketResearchShell() {
       proposedCollections.filter((row) => clusterSelection.includes(row.id)),
     [proposedCollections, clusterSelection]
   );
-  const strategyArticles = useMemo(
-    () =>
-      buildContentStrategy(
-        selectedCollections.length > 0
-          ? selectedCollections
-          : proposedCollections,
-        extractedKeywords
-      ),
-    [selectedCollections, proposedCollections, extractedKeywords]
-  );
+  const strategyArticles = useMemo(() => {
+    if (!activeProject) return [] as StrategyArticle[];
+    return strategyByProject[activeProject.id] ?? [];
+  }, [activeProject, strategyByProject]);
+  const generatedArticles = useMemo(() => {
+    if (!activeProject) return {} as Record<string, GeneratedArticle>;
+    return articlesByProject[activeProject.id] ?? {};
+  }, [activeProject, articlesByProject]);
+
+  // The store's blogs and storefront domain are only needed once the plan
+  // exists, and they rarely change, so they are fetched once on entering
+  // Stage 7.
+  useEffect(() => {
+    if (!workspaceId || !strategyReady || storeUrl) return;
+    let cancelled = false;
+    fetchStoreBlogsApi(workspaceId)
+      .then((res) => {
+        if (cancelled) return;
+        setStoreBlogs(res.blogs ?? []);
+        setStoreUrl(res.storeUrl ?? "");
+        setBlogScopeWarning(res.scopeWarning ?? null);
+      })
+      .catch(() => {
+        // Article generation still works without a blog list.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, strategyReady, storeUrl]);
 
   const contentById = useMemo(() => {
     if (!activeProject) return {};
     return contentByIdByProject[activeProject.id] ?? {};
   }, [activeProject, contentByIdByProject]);
+
+  // Read off the content itself rather than a session flag, so the button stays
+  // off after a refresh and comes back on the moment copy is regenerated or a
+  // row failed and still needs a retry.
+  const seoAllSynced = useMemo(() => {
+    const rows = Object.values(contentById);
+    if (rows.length === 0) return false;
+    return rows.every((row) => Boolean(row.seoSyncedAt) && !row.seoSyncError);
+  }, [contentById]);
 
   useEffect(() => {
     if (!activeProject || !contentReady || generating) return;
@@ -2297,16 +2354,45 @@ export function MarketResearchShell() {
     setSyncingSeoByProject((prev) => ({ ...prev, [projectId]: true }));
     try {
       const res = await syncSeoApi(workspaceId, projectId);
-      setSeoSyncedProjectIds((prev) => {
-        const next = new Set(prev);
-        next.add(projectId);
-        return next;
-      });
-      toast.success(
-        res.syncedCount > 0
-          ? `Synced SEO copy for ${res.syncedCount} collection${res.syncedCount === 1 ? "" : "s"} to store`
-          : "SEO copy and descriptions saved to store"
-      );
+
+      // Stamp each row with its own outcome. This lives on the content slice,
+      // so the table still reports the truth after a refresh.
+      const results = res.results ?? [];
+      if (results.length > 0) {
+        const syncedAt = Date.now();
+        setContentByIdByProject((prev) => {
+          const current = prev[projectId];
+          if (!current) return prev;
+          const next = { ...current };
+          for (const result of results) {
+            const content = next[result.collectionId];
+            if (!content) continue;
+            next[result.collectionId] = result.ok
+              ? { ...content, seoSyncedAt: syncedAt, seoSyncError: undefined }
+              : { ...content, seoSyncError: result.error ?? "Sync failed" };
+          }
+          return { ...prev, [projectId]: next };
+        });
+      }
+
+      const failed = results.filter((row) => !row.ok);
+      if (failed.length > 0) {
+        toast.warning(
+          `${failed.length} collection${failed.length === 1 ? "" : "s"} could not be synced`,
+          { description: failed[0].error }
+        );
+      } else {
+        setSeoSyncedProjectIds((prev) => {
+          const next = new Set(prev);
+          next.add(projectId);
+          return next;
+        });
+        toast.success(
+          res.syncedCount > 0
+            ? `Synced SEO copy for ${res.syncedCount} collection${res.syncedCount === 1 ? "" : "s"} to store`
+            : "SEO copy and descriptions saved to store"
+        );
+      }
     } catch (error) {
       toast.error("Failed to sync SEO to store", {
         description: error instanceof Error ? error.message : "Internal error",
@@ -2343,18 +2429,86 @@ export function MarketResearchShell() {
     }
   };
 
-  const runStrategyBuild = (projectId: string) => {
+  const runStrategyBuild = async (projectId: string) => {
+    if (!workspaceId) {
+      toast.error("Workspace is still loading");
+      return;
+    }
+
+    const informational = extractedKeywords.filter(
+      (row) => row.sheet === "informational"
+    );
+    if (informational.length === 0) {
+      toast.error("No informational keywords to plan articles from");
+      return;
+    }
+
     const gen = ++strategyGen.current;
     setStrategyLoading(true);
-    window.setTimeout(() => {
+
+    try {
+      const res = await buildContentPlanApi(
+        workspaceId,
+        projectId,
+        informational.map((row) => ({
+          id: row.id,
+          keyword: row.keyword,
+          sheet: row.sheet,
+          volume: row.volume,
+          difficulty: row.difficulty,
+          seedId: row.seedId,
+          seed: row.seed,
+        })),
+        {
+          parentNiches: (nichesByProject[projectId] ?? activeNiches).map(
+            (n) => n.name
+          ),
+          collections: proposedCollections.map((row) => ({
+            id: row.id,
+            name: row.name,
+            headKeyword: row.headKeyword,
+            parentNiche: row.parentNiche,
+            volume: row.volume,
+            productCount: row.productCount,
+            storeHandle: row.storeHandle,
+          })),
+        }
+      );
+
       if (strategyGen.current !== gen) return;
-      setStrategyLoading(false);
-      setStrategyReadyIds((prev) => {
-        const next = new Set(prev);
-        next.add(projectId);
-        return next;
+
+      setStrategyByProject((prev) => ({ ...prev, [projectId]: res.articles }));
+      setStrategyReadyIds((prev) => new Set(prev).add(projectId));
+
+      if (res.droppedByCap > 0 || res.mergedByIntent > 0) {
+        const notes: string[] = [];
+        if (res.mergedByIntent > 0) {
+          notes.push(
+            `${res.mergedByIntent} near-duplicate keyword${
+              res.mergedByIntent === 1 ? "" : "s"
+            } folded into an existing article`
+          );
+        }
+        if (res.droppedByCap > 0) {
+          notes.push(
+            `${res.droppedByCap} lower-volume keyword${
+              res.droppedByCap === 1 ? "" : "s"
+            } left out of this plan`
+          );
+        }
+        toast.info(`Planned ${res.articles.length} articles`, {
+          description: `${notes.join(" · ")}.`,
+        });
+      }
+    } catch (err) {
+      if (strategyGen.current !== gen) return;
+      console.error("[runStrategyBuild] Error:", err);
+      toast.error("Could not build the content plan", {
+        description: err instanceof Error ? err.message : undefined,
       });
-    }, STRATEGY_MS);
+    } finally {
+      if (strategyGen.current === gen) setStrategyLoading(false);
+    }
   };
 
   const handleNextStrategy = () => {
@@ -2362,22 +2516,246 @@ export function MarketResearchShell() {
     const projectId = activeProject.id;
     unlockWorkspaceTab(projectId, "strategy");
     if (!strategyReadyIds.has(projectId)) {
-      runStrategyBuild(projectId);
+      void runStrategyBuild(projectId);
     }
   };
 
   const handleBuildStrategy = () => {
     if (!activeProject) return;
-    runStrategyBuild(activeProject.id);
+    void runStrategyBuild(activeProject.id);
   };
 
-  const handleApproveStrategy = () => {
-    if (!activeProject) return;
-    setStrategyApprovedIds((prev) => {
-      const next = new Set(prev);
-      next.add(activeProject.id);
-      return next;
+  const patchStrategyRows = (
+    projectId: string,
+    ids: string[],
+    patch: Partial<StrategyArticle>
+  ) => {
+    const idSet = new Set(ids);
+    setStrategyByProject((prev) => ({
+      ...prev,
+      [projectId]: (prev[projectId] ?? []).map((row) =>
+        idSet.has(row.id) ? { ...row, ...patch } : row
+      ),
+    }));
+  };
+
+  const handleGenerateArticles = async (ids: string[]) => {
+    if (!activeProject || !workspaceId || ids.length === 0) return;
+    const projectId = activeProject.id;
+    const rows = (strategyByProject[projectId] ?? []).filter((row) =>
+      ids.includes(row.id)
+    );
+    if (rows.length === 0) return;
+
+    patchStrategyRows(projectId, ids, { status: "generating", error: undefined });
+
+    // A shared cursor over the queue gives us exactly three in flight at once:
+    // each finished article immediately pulls the next one.
+    let cursor = 0;
+    const workers = Array.from(
+      { length: Math.min(ARTICLE_GENERATION_CONCURRENCY, rows.length) },
+      async () => {
+        while (cursor < rows.length) {
+          const row = rows[cursor];
+          cursor += 1;
+
+          try {
+            const res = await writeArticleApi(
+              workspaceId,
+              projectId,
+              {
+                id: row.id,
+                title: row.title,
+                keyword: row.keyword,
+                type: row.type,
+                volume: row.volume,
+                difficulty: row.difficulty,
+                linksOut: row.linksOut,
+              },
+              storeBlogs
+            );
+
+            setArticlesByProject((prev) => ({
+              ...prev,
+              [projectId]: {
+                ...(prev[projectId] ?? {}),
+                [res.article.articleId]: res.article,
+              },
+            }));
+            patchStrategyRows(projectId, [row.id], {
+              status: "ready",
+              category: res.article.blogTitle,
+              error: undefined,
+            });
+          } catch (err) {
+            console.error("[handleGenerateArticles] Error:", err);
+            patchStrategyRows(projectId, [row.id], {
+              status: "failed",
+              error: err instanceof Error ? err.message : "Writing failed",
+            });
+          }
+        }
+      }
+    );
+
+    await Promise.all(workers);
+  };
+
+  const handleSyncArticles = async (ids: string[]) => {
+    if (!activeProject || !workspaceId || ids.length === 0) return;
+    const projectId = activeProject.id;
+    const generated = articlesByProject[projectId] ?? {};
+    const rows = (strategyByProject[projectId] ?? []).filter(
+      (row) => ids.includes(row.id) && generated[row.id]
+    );
+    if (rows.length === 0) return;
+
+    setArticlesSyncing(true);
+    patchStrategyRows(projectId, rows.map((row) => row.id), {
+      status: "syncing",
     });
+
+    // Declared outside the try so a batch that fails halfway does not roll back
+    // the rows that already reached the store.
+    const scheduledIds: string[] = [];
+
+    try {
+      // The endpoint accepts 50 articles per call and creates them one by one,
+      // so a large plan is sent in sequential batches: parallel calls would
+      // trip Shopify's rate limit and one giant call would hit the function
+      // timeout. Batches run in order so the publishing calendar stays dense.
+      const batches: (typeof rows)[] = [];
+      for (let i = 0; i < rows.length; i += ARTICLE_SYNC_BATCH_SIZE) {
+        batches.push(rows.slice(i, i + ARTICLE_SYNC_BATCH_SIZE));
+      }
+
+      const failedById = new Map<string, string>();
+      let syncedCount = 0;
+      let timeZone = "UTC";
+      const results: ArticleSyncResponse["results"] = [];
+
+      for (const [index, batch] of batches.entries()) {
+        if (batches.length > 1) {
+          setArticlesSyncProgress({ done: index, total: batches.length });
+        }
+        const res = await syncArticlesApi(
+          workspaceId,
+          projectId,
+          batch.map((row) => {
+            const article = generated[row.id];
+            return {
+              articleId: row.id,
+              title: row.title,
+              seoTitle: article.seoTitle,
+              seoDescription: article.seoDescription,
+              blogTitle: article.blogTitle,
+              bodyHtml: article.bodyHtml,
+              featuredImage: article.featuredImage,
+            };
+          })
+        );
+        results.push(...res.results);
+        syncedCount += res.syncedCount;
+        timeZone = res.timeZone;
+      }
+
+      for (const result of results) {
+        if (result.ok) {
+          scheduledIds.push(result.articleId);
+          // Keep the store ids in client state: this snapshot is written back
+          // over the stored slice, so dropping them would lose the record that
+          // the article is already on the store's calendar.
+          setArticlesByProject((prev) => {
+            const current = prev[projectId]?.[result.articleId];
+            if (!current) return prev;
+            return {
+              ...prev,
+              [projectId]: {
+                ...prev[projectId],
+                [result.articleId]: {
+                  ...current,
+                  scheduledAt: result.scheduledAt ?? current.scheduledAt,
+                  storeArticleId: result.storeArticleId ?? current.storeArticleId,
+                  storeHandle: result.storeHandle ?? current.storeHandle,
+                },
+              },
+            };
+          });
+        } else {
+          failedById.set(result.articleId, result.error ?? "Upload failed");
+        }
+      }
+
+      if (scheduledIds.length > 0) {
+        patchStrategyRows(projectId, scheduledIds, {
+          status: "scheduled",
+          error: undefined,
+        });
+        // Anything reaching the store's calendar completes Stage 7.
+        setStrategyApprovedIds((prev) => new Set(prev).add(projectId));
+      }
+      for (const [articleId, message] of failedById) {
+        patchStrategyRows(projectId, [articleId], {
+          status: "ready",
+          error: message,
+        });
+      }
+
+      if (syncedCount > 0) {
+        toast.success(
+          `${syncedCount} article${syncedCount === 1 ? "" : "s"} scheduled`,
+          {
+            description: `One per day in ${timeZone}, at a different time each day.`,
+          }
+        );
+      }
+      if (failedById.size > 0) {
+        toast.error(`${failedById.size} article(s) could not be uploaded`, {
+          description: [...failedById.values()][0],
+        });
+      }
+    } catch (err) {
+      console.error("[handleSyncArticles] Error:", err);
+      const scheduled = new Set(scheduledIds);
+      patchStrategyRows(
+        projectId,
+        rows.map((row) => row.id).filter((id) => !scheduled.has(id)),
+        {
+          status: "ready",
+          error: err instanceof Error ? err.message : "Sync failed",
+        }
+      );
+      toast.error("Could not sync articles to the store", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setArticlesSyncing(false);
+      setArticlesSyncProgress(null);
+    }
+  };
+
+  const handleArticleChange = (
+    articleId: string,
+    patch: Partial<GeneratedArticle>
+  ) => {
+    if (!activeProject) return;
+    const projectId = activeProject.id;
+    setArticlesByProject((prev) => {
+      const current = prev[projectId]?.[articleId];
+      if (!current) return prev;
+      return {
+        ...prev,
+        [projectId]: {
+          ...prev[projectId],
+          [articleId]: { ...current, ...patch },
+        },
+      };
+    });
+  };
+
+  const handleArticleTitleChange = (articleId: string, title: string) => {
+    if (!activeProject) return;
+    patchStrategyRows(activeProject.id, [articleId], { title });
   };
 
   const handleConfirmSpend = handleExtract;
@@ -2646,7 +3024,7 @@ export function MarketResearchShell() {
 
   if (wsLoading || !hydrated) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="autommerce-dashboard flex flex-1 items-center justify-center [font-family:var(--brand-font)]">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
@@ -2654,7 +3032,7 @@ export function MarketResearchShell() {
 
   if (!hasIntegration) {
     return (
-      <div className="flex-1 flex items-center justify-center p-8">
+      <div className="autommerce-dashboard flex flex-1 items-center justify-center p-8 [font-family:var(--brand-font)]">
         <div className="max-w-md text-center space-y-6">
           <div className="mx-auto h-16 w-16 rounded-2xl bg-muted/60 flex items-center justify-center">
             <Unplug className="h-8 w-8 text-muted-foreground" />
@@ -2854,7 +3232,7 @@ export function MarketResearchShell() {
     : [];
 
   return (
-    <div className="flex h-full min-h-0 gap-2 overflow-hidden bg-muted/25 p-2">
+    <div className="autommerce-dashboard market-research-brand flex h-full min-h-0 gap-2 overflow-hidden bg-muted/25 p-2 [font-family:var(--brand-font)]">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-sm">
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {activeProject ? (
@@ -3238,20 +3616,32 @@ export function MarketResearchShell() {
                     syncingSeo={Boolean(
                       activeProject && syncingSeoByProject[activeProject.id]
                     )}
-                    seoSynced={Boolean(
-                      activeProject && seoSyncedProjectIds.has(activeProject.id)
-                    )}
+                    seoSynced={
+                      seoAllSynced ||
+                      Boolean(
+                        activeProject &&
+                          seoSyncedProjectIds.has(activeProject.id)
+                      )
+                    }
                     onStartContent={handleStartContent}
                     onPush={handlePush}
                     onSyncSeo={handleSyncSeo}
                     pushCostUsd={collectionPushCostUsd(clusterSelection.length)}
                     onNextStrategy={handleNextStrategy}
                     strategyArticles={strategyArticles}
+                    generatedArticles={generatedArticles}
+                    storeBlogs={storeBlogs}
+                    storeUrl={storeUrl}
+                    blogScopeWarning={blogScopeWarning}
                     strategyLoading={strategyLoading}
                     strategyReady={strategyReady}
-                    strategyApproved={strategyApproved}
+                    articlesSyncing={articlesSyncing}
+                    articlesSyncProgress={articlesSyncProgress}
                     onBuildStrategy={handleBuildStrategy}
-                    onApproveStrategy={handleApproveStrategy}
+                    onGenerateArticles={(ids) => void handleGenerateArticles(ids)}
+                    onSyncArticles={(ids) => void handleSyncArticles(ids)}
+                    onArticleChange={handleArticleChange}
+                    onArticleTitleChange={handleArticleTitleChange}
                   />
                 </div>
               ) : null}

@@ -87,6 +87,16 @@
 
 :root {
   --radius: 0.625rem;
+  /* Autommerce identity — raw brand tokens, intentionally not mapped onto
+     shadcn's global `primary` yet. Tools migrate to the brand one by one. */
+  --brand-orange: #f76d01;
+  --brand-red: #c40000;
+  --brand-purple: #400095;
+  --brand-violet: #6b358d;
+  --brand-lavender: #c8a8d2;
+  --brand-burgundy: #79081d;
+  --brand-gradient: linear-gradient(135deg, #f76d01 0%, #c40000 48%, #400095 100%);
+  --brand-font: "Uni Neue", var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -161,6 +171,32 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Dashboard is the first product surface migrated to the Autommerce identity.
+   Scoping prevents unfinished tools from changing before their design pass. */
+.autommerce-dashboard {
+  --primary: #400095;
+  --primary-foreground: #ffffff;
+  --ring: #6b358d;
+}
+
+.dark .autommerce-dashboard {
+  --primary: #f76d01;
+  --primary-foreground: #ffffff;
+  --ring: #f76d01;
+}
+
+/* Customize widget previews (FAQ / internal links) render with inline colors
+   taken from the merchant's chosen style — meant for the live storefront,
+   which is normally light. In dark mode that reads as a stray white card, so
+   force the preview surface itself to black here without touching the
+   snippet/config the merchant actually saves. */
+.dark .cp-preview-surface {
+  background-color: #000 !important;
+}
+.dark .cp-preview-surface * {
+  color: #f5f5f5 !important;
 }
 
 /* ═══ Dashboard Animations ═══ */
@@ -397,5 +433,66 @@
   .mr-agent-inner,
   .mr-pane {
     transition: none;
+  }
+}
+
+/* Website Restructure — always a two-pane split (chat / preview), no stage
+   collapse transition since this is a single-stage tool. The chat column's
+   width is a draggable CSS var (--wr-chat-w) set from JS; it only shrinks
+   below and grows back up to that same JS-owned value, never wider. */
+.wr-shell-frame {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  grid-template-columns: var(--wr-chat-w, minmax(0, 0.86fr)) 6px minmax(0, 1fr);
+}
+
+.wr-resize-handle {
+  position: relative;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.wr-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin-inline: auto;
+  width: 1px;
+  background: var(--border);
+  transition: background-color 0.15s ease;
+}
+
+.wr-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--border);
+  transform: translate(-50%, -50%);
+  transition: background-color 0.15s ease;
+}
+
+.wr-resize-handle:hover::before,
+.wr-resize-handle:hover::after,
+.wr-resize-handle.is-dragging::before,
+.wr-resize-handle.is-dragging::after {
+  background: var(--foreground);
+}
+
+@media (max-width: 767px) {
+  .wr-shell-frame {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(16rem, 42%) minmax(0, 1fr);
+  }
+
+  .wr-resize-handle {
+    display: none;
   }
 }

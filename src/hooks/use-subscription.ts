@@ -7,7 +7,6 @@ interface SubscriptionState {
   subscription: any | null;
   plan: any | null;
   availablePlans: any[];
-  creditPacks: any[];
   credits: { monthlyTotal: number; monthlyRemaining: number; bonus: number; total: number; used: number } | null;
   isActive: boolean;
   isLoading: boolean;
@@ -52,7 +51,6 @@ export function useSubscription(workspaceId: string | null) {
           subscription: s.subscription,
           plan: s.currentPlan,
           availablePlans: (s.availablePlans as any[]) || [],
-          creditPacks: (s.creditPacks as any[]) || [],
           credits: (s.credits as any) || null,
           isActive: s.isActive || false,
           isLoading: false,
@@ -64,7 +62,6 @@ export function useSubscription(workspaceId: string | null) {
           subscription: cached.data.subscription,
           plan: cached.data.currentPlan,
           availablePlans: cached.data.availablePlans || [],
-          creditPacks: cached.data.creditPacks || [],
           credits: cached.data.credits || null,
           isActive: cached.data.isActive || false,
           isLoading: false,
@@ -75,7 +72,6 @@ export function useSubscription(workspaceId: string | null) {
       subscription: null,
       plan: null,
       availablePlans: [],
-      creditPacks: [],
       credits: null,
       isActive: false,
       isLoading: true,
@@ -93,7 +89,6 @@ export function useSubscription(workspaceId: string | null) {
           subscription: s.subscription,
           plan: s.currentPlan,
           availablePlans: (s.availablePlans as any[]) || [],
-          creditPacks: (s.creditPacks as any[]) || [],
           credits: (s.credits as any) || null,
           isActive: s.isActive || false,
           isLoading: false,
@@ -108,7 +103,6 @@ export function useSubscription(workspaceId: string | null) {
         subscription: data.subscription,
         plan: data.currentPlan,
         availablePlans: data.availablePlans || [],
-        creditPacks: data.creditPacks || [],
         credits: data.credits || null,
         isActive: data.isActive || false,
         isLoading: false,

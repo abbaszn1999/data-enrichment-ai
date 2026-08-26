@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
+import { motion } from "motion/react";
 import {
   Upload,
   FileSpreadsheet,
@@ -177,38 +178,62 @@ export default function NewImportPage() {
 
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-              <Upload className="h-5 w-5 text-primary" />
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="absolute -bottom-28 -right-16 h-64 w-64 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-[1500px] px-5 py-7 sm:px-7 lg:px-10">
+        <motion.header
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"
+        >
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01]">
+                <Upload className="h-4 w-4" />
+              </span>
+              <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
+                Step 01 · Source intake
+              </span>
             </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">New catalog intelligence project</h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Upload a supplier worksheet to start matching and enrichment.
-              </p>
-            </div>
+            <h1 className="text-3xl font-black tracking-[-0.035em]">New catalog intelligence project</h1>
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
+              Define the source, choose your enrichment intelligence, and validate the worksheet before matching begins.
+            </p>
           </div>
           <Button
             size="sm"
             variant="outline"
-            className="gap-1.5 self-start shadow-sm sm:self-auto"
+            className="h-9 gap-1.5 self-start rounded-xl border-border/60 bg-background/70 text-[10px] backdrop-blur sm:self-auto"
             onClick={() => router.push(`/w/${slug}/import`)}
           >
             Back to projects
           </Button>
-        </header>
+        </motion.header>
+        </div>
+      </section>
 
-        <section className="overflow-hidden rounded-xl border bg-card p-4 shadow-sm sm:p-5">
+      <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.08 }}
+          className="overflow-hidden rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:p-4"
+        >
           <ImportStepper currentStep={1} />
-        </section>
+        </motion.section>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
           {/* Main Form */}
           <div className="space-y-4 lg:col-span-2">
-            <section className="space-y-5 rounded-xl border bg-card p-5 shadow-sm">
+            <motion.section
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.14 }}
+              className="relative space-y-5 overflow-hidden rounded-[24px] border border-border/60 bg-card p-5 shadow-[0_15px_50px_rgba(15,23,42,.05)] sm:p-6"
+            >
+              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
               {/* Session Name */}
               <div className="space-y-2">
                 <Label className="text-xs font-medium">Session Name</Label>
@@ -216,7 +241,7 @@ export default function NewImportPage() {
                   placeholder="e.g. Samsung Q3 Shipment"
                   value={sessionName}
                   onChange={(e) => setSessionName(e.target.value)}
-                  className="h-10"
+                  className="h-10 rounded-xl bg-muted/35"
                 />
               </div>
 
@@ -226,7 +251,7 @@ export default function NewImportPage() {
                 <select
                   value={supplier}
                   onChange={(e) => setSupplier(e.target.value)}
-                  className="h-10 w-full rounded-lg border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  className="h-10 w-full rounded-xl border border-border/60 bg-muted/35 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#6B358D]/25"
                 >
                   <option value="">Select supplier or type new...</option>
                   {suppliers.map((s) => (
@@ -241,7 +266,7 @@ export default function NewImportPage() {
                     placeholder="Enter new supplier name"
                     value={newSupplierName}
                     onChange={(e) => setNewSupplierName(e.target.value)}
-                    className="mt-2 h-9"
+                    className="mt-2 h-9 rounded-xl"
                   />
                 )}
               </div>
@@ -257,7 +282,7 @@ export default function NewImportPage() {
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="Add any notes about this project..."
                   rows={2}
-                  className="w-full resize-none rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  className="w-full resize-none rounded-xl border border-border/60 bg-muted/35 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6B358D]/25"
                 />
               </div>
 
@@ -271,7 +296,7 @@ export default function NewImportPage() {
                     onClick={() => setSelectedPresetId("")}
                     className={`rounded-lg border p-3 text-left transition-colors ${
                       selectedPresetId === ""
-                        ? "border-primary/50 bg-primary/5"
+                        ? "border-[#400095]/40 bg-[#400095]/5 dark:border-[#F76D01]/40 dark:bg-[#F76D01]/5"
                         : "hover:bg-muted/50"
                     }`}
                   >
@@ -284,7 +309,7 @@ export default function NewImportPage() {
                     value={selectedPresetId}
                     onChange={(e) => setSelectedPresetId(e.target.value)}
                     disabled={presets.length === 0}
-                    className="h-[62px] w-full rounded-lg border bg-background px-3 text-xs focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
+                    className="h-[62px] w-full rounded-xl border border-border/60 bg-background px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#6B358D]/25 disabled:opacity-60"
                   >
                     <option value="">
                       {presets.length === 0
@@ -320,12 +345,12 @@ export default function NewImportPage() {
                     };
                     input.click();
                   }}
-                  className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 transition-all ${
+                  className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-10 transition-all ${
                     isDragging
-                      ? "border-primary bg-primary/5"
+                      ? "border-[#400095] bg-[#400095]/5 dark:border-[#F76D01] dark:bg-[#F76D01]/5"
                       : file
                         ? "border-green-500/50 bg-green-50/30 dark:bg-green-950/10"
-                        : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50"
+                        : "border-muted-foreground/20 bg-muted/20 hover:border-[#6B358D]/50 hover:bg-[#400095]/[0.03]"
                   }`}
                 >
                   {file ? (
@@ -415,7 +440,7 @@ export default function NewImportPage() {
               <Button
                 onClick={handleSubmit}
                 disabled={!sessionName || !file || !fileData || loading}
-                className="h-10 w-full gap-2"
+                className="h-11 w-full gap-2 rounded-xl bg-[#400095] text-white shadow-[0_10px_26px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
               >
                 {loading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -424,13 +449,13 @@ export default function NewImportPage() {
                 )}
                 {loading ? "Processing file..." : "Continue to Matching Rules"}
               </Button>
-            </section>
+            </motion.section>
           </div>
 
           {/* Right Sidebar */}
           <div className="space-y-4">
             {suppliers.length > 0 && (
-              <section className="rounded-xl border bg-card p-4 shadow-sm">
+              <motion.section initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} className="rounded-2xl border border-border/60 bg-card p-4 shadow-sm">
                 <h3 className="mb-3 flex items-center gap-1.5 text-xs font-semibold">
                   <Users className="h-3.5 w-3.5" /> Recent Suppliers
                 </h3>
@@ -453,38 +478,38 @@ export default function NewImportPage() {
                     </button>
                   ))}
                 </div>
-              </section>
+              </motion.section>
             )}
 
-            <section className="rounded-xl border border-primary/20 bg-primary/5 p-4 shadow-sm">
+            <motion.section initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.08 }} className="rounded-2xl border border-[#6B358D]/20 bg-gradient-to-br from-[#400095]/[0.06] to-[#F76D01]/[0.04] p-4 shadow-sm">
               <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
-                <Zap className="h-3.5 w-3.5 text-primary" /> Quick Tips
+                <Zap className="h-3.5 w-3.5 text-[#6B358D] dark:text-[#F76D01]" /> Quick Tips
               </h3>
               <div className="space-y-2 text-[10px] text-muted-foreground">
                 <div className="flex items-start gap-2">
-                  <span className="shrink-0 font-bold text-primary">1.</span>
+                  <span className="shrink-0 font-bold text-[#6B358D] dark:text-[#F76D01]">1.</span>
                   <span>
                     Include a <strong>SKU</strong> or <strong>Part Number</strong>{" "}
                     column for best matching
                   </span>
                 </div>
                 <div className="flex items-start gap-2">
-                  <span className="shrink-0 font-bold text-primary">2.</span>
+                  <span className="shrink-0 font-bold text-[#6B358D] dark:text-[#F76D01]">2.</span>
                   <span>
                     Headers should be in the <strong>first row</strong>
                   </span>
                 </div>
                 <div className="flex items-start gap-2">
-                  <span className="shrink-0 font-bold text-primary">3.</span>
+                  <span className="shrink-0 font-bold text-[#6B358D] dark:text-[#F76D01]">3.</span>
                   <span>
                     Supported: <strong>.xlsx, .xls, .csv</strong>
                   </span>
                 </div>
               </div>
-            </section>
+            </motion.section>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

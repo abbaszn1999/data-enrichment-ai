@@ -13,8 +13,10 @@ import type {
   MarketResearchProduct,
   OnPageInstructionField,
   OnPageInstructions,
+  GeneratedArticle,
   ProposedCollection,
   SeedExtractProgress,
+  StoreBlog,
   StrategyArticle,
   WorkspaceTab,
 } from "./workspace-data";
@@ -66,11 +68,19 @@ export function DeepWorkspace({
   pushCostUsd,
   onNextStrategy,
   strategyArticles,
+  generatedArticles,
+  storeBlogs = [],
+  storeUrl = "",
+  blogScopeWarning = null,
   strategyLoading,
   strategyReady,
-  strategyApproved,
+  articlesSyncing = false,
+  articlesSyncProgress = null,
   onBuildStrategy,
-  onApproveStrategy,
+  onGenerateArticles,
+  onSyncArticles,
+  onArticleChange,
+  onArticleTitleChange,
 }: {
   projectName: string;
   storeLabel: string;
@@ -116,11 +126,19 @@ export function DeepWorkspace({
   pushCostUsd?: number;
   onNextStrategy: () => void;
   strategyArticles: StrategyArticle[];
+  generatedArticles: Record<string, GeneratedArticle>;
+  storeBlogs?: StoreBlog[];
+  storeUrl?: string;
+  blogScopeWarning?: string | null;
   strategyLoading: boolean;
   strategyReady: boolean;
-  strategyApproved: boolean;
+  articlesSyncing?: boolean;
+  articlesSyncProgress?: { done: number; total: number } | null;
   onBuildStrategy: () => void;
-  onApproveStrategy: () => void;
+  onGenerateArticles: (ids: string[]) => void;
+  onSyncArticles: (ids: string[]) => void;
+  onArticleChange: (articleId: string, patch: Partial<GeneratedArticle>) => void;
+  onArticleTitleChange: (articleId: string, title: string) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
@@ -196,11 +214,19 @@ export function DeepWorkspace({
         {tab === "strategy" ? (
           <StageStrategyPanel
             articles={strategyArticles}
+            generatedById={generatedArticles}
+            blogs={storeBlogs}
+            storeUrl={storeUrl}
+            scopeWarning={blogScopeWarning}
             loading={strategyLoading}
             ready={strategyReady}
-            approved={strategyApproved}
+            syncing={articlesSyncing}
+            syncProgress={articlesSyncProgress}
             onBuild={onBuildStrategy}
-            onApprove={onApproveStrategy}
+            onGenerate={onGenerateArticles}
+            onSync={onSyncArticles}
+            onArticleChange={onArticleChange}
+            onTitleChange={onArticleTitleChange}
           />
         ) : null}
       </div>

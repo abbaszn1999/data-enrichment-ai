@@ -9,7 +9,6 @@ import { getWorkspaceContext, isContextSubscriptionActive } from "@/lib/workspac
 // this is cheap: getWorkspaceContext resolves everything via a single cached RPC.
 
 let _plansCache: { data: unknown[] | null; ts: number } = { data: null, ts: 0 };
-let _packsCache: { data: unknown[] | null; ts: number } = { data: null, ts: 0 };
 const REF_CACHE_TTL = 10 * 60 * 1000;
 
 async function getCachedPlans() {
@@ -20,16 +19,6 @@ async function getCachedPlans() {
     .order("sort_order", { ascending: true });
   _plansCache = { data: data || [], ts: Date.now() };
   return _plansCache.data;
-}
-
-async function getCachedPacks() {
-  if (_packsCache.data && Date.now() - _packsCache.ts < REF_CACHE_TTL) return _packsCache.data;
-  const admin = createAdminClient();
-  const { data } = await admin
-    .from("credit_packs").select("*").eq("is_active", true)
-    .order("sort_order", { ascending: true });
-  _packsCache = { data: data || [], ts: Date.now() };
-  return _packsCache.data;
 }
 
 export async function GET(request: NextRequest) {
@@ -54,10 +43,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
     }
 
-    const [ctx, plans, packs] = await Promise.all([
+    const [ctx, plans] = await Promise.all([
       getWorkspaceContext({ workspaceId: workspace.id, userId: user.id }),
       getCachedPlans(),
-      getCachedPacks(),
     ]);
 
     if (!ctx.membershipRole) {
@@ -90,7 +78,6 @@ export async function GET(request: NextRequest) {
         } : null,
         currentPlan: ctx.plan || null,
         availablePlans: plans || [],
-        creditPacks: packs || [],
         credits: bal,
         isActive: isContextSubscriptionActive(ctx),
       },

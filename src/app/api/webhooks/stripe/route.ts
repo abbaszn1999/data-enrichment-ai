@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe, findPlanByStripePriceId, invalidateSubscriptionCache } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { creditWorkspaceWallet } from "@/lib/wallet/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 
 export async function POST(request: NextRequest) {
@@ -56,6 +58,11 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
   const userId = session.metadata?.userId;
   if (!userId) return;
 
+  if (session.metadata?.walletTopup === "1") {
+    await handleWalletTopup(session, userId, admin);
+    return;
+  }
+
   if (session.mode === "subscription") {
     const subId = session.subscription as string;
     const customerId = session.customer as string;
@@ -89,12 +96,49 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
     }
 
     await admin.from("credit_purchases").insert({
-      user_id: userId, pack_id: session.metadata?.packId || null, credits,
+      user_id: userId, credits,
       amount_paid: (session.amount_total || 0) / 100,
       stripe_checkout_session_id: session.id,
       stripe_payment_intent_id: (session.payment_intent as string) || null,
       status: "completed",
     });
+  }
+}
+
+/** Credits the workspace wallet for a completed real-money top-up. Never
+ *  called from the checkout route itself — only from here, once Stripe
+ *  confirms the payment actually cleared. `session.id` is the idempotency
+ *  key, so a re-delivered webhook (Stripe retries on any non-2xx) can never
+ *  credit the same payment twice. */
+async function handleWalletTopup(
+  session: Stripe.Checkout.Session,
+  userId: string,
+  admin: SupabaseClient
+) {
+  const workspaceId = session.metadata?.workspaceId;
+  if (!workspaceId) return;
+  const amountUsd = (session.amount_total ?? 0) / 100;
+  if (amountUsd <= 0) return;
+
+  const credited = await creditWorkspaceWallet(admin, {
+    workspaceId,
+    userId,
+    amountUsd,
+    kind: "topup",
+    description: "Wallet top-up · card",
+    module: "Billing",
+    method: "Card",
+    idempotencyKey: `stripe_checkout:${session.id}`,
+    details: {
+      stripeSessionId: session.id,
+      stripePaymentIntentId: (session.payment_intent as string) || null,
+    },
+  });
+  if (!credited.ok) {
+    console.error(
+      `[Stripe Webhook] Wallet top-up credit failed for session ${session.id}:`,
+      credited.message
+    );
   }
 }
 

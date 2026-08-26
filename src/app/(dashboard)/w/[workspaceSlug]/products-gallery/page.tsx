@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { motion } from "motion/react";
 import {
   ArrowLeft,
   AlertCircle,
@@ -2238,8 +2239,9 @@ export default function ProductsGalleryPage() {
           }`;
 
     return (
-      <div className="flex h-[calc(100vh-3rem)] min-h-0 flex-col bg-background">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b px-5">
+      <div className="autommerce-dashboard flex h-[calc(100vh-3rem)] min-h-0 flex-col bg-background [font-family:var(--brand-font)]">
+        <div className="h-1 shrink-0 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/60 bg-background/95 px-4 backdrop-blur-xl">
           <div className="flex min-w-0 items-center gap-3">
             <Button
               variant="ghost"
@@ -2250,8 +2252,8 @@ export default function ProductsGalleryPage() {
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold">{title}</h1>
-              <p className="truncate text-[11px] text-muted-foreground">
+              <h1 className="truncate text-sm font-black">{title}</h1>
+              <p className="truncate text-[9px] font-bold uppercase tracking-[.12em] text-[#6B358D] dark:text-[#C8A8D2]">
                 {fileLabel} · {productCount} products
               </p>
             </div>
@@ -2276,7 +2278,7 @@ export default function ProductsGalleryPage() {
                   );
                 });
               }}
-              className="gap-1.5 text-xs"
+              className={`h-8 gap-1.5 rounded-lg text-[10px] ${saveStatus === "dirty" ? "bg-[#400095] text-white dark:bg-[#F76D01]" : ""}`}
               aria-live="polite"
             >
               {saveStatus === "saving" ? (
@@ -2299,7 +2301,7 @@ export default function ProductsGalleryPage() {
             <Button
               variant="outline"
               size="sm"
-              className="gap-1.5 text-xs"
+              className="h-8 gap-1.5 rounded-lg border-border/60 text-[10px]"
               disabled={isExporting || !worksheet || !!generationRun || isGenerating}
               onClick={handleExport}
             >
@@ -2314,15 +2316,15 @@ export default function ProductsGalleryPage() {
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <aside className="max-h-[40vh] w-full shrink-0 overflow-y-auto border-b bg-muted/15 md:h-full md:max-h-none md:w-[310px] md:border-b-0 md:border-r">
+          <aside className="max-h-[40vh] w-full shrink-0 overflow-y-auto border-b bg-gradient-to-b from-[#400095]/[0.035] to-background md:h-full md:max-h-none md:w-[320px] md:border-b-0 md:border-r">
             <div className="border-b p-4">
-              <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
+              <div className="grid grid-cols-2 rounded-xl bg-muted/60 p-1">
                 <button
                   type="button"
                   onClick={() => setActiveTab("scraping")}
                   disabled={!canEdit || !!generationRun || isGenerating}
                   className={`flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
-                    activeTab === "scraping" ? "bg-background shadow-sm" : "text-muted-foreground"
+                    activeTab === "scraping" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground"
                   }`}
                 >
                   <Search className="h-3.5 w-3.5" /> Scraping
@@ -2333,7 +2335,7 @@ export default function ProductsGalleryPage() {
                   disabled={!canEdit || !!generationRun || isGenerating}
                   title="Create product images with AI"
                   className={`flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
-                    activeTab === "ai" ? "bg-background shadow-sm" : "text-muted-foreground"
+                    activeTab === "ai" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground"
                   }`}
                 >
                   <Sparkles className="h-3.5 w-3.5" /> Generate
@@ -2371,7 +2373,7 @@ export default function ProductsGalleryPage() {
                     }
                   }}
                   disabled={!canEdit}
-                  className="h-8 w-full rounded-md border bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-ring"
+                  className="h-8 w-full rounded-lg border border-border/60 bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-[#6B358D]/40"
                 >
                   <option value="none">
                     {activeTab === "ai"
@@ -3876,31 +3878,34 @@ export default function ProductsGalleryPage() {
 
   // ── Project list view ────────────────────────────────────────────────
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-              <GalleryHorizontalEnd className="h-5 w-5 text-primary" />
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="absolute -bottom-28 -right-16 h-64 w-64 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-[1500px] px-5 py-7 sm:px-7 lg:px-10">
+        <motion.header initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01]"><GalleryHorizontalEnd className="h-4 w-4" /></span>
+              <span className="text-[9px] font-black uppercase tracking-[.24em] text-[#400095] dark:text-[#F76D01]">Visual commerce studio</span>
             </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">Products Gallery</h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Source, validate, and organize product imagery from your worksheets.
-              </p>
-            </div>
+            <h1 className="text-3xl font-black tracking-[-.035em] sm:text-4xl">
+              Product imagery,
+              <span className="block bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">sourced and generated at scale.</span>
+            </h1>
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">Transform product worksheets into complete, validated image galleries using web sourcing and generative AI.</p>
           </div>
           <Button
             size="sm"
-            className="gap-1.5 self-start shadow-sm sm:self-auto"
+            className="h-9 gap-2 self-start rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] sm:self-auto"
             disabled={!canEdit}
             onClick={() => setShowCreate(true)}
           >
             <Plus className="h-3.5 w-3.5" /> New project
           </Button>
-        </header>
+        </motion.header>
 
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <section className="mt-7 grid max-w-3xl grid-cols-2 overflow-hidden rounded-2xl border border-border/60 bg-background/70 shadow-sm backdrop-blur sm:grid-cols-4">
           {[
             {
               label: "Projects",
@@ -3927,30 +3932,32 @@ export default function ProductsGalleryPage() {
               style: "bg-blue-500/10 text-blue-600",
             },
           ].map((stat) => (
-            <div
+            <motion.div
               key={stat.label}
-              className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-center gap-3 border-r border-border/60 px-4 py-3.5 last:border-r-0"
             >
-              <div
-                className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
-              >
                 <stat.icon
-                  className={`h-4 w-4 ${
+                  className={`h-4 w-4 text-[#6B358D] dark:text-[#C8A8D2] ${
                     stat.label === "Processing" && stat.value ? "animate-spin" : ""
                   }`}
                 />
-              </div>
               <div>
-                <p className="text-lg font-bold leading-none">{stat.value}</p>
-                <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                <p className="text-lg font-black leading-none">{stat.value}</p>
+                <p className="mt-1 text-[8px] font-bold uppercase tracking-[.16em] text-muted-foreground">
                   {stat.label}
                 </p>
               </div>
-            </div>
+            </motion.div>
           ))}
         </section>
+        </div>
+      </section>
 
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      <main className="mx-auto max-w-[1500px] p-5 sm:p-7 lg:p-10">
+        <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="overflow-hidden rounded-[24px] border border-border/60 bg-card shadow-[0_15px_50px_rgba(15,23,42,.05)]">
+          <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <ProjectListToolbar
             title="Gallery projects"
             description="Open a project to manage its worksheet and generated assets."
@@ -3981,8 +3988,8 @@ export default function ProductsGalleryPage() {
             </div>
           ) : sessions.length === 0 ? (
             <div className="flex flex-col items-center px-6 py-16 text-center">
-              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                <GalleryHorizontalEnd className="h-5 w-5" />
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F76D01]/15 to-[#400095]/15">
+                <GalleryHorizontalEnd className="h-7 w-7 text-[#6B358D]" />
               </div>
               <h3 className="text-sm font-semibold">Create your first gallery project</h3>
               <p className="mt-1 max-w-sm text-xs text-muted-foreground">
@@ -4006,7 +4013,7 @@ export default function ProductsGalleryPage() {
           ) : (
             <>
             <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
-              {pagedProjects.map((session) => {
+              {pagedProjects.map((session, index) => {
                 const statusLabel =
                   SESSION_STATUS_LABEL[session.status] ?? session.status;
                 const isReady =
@@ -4020,8 +4027,11 @@ export default function ProductsGalleryPage() {
                       )
                     : 0;
                 return (
-                  <article
+                  <motion.article
                     key={session.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: Math.min(index * .04, .2) }}
                     role="button"
                     tabIndex={0}
                     onClick={() => openProject(session.id)}
@@ -4030,15 +4040,16 @@ export default function ProductsGalleryPage() {
                         openProject(session.id);
                       }
                     }}
-                    className="group relative cursor-pointer rounded-xl border bg-background p-4 outline-none transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-primary/40"
+                    className="group relative cursor-pointer overflow-hidden rounded-2xl border border-border/60 bg-background p-4 outline-none transition-all hover:-translate-y-1 hover:border-[#6B358D]/35 hover:shadow-[0_16px_40px_rgba(64,0,149,.08)]"
                   >
+                    <div className="absolute inset-x-0 top-0 h-0.5 origin-left scale-x-0 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] transition-transform group-hover:scale-x-100" />
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-muted/40 text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#F76D01]/10 to-[#400095]/10 text-[#6B358D]">
                           <FileSpreadsheet className="h-4 w-4" />
                         </div>
                         <div className="min-w-0">
-                          <h3 className="truncate text-sm font-semibold group-hover:text-primary">
+                          <h3 className="truncate text-sm font-black group-hover:text-[#400095] dark:group-hover:text-[#F76D01]">
                             {session.name}
                           </h3>
                         </div>
@@ -4083,7 +4094,7 @@ export default function ProductsGalleryPage() {
                       </div>
                       <div className="h-1 overflow-hidden rounded-full bg-muted">
                         <div
-                          className="h-full rounded-full bg-primary transition-all"
+                          className="h-full rounded-full bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] transition-all"
                           style={{ width: `${Math.min(100, progress)}%` }}
                         />
                       </div>
@@ -4107,7 +4118,7 @@ export default function ProductsGalleryPage() {
                         </button>
                       )}
                     </div>
-                  </article>
+                  </motion.article>
                 );
               })}
             </div>
@@ -4119,8 +4130,8 @@ export default function ProductsGalleryPage() {
             />
             </>
           )}
-        </section>
-      </div>
+        </motion.section>
+      </main>
 
       <Dialog
         open={showCreate}
@@ -4133,10 +4144,11 @@ export default function ProductsGalleryPage() {
           }
         }}
       >
-        <DialogContent className="overflow-hidden p-0 sm:max-w-xl">
-          <div className="border-b bg-gradient-to-br from-primary/10 via-primary/5 to-transparent px-6 py-5">
+        <DialogContent className="overflow-hidden rounded-[24px] border-border/60 p-0 sm:max-w-xl">
+          <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+          <div className="border-b bg-gradient-to-br from-[#400095]/10 via-[#F76D01]/5 to-transparent px-6 py-5">
             <DialogHeader>
-              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]">
                 <Plus className="h-4 w-4" />
               </div>
               <DialogTitle>Create gallery project</DialogTitle>
@@ -4163,15 +4175,15 @@ export default function ProductsGalleryPage() {
               <button
                 type="button"
                 onClick={() => inputRef.current?.click()}
-                className={`flex min-h-28 w-full flex-col items-center justify-center rounded-xl border border-dashed px-5 py-4 text-center transition-colors ${
+                className={`flex min-h-32 w-full flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-4 text-center transition-colors ${
                   uploadFile
-                    ? "border-primary/40 bg-primary/5"
-                    : "hover:border-primary/40 hover:bg-muted/30"
+                    ? "border-[#400095]/40 bg-[#400095]/5 dark:border-[#F76D01]/40"
+                    : "hover:border-[#6B358D]/40 hover:bg-muted/30"
                 }`}
               >
                 <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                   {uploadFile ? (
-                    <FileSpreadsheet className="h-4 w-4 text-primary" />
+                    <FileSpreadsheet className="h-4 w-4 text-[#6B358D] dark:text-[#F76D01]" />
                   ) : (
                     <Upload className="h-4 w-4" />
                   )}
@@ -4203,7 +4215,7 @@ export default function ProductsGalleryPage() {
               Cancel
             </Button>
             <Button
-              className="gap-1.5"
+              className="gap-1.5 rounded-xl bg-[#400095] px-5 text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
               disabled={!projectName.trim() || !uploadFile || creating || !canEdit}
               onClick={createProject}
             >

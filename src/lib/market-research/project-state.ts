@@ -15,8 +15,10 @@ import {
   normalizeOnPageInstructions,
   type CollectionContent,
   type ExtractedKeyword,
+  type GeneratedArticle,
   type OnPageInstructions,
   type ProposedCollection,
+  type StrategyArticle,
   type WorkspaceTab,
 } from "@/components/market-research/workspace-data";
 
@@ -48,6 +50,8 @@ export type MrProjectStateJson = {
   extractCharge?: number;
   extractRows?: number;
   keywords?: ExtractedKeyword[];
+  strategy?: StrategyArticle[];
+  articles?: Record<string, GeneratedArticle>;
   /** Fingerprints of the heavy slices stored in object storage, so autosave can skip unchanged uploads. */
   sliceHashes?: Record<string, string>;
 };
@@ -181,6 +185,12 @@ export function rowsToPersisted(
     if (Array.isArray(state.keywords)) {
       next.keywordsByProject[id] = state.keywords;
     }
+    if (Array.isArray(state.strategy)) {
+      next.strategyByProject[id] = state.strategy;
+    }
+    if (state.articles && typeof state.articles === "object") {
+      next.articlesByProject[id] = state.articles;
+    }
   }
 
   return next;
@@ -219,6 +229,8 @@ export function projectStateSlice(
     extractCharge: persisted.extractChargeByProject[projectId] ?? 0,
     extractRows: persisted.extractRowsByProject[projectId] ?? 0,
     keywords: Array.isArray(keywords) ? keywords : [],
+    strategy: persisted.strategyByProject?.[projectId] ?? [],
+    articles: persisted.articlesByProject?.[projectId] ?? {},
   };
 }
 
@@ -269,6 +281,8 @@ export function remapPersistedIds(
     extractChargeByProject: remapRecord(persisted.extractChargeByProject),
     extractRowsByProject: remapRecord(persisted.extractRowsByProject),
     keywordsByProject: remapRecord(persisted.keywordsByProject),
+    strategyByProject: remapRecord(persisted.strategyByProject ?? {}),
+    articlesByProject: remapRecord(persisted.articlesByProject ?? {}),
   };
 }
 

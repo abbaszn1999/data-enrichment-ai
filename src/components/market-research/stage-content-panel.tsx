@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  AlertCircle,
   Check,
   ChevronRight,
   Eye,
@@ -162,7 +163,7 @@ export function StageContentPanel({
                     seoSynced &&
                       "border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10"
                   )}
-                  disabled={syncingSeo}
+                  disabled={syncingSeo || seoSynced}
                   onClick={onSyncSeo ?? onPush}
                 >
                   {syncingSeo ? (
@@ -238,6 +239,7 @@ export function StageContentPanel({
                 );
               })}
               <TableHead className="text-xs min-w-[150px]">Internal Links</TableHead>
+              <TableHead className="text-xs min-w-[120px]">Store</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -305,6 +307,13 @@ export function StageContentPanel({
                     ) : (
                       "—"
                     )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-[11px]">
+                    <SyncStatusCell
+                      content={content}
+                      syncing={syncingSeo}
+                      generating={generating}
+                    />
                   </TableCell>
                 </TableRow>
               );
@@ -522,4 +531,58 @@ function ContentCell({
 
 function Pulse() {
   return <div className="h-3 w-28 animate-pulse rounded bg-muted" />;
+}
+
+/** Whether this row's copy is live on the store, per row rather than per batch. */
+function SyncStatusCell({
+  content,
+  syncing,
+  generating,
+}: {
+  content?: CollectionContent;
+  syncing: boolean;
+  generating: boolean;
+}) {
+  if (!content) {
+    return generating ? (
+      <Pulse />
+    ) : (
+      <span className="text-muted-foreground">—</span>
+    );
+  }
+
+  if (content.seoSyncError) {
+    return (
+      <span
+        className="flex items-center gap-1 font-medium text-destructive"
+        title={content.seoSyncError}
+      >
+        <AlertCircle className="h-3.5 w-3.5" />
+        Failed
+      </span>
+    );
+  }
+
+  if (content.seoSyncedAt) {
+    return (
+      <span
+        className="flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400"
+        title={`Synced ${new Date(content.seoSyncedAt).toLocaleString()}`}
+      >
+        <Check className="h-3.5 w-3.5" />
+        Synced
+      </span>
+    );
+  }
+
+  if (syncing) {
+    return (
+      <span className="flex items-center gap-1 text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Syncing
+      </span>
+    );
+  }
+
+  return <span className="text-muted-foreground">Not synced</span>;
 }

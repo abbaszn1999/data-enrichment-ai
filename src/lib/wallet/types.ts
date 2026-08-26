@@ -11,6 +11,8 @@ export type WalletTx = {
   method?: string;
   status: WalletTxStatus;
   createdAt: number;
+  /** Free-form per-charge metadata (e.g. Sync's `productCount`). */
+  details?: Record<string, unknown>;
 };
 
 export type WalletAutoReload = {

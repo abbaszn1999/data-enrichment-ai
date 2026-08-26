@@ -100,6 +100,78 @@ export type ResolvedTaxonomy = {
   title?: string;
 };
 
+/** A taxonomy group as listed for selection, with the facts a caller needs to
+ *  decide whether it can be written to. */
+export type TaxonomySummary = {
+  id: string;
+  title: string;
+  handle?: string;
+  productCount: number;
+  /**
+   * Whether membership can be edited through `assign`/`unassign`.
+   *
+   * False means the provider derives membership from rules and rejects manual
+   * changes (a Shopify smart collection). Providers with no such concept
+   * report `true`. Callers gate on this flag rather than on any
+   * provider-shaped field, so a new CMS needs no special case.
+   */
+  manual: boolean;
+  /** Parent taxonomy id, when the provider models a hierarchy (WooCommerce
+   *  categories). Absent on flat taxonomies (Shopify collections). */
+  parent?: string;
+  /** Customer-facing URL, when the provider exposes one directly. */
+  url?: string;
+};
+
+/** One entry in a store's public navigation menu, with nested children. */
+export type NavigationItem = {
+  title: string;
+  /** Customer-facing URL, absolute or relative to the storefront root. */
+  url: string;
+  /** Present when the item resolves to a taxonomy group the store already has. */
+  resourceId?: string;
+  children?: NavigationItem[];
+};
+
+export type NavigationMenu = {
+  id: string;
+  title: string;
+  /** Storefront "handle", e.g. Shopify's main-menu. */
+  handle?: string;
+  items: NavigationItem[];
+};
+
+/**
+ * Optional read of the store's real public navigation, for tools that build
+ * on top of it (Website Restructure) rather than the flat taxonomy list.
+ * Absent on providers with no navigation concept or no API for it.
+ */
+export interface ProviderNavigation {
+  list(input: { integration: IntegrationRecord }): Promise<{
+    menus: NavigationMenu[];
+    /** Set when the API call failed for a permission reason — the caller
+     *  should fall back to taxonomy-only reasoning instead of failing. */
+    unavailableReason?: string;
+  }>;
+}
+
+/** A product discovered by `detectNewProducts`, flattened to what the
+ *  classification pipeline actually reads. */
+export type DetectedProduct = {
+  /** Provider-native reference: a Shopify GID, a WooCommerce numeric id, … */
+  id: string;
+  title: string;
+  /** ISO 8601 creation timestamp. Drives the watermark. */
+  createdAt: string;
+  /** Customer-facing URL, when the provider exposes one. */
+  url?: string;
+  imageUrl?: string;
+  productType?: string;
+  vendor?: string;
+  tags?: string[];
+  description?: string;
+};
+
 /**
  * Provider-agnostic taxonomy operations. A provider implements only what it
  * supports; the agent gates each tool on the presence of the method, surfacing
@@ -123,6 +195,53 @@ export interface ProviderTaxonomy {
     integration: IntegrationRecord;
     ids: string[];
   }): Promise<{ deletedIds: string[]; failed: Array<{ id: string; error: string }> }>;
+  /** Every taxonomy group in the store, for pickers. Walks all pages. */
+  list?(input: {
+    integration: IntegrationRecord;
+    /** Safety valve so a pathological catalog can't spin forever. */
+    max?: number;
+  }): Promise<TaxonomySummary[]>;
+  /**
+   * Remove products from a taxonomy group — the inverse of `assign`.
+   *
+   * `pendingJobRef` is set when the provider queues the removal instead of
+   * applying it inline, so a caller can report "removing" rather than claiming
+   * a completion it hasn't observed.
+   */
+  unassign?(input: {
+    integration: IntegrationRecord;
+    taxonomyId: string;
+    productIds: string[];
+  }): Promise<{ removedCount: number; pendingJobRef?: string }>;
+}
+
+/**
+ * Detection of newly created products inside one taxonomy group, for the
+ * Growth Sync engine.
+ *
+ * Every provider answers the same question — "what appeared here after this
+ * moment?" — but the cheapest route differs sharply: WooCommerce filters by
+ * date server-side, while Shopify's collection connection accepts no query
+ * argument and must be walked newest-first until the watermark is crossed.
+ * Keeping that difference behind this method is what lets the engine stay
+ * provider-agnostic.
+ */
+export interface ProviderGrowthSync {
+  detectNewProducts(input: {
+    integration: IntegrationRecord;
+    taxonomyId: string;
+    /** ISO 8601 watermark. `null` means "first run" and detects nothing. */
+    since: string | null;
+    /** Page ceiling for providers that must paginate. */
+    maxPages?: number;
+  }): Promise<{
+    /** Newest first. Empty when nothing was created after `since`. */
+    products: DetectedProduct[];
+    /** `createdAt` of the newest product seen, for advancing the watermark. */
+    newestCreatedAt: string | null;
+    /** True when the page ceiling cut the walk short. */
+    truncated?: boolean;
+  }>;
 }
 
 export interface SyncProvider {
@@ -134,6 +253,12 @@ export interface SyncProvider {
   schema: ProviderSchema;
   /** Optional taxonomy CRUD. Absent methods → tool reports "not supported". */
   taxonomy?: ProviderTaxonomy;
+  /** Optional new-product detection. Absent → Growth Sync rules are refused
+   *  for this provider with a clear message instead of silently idling. */
+  growthSync?: ProviderGrowthSync;
+  /** Optional real navigation menu read. Absent → callers reason from the
+   *  flat taxonomy list alone (Website Restructure). */
+  navigation?: ProviderNavigation;
   /** Fields the user enters when connecting this provider. */
   configFields: ProviderConfigField[];
   /** Save: returns `{ baseUrl, config }` to persist after a successful test. */

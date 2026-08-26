@@ -2,6 +2,16 @@ import Stripe from "stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { roundCredits } from "@/lib/format-credits";
 
+/** Flat rate for the free-form credit top-up — derived from (and replacing)
+ *  the old fixed packs, which all priced out to exactly $0.30/credit
+ *  (Basic 1,000/$300, Standard 2,000/$600, Premium 3,000/$900). */
+export const CREDIT_TOPUP_USD_PER_CREDIT = 0.3;
+export const CREDIT_TOPUP_MIN_CREDITS = 100;
+
+export function creditsToUsd(credits: number): number {
+  return Math.round(credits * CREDIT_TOPUP_USD_PER_CREDIT * 100) / 100;
+}
+
 let _stripe: Stripe | null = null;
 
 export function getStripe(): Stripe {

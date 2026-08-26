@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
+import { motion } from "motion/react";
 import {
   ArrowRight,
   Check,
@@ -327,23 +328,27 @@ export default function MatchingRulesPage() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center gap-3">
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
+      <section className="border-b border-border/60 bg-gradient-to-r from-[#400095]/[0.07] via-background to-[#F76D01]/[0.07]">
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mx-auto flex max-w-[1500px] items-center gap-3 px-5 py-6 sm:px-7 lg:px-10">
         <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => router.back()}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div>
-          <h1 className="text-xl font-bold">{session.name}</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">Configure matching rules</p>
+          <div className="mb-1 text-[9px] font-black uppercase tracking-[.2em] text-[#400095] dark:text-[#F76D01]">Step 02 · Matching engine</div>
+          <h1 className="text-2xl font-black tracking-tight">{session.name}</h1>
+          <p className="mt-1 text-xs text-muted-foreground">Configure how supplier identifiers map to your master catalog.</p>
         </div>
-      </div>
+      </motion.div>
+      </section>
 
-      <ImportStepper currentStep={2} />
+      <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
+      <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={2} /></section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-4">
           {/* Match Configuration */}
-          <Card className="p-4">
+          <Card className="rounded-2xl border-border/60 p-5 shadow-sm">
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
               <Settings2 className="h-4 w-4" /> Match Configuration
             </h3>
@@ -421,7 +426,7 @@ export default function MatchingRulesPage() {
           </Card>
 
           {/* Rule Presets */}
-          <Card className="p-4">
+          <Card className="rounded-2xl border-border/60 p-5 shadow-sm">
             <h3 className="text-xs font-semibold mb-2 flex items-center gap-2">
               <BookOpen className="h-3.5 w-3.5" /> Rule Presets
             </h3>
@@ -431,7 +436,7 @@ export default function MatchingRulesPage() {
                   key={preset.id}
                   onClick={() => applyPreset(preset)}
                   className={`p-2.5 rounded-lg border text-left transition-all ${
-                    activePreset === preset.id ? "border-primary/40 bg-primary/5 shadow-sm" : "hover:bg-muted/50"
+                    activePreset === preset.id ? "border-[#400095]/40 bg-[#400095]/5 shadow-sm dark:border-[#F76D01]/40 dark:bg-[#F76D01]/5" : "hover:bg-muted/50"
                   }`}
                 >
                   <div className="text-[11px] font-medium">{preset.name}</div>
@@ -442,7 +447,7 @@ export default function MatchingRulesPage() {
           </Card>
 
           {/* Rules List */}
-          <Card className="p-4">
+          <Card className="rounded-2xl border-border/60 p-5 shadow-sm">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold">Matching Rules</h3>
               <Badge variant="secondary" className="text-[9px]">{enabledRuleCount} active</Badge>
@@ -455,14 +460,14 @@ export default function MatchingRulesPage() {
                 <div
                   key={rule.type}
                   className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
-                    rule.enabled ? "bg-primary/5 border-primary/20" : "bg-muted/30"
+                    rule.enabled ? "border-[#400095]/20 bg-[#400095]/5 dark:border-[#F76D01]/20 dark:bg-[#F76D01]/5" : "bg-muted/30"
                   }`}
                 >
                   <GripVertical className="h-3.5 w-3.5 text-muted-foreground/30 shrink-0 cursor-grab" />
                   <button
                     onClick={() => toggleRule(index)}
                     className={`h-5 w-5 rounded flex items-center justify-center shrink-0 border-2 transition-colors ${
-                      rule.enabled ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/30"
+                      rule.enabled ? "border-[#400095] bg-[#400095] text-white dark:border-[#F76D01] dark:bg-[#F76D01]" : "border-muted-foreground/30"
                     }`}
                   >
                     {rule.enabled && <Check className="h-3 w-3" />}
@@ -503,7 +508,7 @@ export default function MatchingRulesPage() {
           </Card>
 
           {/* Test a SKU */}
-          <Card className="p-4">
+          <Card className="rounded-2xl border-border/60 p-5 shadow-sm">
             <h4 className="text-xs font-semibold mb-2 flex items-center gap-2">
               <FlaskConical className="h-3.5 w-3.5" /> Test a Value
             </h4>
@@ -549,15 +554,15 @@ export default function MatchingRulesPage() {
 
         {/* Right: Preview Results */}
         <div className="space-y-4">
-          <Button onClick={handlePreview} disabled={previewLoading} className="w-full gap-1.5 text-xs" variant="outline">
+          <Button onClick={handlePreview} disabled={previewLoading} className="h-10 w-full gap-1.5 rounded-xl border-[#6B358D]/25 text-xs" variant="outline">
             {previewLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
             {previewLoading ? "Running match..." : "Preview Match Results"}
           </Button>
 
           {showPreview && previewResult && (
             <>
-              <Card className="p-4 text-center border-primary/20">
-                <div className="text-3xl font-bold text-primary">
+              <Card className="rounded-2xl border-[#6B358D]/20 bg-gradient-to-br from-[#400095]/5 to-[#F76D01]/5 p-5 text-center">
+                <div className="text-3xl font-black text-[#400095] dark:text-[#F76D01]">
                   {previewResult.existing + previewResult.new > 0
                     ? Math.round((previewResult.existing / (previewResult.existing + previewResult.new)) * 100)
                     : 0}%
@@ -601,7 +606,7 @@ export default function MatchingRulesPage() {
         <Button variant="outline" size="sm" className="text-xs" onClick={() => router.back()}>Back</Button>
         <Button
           size="sm"
-          className="gap-1.5 text-xs"
+          className="h-9 gap-1.5 rounded-xl bg-[#400095] px-4 text-xs text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
           onClick={handleContinue}
           disabled={matchLoading}
         >
@@ -609,6 +614,7 @@ export default function MatchingRulesPage() {
           {matchLoading ? "Running matching..." : "Confirm & Review Results"}
         </Button>
       </div>
+      </main>
     </div>
   );
 }

@@ -147,6 +147,13 @@ export type CollectionContent = {
   collectionDescription: string;
   faqs: CollectionFaq[];
   links: CollectionLink[];
+  /**
+   * When this copy last reached the live store. Kept on the content itself so
+   * the status survives a refresh, and so regenerating the copy resets it —
+   * new copy that never left the dashboard is not synced.
+   */
+  seoSyncedAt?: number;
+  seoSyncError?: string;
 };
 
 export type OnPageInstructionField =
@@ -191,19 +198,74 @@ export function normalizeOnPageInstructions(
 export type StrategyArticleType = "guide" | "comparison" | "faq" | "roundup";
 export type StrategyPriority = "high" | "medium" | "low";
 
+/** A collection page the article must link to, with the anchor text to use. */
+export type ArticleLinkTarget = {
+  anchor: string;
+  url: string;
+  collectionName: string;
+};
+
+export type ArticleStatus =
+  | "pending"
+  | "generating"
+  | "ready"
+  | "syncing"
+  | "scheduled"
+  | "failed";
+
 export type StrategyArticle = {
   id: string;
   title: string;
+  /** The informational keyword the title was built from, verbatim. */
   keyword: string;
   type: StrategyArticleType;
-  collectionId: string;
-  collectionName: string;
+  /** Store blog the writer picked. "-" until the article is generated. */
+  category: string;
+  /** Copied verbatim from the source keyword. */
   volume: number;
+  /** Copied verbatim from the source keyword. */
   difficulty: number;
-  linksIn: string[];
-  linksOut: string[];
+  linksOut: ArticleLinkTarget[];
   priority: StrategyPriority;
+  /**
+   * Near-duplicate keywords folded into this article. One article covering the
+   * whole intent beats several competing for the same query.
+   */
+  mergedCount?: number;
+  status: ArticleStatus;
+  error?: string;
 };
+
+export type GeneratedArticle = {
+  articleId: string;
+  seoTitle: string;
+  seoDescription: string;
+  /** Blog title chosen from the store, or "none" when nothing fits. */
+  blogTitle: string;
+  bodyHtml: string;
+  images: Array<{ url: string; alt: string }>;
+  /** Cover image uploaded to the store's article listing. */
+  featuredImage?: { url: string; alt: string };
+  storeArticleId?: string;
+  storeHandle?: string;
+  scheduledAt?: string;
+};
+
+export type StoreBlog = {
+  id: string;
+  handle: string;
+  title: string;
+};
+
+/** Hard ceiling on how many informational keywords Stage 7 will plan for. */
+export const MAX_STRATEGY_KEYWORDS = 240;
+/** Articles generated in parallel, one request each. */
+export const ARTICLE_GENERATION_CONCURRENCY = 3;
+/**
+ * Articles per sync request. The endpoint accepts 50 and creates them one at a
+ * time against Shopify, so half that leaves room under the function timeout.
+ */
+export const ARTICLE_SYNC_BATCH_SIZE = 25;
 
 export type KeywordFilters = {
   minVolume: number;
@@ -459,7 +521,7 @@ export function buildCollectionContent(
   };
 }
 
-function titleFromKeyword(keyword: string): string {
+export function titleFromKeyword(keyword: string): string {
   const titled = keyword
     .split(/\s+/)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
@@ -471,7 +533,7 @@ function titleFromKeyword(keyword: string): string {
   return titled;
 }
 
-function typeFromKeyword(keyword: string): StrategyArticleType {
+export function typeFromKeyword(keyword: string): StrategyArticleType {
   const k = keyword.toLowerCase();
   if (/\bvs\b|difference between/.test(k)) return "comparison";
   if (/\bworth it\b|^(are|what is|why)\b/.test(k)) return "faq";
@@ -479,77 +541,79 @@ function typeFromKeyword(keyword: string): StrategyArticleType {
   return "guide";
 }
 
-function priorityFor(volume: number, difficulty: number): StrategyPriority {
+export function priorityFor(volume: number, difficulty: number): StrategyPriority {
   const score = volume / Math.max(12, difficulty);
   if (score > 80) return "high";
   if (score > 28) return "medium";
   return "low";
 }
 
-const MAX_ARTICLES_PER_COLLECTION = 3;
-
-export function buildContentStrategy(
-  collections: ProposedCollection[],
+/**
+ * The informational keywords, deduplicated on normalized text and ordered by
+ * volume. Uncapped: the cap is applied later, after the seeds have been given
+ * their share.
+ */
+export function uniqueInformationalKeywords(
   keywords: ExtractedKeyword[]
-): StrategyArticle[] {
-  const articles: StrategyArticle[] = [];
-  collections.forEach((collection, collectionIndex) => {
-    const related = keywords
-      .filter((row) => {
-        if (row.sheet !== "informational") return false;
-        const hay = `${row.seed} ${row.keyword}`.toLowerCase();
-        const head = collection.headKeyword.toLowerCase();
-        const name = collection.name.toLowerCase();
-        return (
-          hay.includes(head) ||
-          hay.includes(name) ||
-          head.split(/\s+/).some((word) => word.length > 3 && hay.includes(word))
-        );
-      })
-      .sort((a, b) => b.volume - a.volume);
-
-    const fallback = keywords
-      .filter((row) => row.sheet === "informational")
-      .sort((a, b) => b.volume - a.volume);
-
-    const pool = (related.length > 0 ? related : fallback).slice(
-      0,
-      MAX_ARTICLES_PER_COLLECTION
-    );
-    const sibling = collections[(collectionIndex + 1) % collections.length];
-
-    pool.forEach((row, i) => {
-      const type = typeFromKeyword(row.keyword);
-      const title = titleFromKeyword(row.keyword);
-      articles.push({
-        id: `${collection.id}-art-${row.id}`,
-        title,
-        keyword: row.keyword,
-        type,
-        collectionId: collection.id,
-        collectionName: collection.name,
-        volume: row.volume,
-        difficulty: row.difficulty,
-        linksIn: [
-          collection.name,
-          i === 0 ? "Collection FAQ" : pool[0] ? titleFromKeyword(pool[0].keyword) : collection.name,
-        ],
-        linksOut: [
-          collection.name,
-          sibling && sibling.id !== collection.id ? sibling.name : "Related collections",
-        ],
-        priority: priorityFor(row.volume, row.difficulty),
-      });
-    });
-  });
-
+): ExtractedKeyword[] {
   const seen = new Set<string>();
-  return articles.filter((row) => {
-    const key = row.keyword.toLowerCase();
-    if (seen.has(key)) return false;
+  const unique: ExtractedKeyword[] = [];
+
+  for (const row of keywords) {
+    if (row.sheet !== "informational") continue;
+    const key = row.keyword.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!key || seen.has(key)) continue;
     seen.add(key);
-    return true;
-  });
+    unique.push(row);
+  }
+
+  unique.sort((a, b) => b.volume - a.volume || a.keyword.localeCompare(b.keyword));
+  return unique;
+}
+
+/**
+ * Picks the informational keywords Stage 7 will plan articles for.
+ *
+ * Taking the top N by volume alone lets the busiest seed swallow the entire
+ * plan — a large store ends up with a hundred articles about chargers and none
+ * about a whole department. So the quota is dealt round-robin across seeds:
+ * every seed gets its first pick before any seed gets a second, and volume
+ * decides the order within a seed. Seeds that run dry simply drop out.
+ */
+export function selectStrategyKeywords(
+  keywords: ExtractedKeyword[],
+  limit = MAX_STRATEGY_KEYWORDS
+): ExtractedKeyword[] {
+  const unique = uniqueInformationalKeywords(keywords);
+  const cap = Math.max(0, limit);
+  if (unique.length <= cap) return unique;
+
+  const bySeed = new Map<string, ExtractedKeyword[]>();
+  for (const row of unique) {
+    const key = row.seedId || row.seed || "unknown";
+    const bucket = bySeed.get(key);
+    if (bucket) bucket.push(row);
+    else bySeed.set(key, [row]);
+  }
+
+  // Richest seeds first so the rounds stay full for as long as possible.
+  const buckets = [...bySeed.values()].sort((a, b) => b.length - a.length);
+  const picked: ExtractedKeyword[] = [];
+
+  for (let round = 0; picked.length < cap; round += 1) {
+    let placed = false;
+    for (const bucket of buckets) {
+      if (round >= bucket.length) continue;
+      picked.push(bucket[round]);
+      placed = true;
+      if (picked.length >= cap) break;
+    }
+    if (!placed) break;
+  }
+
+  return picked.sort(
+    (a, b) => b.volume - a.volume || a.keyword.localeCompare(b.keyword)
+  );
 }
 
 export function collectionCharge(count: number): number {

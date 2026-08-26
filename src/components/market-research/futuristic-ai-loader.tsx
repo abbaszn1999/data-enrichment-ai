@@ -87,8 +87,8 @@ export function FuturisticAiLoader({
     >
       {/* Background Animated Ambient Mesh Light */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-1/4 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-gradient-to-tr from-violet-600/20 via-primary/20 to-cyan-400/20 blur-3xl animate-pulse" />
-        <div className="absolute -bottom-1/4 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-gradient-to-br from-emerald-500/15 via-teal-500/15 to-indigo-600/15 blur-3xl" />
+        <div className="absolute -top-1/4 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-gradient-to-tr from-[#400095]/20 via-[#C40000]/20 to-[#F76D01]/20 blur-3xl animate-pulse" />
+        <div className="absolute -bottom-1/4 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-gradient-to-br from-[#F76D01]/15 via-[#C40000]/15 to-[#400095]/15 blur-3xl" />
         {/* Subtle grid pattern */}
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#8080800a_1px,transparent_1px),linear-gradient(to_bottom,#8080800a_1px,transparent_1px)] bg-[size:24px_24px]" />
       </div>
@@ -101,7 +101,7 @@ export function FuturisticAiLoader({
           <div className="absolute h-24 w-24 rounded-full border border-violet-500/30 bg-violet-500/10 animate-pulse" />
           
           {/* Glowing Orb Center */}
-          <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-primary/40 bg-gradient-to-tr from-violet-600 via-primary to-cyan-400 p-0.5 shadow-[0_0_35px_rgba(139,92,246,0.45)]">
+          <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-primary/40 bg-gradient-to-tr from-[#400095] via-[#C40000] to-[#F76D01] p-0.5 shadow-[0_0_35px_rgba(64,0,149,0.35)]">
             <div className="flex h-full w-full items-center justify-center rounded-full bg-card/90 backdrop-blur-sm">
               <Store className="h-8 w-8 text-primary animate-bounce duration-1000" />
             </div>
@@ -135,7 +135,7 @@ export function FuturisticAiLoader({
           </div>
           <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted/60 p-0.5 shadow-inner">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-violet-500 via-primary to-cyan-400 transition-all duration-300 ease-out shadow-[0_0_12px_rgba(99,102,241,0.6)]"
+              className="h-full rounded-full bg-gradient-to-r from-[#400095] via-[#C40000] to-[#F76D01] transition-all duration-300 ease-out shadow-[0_0_12px_rgba(196,0,0,0.35)]"
               style={{ width: `${progress}%` }}
             />
           </div>

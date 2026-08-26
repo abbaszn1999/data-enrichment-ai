@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useMemo, useState } from "react";
+import { motion } from "motion/react";
 import {
   CreditCard,
   Sparkles,
@@ -30,7 +31,7 @@ import { useUsage } from "@/hooks/use-usage";
 import { formatCredits } from "@/lib/format-credits";
 
 const OP_LABELS: Record<string, { label: string; icon: any; color: string }> = {
-  ai_enrichment: { label: "AI Enrichment", icon: Sparkles, color: "text-purple-600" },
+  ai_enrichment: { label: "AI Enrichment", icon: Sparkles, color: "text-[#6B358D] dark:text-[#F76D01]" },
   ai_image_search: { label: "AI Image Search", icon: ImageIcon, color: "text-blue-600" },
   ai_column_mapping: { label: "AI Column Mapping", icon: Columns3, color: "text-amber-600" },
   ai_category_suggest: { label: "AI Category Suggest", icon: FolderTree, color: "text-green-600" },
@@ -69,8 +70,8 @@ export default function UsagePage() {
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <div className="autommerce-dashboard flex h-64 items-center justify-center [font-family:var(--brand-font)]">
+        <Loader2 className="h-5 w-5 animate-spin text-[#6B358D] dark:text-[#F76D01]" />
       </div>
     );
   }
@@ -80,46 +81,66 @@ export default function UsagePage() {
   const isLow = balance.total > 0 && balance.remaining < balance.total * 0.2;
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-muted/20 via-background to-background">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-6 lg:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border bg-background shadow-sm">
-              <CreditCard className="h-5 w-5 text-primary" />
-            </div>
+    <div className="autommerce-dashboard flex-1 overflow-auto bg-background [font-family:var(--brand-font)]">
+      <section className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-[#400095]/[0.08] via-background to-[#F76D01]/[0.08]">
+        <div className="absolute -left-20 -top-28 h-64 w-64 rounded-full bg-[#400095]/10 blur-3xl" />
+        <div className="absolute -bottom-28 -right-16 h-64 w-64 rounded-full bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative mx-auto max-w-7xl px-6 py-7">
+          <motion.header
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex flex-wrap items-end justify-between gap-4"
+          >
             <div>
-              <h1 className="text-xl font-bold tracking-tight">
-                Usage & Credits
-              </h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Track AI credit usage and subscription details for{" "}
-                <span className="font-medium text-foreground">
-                  {workspace?.name}
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_25px_rgba(64,0,149,.22)] dark:bg-[#F76D01]">
+                  <CreditCard className="h-4 w-4" />
                 </span>
-                .
+                <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
+                  Billing
+                </span>
+              </div>
+              <h1 className="text-3xl font-black tracking-[-0.035em] sm:text-4xl">
+                Usage
+                <span className="block bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] bg-clip-text pb-1 text-transparent">
+                  & Credits
+                </span>
+              </h1>
+              <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
+                Track AI credit usage and subscription details for{" "}
+                <span className="font-medium text-foreground">{workspace?.name}</span>.
               </p>
             </div>
-          </div>
-          <Button size="sm" variant="outline" className="gap-1.5 self-start shadow-sm sm:self-auto" asChild>
-            <Link href={`/w/${slug}/subscription`}>
-              <ArrowUpRight className="h-3.5 w-3.5" /> View Plans
-            </Link>
-          </Button>
-        </header>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 gap-1.5 self-start rounded-xl text-xs shadow-sm sm:self-auto"
+              asChild
+            >
+              <Link href={`/w/${slug}/subscription`}>
+                <ArrowUpRight className="h-3.5 w-3.5" /> View Plans
+              </Link>
+            </Button>
+          </motion.header>
+        </div>
+      </section>
 
+      <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         {/* Credits Overview */}
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div className="space-y-4 rounded-xl border bg-card p-5 shadow-sm md:col-span-2">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="space-y-4 overflow-hidden rounded-2xl border border-border/60 bg-card p-5 shadow-sm md:col-span-2">
+            <div className="h-1 -m-5 mb-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]">
                   <Coins className="h-4 w-4" />
                 </div>
                 <div>
                   <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
                     AI Credits Remaining
                   </p>
-                  <p className="mt-0.5 text-2xl font-bold tracking-tight">
+                  <p className="mt-0.5 text-2xl font-black tracking-tight">
                     {formatCredits(balance.remaining)}
                     <span className="ml-1.5 text-sm font-normal text-muted-foreground">
                       / {formatCredits(balance.total)}
@@ -128,7 +149,10 @@ export default function UsagePage() {
                 </div>
               </div>
               {plan && (
-                <Badge variant="secondary" className="px-2.5 py-0.5 text-[10px] font-semibold">
+                <Badge
+                  variant="secondary"
+                  className="px-2.5 py-0.5 text-[10px] font-semibold bg-[#400095]/10 text-[#400095] dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
+                >
                   {plan.displayName} Plan
                 </Badge>
               )}
@@ -138,7 +162,7 @@ export default function UsagePage() {
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${
-                    isLow ? "bg-amber-500" : "bg-primary"
+                    isLow ? "bg-amber-500" : "bg-[#400095] dark:bg-[#F76D01]"
                   }`}
                   style={{ width: `${Math.min(usagePercent, 100)}%` }}
                 />
@@ -174,7 +198,7 @@ export default function UsagePage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="shrink-0 border-amber-300 text-xs text-amber-700 hover:bg-amber-50"
+                  className="shrink-0 rounded-lg border-amber-300 text-xs text-amber-700 hover:bg-amber-50"
                   asChild
                 >
                   <Link href={`/w/${slug}/subscription`}>Upgrade</Link>
@@ -183,7 +207,7 @@ export default function UsagePage() {
             )}
           </div>
 
-          <div className="space-y-4 rounded-xl border bg-card p-5 shadow-sm">
+          <div className="space-y-4 rounded-2xl border border-border/60 bg-card p-5 shadow-sm">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600">
                 <Crown className="h-4 w-4" />
@@ -234,7 +258,12 @@ export default function UsagePage() {
                 </Badge>
               </div>
             </div>
-            <Button size="sm" variant="outline" className="mt-1 w-full gap-1.5 text-xs" asChild>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-1 w-full gap-1.5 rounded-xl text-xs"
+              asChild
+            >
               <Link href={`/w/${slug}/subscription`}>
                 <ArrowUpRight className="h-3.5 w-3.5" />
                 View Plans
@@ -249,7 +278,7 @@ export default function UsagePage() {
               label: "Used (Month)",
               value: balance.used,
               icon: Coins,
-              style: "bg-primary/10 text-primary",
+              style: "bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]",
             },
             {
               label: "Used (All Time)",
@@ -273,10 +302,13 @@ export default function UsagePage() {
               icon: BarChart3,
               style: "bg-amber-500/10 text-amber-600",
             },
-          ].map((stat) => (
-            <div
+          ].map((stat, i) => (
+            <motion.div
               key={stat.label}
-              className="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-sm"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: i * 0.04 }}
+              className="flex items-center gap-3 rounded-2xl border border-border/60 bg-card p-3.5 shadow-sm"
             >
               <div
                 className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.style}`}
@@ -284,7 +316,7 @@ export default function UsagePage() {
                 <stat.icon className="h-4 w-4" />
               </div>
               <div>
-                <p className="text-lg font-bold leading-none">
+                <p className="text-lg font-black leading-none">
                   {"format" in stat && stat.format
                     ? stat.format(stat.value)
                     : formatCredits(stat.value)}
@@ -293,18 +325,18 @@ export default function UsagePage() {
                   {stat.label}
                 </p>
               </div>
-            </div>
+            </motion.div>
           ))}
         </section>
 
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
           <div className="border-b bg-muted/20 px-5 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]">
                 <Zap className="h-4 w-4" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold">What Uses Credits</h2>
+                <h2 className="text-sm font-bold">What Uses Credits</h2>
                 <p className="text-[11px] text-muted-foreground">
                   Credits are consumed exclusively by AI operations. All other
                   actions are free.
@@ -347,7 +379,7 @@ export default function UsagePage() {
             ].map((item) => (
               <div
                 key={item.label}
-                className="rounded-xl border bg-background p-3.5"
+                className="rounded-xl border border-border/60 bg-background p-3.5 transition-colors hover:border-[#6B358D]/30 dark:hover:border-[#F76D01]/30"
               >
                 <div
                   className={`mb-2.5 flex h-8 w-8 items-center justify-center rounded-lg ${item.style}`}
@@ -363,14 +395,14 @@ export default function UsagePage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
           <div className="flex flex-col gap-3 border-b bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#400095]/10 text-[#6B358D] dark:bg-[#F76D01]/10 dark:text-[#F76D01]">
                 <Activity className="h-4 w-4" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold">Credit Transaction Log</h2>
+                <h2 className="text-sm font-bold">Credit Transaction Log</h2>
                 <p className="text-[11px] text-muted-foreground">
                   {filteredTransactions.length}{" "}
                   {filterUser !== "all" ? "filtered" : "total"} operations
@@ -383,7 +415,7 @@ export default function UsagePage() {
                 <button
                   type="button"
                   onClick={() => setFilterOpen(!filterOpen)}
-                  className="flex items-center gap-2 rounded-md border bg-background px-3 py-1.5 text-xs transition-colors hover:bg-muted/50"
+                  className="flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5 text-xs transition-colors hover:bg-muted/50"
                 >
                   <Users className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="font-medium">
@@ -412,7 +444,9 @@ export default function UsagePage() {
                           setFilterOpen(false);
                         }}
                         className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/50 ${
-                          filterUser === "all" ? "bg-muted/30 font-semibold" : ""
+                          filterUser === "all"
+                            ? "bg-[#400095]/10 font-semibold text-[#400095] dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
+                            : ""
                         }`}
                       >
                         <Users className="h-3 w-3 text-muted-foreground" />
@@ -428,7 +462,7 @@ export default function UsagePage() {
                           }}
                           className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs transition-colors hover:bg-muted/50 ${
                             filterUser === m.userId
-                              ? "bg-muted/30 font-semibold"
+                              ? "bg-[#400095]/10 font-semibold text-[#400095] dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
                               : ""
                           }`}
                         >

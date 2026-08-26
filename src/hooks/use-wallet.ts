@@ -68,6 +68,26 @@ export async function topUpWalletApi(
   return data.wallet;
 }
 
+export async function startWalletCheckoutApi(
+  workspaceId: string,
+  workspaceSlug: string,
+  amountUsd: number
+): Promise<string> {
+  const response = await fetch("/api/wallet/checkout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, workspaceSlug, amountUsd }),
+  });
+  const data = (await response.json().catch(() => ({}))) as {
+    url?: string;
+    error?: string;
+  };
+  if (!response.ok || !data.url) {
+    throw new Error(data.error || "Could not start checkout");
+  }
+  return data.url;
+}
+
 export async function saveWalletAutoReloadApi(
   workspaceId: string,
   autoReload: WalletAutoReload

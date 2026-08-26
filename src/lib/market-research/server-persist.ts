@@ -9,8 +9,10 @@ import type {
 import type {
   CollectionContent,
   ExtractedKeyword,
+  GeneratedArticle,
   MarketResearchProduct,
   ProposedCollection,
+  StrategyArticle,
 } from "@/components/market-research/workspace-data";
 import {
   projectStateSlice,
@@ -250,6 +252,45 @@ export async function loadMrPersistedState(
             }
           }
         })(),
+
+        // 7. Stage 7 article plan slice
+        (async () => {
+          try {
+            const data = await loadProjectSliceAdmin<StrategyArticle[]>(
+              admin,
+              workspaceId,
+              projectId,
+              "strategy"
+            );
+            if (Array.isArray(data) && data.length > 0) {
+              persisted.strategyByProject[projectId] = data;
+            } else if (Array.isArray(state.strategy)) {
+              persisted.strategyByProject[projectId] = state.strategy;
+            }
+          } catch {
+            if (Array.isArray(state.strategy)) {
+              persisted.strategyByProject[projectId] = state.strategy;
+            }
+          }
+        })(),
+
+        // 8. Stage 7 generated article bodies slice
+        (async () => {
+          try {
+            const data = await loadProjectSliceAdmin<
+              Record<string, GeneratedArticle>
+            >(admin, workspaceId, projectId, "articles");
+            if (data && typeof data === "object") {
+              persisted.articlesByProject[projectId] = data;
+            } else if (state.articles && typeof state.articles === "object") {
+              persisted.articlesByProject[projectId] = state.articles;
+            }
+          } catch {
+            if (state.articles && typeof state.articles === "object") {
+              persisted.articlesByProject[projectId] = state.articles;
+            }
+          }
+        })(),
       ]);
     })
   );
@@ -325,6 +366,17 @@ export async function saveMrPersistedState(
         payload: persisted.contentByIdByProject[projectId] ?? {},
         empty:
           Object.keys(persisted.contentByIdByProject[projectId] ?? {}).length === 0,
+      },
+      {
+        name: "strategy",
+        payload: persisted.strategyByProject?.[projectId] ?? [],
+        empty: (persisted.strategyByProject?.[projectId] ?? []).length === 0,
+      },
+      {
+        name: "articles",
+        payload: persisted.articlesByProject?.[projectId] ?? {},
+        empty:
+          Object.keys(persisted.articlesByProject?.[projectId] ?? {}).length === 0,
       },
     ];
 

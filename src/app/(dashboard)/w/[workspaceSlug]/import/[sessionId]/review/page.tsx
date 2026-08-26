@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
+import { motion } from "motion/react";
 import {
   ArrowLeft,
   Check,
@@ -181,29 +182,33 @@ export default function ReviewPage() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center gap-3">
+    <div className="autommerce-dashboard min-h-full bg-background [font-family:var(--brand-font)]">
+      <section className="border-b border-border/60 bg-gradient-to-r from-[#400095]/[0.07] via-background to-[#F76D01]/[0.07]">
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mx-auto flex max-w-[1500px] items-center gap-3 px-5 py-6 sm:px-7 lg:px-10">
         <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => router.back()}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex-1">
-          <h1 className="text-xl font-bold">{session.name}</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">Review matching results</p>
+          <div className="mb-1 text-[9px] font-black uppercase tracking-[.2em] text-[#400095] dark:text-[#F76D01]">Step 03 · Quality review</div>
+          <h1 className="text-2xl font-black tracking-tight">{session.name}</h1>
+          <p className="mt-1 text-xs text-muted-foreground">Inspect matches, identify updates, and verify new products before enrichment.</p>
         </div>
-        <Button variant="outline" size="sm" className="gap-1.5 text-xs">
+        <Button variant="outline" size="sm" className="h-9 gap-1.5 rounded-xl border-border/60 bg-background/70 text-xs">
           <Download className="h-3.5 w-3.5" /> Export Report
         </Button>
-      </div>
+      </motion.div>
+      </section>
 
-      <ImportStepper currentStep={3} />
+      <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
+      <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={3} /></section>
 
       {/* Tabs */}
-      <div className="flex items-center gap-3">
-        <div className="flex gap-1">
+      <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:flex-row sm:items-center">
+        <div className="flex gap-1 rounded-xl bg-muted/50 p-1">
           <button
             onClick={() => setActiveTab("existing")}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === "existing" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+              activeTab === "existing" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground hover:bg-background"
             }`}
           >
             Existing ({existingRows.length})
@@ -211,7 +216,7 @@ export default function ReviewPage() {
           <button
             onClick={() => setActiveTab("new")}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === "new" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+              activeTab === "new" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground hover:bg-background"
             }`}
           >
             New ({newRows.length})
@@ -225,7 +230,7 @@ export default function ReviewPage() {
             placeholder="Search..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-8 w-44 pl-8 pr-7 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
+            className="h-9 w-full rounded-xl border border-border/60 bg-muted/35 pl-8 pr-7 text-xs focus:outline-none focus:ring-1 focus:ring-[#6B358D]/40 sm:w-56"
           />
           {searchTerm && (
             <button onClick={() => setSearchTerm("")} className="absolute right-2 top-1/2 -translate-y-1/2">
@@ -237,11 +242,12 @@ export default function ReviewPage() {
 
       {/* Existing Products Table */}
       {activeTab === "existing" && (
-        <Card>
+        <Card className="overflow-hidden rounded-[24px] border-border/60 shadow-[0_15px_50px_rgba(15,23,42,.05)]">
+          <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <div className="overflow-x-auto max-h-[calc(100vh-400px)]">
             <table className="w-max min-w-full">
               <thead className="sticky top-0 z-20">
-                <tr className="border-b bg-muted/80 backdrop-blur-sm">
+                <tr className="border-b bg-card/95 backdrop-blur-xl">
                   {supplierColumns.map((col) => (
                     <th key={col} className="text-left px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase whitespace-nowrap min-w-[120px]">{col}</th>
                   ))}
@@ -290,11 +296,12 @@ export default function ReviewPage() {
 
       {/* New Products Table */}
       {activeTab === "new" && (
-        <Card>
+        <Card className="overflow-hidden rounded-[24px] border-border/60 shadow-[0_15px_50px_rgba(15,23,42,.05)]">
+          <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <div className="overflow-x-auto max-h-[calc(100vh-400px)]">
             <table className="w-max min-w-full">
               <thead className="sticky top-0 z-20">
-                <tr className="border-b bg-muted/80 backdrop-blur-sm">
+                <tr className="border-b bg-card/95 backdrop-blur-xl">
                   {supplierColumns.map((col) => (
                     <th key={col} className="text-left px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase whitespace-nowrap min-w-[120px]">{col}</th>
                   ))}
@@ -330,7 +337,7 @@ export default function ReviewPage() {
           <Button variant="outline" size="sm" className="text-xs" onClick={() => router.back()}>Back</Button>
           <Button
             size="sm"
-            className="gap-1.5 text-xs"
+            className="h-9 gap-1.5 rounded-xl bg-[#400095] px-4 text-xs text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
             onClick={handleContinue}
             disabled={continueLoading}
           >
@@ -339,6 +346,7 @@ export default function ReviewPage() {
           </Button>
         </div>
       </div>
+      </main>
     </div>
   );
 }
