@@ -1,6 +1,11 @@
 import { createAdminClient } from "@/lib/supabase-admin";
 import { JOB_BATCH_SIZE } from "./config";
-import { chargeCatalogRow, processCatalogRow, type EnrichRowOutcome } from "./enrich-row";
+import {
+  catalogPendingRowIds,
+  chargeCatalogRow,
+  processCatalogRow,
+  type EnrichRowOutcome,
+} from "./enrich-row";
 import { runJobWithFailureGuard } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
@@ -71,17 +76,13 @@ async function runEnrichSessionInner(
   }
 
   const byId = new Map(project.rows.map((row) => [row.id, row]));
-  const pending = run.target_ids.filter((id) => {
-    const row = byId.get(id);
-    return row && row.status !== "done";
-  });
+  const processed = new Set(
+    (Array.isArray(settings.processedRowIds) ? settings.processedRowIds : []).map(String)
+  );
+  const pending = catalogPendingRowIds(run.target_ids, project.rows, [...processed]);
 
-  let completed = project.rows.filter(
-    (row) => run.target_ids.includes(row.id) && row.status === "done"
-  ).length;
-  let failed = project.rows.filter(
-    (row) => run.target_ids.includes(row.id) && row.status === "error"
-  ).length;
+  let completed = run.completed_count;
+  let failed = run.failed_count;
   let pausedNoCredits = false;
 
   for (let i = 0; i < pending.length; i += JOB_BATCH_SIZE) {
@@ -142,8 +143,10 @@ async function runEnrichSessionInner(
     await saveProjectJsonAdmin(run.workspace_id, run.session_id, project, admin);
 
     for (const outcome of outcomes) {
+      processed.add(outcome.rowId);
       if (!outcome.ok) continue;
       const charged = await chargeCatalogRow({
+        runId: run.id,
         sessionId: run.session_id,
         workspaceId: run.workspace_id,
         rowId: outcome.rowId,
@@ -155,14 +158,12 @@ async function runEnrichSessionInner(
       });
       if (!charged.ok && charged.noCredits) {
         pausedNoCredits = true;
-        const row = byId.get(outcome.rowId);
-        if (row && row.status === "done") {
-          // Keep the saved result; stop further charges/rows.
-        }
         break;
       }
-      if (outcome.ok) completed += 1;
+      completed += 1;
     }
+
+    settings.processedRowIds = [...processed];
 
     const enrichedCount = project.rows.filter((row) => row.status === "done").length;
     await admin
@@ -175,7 +176,11 @@ async function runEnrichSessionInner(
       .eq("id", run.session_id)
       .eq("workspace_id", run.workspace_id);
 
-    await touchJobHeartbeat(admin, run.id, { completed, failed });
+    await touchJobHeartbeat(admin, run.id, {
+      completed,
+      failed,
+      settings,
+    });
 
     if (pausedNoCredits) {
       const paused = await finishJobRun(admin, run.id, {

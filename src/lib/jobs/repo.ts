@@ -129,7 +129,7 @@ export async function markJobRunning(
 export async function touchJobHeartbeat(
   admin: Admin,
   id: string,
-  counts?: { completed?: number; failed?: number }
+  counts?: { completed?: number; failed?: number; settings?: JobRunSettings }
 ): Promise<JobRunRecord | null> {
   const patch: Record<string, unknown> = {
     heartbeat_at: new Date().toISOString(),
@@ -137,6 +137,7 @@ export async function touchJobHeartbeat(
   };
   if (typeof counts?.completed === "number") patch.completed_count = counts.completed;
   if (typeof counts?.failed === "number") patch.failed_count = counts.failed;
+  if (counts?.settings) patch.settings = counts.settings;
   const { data, error } = await admin
     .from("job_runs")
     .update(patch)

@@ -34,6 +34,21 @@ export type EnrichRowOutcome =
       noCredits?: boolean;
     };
 
+export function catalogCreditIdempotencyKey(runId: string, rowId: string): string {
+  return `ai_enrichment:${runId}:${rowId}`;
+}
+
+/** Rows the user targeted, minus ones this same run already finished. `done` from an earlier run is not skipped. */
+export function catalogPendingRowIds(
+  targetIds: string[],
+  rows: Array<{ id: string }>,
+  processedRowIds?: string[] | null
+): string[] {
+  const known = new Set(rows.map((row) => row.id));
+  const processed = new Set((processedRowIds ?? []).map(String));
+  return targetIds.filter((id) => known.has(id) && !processed.has(id));
+}
+
 export function buildRowSourceData(
   row: ProjectRow,
   sourceColumns: string[],
@@ -134,6 +149,7 @@ export async function processCatalogRow(params: {
 }
 
 export async function chargeCatalogRow(params: {
+  runId: string;
   sessionId: string;
   workspaceId: string;
   rowId: string;
@@ -152,8 +168,9 @@ export async function chargeCatalogRow(params: {
     operation: "ai_enrichment",
     entityType: params.settings.kind === "plp" ? "import_plp_row" : "import_row",
     entityId: params.rowId,
-    idempotencyKey: `ai_enrichment:${params.sessionId}:${params.rowId}`,
+    idempotencyKey: catalogCreditIdempotencyKey(params.runId, params.rowId),
     details: {
+      sessionId: params.sessionId,
       rowIndex: params.rowIndex,
       enrichmentModel: params.settings.enrichmentModel,
       totalCost: params.cost,

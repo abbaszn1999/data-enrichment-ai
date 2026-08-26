@@ -149,6 +149,7 @@ export function Sidebar() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const enrichRunIdRef = useRef<string | null>(null);
   const enrichPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const enrichPollSawActiveRef = useRef(false);
   const isPlp = sessionKind === "plp";
 
   const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
@@ -353,23 +354,27 @@ export function Sidebar() {
     const active =
       data.run && (data.run.status === "queued" || data.run.status === "running");
     if (!active) {
+      const shouldToast = enrichPollSawActiveRef.current && Boolean(data.run);
+      enrichPollSawActiveRef.current = false;
+      enrichRunIdRef.current = null;
       setIsEnriching(false);
       setEnrichingContext(null, []);
       invalidateCredits();
-      if (data.run?.status === "paused_no_credits") {
+      if (shouldToast && data.run?.status === "paused_no_credits") {
         setLastError("NO_CREDITS");
         toast.error("No credits remaining", {
           description: "Enrichment paused. Add credits and resume from this session.",
         });
-      } else if (data.run?.status === "failed") {
+      } else if (shouldToast && data.run?.status === "failed") {
         toast.error("Enrichment failed");
-      } else if (data.run?.status === "completed") {
+      } else if (shouldToast && data.run?.status === "completed") {
         toast.success("Enrichment complete", {
           description: `${data.run.completed_count} rows processed`,
         });
       }
       return false;
     }
+    enrichPollSawActiveRef.current = true;
     const run = data.run;
     if (!run) return false;
     setIsEnriching(true);
@@ -404,6 +409,12 @@ export function Sidebar() {
     setEnrichProgress(0, enrichableRows.length);
     setLastError(null);
     setEnrichingContext(isNewTab ? "new" : "existing", isNewTab ? [] : existingColumnsToEnrich);
+    if (enrichPollRef.current) {
+      clearTimeout(enrichPollRef.current);
+      enrichPollRef.current = null;
+    }
+    enrichRunIdRef.current = null;
+    enrichPollSawActiveRef.current = false;
 
     const resolvedLanguage = enrichmentSettings.outputLanguage === "custom"
       ? enrichmentSettings.customLanguage || "English"
@@ -499,6 +510,8 @@ export function Sidebar() {
         const body = (await response.json()) as { runId?: string };
         if (body.runId) enrichRunIdRef.current = body.runId;
       }
+
+      enrichPollSawActiveRef.current = true;
 
       toast.message("Enrichment is running in the background", {
         description: "You can leave this page. We'll notify you when it finishes.",

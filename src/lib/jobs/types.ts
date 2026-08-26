@@ -52,6 +52,7 @@ export interface CatalogJobSettings extends JobRunSettings {
   categoriesRawRows?: Record<string, string>[];
   ownerUserId: string;
   actorUserId: string;
+  processedRowIds?: string[];
 }
 
 export interface JobRunRecord {
