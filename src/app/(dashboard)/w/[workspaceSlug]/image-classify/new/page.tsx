@@ -21,7 +21,7 @@ import {
   UploadingImagesCard,
   analyzingProgressMessage,
 } from "@/components/media/analyzing-products-card";
-import { useWorkspaceContext } from "../../layout";
+import { useWorkspaceContext } from "../../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import {
   createImageClassificationSession,

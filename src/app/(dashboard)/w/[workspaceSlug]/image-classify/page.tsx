@@ -27,7 +27,7 @@ import {
   type ProjectSortOption,
 } from "@/components/media/project-list-controls";
 import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import {
   getImageClassificationSessions,

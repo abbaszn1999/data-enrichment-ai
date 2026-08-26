@@ -103,7 +103,12 @@ export async function POST(request: Request) {
         // Generate diff between supplier data and master product data
         const masterProduct = masterMap.get(result.matchedProductSku);
         if (masterProduct?.data && row.originalData) {
-          const diff = generateDiff(row.originalData, masterProduct.data, columnMapping);
+          const diff = generateDiff(
+            row.originalData,
+            masterProduct.data,
+            columnMapping,
+            masterMatchCol
+          );
           (row as any).diffData = diff;
         }
         existingCount++;

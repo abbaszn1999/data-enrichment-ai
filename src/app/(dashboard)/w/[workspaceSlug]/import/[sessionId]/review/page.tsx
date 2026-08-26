@@ -21,9 +21,16 @@ import {
   type ImportSession,
 } from "@/lib/supabase";
 import { loadProjectJson, loadProductsJson, saveProjectJson, type ProjectRow } from "@/lib/storage-helpers";
-import { useWorkspaceContext } from "../../../layout";
+import { useWorkspaceContext } from "../../../workspace-context";
 import { normalizeValue, generateDiff, type MatchingRule } from "@/lib/matching";
+import {
+  applyMatchTypes,
+  guessPlpSourceColumn,
+  resolveTargetCategoryNames,
+  PLP_MATCHING_RULES,
+} from "@/lib/import-matching";
 import { ImportStepper } from "@/components/import/import-stepper";
+import type { SessionKind } from "@/types";
 
 // Alias ProjectRow for compatibility with existing template code
 type ImportRow = ProjectRow & { id: string; match_type?: string | null; supplier_data?: Record<string, string>; diff_data?: Record<string, any>; mapped_data?: Record<string, any> };
@@ -42,6 +49,9 @@ export default function ReviewPage() {
   const [continueLoading, setContinueLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"existing" | "new">("existing");
   const [searchTerm, setSearchTerm] = useState("");
+  const [kind, setKind] = useState<SessionKind>("product");
+
+  const isPlp = kind === "plp";
 
   useEffect(() => {
     if (!sessionId || !workspace) return;
@@ -49,7 +59,7 @@ export default function ReviewPage() {
       getImportSession(sessionId),
       loadProjectJson(workspace.id, sessionId),
       loadProductsJson(workspace.id),
-    ]).then(([s, project, masterProducts]) => {
+    ]).then(async ([s, project, masterProducts]) => {
       setSession(s);
 
       // Extract supplier columns from project
@@ -57,36 +67,63 @@ export default function ReviewPage() {
         setSupplierColumns(project.columns);
       }
 
-      // Re-run matching client-side using session rules (bulletproof, no Storage cache dependency)
-      const matchRules: MatchingRule[] = (s?.matching_rules as MatchingRule[]) || [];
-      const supplierMatchCol = s?.supplier_match_column || (project?.columns?.[0] ?? "");
-      const masterMatchCol = s?.master_match_column || "sku";
-      const columnMapping: Record<string, string> = {};
-      for (const col of (project?.columns ?? [])) { columnMapping[col] = col; }
+      const sessionKind: SessionKind =
+        (s?.kind as SessionKind) ?? project?.kind ?? "product";
+      setKind(sessionKind);
 
-      // Build master keys — same proven logic as Rules page preview
-      const masterKeys = new Map<string, string>(); // normalized → original sku
-      for (const p of masterProducts) {
-        const val = masterMatchCol === "sku" ? p.sku : (p.data?.[masterMatchCol] ?? p.sku);
-        masterKeys.set(normalizeValue(String(val), matchRules), p.sku);
-      }
-      const masterMap = new Map(masterProducts.map((p) => [p.sku, p]));
-
-      // Match each row
+      // Re-run matching client-side so the review never depends on stale storage
       const projectRows = project?.rows ?? [];
-      for (const row of projectRows) {
-        const supplierVal = row.originalData?.[supplierMatchCol] ?? "";
-        const normalized = normalizeValue(String(supplierVal), matchRules);
-        if (masterKeys.has(normalized)) {
-          row.matchType = "existing";
-          const matchedSku = masterKeys.get(normalized)!;
-          (row as any).matchedProductSku = matchedSku;
+      const supplierMatchCol =
+        s?.supplier_match_column ||
+        (sessionKind === "plp"
+          ? guessPlpSourceColumn(project?.columns ?? [])
+          : (project?.columns?.[0] ?? ""));
+
+      // "Skip matching" is a decision, not a cache — re-deriving would undo it.
+      if (project?.matchingSkipped) {
+        for (const row of projectRows) row.matchType = row.matchType ?? "new";
+      } else if (sessionKind === "plp") {
+        await applyMatchTypes({
+          kind: "plp",
+          workspaceId: workspace.id,
+          rows: projectRows,
+          sourceColumn: supplierMatchCol,
+          masterColumn: s?.master_match_column || "name",
+          rules: PLP_MATCHING_RULES,
+        });
+      } else {
+        const matchRules: MatchingRule[] = (s?.matching_rules as MatchingRule[]) || [];
+        const masterMatchCol = s?.master_match_column || "sku";
+
+        await applyMatchTypes({
+          kind: "product",
+          workspaceId: workspace.id,
+          rows: projectRows,
+          sourceColumn: supplierMatchCol,
+          masterColumn: masterMatchCol,
+          rules: matchRules,
+          targetCategoryNames: await resolveTargetCategoryNames(
+            workspace.id,
+            s?.target_category_ids
+          ),
+        });
+
+        const columnMapping: Record<string, string> = {};
+        for (const col of (project?.columns ?? [])) { columnMapping[col] = col; }
+        const masterMap = new Map(masterProducts.map((p) => [p.sku, p]));
+
+        for (const row of projectRows) {
+          const matchedSku = (row as any).matchedProductSku as string | undefined;
+          if (!matchedSku) continue;
           const masterProduct = masterMap.get(matchedSku);
           if (masterProduct?.data && row.originalData) {
-            (row as any).diffData = generateDiff(row.originalData, masterProduct.data, columnMapping);
+            (row as any).diffData = generateDiff(
+              row.originalData,
+              masterProduct.data,
+              columnMapping,
+              masterMatchCol
+            );
           }
-        } else {
-          row.matchType = "new";
         }
       }
 
@@ -191,7 +228,11 @@ export default function ReviewPage() {
         <div className="flex-1">
           <div className="mb-1 text-[9px] font-black uppercase tracking-[.2em] text-[#400095] dark:text-[#F76D01]">Step 03 · Quality review</div>
           <h1 className="text-2xl font-black tracking-tight">{session.name}</h1>
-          <p className="mt-1 text-xs text-muted-foreground">Inspect matches, identify updates, and verify new products before enrichment.</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {isPlp
+              ? "Check which category pages you are updating and which you are creating before enrichment."
+              : "Inspect matches, identify updates, and verify new products before enrichment."}
+          </p>
         </div>
         <Button variant="outline" size="sm" className="h-9 gap-1.5 rounded-xl border-border/60 bg-background/70 text-xs">
           <Download className="h-3.5 w-3.5" /> Export Report
@@ -200,7 +241,7 @@ export default function ReviewPage() {
       </section>
 
       <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
-      <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={3} /></section>
+      <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={3} kind={kind} /></section>
 
       {/* Tabs */}
       <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:flex-row sm:items-center">
@@ -211,7 +252,7 @@ export default function ReviewPage() {
               activeTab === "existing" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground hover:bg-background"
             }`}
           >
-            Existing ({existingRows.length})
+            {isPlp ? "Existing pages" : "Existing"} ({existingRows.length})
           </button>
           <button
             onClick={() => setActiveTab("new")}
@@ -219,7 +260,7 @@ export default function ReviewPage() {
               activeTab === "new" ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]" : "text-muted-foreground hover:bg-background"
             }`}
           >
-            New ({newRows.length})
+            {isPlp ? "New pages" : "New"} ({newRows.length})
           </button>
         </div>
         <div className="flex-1" />
@@ -251,12 +292,15 @@ export default function ReviewPage() {
                   {supplierColumns.map((col) => (
                     <th key={col} className="text-left px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase whitespace-nowrap min-w-[120px]">{col}</th>
                   ))}
-                  <th className="text-center px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase min-w-[100px]">Changes</th>
+                  {/* PLP rows are matched by identity only, so there is no field-level diff to show. */}
+                  {!isPlp && (
+                    <th className="text-center px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase min-w-[100px]">Changes</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {filteredExisting.length === 0 ? (
-                  <tr><td colSpan={supplierColumns.length + 1} className="text-center py-8 text-xs text-muted-foreground">No matching rows</td></tr>
+                  <tr><td colSpan={supplierColumns.length + (isPlp ? 0 : 1)} className="text-center py-8 text-xs text-muted-foreground">No matching rows</td></tr>
                 ) : (
                   filteredExisting.map((row) => {
                     const d = row.mapped_data || {};
@@ -275,6 +319,7 @@ export default function ReviewPage() {
                             </td>
                           );
                         })}
+                        {!isPlp && (
                         <td className="px-3 py-2.5 text-center">
                           {diffFields.length > 0 ? (
                             <Badge variant="secondary" className="text-[8px] bg-amber-50 text-amber-700 dark:bg-amber-950/30">
@@ -284,6 +329,7 @@ export default function ReviewPage() {
                             <span className="text-[9px] text-muted-foreground">No changes</span>
                           )}
                         </td>
+                        )}
                       </tr>
                     );
                   })

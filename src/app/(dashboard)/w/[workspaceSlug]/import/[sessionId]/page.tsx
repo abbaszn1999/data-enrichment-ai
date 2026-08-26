@@ -20,13 +20,16 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getImportSession, type ImportSession } from "@/lib/supabase";
-import { useWorkspaceContext } from "../../layout";
+import { getImportSteps } from "@/components/import/import-stepper";
+import type { SessionKind } from "@/types";
+import { useWorkspaceContext } from "../../workspace-context";
 
+/** `step` matches the numbering in getImportSteps (upload is 1). */
 const STATUS_INFO: Record<string, { label: string; color: string; step: number }> = {
-  matching: { label: "Matching Rules", color: "text-purple-600", step: 1 },
-  review: { label: "Review Results", color: "text-amber-600", step: 2 },
-  enriching: { label: "Enrichment", color: "text-indigo-600", step: 3 },
-  completed: { label: "Completed", color: "text-green-600", step: 4 },
+  matching: { label: "Matching Rules", color: "text-purple-600", step: 2 },
+  review: { label: "Review Results", color: "text-amber-600", step: 3 },
+  enriching: { label: "Enrichment", color: "text-indigo-600", step: 4 },
+  completed: { label: "Completed", color: "text-green-600", step: 5 },
   cancelled: { label: "Cancelled", color: "text-gray-600", step: 0 },
 };
 
@@ -69,11 +72,15 @@ export default function SessionOverviewPage() {
   const info = STATUS_INFO[session.status] || STATUS_INFO.matching;
   const basePath = `/w/${slug}/import/${session.id}`;
 
-  const steps = [
-    { num: 1, label: "Matching Rules", href: `${basePath}/rules`, done: info.step > 1 },
-    { num: 2, label: "Review Results", href: `${basePath}/review`, done: info.step > 2 },
-    { num: 3, label: "Enrichment Tool", href: `${basePath}/enrich`, done: info.step > 3 },
-  ];
+  const kind: SessionKind = (session.kind as SessionKind) ?? "product";
+  const steps = getImportSteps(kind)
+    .filter((step) => step.segment !== null)
+    .map((step) => ({
+      num: step.num,
+      label: step.label,
+      href: `${basePath}/${step.segment}`,
+      done: info.step > step.num,
+    }));
 
   // Determine the current step link
   const currentStepHref =
@@ -86,7 +93,12 @@ export default function SessionOverviewPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-xl font-bold">{session.name}</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-xl font-bold">{session.name}</h1>
+          <Badge variant="outline" className="text-[10px]">
+            {kind === "plp" ? "PLP pages" : "Products"}
+          </Badge>
+        </div>
         <p className="text-xs text-muted-foreground mt-0.5">Session overview</p>
       </div>
 
@@ -140,11 +152,15 @@ export default function SessionOverviewPage() {
           </div>
           <div className="text-center">
             <div className="text-lg font-bold text-green-600">{session.existing_count}</div>
-            <div className="text-[9px] text-muted-foreground">Existing</div>
+            <div className="text-[9px] text-muted-foreground">
+              {kind === "plp" ? "Existing pages" : "Existing"}
+            </div>
           </div>
           <div className="text-center">
             <div className="text-lg font-bold text-blue-600">{session.new_count}</div>
-            <div className="text-[9px] text-muted-foreground">New</div>
+            <div className="text-[9px] text-muted-foreground">
+              {kind === "plp" ? "New pages" : "New"}
+            </div>
           </div>
           <div className="text-center">
             <div className="text-lg font-bold text-purple-600">{session.enriched_count}</div>

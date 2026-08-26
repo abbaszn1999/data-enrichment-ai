@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase-browser";
 import type { Role } from "@/lib/permissions";
-import type { EnrichmentPreset } from "@/types";
+import type { EnrichmentPreset, SessionKind } from "@/types";
 
 // Re-export a convenience singleton for client-side use
 function getClient() {
@@ -63,6 +63,8 @@ export interface ImportSession {
   workspace_id: string;
   name: string;
   notes: string;
+  /** 'product' | 'plp'. Sessions created before the split have 'product'. */
+  kind: SessionKind;
   status: string;
   supplier_match_column: string | null;
   master_match_column: string;
@@ -613,6 +615,7 @@ export async function createImportSession(workspaceId: string, importSession: {
   name: string;
   notes?: string;
   total_rows: number;
+  kind?: SessionKind;
 }) {
   const supabase = getClient();
   const { data: { session } } = await supabase.auth.getSession();

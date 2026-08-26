@@ -1,5 +1,5 @@
 import { calculateOpenAiWebSearchCost, type AiCallCost } from "@/lib/ai-pricing";
-import type { CategoryItem } from "@/types";
+import type { CategoryItem, SessionKind } from "@/types";
 import {
   resolveEnrichOpenAiModel,
   resolveEnrichReasoningEffort,
@@ -7,7 +7,11 @@ import {
   type EnrichOpenAiModelId,
 } from "./models";
 import type { EnrichToolPolicy } from "./policy";
-import type { EnrichSettings, OpenAiResponse } from "./types";
+import type {
+  EnrichColumnConfig,
+  EnrichSettings,
+  OpenAiResponse,
+} from "./types";
 import {
   buildEnrichedData,
   countWebSearchCalls,
@@ -33,7 +37,12 @@ export async function runEnrichOpenAiResponse(params: {
   schemaName: string;
   schema: Record<string, unknown>;
   enabledColumns: string[];
+  enrichmentColumns?: EnrichColumnConfig[];
+  kind?: SessionKind;
+  rowData?: Record<string, string>;
+  language?: string;
   workspaceCategories?: CategoryItem[];
+  categoriesRawRows?: Record<string, string>[];
   cmsType?: string;
   maxCategories?: number;
 }): Promise<{
@@ -145,8 +154,12 @@ export async function runEnrichOpenAiResponse(params: {
     selection,
     response: body,
     enabledColumns: params.enabledColumns,
-    policy: params.policy,
+    enrichmentColumns: params.enrichmentColumns,
+    kind: params.kind,
+    rowData: params.rowData,
+    language: params.language,
     workspaceCategories: params.workspaceCategories,
+    categoriesRawRows: params.categoriesRawRows,
     cmsType: params.cmsType,
     maxCategories: params.maxCategories,
   });

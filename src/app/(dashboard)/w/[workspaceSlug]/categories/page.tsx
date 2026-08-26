@@ -27,7 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import { loadCategoriesJson, saveCategoriesJson, saveCategoriesRawJson, type CategoryJson } from "@/lib/storage-helpers";
 

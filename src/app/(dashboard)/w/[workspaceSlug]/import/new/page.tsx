@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { motion } from "motion/react";
 import {
@@ -11,21 +11,72 @@ import {
   StickyNote,
   Zap,
   Users,
+  Package,
+  LayoutList,
+  CheckCircle2,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useWorkspaceContext } from "../../layout";
+import { useWorkspaceContext } from "../../workspace-context";
 import {
   createImportSession,
-  getEnrichmentPresets,
   updateImportSession,
 } from "@/lib/supabase";
 import { uploadWorkspaceFile } from "@/lib/supabase-storage";
 import { saveProjectJson, saveSuppliersJson, loadSuppliersJson, type ProjectJson, type ProjectRow, type SupplierJson } from "@/lib/storage-helpers";
 import { parseExcelFile } from "@/lib/excel";
 import { ImportStepper } from "@/components/import/import-stepper";
-import type { EnrichmentPreset } from "@/types";
+import {
+  CMS_CATEGORY_COLUMNS,
+  getDefaultEnrichmentColumns,
+  type SessionKind,
+} from "@/types";
+
+const KIND_OPTIONS: Array<{
+  value: SessionKind;
+  label: string;
+  description: string;
+  icon: typeof Package;
+}> = [
+  {
+    value: "product",
+    label: "Product enrichment",
+    description:
+      "Upload a supplier catalog and enrich product titles, descriptions, categories and images.",
+    icon: Package,
+  },
+  {
+    value: "plp",
+    label: "PLP enrichment",
+    description:
+      "Upload your categories and generate SEO content for each category listing page.",
+    icon: LayoutList,
+  },
+];
+
+/** Which uploaded columns look like the category name / parent / description. */
+function detectCategoryColumns(columns: string[], cmsType: string | undefined) {
+  const cms =
+    CMS_CATEGORY_COLUMNS[(cmsType || "").toLowerCase()] ||
+    CMS_CATEGORY_COLUMNS.custom;
+  const lower = new Map(columns.map((c) => [c.trim().toLowerCase(), c]));
+  const find = (candidates: string[]) => {
+    for (const candidate of candidates) {
+      const hit = lower.get(candidate.toLowerCase());
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return {
+    name: find(cms.nameColumns),
+    parent: find(cms.parentColumns),
+    description: find(cms.descColumns),
+    id: find(cms.idColumns),
+    hint: cms.hint,
+  };
+}
 
 export default function NewImportPage() {
   const router = useRouter();
@@ -33,6 +84,7 @@ export default function NewImportPage() {
   const slug = params.workspaceSlug as string;
   const { workspace } = useWorkspaceContext();
 
+  const [kind, setKind] = useState<SessionKind>("product");
   const [sessionName, setSessionName] = useState("");
   const [supplier, setSupplier] = useState("");
   const [newSupplierName, setNewSupplierName] = useState("");
@@ -44,9 +96,8 @@ export default function NewImportPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [suppliersLoaded, setSuppliersLoaded] = useState(false);
-  const [presets, setPresets] = useState<EnrichmentPreset[]>([]);
-  const [selectedPresetId, setSelectedPresetId] = useState("");
 
+  const isPlp = kind === "plp";
 
   // Load suppliers from Storage
   const loadSuppliers = useCallback(async () => {
@@ -60,12 +111,13 @@ export default function NewImportPage() {
     loadSuppliers();
   }, [loadSuppliers]);
 
-  useEffect(() => {
-    if (!workspace?.id) return;
-    getEnrichmentPresets(workspace.id)
-      .then(setPresets)
-      .catch(console.error);
-  }, [workspace?.id]);
+  const detected = useMemo(
+    () =>
+      isPlp && fileData
+        ? detectCategoryColumns(fileData.columns, workspace?.cms_type)
+        : null,
+    [isPlp, fileData, workspace?.cms_type]
+  );
 
   const handleFileSelect = async (selectedFile: File) => {
     setFile(selectedFile);
@@ -113,20 +165,15 @@ export default function NewImportPage() {
       // 1. Upload original file to storage (backup)
       await uploadWorkspaceFile(workspace.id, "supplier", file, file.name);
 
-      // 2. Handle supplier (save to suppliers.json in Storage)
-      let supplierName: string | undefined;
-      if (supplier === "__new__" && newSupplierName.trim()) {
-        supplierName = newSupplierName.trim();
+      // 2. Register a newly typed supplier (product mode only)
+      if (!isPlp && supplier === "__new__" && newSupplierName.trim()) {
         const existing = await loadSuppliersJson(workspace.id);
         const newSupplier: SupplierJson = {
           id: crypto.randomUUID(),
-          name: supplierName,
+          name: newSupplierName.trim(),
           createdAt: new Date().toISOString(),
         };
         await saveSuppliersJson(workspace.id, [...existing, newSupplier]);
-      } else if (supplier && supplier !== "__new__") {
-        const existing = await loadSuppliersJson(workspace.id);
-        supplierName = existing.find((s) => s.id === supplier)?.name;
       }
 
       // 3. Create import session in DB (metadata only)
@@ -134,6 +181,7 @@ export default function NewImportPage() {
         name: sessionName.trim(),
         notes: notes.trim(),
         total_rows: fileData.totalRows,
+        kind,
       });
 
       // 4. Build project JSON and save to Storage
@@ -146,17 +194,15 @@ export default function NewImportPage() {
         matchType: "new" as const,
       }));
 
-      const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
-      const presetSourceColumns = selectedPreset
-        ? selectedPreset.settings.sourceColumns.filter((col) => fileData.columns.includes(col))
-        : null;
-
+      // Saved settings are now applied inside the workspace (step 4), so a new
+      // session always starts from the defaults for its kind.
       const projectJson: ProjectJson = {
+        kind,
         columns: fileData.columns,
         rows: projectRows,
-        sourceColumns: presetSourceColumns?.length ? presetSourceColumns : [...fileData.columns],
-        enrichmentColumns: selectedPreset ? selectedPreset.settings.enrichmentColumns : [],
-        enrichmentSettings: selectedPreset ? selectedPreset.settings.enrichmentSettings : {},
+        sourceColumns: [...fileData.columns],
+        enrichmentColumns: getDefaultEnrichmentColumns(kind),
+        enrichmentSettings: {},
         columnVisibility: {},
       };
 
@@ -221,7 +267,7 @@ export default function NewImportPage() {
           transition={{ delay: 0.08 }}
           className="overflow-hidden rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:p-4"
         >
-          <ImportStepper currentStep={1} />
+          <ImportStepper currentStep={1} kind={kind} />
         </motion.section>
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
@@ -234,6 +280,44 @@ export default function NewImportPage() {
               className="relative space-y-5 overflow-hidden rounded-[24px] border border-border/60 bg-card p-5 shadow-[0_15px_50px_rgba(15,23,42,.05)] sm:p-6"
             >
               <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+
+              {/* What are we enriching? */}
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">What do you want to enrich?</Label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {KIND_OPTIONS.map((option) => {
+                    const Icon = option.icon;
+                    const active = kind === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setKind(option.value)}
+                        className={`flex flex-col gap-1.5 rounded-xl border p-3 text-left transition-colors ${
+                          active
+                            ? "border-[#400095]/40 bg-[#400095]/5 dark:border-[#F76D01]/40 dark:bg-[#F76D01]/5"
+                            : "border-border/60 hover:bg-muted/50"
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <Icon
+                            className={`h-3.5 w-3.5 ${
+                              active
+                                ? "text-[#400095] dark:text-[#F76D01]"
+                                : "text-muted-foreground"
+                            }`}
+                          />
+                          <span className="text-xs font-semibold">{option.label}</span>
+                        </span>
+                        <span className="text-[10px] leading-relaxed text-muted-foreground">
+                          {option.description}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Session Name */}
               <div className="space-y-2">
                 <Label className="text-xs font-medium">Session Name</Label>
@@ -245,7 +329,8 @@ export default function NewImportPage() {
                 />
               </div>
 
-              {/* Supplier */}
+              {/* Supplier — product sessions only */}
+              {!isPlp && (
               <div className="space-y-2">
                 <Label className="text-xs font-medium">Supplier</Label>
                 <select
@@ -270,6 +355,7 @@ export default function NewImportPage() {
                   />
                 )}
               </div>
+              )}
 
               {/* Notes */}
               <div className="space-y-2">
@@ -286,48 +372,11 @@ export default function NewImportPage() {
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label className="flex items-center gap-1.5 text-xs font-medium">
-                  <Zap className="h-3 w-3" /> AI Enrichment Settings
-                </Label>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPresetId("")}
-                    className={`rounded-lg border p-3 text-left transition-colors ${
-                      selectedPresetId === ""
-                        ? "border-[#400095]/40 bg-[#400095]/5 dark:border-[#F76D01]/40 dark:bg-[#F76D01]/5"
-                        : "hover:bg-muted/50"
-                    }`}
-                  >
-                    <div className="text-xs font-semibold">New settings</div>
-                    <div className="mt-0.5 text-[10px] text-muted-foreground">
-                      Start with default enrichment settings
-                    </div>
-                  </button>
-                  <select
-                    value={selectedPresetId}
-                    onChange={(e) => setSelectedPresetId(e.target.value)}
-                    disabled={presets.length === 0}
-                    className="h-[62px] w-full rounded-xl border border-border/60 bg-background px-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#6B358D]/25 disabled:opacity-60"
-                  >
-                    <option value="">
-                      {presets.length === 0
-                        ? "No saved settings yet"
-                        : "Choose saved setting..."}
-                    </option>
-                    {presets.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
               {/* File Upload */}
               <div className="space-y-2">
-                <Label className="text-xs font-medium">Supplier File</Label>
+                <Label className="text-xs font-medium">
+                  {isPlp ? "Categories File" : "Supplier File"}
+                </Label>
                 <div
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -397,6 +446,55 @@ export default function NewImportPage() {
                     </div>
                   </div>
 
+                  {detected && (
+                    <div
+                      className={`space-y-1.5 rounded-xl border p-3 ${
+                        detected.name
+                          ? "border-green-500/30 bg-green-50/40 dark:bg-green-950/10"
+                          : "border-amber-500/30 bg-amber-50/40 dark:bg-amber-950/10"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-semibold">
+                        {detected.name ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                        ) : (
+                          <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                        )}
+                        {detected.name
+                          ? "Category columns detected"
+                          : "Could not find a category name column"}
+                      </div>
+                      {detected.name ? (
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] text-muted-foreground sm:grid-cols-4">
+                          <span>
+                            Name: <strong className="text-foreground">{detected.name}</strong>
+                          </span>
+                          <span>
+                            Parent:{" "}
+                            <strong className="text-foreground">
+                              {detected.parent || "—"}
+                            </strong>
+                          </span>
+                          <span>
+                            Description:{" "}
+                            <strong className="text-foreground">
+                              {detected.description || "—"}
+                            </strong>
+                          </span>
+                          <span>
+                            ID:{" "}
+                            <strong className="text-foreground">{detected.id || "—"}</strong>
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="text-[10px] text-muted-foreground">
+                          Expected {detected.hint}. You can still continue — you will pick
+                          the matching column in the next step.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {fileData.rows.length > 0 && (
                     <div className="space-y-2">
                       <Label className="text-xs font-medium">
@@ -447,14 +545,18 @@ export default function NewImportPage() {
                 ) : (
                   <ArrowRight className="h-4 w-4" />
                 )}
-                {loading ? "Processing file..." : "Continue to Matching Rules"}
+                {loading
+                  ? "Processing file..."
+                  : isPlp
+                    ? "Continue to Match Categories"
+                    : "Continue to Matching Rules"}
               </Button>
             </motion.section>
           </div>
 
           {/* Right Sidebar */}
           <div className="space-y-4">
-            {suppliers.length > 0 && (
+            {!isPlp && suppliers.length > 0 && (
               <motion.section initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} className="rounded-2xl border border-border/60 bg-card p-4 shadow-sm">
                 <h3 className="mb-3 flex items-center gap-1.5 text-xs font-semibold">
                   <Users className="h-3.5 w-3.5" /> Recent Suppliers
@@ -488,10 +590,17 @@ export default function NewImportPage() {
               <div className="space-y-2 text-[10px] text-muted-foreground">
                 <div className="flex items-start gap-2">
                   <span className="shrink-0 font-bold text-[#6B358D] dark:text-[#F76D01]">1.</span>
-                  <span>
-                    Include a <strong>SKU</strong> or <strong>Part Number</strong>{" "}
-                    column for best matching
-                  </span>
+                  {isPlp ? (
+                    <span>
+                      Include a <strong>Category name</strong>, and ideally{" "}
+                      <strong>URL</strong> or <strong>Parent</strong> columns
+                    </span>
+                  ) : (
+                    <span>
+                      Include a <strong>SKU</strong> or <strong>Part Number</strong>{" "}
+                      column for best matching
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-start gap-2">
                   <span className="shrink-0 font-bold text-[#6B358D] dark:text-[#F76D01]">2.</span>

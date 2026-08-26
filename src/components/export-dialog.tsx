@@ -1,11 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { Download, FileSpreadsheet, FileText, FileJson, X } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, FileJson, FolderTree, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { getImportSession } from "@/lib/supabase";
+import { guessPlpSourceColumn } from "@/lib/import-matching";
+import { applyPlpWriteBack, countRowsWithPlpContent } from "@/lib/plp-writeback";
 import { useSheetStore } from "@/store/sheet-store";
 import { exportToExcelTwoSheets } from "@/lib/excel";
+import { enrichedValueToJson, enrichedValueToText } from "@/lib/export-values";
 import type { ProductRow } from "@/types";
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -41,27 +55,8 @@ function buildCSV(
         return v.startsWith("data:image/") ? '"[image]"' : `"${v.replace(/"/g, '""')}"`;
       }),
       ...visibleEnrichment.map((col) => {
-        const v = row.enrichedData[col.id];
-        if (!v) return '""';
-        if (Array.isArray(v)) {
-          if (col.id === "imageUrls") {
-            const urls = (v as any[])
-              .map((i: any) => (typeof i === "object" && i !== null ? (i.imageUrl || "") : String(i || "")))
-              .filter(Boolean);
-            return `"${urls.join("\n").replace(/"/g, '""')}"`;
-          }
-          if (col.id === "sourceUrls") {
-            const urls = (v as any[])
-              .map((i: any) => (typeof i === "object" && i !== null ? (i.uri || i.url || "") : String(i || "")))
-              .filter(Boolean);
-            return `"${urls.join("\n").replace(/"/g, '""')}"`;
-          }
-          return `"${(v as any[])
-            .map((i: any) => (typeof i === "object" ? i.imageUrl || i.uri || i.title || JSON.stringify(i) : i))
-            .join("\n")
-            .replace(/"/g, '""')}"`;
-        }
-        return `"${String(v).replace(/"/g, '""')}"`;
+        const text = enrichedValueToText(row.enrichedData[col.id], col.id);
+        return `"${text.replace(/"/g, '""')}"`;
       }),
     ];
     csvRows.push(vals.join(","));
@@ -89,29 +84,28 @@ function buildJSON(
       obj[col] = v.startsWith("data:image/") ? "[image]" : v;
     }
     for (const col of visibleEnrichment) {
-      const v = row.enrichedData[col.id];
-      if (col.id === "imageUrls" && Array.isArray(v)) {
-        obj[col.label] = (v as any[])
-          .map((i: any) => (typeof i === "object" && i !== null ? (i.imageUrl || "") : String(i || "")))
-          .filter(Boolean);
-      } else if (col.id === "sourceUrls" && Array.isArray(v)) {
-        obj[col.label] = (v as any[])
-          .map((i: any) => (typeof i === "object" && i !== null ? (i.uri || i.url || "") : String(i || "")))
-          .filter(Boolean);
-      } else {
-        obj[col.label] = v ?? "";
-      }
+      obj[col.label] = enrichedValueToJson(row.enrichedData[col.id], col.id);
     }
     return obj;
   });
 }
 
 export function ExportDialog() {
-  const { rows, originalColumns, enrichmentColumns, fileName, isEnriching } =
-    useSheetStore();
+  const {
+    rows,
+    originalColumns,
+    enrichmentColumns,
+    fileName,
+    isEnriching,
+    sessionKind,
+    workspaceId,
+    projectId,
+  } = useSheetStore();
 
   const [open, setOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [confirmWriteBack, setConfirmWriteBack] = useState(false);
+  const [writingBack, setWritingBack] = useState(false);
 
   const existingRows = rows.filter((r) => r.matchType === "existing");
   const newRows = rows.filter((r) => r.matchType !== "existing");
@@ -167,6 +161,53 @@ export function ExportDialog() {
       description: `${existingRows.length} existing + ${newRows.length} new rows`,
     });
     setOpen(false);
+  };
+
+  const writeBackCount = sessionKind === "plp" ? countRowsWithPlpContent(rows) : 0;
+
+  const handleWriteBack = async () => {
+    if (!workspaceId || !projectId) {
+      toast.error("Session not loaded", {
+        description: "Reload the workspace and try again.",
+      });
+      return;
+    }
+    setWritingBack(true);
+    try {
+      const session = await getImportSession(projectId);
+      const result = await applyPlpWriteBack({
+        workspaceId,
+        sessionId: projectId,
+        rows,
+        sourceColumn:
+          session?.supplier_match_column ||
+          guessPlpSourceColumn(originalColumns),
+        masterColumn: session?.master_match_column || "name",
+      });
+      if (result.updated === 0) {
+        toast.error("Nothing was written", {
+          description:
+            result.unmatched > 0
+              ? `${result.unmatched} rows did not match any category in your store.`
+              : "No PLP content found on these rows.",
+        });
+      } else {
+        toast.success(`${result.updated} categories updated`, {
+          description: [
+            result.unmatched > 0 ? `${result.unmatched} unmatched` : null,
+            result.skipped > 0 ? `${result.skipped} without content` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || undefined,
+        });
+      }
+      setConfirmWriteBack(false);
+      setOpen(false);
+    } catch (err: any) {
+      toast.error("Write-back failed", { description: err?.message });
+    } finally {
+      setWritingBack(false);
+    }
   };
 
   return (
@@ -245,10 +286,56 @@ export function ExportDialog() {
                   <div className="text-[10px] text-muted-foreground">Structured with existing & new keys</div>
                 </div>
               </button>
+
+              {sessionKind === "plp" && (
+                <button
+                  onClick={() => setConfirmWriteBack(true)}
+                  disabled={exporting || writeBackCount === 0}
+                  className="w-full flex items-center gap-3 p-2.5 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 transition-colors text-left disabled:opacity-50"
+                >
+                  <div className="h-8 w-8 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+                    <FolderTree className="h-4 w-4 text-primary" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold">Apply to my categories</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {writeBackCount === 0
+                        ? "No enriched pages yet"
+                        : `Write SEO content into ${writeBackCount} category pages`}
+                    </div>
+                  </div>
+                </button>
+              )}
             </div>
           </div>
         </>
       )}
+
+      <AlertDialog open={confirmWriteBack} onOpenChange={setConfirmWriteBack}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apply to my categories?</AlertDialogTitle>
+            <AlertDialogDescription>
+              SEO content from {writeBackCount} enriched{" "}
+              {writeBackCount === 1 ? "page" : "pages"} will be written into your
+              store categories. Rows that match no existing category are skipped,
+              and fields left empty keep their current value.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={writingBack}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleWriteBack();
+              }}
+              disabled={writingBack}
+            >
+              {writingBack ? "Writing..." : "Apply"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

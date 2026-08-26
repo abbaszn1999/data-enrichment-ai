@@ -24,7 +24,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useSubscription } from "@/hooks/use-subscription";
 import { formatCredits } from "@/lib/format-credits";
 
@@ -285,16 +285,16 @@ export default function SubscriptionPage() {
 
       {/* Extra Credits — buy any amount, priced at a flat $0.30/credit */}
       {isActive && (
-        <div className="relative overflow-hidden rounded-2xl border-2 border-amber-500/20 bg-gradient-to-br from-amber-500/[0.07] via-background to-[#400095]/[0.06] dark:to-[#F76D01]/[0.06] p-5 sm:p-7">
-          <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-amber-500/10 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-20 -left-10 h-48 w-48 rounded-full bg-[#400095]/10 dark:bg-[#F76D01]/10 blur-3xl" />
+        <div className="relative overflow-hidden rounded-2xl border-2 border-[#F76D01]/20 bg-gradient-to-br from-[#F76D01]/[0.07] via-background to-[#400095]/[0.06] p-5 sm:p-7">
+          <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-[#F76D01]/10 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-20 -left-10 h-48 w-48 rounded-full bg-[#400095]/10 blur-3xl" />
 
           <div className="relative grid grid-cols-1 lg:grid-cols-5 gap-8">
             {/* Left: pitch + benefits */}
             <div className="lg:col-span-2 flex flex-col gap-4">
               <div className="flex items-center gap-2.5">
-                <div className="h-10 w-10 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0">
-                  <Coins className="h-5 w-5 text-amber-500" />
+                <div className="h-10 w-10 rounded-xl bg-[#F76D01]/15 flex items-center justify-center shrink-0">
+                  <Coins className="h-5 w-5 text-[#F76D01]" />
                 </div>
                 <div>
                   <h2 className="text-lg font-bold leading-tight">Buy Extra Credits</h2>
@@ -315,8 +315,8 @@ export default function SubscriptionPage() {
                   { icon: Sparkles, text: "Buy exactly what you need, any amount" },
                 ].map((item, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <div className="h-6 w-6 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
-                      <item.icon className="h-3.5 w-3.5 text-amber-500" />
+                    <div className="h-6 w-6 rounded-full bg-[#F76D01]/10 flex items-center justify-center shrink-0">
+                      <item.icon className="h-3.5 w-3.5 text-[#F76D01]" />
                     </div>
                     <span className="text-xs text-foreground/80">{item.text}</span>
                   </div>
@@ -334,8 +334,8 @@ export default function SubscriptionPage() {
                     onClick={() => setTopupCredits(String(amount))}
                     className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
                       topupCreditsNum === amount
-                        ? "bg-amber-500 border-amber-500 text-white"
-                        : "border-border text-muted-foreground hover:border-amber-500/50 hover:text-foreground"
+                        ? "bg-[#F76D01] border-[#F76D01] text-white"
+                        : "border-border text-muted-foreground hover:border-[#F76D01]/50 hover:text-foreground"
                     }`}
                   >
                     {amount.toLocaleString()}
@@ -379,7 +379,7 @@ export default function SubscriptionPage() {
                 <div className="hidden sm:block h-12 w-px bg-border" />
 
                 <div className="text-center sm:text-right">
-                  <div className="text-3xl font-extrabold tracking-tight text-amber-600 dark:text-amber-400">
+                  <div className="text-3xl font-extrabold tracking-tight text-[#F76D01]">
                     ${topupUsd.toFixed(2)}
                   </div>
                   <div className="text-[10px] text-muted-foreground">$0.30 / credit · one-time</div>
@@ -393,7 +393,7 @@ export default function SubscriptionPage() {
               )}
 
               <Button
-                className="w-full gap-1.5 mt-4 h-10 font-semibold bg-amber-500 hover:bg-amber-600 text-white"
+                className="w-full gap-1.5 mt-4 h-10 font-semibold bg-[#F76D01] hover:bg-[#e05e00] text-white"
                 onClick={handleBuyCredits}
                 disabled={loadingAction === "topup" || topupCreditsNum < CREDIT_TOPUP_MIN_CREDITS}
               >

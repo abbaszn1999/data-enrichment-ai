@@ -1,4 +1,5 @@
 import type { ProductRow, EnrichedData, EnrichmentColumn } from "@/types";
+import { enrichedValueToText } from "./export-values";
 
 // --- Image extraction from xlsx ---
 
@@ -285,29 +286,7 @@ export async function exportToExcel(
     }
 
     for (const col of enabledEnrichment) {
-      const value = row.enrichedData[col.id];
-      let strValue = "";
-
-      if (value === undefined || value === null) {
-        strValue = "";
-      } else if (Array.isArray(value)) {
-        if (col.id === "imageUrls") {
-          strValue = (value as any[])
-            .map((i: any) => (typeof i === "object" && i !== null ? (i.imageUrl || "") : String(i || "")))
-            .filter(Boolean)
-            .join("\n");
-        } else if (col.id === "sourceUrls") {
-          strValue = (value as any[])
-            .map((i: any) => (typeof i === "object" && i !== null ? (i.uri || i.url || "") : String(i || "")))
-            .filter(Boolean)
-            .join("\n");
-        } else {
-          strValue = (value as any[]).map((i: any) => typeof i === "object" ? (i.imageUrl || i.uri || i.title || JSON.stringify(i)) : String(i)).join("\n");
-        }
-      } else {
-        strValue = String(value);
-      }
-
+      const strValue = enrichedValueToText(row.enrichedData[col.id], col.id);
       values.push(strValue.length > 32700 ? strValue.substring(0, 32700) + "..." : strValue);
     }
 
@@ -413,24 +392,7 @@ function addSheetRows(
     }
 
     for (const col of enabledEnrichment) {
-      const value = row.enrichedData[col.id];
-      let strValue = "";
-      if (value === undefined || value === null) strValue = "";
-      else if (Array.isArray(value)) {
-        if (col.id === "imageUrls") {
-          strValue = (value as any[])
-            .map((i: any) => (typeof i === "object" && i !== null ? (i.imageUrl || "") : String(i || "")))
-            .filter(Boolean)
-            .join("\n");
-        } else if (col.id === "sourceUrls") {
-          strValue = (value as any[])
-            .map((i: any) => (typeof i === "object" && i !== null ? (i.uri || i.url || "") : String(i || "")))
-            .filter(Boolean)
-            .join("\n");
-        } else {
-          strValue = (value as any[]).map((i: any) => typeof i === "object" ? (i.imageUrl || i.uri || i.title || JSON.stringify(i)) : String(i)).join("\n");
-        }
-      } else strValue = String(value);
+      const strValue = enrichedValueToText(row.enrichedData[col.id], col.id);
       values.push(strValue.length > 32700 ? strValue.substring(0, 32700) + "..." : strValue);
     }
 

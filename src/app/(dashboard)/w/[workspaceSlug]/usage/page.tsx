@@ -26,7 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useUsage } from "@/hooks/use-usage";
 import { formatCredits } from "@/lib/format-credits";
 

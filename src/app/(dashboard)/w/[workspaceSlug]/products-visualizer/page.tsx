@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { Button } from "@/components/ui/button";

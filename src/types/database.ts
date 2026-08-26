@@ -132,24 +132,19 @@ export interface Database {
         Row: {
           id: string;
           workspace_id: string;
-          file_id: string | null;
-          supplier_id: string | null;
           name: string;
           notes: string;
-          tags: string[];
+          /** 'product' enriches catalog rows, 'plp' enriches category/listing pages. */
+          kind: "product" | "plp";
           status: "matching" | "review" | "enriching" | "completed" | "cancelled";
-          column_mapping: Json;
           supplier_match_column: string | null;
           master_match_column: string;
           target_category_ids: string[];
           matching_rules: Json;
-          enrichment_columns: Json;
-          enrichment_settings: Json;
           total_rows: number;
           existing_count: number;
           new_count: number;
           enriched_count: number;
-          updated_count: number;
           storage_path: string | null;
           created_by: string;
           created_at: string;
@@ -159,24 +154,21 @@ export interface Database {
           workspace_id: string;
           name: string;
           created_by: string;
-          file_id?: string | null;
-          supplier_id?: string | null;
+          kind?: "product" | "plp";
           notes?: string;
-          tags?: string[];
           total_rows?: number;
-          column_mapping?: Json;
           supplier_match_column?: string | null;
           storage_path?: string | null;
         };
         Update: {
           status?: "matching" | "review" | "enriching" | "completed" | "cancelled";
           matching_rules?: Json;
-          enrichment_columns?: Json;
-          enrichment_settings?: Json;
+          supplier_match_column?: string | null;
+          master_match_column?: string;
+          target_category_ids?: string[];
           existing_count?: number;
           new_count?: number;
           enriched_count?: number;
-          updated_count?: number;
           storage_path?: string | null;
           updated_at?: string;
         };

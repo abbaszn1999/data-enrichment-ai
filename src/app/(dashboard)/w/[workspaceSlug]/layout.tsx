@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, createContext, useContext, type ComponentType } from "react";
+import { useState, useEffect, type ComponentType } from "react";
 import Link from "next/link";
 import { usePathname, useParams, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -54,22 +54,7 @@ import { useWorkspaceStore } from "@/store/workspace-store";
 import { useSyncStore } from "@/store/sync-store";
 import { SubscriptionGate, SubscriptionBanner } from "@/components/subscription-gate";
 import { AutommerceLogo } from "@/components/brand/autommerce-logo";
-
-interface WorkspaceContextType {
-  workspace: Workspace | null;
-  role: Role | null;
-  wsLoading: boolean;
-  hasIntegration: boolean;
-}
-
-const WorkspaceContext = createContext<WorkspaceContextType>({
-  workspace: null,
-  role: null,
-  wsLoading: true,
-  hasIntegration: false,
-});
-
-export const useWorkspaceContext = () => useContext(WorkspaceContext);
+import { WorkspaceContext } from "./workspace-context";
 
 export default function WorkspaceLayout({
   children,
@@ -118,9 +103,6 @@ export default function WorkspaceLayout({
   const isEnrichPage = pathname.includes("/enrich");
   const isSyncPage =
     pathname === `${basePath}/sync` || pathname.startsWith(`${basePath}/sync/`);
-  const isGrowthSyncPage =
-    pathname === `${basePath}/growth-sync` ||
-    pathname.startsWith(`${basePath}/growth-sync/`);
   const isMarketResearchPage = pathname.includes("/market-research");
   const isWebsiteRestructurePage = pathname.includes("/website-restructure");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
@@ -137,9 +119,10 @@ export default function WorkspaceLayout({
     (isSyncPage && syncFocusMode);
   // Immersive mode hides the top header — keep false so Enrich shows it
   const isImmersive = false;
-  // Lock main content height so tool UIs (Enrich sidebar/table) scroll internally
+  // Lock main content height so tool UIs (Enrich sidebar/table) scroll internally.
+  // Growth Sync is a regular scrollable dashboard page, so it's excluded here.
   const lockContentHeight =
-    isEnrichPage || isSyncPage || isMarketResearchPage || isGrowthSyncPage || isWebsiteRestructurePage;
+    isEnrichPage || isSyncPage || isMarketResearchPage || isWebsiteRestructurePage;
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage =
     pathname === `${basePath}/subscription` ||
@@ -701,7 +684,7 @@ export default function WorkspaceLayout({
               <SubscriptionGate subscription={subscription} isActive={isActive} isLoading={subLoading} role={role}>
                 <div
                   className={
-                    isEnrichPage || isMarketResearchPage || isGrowthSyncPage || isWebsiteRestructurePage
+                    isEnrichPage || isMarketResearchPage || isWebsiteRestructurePage
                       ? "flex-1 flex flex-col min-h-0 overflow-hidden h-full"
                       : "flex-1"
                   }

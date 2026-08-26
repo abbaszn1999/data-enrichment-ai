@@ -3,6 +3,7 @@ import type {
   EnrichmentColumn,
   EnrichmentModel,
   ImageUrl,
+  SessionKind,
   SourceUrl,
 } from "@/types";
 import type { AiCallCost } from "@/lib/ai-pricing";
@@ -24,6 +25,8 @@ export type EnrichColumnConfig = Pick<
   | "imageCount"
   | "sourceCount"
   | "maxCategories"
+  | "itemCount"
+  | "maxChars"
   | "customInstruction"
   | "writingTone"
   | "contentLength"
@@ -39,6 +42,8 @@ export interface EnrichAgentParams {
   enabledColumns: string[];
   enrichmentColumns?: EnrichColumnConfig[];
   settings?: EnrichSettings;
+  /** Defaults to "product" for callers predating the PLP mode. */
+  kind?: SessionKind;
   cmsType?: string;
   workspaceCategories?: CategoryItem[];
   categoriesRawRows?: Record<string, string>[];

@@ -25,7 +25,7 @@ import {
   imageCaption,
   sanitizeSku,
 } from "@/lib/image-classify/sku";
-import { useWorkspaceContext } from "../../layout";
+import { useWorkspaceContext } from "../../workspace-context";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {
   getImageClassificationSession,

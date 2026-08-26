@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -37,6 +37,7 @@ import {
   LANGUAGE_OPTIONS,
   MODEL_OPTIONS,
   TONE_OPTIONS,
+  getDefaultEnrichmentColumns,
   resolveEnrichmentModel,
   type OutputLanguage,
   type EnrichmentModel,
@@ -47,7 +48,7 @@ import {
   type EnrichmentColumn,
 } from "@/types";
 import type { EnrichSettings } from "@/lib/enrich";
-import { saveEnrichmentPreset } from "@/lib/supabase";
+import { getEnrichmentPresets, saveEnrichmentPreset } from "@/lib/supabase";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -73,6 +74,8 @@ export function Sidebar() {
     enrichmentSettings,
     selectedRowIds,
     activeSheet,
+    sessionKind,
+    applyEnrichmentPreset,
     toggleEnrichmentColumn,
     setAllEnrichmentColumns,
     addCustomEnrichmentColumn,
@@ -121,6 +124,53 @@ export function Sidebar() {
   const [existingSearch, setExistingSearch] = useState("");
   const [expandedExistingCols, setExpandedExistingCols] = useState<Set<string>>(new Set());
   const [existingColDrafts, setExistingColDrafts] = useState<Record<string, string>>({});
+  const [presets, setPresets] = useState<EnrichmentPreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState("");
+
+  // Saved settings are kind-specific: a product column set is meaningless in a
+  // PLP session. Presets saved before the split are treated as product.
+  const kindPresets = useMemo(
+    () => presets.filter((p) => (p.kind ?? "product") === sessionKind),
+    [presets, sessionKind]
+  );
+
+  const refreshPresets = useCallback(async () => {
+    if (!workspace?.id) return;
+    try {
+      setPresets(await getEnrichmentPresets(workspace.id));
+    } catch (error) {
+      console.error("Failed to load saved settings", error);
+    }
+  }, [workspace?.id]);
+
+  useEffect(() => {
+    refreshPresets();
+  }, [refreshPresets]);
+
+  const handleSelectPreset = useCallback(
+    (presetId: string) => {
+      if (presetId === "") {
+        setSelectedPresetId("");
+        applyEnrichmentPreset({
+          enrichmentColumns: getDefaultEnrichmentColumns(sessionKind),
+        });
+        return;
+      }
+
+      const preset = kindPresets.find((p) => p.id === presetId);
+      if (!preset) return;
+
+      const confirmed = window.confirm(
+        `Apply "${preset.name}"?\n\nThis replaces your current AI column configuration. Enriched cells are kept — columns you turn off keep their data and it reappears if you re-enable them.`
+      );
+      if (!confirmed) return;
+
+      setSelectedPresetId(presetId);
+      applyEnrichmentPreset(preset.settings);
+      toast.success("Setting applied", { description: preset.name });
+    },
+    [kindPresets, applyEnrichmentPreset, sessionKind]
+  );
 
   const enabledColumns = enrichmentColumns
     .filter((col) => col.enabled)
@@ -206,7 +256,10 @@ export function Sidebar() {
       // Fetch workspace categories if categories column is enabled
       let workspaceCategories: CategoryItem[] | undefined;
       let categoriesRawRows: Record<string, string>[] | undefined;
-      const categoriesEnabled = enabledColumns.includes("categories");
+      // Any column validated against the store category tree needs the allowlist.
+      const categoriesEnabled = enabledColumns.some((id) =>
+        ["categories", "parentCategory", "internalLinks"].includes(id)
+      );
       if (categoriesEnabled && workspace?.id) {
         try {
           const catRes = await fetch(`/api/categories?workspaceId=${workspace.id}`);
@@ -252,6 +305,7 @@ export function Sidebar() {
           ? enrichmentColumns.filter((c) => c.enabled)
           : existingAsEnrichCols,
         settings: enrichSettings,
+        kind: sessionKind,
         cmsType: workspace?.cms_type || undefined,
         workspaceCategories,
         categoriesRawRows,
@@ -450,6 +504,7 @@ export function Sidebar() {
     enrichmentColumns,
     enrichmentSettings,
     sourceColumns,
+    sessionKind,
     workspace,
     setIsEnriching,
     setPaused,
@@ -486,6 +541,7 @@ export function Sidebar() {
       name: name.trim(),
       createdAt: now,
       updatedAt: now,
+      kind: sessionKind,
       settings: {
         sourceColumns: [...sourceColumns],
         enrichmentColumns: enrichmentColumns.map((col) => ({ ...col })),
@@ -494,13 +550,22 @@ export function Sidebar() {
     };
     try {
       await saveEnrichmentPreset(workspace.id, preset);
+      setSelectedPresetId(preset.id);
+      await refreshPresets();
       toast.success("Setting saved", { description: preset.name });
     } catch (error) {
       toast.error("Failed to save setting", {
         description: error instanceof Error ? error.message : "Unknown error",
       });
     }
-  }, [workspace?.id, enrichmentColumns, sourceColumns, enrichmentSettings]);
+  }, [
+    workspace?.id,
+    enrichmentColumns,
+    sourceColumns,
+    enrichmentSettings,
+    sessionKind,
+    refreshPresets,
+  ]);
 
   const handleAddCustomColumn = useCallback(() => {
     if (!newColLabel.trim()) return;
@@ -628,6 +693,37 @@ export function Sidebar() {
             >
               {enrichableRows.length} to enrich
             </Badge>
+          </div>
+
+          {/* Saved settings — applies to everything below */}
+          <div className="flex items-center gap-1.5">
+            <select
+              value={selectedPresetId}
+              onChange={(e) => handleSelectPreset(e.target.value)}
+              disabled={isEnriching}
+              className="h-7 flex-1 min-w-0 rounded-md border border-border/60 bg-background px-2 text-[10px] font-medium focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:opacity-50"
+            >
+              <option value="">Default settings</option>
+              {kindPresets.length === 0 ? (
+                <option value="" disabled>
+                  No saved settings yet
+                </option>
+              ) : (
+                kindPresets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name}
+                  </option>
+                ))
+              )}
+            </select>
+            <button
+              onClick={handleSavePreset}
+              disabled={isEnriching || enabledColumns.length === 0}
+              title="Save the current configuration as a reusable setting"
+              className="h-7 shrink-0 rounded-md border border-border/60 px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              Save
+            </button>
           </div>
 
           <Separator />
@@ -804,7 +900,18 @@ export function Sidebar() {
                       return next;
                     });
                   };
-                  const hasSettings = col.type === "imageUrls" || col.type === "sourceUrls" || col.type === "categories" || col.id === "enhancedTitle" || col.id === "marketingDescription" || col.isCustom;
+                  // Any free-text column can carry tone/length, so PLP columns
+                  // get the same controls as the product ones.
+                  const hasToneControls = col.type === "text";
+                  const hasSettings =
+                    col.type === "imageUrls" ||
+                    col.type === "sourceUrls" ||
+                    col.type === "categories" ||
+                    col.type === "faq" ||
+                    col.type === "internalLinks" ||
+                    col.type === "keywords" ||
+                    hasToneControls ||
+                    col.isCustom;
 
                   return (
                     <div
@@ -883,8 +990,8 @@ export function Sidebar() {
                           className="space-y-2.5 border-t border-border/50 px-2 pb-2.5 pt-2"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Writing Tone — only for Enhanced Title & Marketing Description */}
-                          {(col.id === "enhancedTitle" || col.id === "marketingDescription") && (
+                          {/* Writing Tone & length — any free-text column */}
+                          {hasToneControls && (
                             <>
                               <div className="space-y-1">
                                 <label className="text-[10px] font-medium text-muted-foreground">
@@ -1038,6 +1145,74 @@ export function Sidebar() {
                                 <span>3</span>
                                 <span>5</span>
                               </div>
+                            </div>
+                          )}
+
+                          {/* Item count — faq / keywords / internal links */}
+                          {(col.type === "faq" ||
+                            col.type === "keywords" ||
+                            col.type === "internalLinks") && (
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-medium text-muted-foreground">
+                                  {col.type === "faq"
+                                    ? "Number of questions"
+                                    : col.type === "keywords"
+                                      ? "Number of keywords"
+                                      : "Number of links"}
+                                </label>
+                                <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
+                                  {col.itemCount ?? (col.type === "faq" ? 4 : 5)}
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min={1}
+                                max={10}
+                                value={col.itemCount ?? (col.type === "faq" ? 4 : 5)}
+                                onChange={(e) =>
+                                  updateEnrichmentColumnConfig(col.id, {
+                                    itemCount: parseInt(e.target.value),
+                                  })
+                                }
+                                disabled={isEnriching}
+                                className="w-full h-1.5 accent-primary disabled:opacity-50"
+                              />
+                              <div className="flex justify-between text-[8px] text-muted-foreground/50">
+                                <span>1</span>
+                                <span>5</span>
+                                <span>10</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Character budget — SEO fields with a hard limit */}
+                          {col.type === "text" && col.maxChars != null && (
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-medium text-muted-foreground">
+                                  Character limit
+                                </label>
+                                <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
+                                  {col.maxChars}
+                                </span>
+                              </div>
+                              <input
+                                type="number"
+                                min={10}
+                                max={2000}
+                                value={col.maxChars}
+                                onChange={(e) =>
+                                  updateEnrichmentColumnConfig(col.id, {
+                                    maxChars: Math.max(
+                                      10,
+                                      Math.min(2000, parseInt(e.target.value) || 10)
+                                    ),
+                                  })
+                                }
+                                disabled={isEnriching}
+                                className="w-full h-7 px-2 text-[10px] rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50"
+                              />
                             </div>
                           )}
 
@@ -1420,15 +1595,6 @@ export function Sidebar() {
                   </Badge>
                 )}
                 </div>
-                {enrichOutputTab === "new" && (
-                  <button
-                    onClick={handleSavePreset}
-                    disabled={enabledColumns.length === 0}
-                    className="h-6 px-2 rounded-md border border-border/60 text-[10px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:pointer-events-none"
-                  >
-                    Save Setting
-                  </button>
-                )}
               </div>
 
               {errorCount > 0 && lastError && (

@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import { loadProductsJson, saveProductsJson, type MasterProductJson } from "@/lib/storage-helpers";
 

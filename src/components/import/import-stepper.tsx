@@ -1,18 +1,48 @@
 "use client";
 
 import { Check } from "lucide-react";
+import type { SessionKind } from "@/types";
 
-const STEPS = [
-  { num: 1, label: "Upload File" },
-  { num: 2, label: "Matching Rules" },
-  { num: 3, label: "Review Results" },
-  { num: 4, label: "Enrichment Tool" },
-];
+export interface ImportStep {
+  num: number;
+  label: string;
+  /** Route segment under /import/[sessionId]; the upload step has no segment. */
+  segment: string | null;
+}
 
-export function ImportStepper({ currentStep }: { currentStep: number }) {
+/**
+ * The single source of truth for the import flow's steps, shared by the
+ * stepper header and the session overview page so numbering never drifts.
+ */
+export function getImportSteps(kind: SessionKind = "product"): ImportStep[] {
+  return [
+    { num: 1, label: "Upload File", segment: null },
+    {
+      num: 2,
+      label: kind === "plp" ? "Match Categories" : "Matching Rules",
+      segment: "rules",
+    },
+    { num: 3, label: "Review Results", segment: "review" },
+    {
+      num: 4,
+      label: kind === "plp" ? "PLP Workspace" : "Enrichment Tool",
+      segment: "enrich",
+    },
+  ];
+}
+
+export function ImportStepper({
+  currentStep,
+  kind = "product",
+}: {
+  currentStep: number;
+  kind?: SessionKind;
+}) {
+  const steps = getImportSteps(kind);
+
   return (
     <div className="flex w-full items-center overflow-x-auto py-1">
-      {STEPS.map((step, i) => (
+      {steps.map((step, i) => (
         <div key={step.num} className="flex min-w-fit flex-1 items-center">
           <div
             className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-[10px] font-bold transition-all ${
@@ -32,7 +62,7 @@ export function ImportStepper({ currentStep }: { currentStep: number }) {
             )}
             <span className="whitespace-nowrap">{step.label}</span>
           </div>
-          {i < STEPS.length - 1 && (
+          {i < steps.length - 1 && (
             <div className={`mx-2 h-px min-w-5 flex-1 ${step.num < currentStep ? "bg-emerald-400" : "bg-border"}`} />
           )}
         </div>

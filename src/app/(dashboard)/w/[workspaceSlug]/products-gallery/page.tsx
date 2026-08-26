@@ -66,7 +66,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {

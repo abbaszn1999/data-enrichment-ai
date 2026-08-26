@@ -137,7 +137,30 @@ function applyPreview(value: string, op: string, param: string, param2?: string)
 }
 
 export function FunctionsPanel() {
-  const { rows, originalColumns, selectedRowIds, enrichmentColumns } = useSheetStore();
+  const { rows, originalColumns, selectedRowIds, enrichmentColumns, sessionKind } = useSheetStore();
+
+  // A category page has no SKU; the slug is its identity instead.
+  const categories = useMemo(() => {
+    if (sessionKind !== "plp") return CATEGORIES;
+    return CATEGORIES.map((cat) =>
+      cat.id !== "generate"
+        ? cat
+        : {
+            ...cat,
+            ops: cat.ops
+              .filter((op) => op.id !== "sku")
+              .map((op) =>
+                op.id === "slug"
+                  ? {
+                      ...op,
+                      label: "Generate slug",
+                      description: "Build a page slug from the category name",
+                    }
+                  : op
+              ),
+          }
+    );
+  }, [sessionKind]);
 
   const [selectedColumn, setSelectedColumn] = useState<string>("");
   const [applyTo, setApplyTo] = useState<"selected" | "all">("selected");
@@ -344,7 +367,7 @@ export function FunctionsPanel() {
         <Separator />
 
         {/* Function Categories */}
-        {CATEGORIES.map((cat) => {
+        {categories.map((cat) => {
           const isExpanded = expandedCategory === cat.id;
           // Auto-suggest: show math first for numeric, text first for text columns
           const isRelevant = selectedColumn && (

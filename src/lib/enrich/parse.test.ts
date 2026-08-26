@@ -7,7 +7,7 @@ import {
   pickImagesFromSelection,
 } from "./parse";
 import { buildEnrichToolPolicy } from "./policy";
-import type { OpenAiResponse } from "./types";
+import type { EnrichColumnConfig, OpenAiResponse } from "./types";
 
 const responseFixture: OpenAiResponse = {
   status: "completed",
@@ -85,7 +85,7 @@ describe("enrich parse validation", () => {
   });
 
   it("rejects invented image and source URLs, pads images to count", () => {
-    const policy = buildEnrichToolPolicy(["enhancedTitle", "imageUrls", "sourceUrls"], [
+    const columns: EnrichColumnConfig[] = [
       {
         id: "imageUrls",
         label: "Images",
@@ -102,7 +102,8 @@ describe("enrich parse validation", () => {
         enabled: true,
         sourceCount: 3,
       },
-    ]);
+    ];
+    buildEnrichToolPolicy(["enhancedTitle", "imageUrls", "sourceUrls"], columns);
 
     const data = buildEnrichedData({
       selection: {
@@ -118,7 +119,7 @@ describe("enrich parse validation", () => {
       },
       response: responseFixture,
       enabledColumns: ["enhancedTitle", "imageUrls", "sourceUrls"],
-      policy,
+      enrichmentColumns: columns,
     });
 
     expect(data.enhancedTitle).toBe("Acme Widget Pro");
@@ -155,14 +156,12 @@ describe("enrich parse validation", () => {
   });
 
   it("sanitizes categories against store allowlist", () => {
-    const policy = buildEnrichToolPolicy(["categories"]);
     const data = buildEnrichedData({
       selection: {
         categories: "Baby & Toddler > Feeding, Electronics > TVs",
       },
       response: { status: "completed", output: [] },
       enabledColumns: ["categories"],
-      policy,
       workspaceCategories: [
         {
           id: "1",

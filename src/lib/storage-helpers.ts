@@ -8,6 +8,7 @@ import {
   getGalleryWorksheetPath,
 } from "@/lib/gallery/storage-paths";
 import type { GalleryWorksheetJson } from "@/lib/gallery/types";
+import type { FaqItem, SessionKind } from "@/types";
 
 const BUCKET = "workspace-files";
 
@@ -52,6 +53,8 @@ export async function deleteJsonFromStorage(storagePath: string): Promise<void> 
 // ─── Project JSON (import session data) ──────────────────
 
 export interface ProjectJson {
+  /** What this session enriches. Absent on projects created before the split. */
+  kind?: SessionKind;
   /** Columns from the original file */
   columns: string[];
   /** All rows with original + enriched data */
@@ -64,6 +67,11 @@ export interface ProjectJson {
   enrichmentSettings: any;
   /** Column visibility map */
   columnVisibility: Record<string, boolean>;
+  /**
+   * The user chose "Skip matching" in step 2, so every row is new by decision.
+   * Later steps must not re-derive matchType, which would undo that choice.
+   */
+  matchingSkipped?: boolean;
 }
 
 export interface ProjectRow {
@@ -239,6 +247,24 @@ export interface CategoryJson {
   sortOrder?: number;
   attributes?: any[];
   createdAt?: string;
+  /** PLP enrichment output, written back from a Catalog Intelligence session. */
+  seo?: CategorySeoContent;
+}
+
+export interface CategorySeoContent {
+  seoTitle?: string;
+  metaDescription?: string;
+  h1?: string;
+  introCopy?: string;
+  seoCopy?: string;
+  targetKeyword?: string;
+  secondaryKeywords?: string[];
+  faq?: FaqItem[];
+  internalLinks?: string[];
+  breadcrumbLabel?: string;
+  /** Session id + timestamp of the run that produced this content. */
+  updatedAt?: string;
+  sourceSessionId?: string;
 }
 
 export function getCategoriesStoragePath(workspaceId: string): string {

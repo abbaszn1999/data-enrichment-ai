@@ -6,16 +6,23 @@ import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getImportSession, type ImportSession } from "@/lib/supabase";
-import { loadProjectJson, loadProductsJson } from "@/lib/storage-helpers";
-import { useWorkspaceContext } from "../../../layout";
+import { loadProjectJson } from "@/lib/storage-helpers";
+import { useWorkspaceContext } from "../../../workspace-context";
 import { useSheetStore } from "@/store/sheet-store";
-import { normalizeValue, type MatchingRule } from "@/lib/matching";
+import type { MatchingRule } from "@/lib/matching";
+import {
+  applyMatchTypes,
+  guessPlpSourceColumn,
+  resolveTargetCategoryNames,
+  PLP_MATCHING_RULES,
+} from "@/lib/import-matching";
 import { Sidebar } from "@/components/sidebar";
 import { DataTable } from "@/components/data-table";
 import {
-  DEFAULT_ENRICHMENT_COLUMNS,
   DEFAULT_ENRICHMENT_SETTINGS,
+  getDefaultEnrichmentColumns,
   type ProductRow,
+  type SessionKind,
 } from "@/types";
 
 export default function EnrichPage() {
@@ -52,33 +59,33 @@ export default function EnrichPage() {
           return;
         }
 
-        // 3. Re-run matching to ensure matchType is always correct
-        const masterProducts = await loadProductsJson(workspace!.id);
-        const matchRules: MatchingRule[] = (session.matching_rules as MatchingRule[]) || [];
-        const supplierMatchCol = session.supplier_match_column || (project.columns?.[0] ?? "");
-        const masterMatchCol = session.master_match_column || "sku";
+        // 3. Re-run matching so matchType is always correct on load
+        const kind: SessionKind =
+          (session.kind as SessionKind) ?? project.kind ?? "product";
+        const isPlp = kind === "plp";
 
-        const masterKeys = new Map<string, string>();
-        for (const p of masterProducts) {
-          const val = masterMatchCol === "sku" ? p.sku : (p.data?.[masterMatchCol] ?? p.sku);
-          masterKeys.set(normalizeValue(String(val), matchRules), p.sku);
-        }
-
-        const containsRule = matchRules.find((r) => r.type === "contains" && r.enabled);
-
-        for (const row of project.rows) {
-          const supplierVal = row.originalData?.[supplierMatchCol] ?? "";
-          const normalized = normalizeValue(String(supplierVal), matchRules);
-
-          let matched = false;
-          if (masterKeys.has(normalized)) {
-            matched = true;
-          } else if (containsRule) {
-            for (const mk of masterKeys.keys()) {
-              if (normalized.includes(mk) || mk.includes(normalized)) { matched = true; break; }
-            }
-          }
-          row.matchType = matched ? "existing" : "new";
+        // A skipped step 2 is a decision the workspace must respect.
+        if (!project.matchingSkipped) {
+          await applyMatchTypes({
+            kind,
+            workspaceId: workspace!.id,
+            rows: project.rows,
+            sourceColumn:
+              session.supplier_match_column ||
+              (isPlp
+                ? guessPlpSourceColumn(project.columns ?? [])
+                : (project.columns?.[0] ?? "")),
+            masterColumn: session.master_match_column || (isPlp ? "name" : "sku"),
+            rules: isPlp
+              ? PLP_MATCHING_RULES
+              : ((session.matching_rules as MatchingRule[]) || []),
+            targetCategoryNames: isPlp
+              ? []
+              : await resolveTargetCategoryNames(
+                  workspace!.id,
+                  session.target_category_ids
+                ),
+          });
         }
 
         // Convert Storage rows to ProductRow[] for the sheet store
@@ -96,7 +103,7 @@ export default function EnrichPage() {
         // 4. Use saved enrichment config from Storage, or defaults
         const enrichCols = project.enrichmentColumns?.length > 0
           ? project.enrichmentColumns
-          : DEFAULT_ENRICHMENT_COLUMNS;
+          : getDefaultEnrichmentColumns(kind);
         const enrichSettings = project.enrichmentSettings && Object.keys(project.enrichmentSettings).length > 0
           ? project.enrichmentSettings
           : DEFAULT_ENRICHMENT_SETTINGS;
@@ -112,6 +119,8 @@ export default function EnrichPage() {
           enrichCols,
           enrichSettings,
           project.columnVisibility || {},
+          kind,
+          project.matchingSkipped ?? false,
         );
 
         setLoading(false);

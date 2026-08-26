@@ -1,3 +1,6 @@
+import type { SessionKind } from "@/types";
+import { resolveEnabledColumns } from "./columns/registry";
+import type { ColumnNeeds } from "./columns/types";
 import type { EnrichColumnConfig } from "./types";
 
 export type EnrichToolChoice = "auto" | "required";
@@ -16,52 +19,61 @@ export interface EnrichToolPolicy {
   includeSources: boolean;
 }
 
-const SPECIAL_IDS = new Set(["imageUrls", "sourceUrls", "categories"]);
-
-function columnById(
-  columns: EnrichColumnConfig[] | undefined,
-  id: string
-): EnrichColumnConfig | undefined {
-  return columns?.find((c) => c.id === id);
-}
-
 /**
- * Derive Responses `web_search` tool settings from the enabled column set.
- * Images / sources force search; text-only uses auto so the model can skip
- * when product identity is already clear.
+ * Derive Responses `web_search` tool settings by reducing over the `needs` of
+ * every enabled column. A column that declares `search` forces the tool;
+ * text-only runs stay on "auto" so the model can skip searching when the row
+ * already identifies its subject.
  */
 export function buildEnrichToolPolicy(
   enabledColumns: string[],
-  enrichmentColumns?: EnrichColumnConfig[]
+  enrichmentColumns?: EnrichColumnConfig[],
+  kind: SessionKind = "product"
 ): EnrichToolPolicy {
-  const enabled = enabledColumns.filter(Boolean);
-  const needsImages = enabled.includes("imageUrls");
-  const needsSources = enabled.includes("sourceUrls");
-  const needsCategories = enabled.includes("categories");
-  const textColumnIds = enabled.filter((id) => !SPECIAL_IDS.has(id));
+  const resolved = resolveEnabledColumns(kind, enabledColumns, enrichmentColumns);
 
-  const imageCol = columnById(enrichmentColumns, "imageUrls");
-  const sourceCol = columnById(enrichmentColumns, "sourceUrls");
-  const imageCount = Math.min(10, Math.max(1, imageCol?.imageCount ?? 3));
-  const sourceCount = Math.min(10, Math.max(1, sourceCol?.sourceCount ?? 3));
+  const needs: Required<ColumnNeeds> = {
+    search: false,
+    images: false,
+    sources: false,
+    categoryAllowlist: false,
+  };
+  const textColumnIds: string[] = [];
+  let imageCount = 3;
+  let sourceCount = 3;
 
-  const forceSearch = needsImages || needsSources;
-  const toolChoice: EnrichToolChoice = forceSearch ? "required" : "auto";
+  for (const { id, col, spec } of resolved) {
+    const columnNeeds = spec.needs ?? {};
+    needs.search = needs.search || columnNeeds.search === true;
+    needs.images = needs.images || columnNeeds.images === true;
+    needs.sources = needs.sources || columnNeeds.sources === true;
+    needs.categoryAllowlist =
+      needs.categoryAllowlist || columnNeeds.categoryAllowlist === true;
 
-  const searchContentTypes: EnrichSearchContentType[] = needsImages
-    ? ["image", "text"]
-    : ["text"];
+    if (columnNeeds.images) {
+      imageCount = Math.min(10, Math.max(1, col.imageCount ?? 3));
+    }
+    if (columnNeeds.sources) {
+      sourceCount = Math.min(10, Math.max(1, col.sourceCount ?? 3));
+    }
+    if (!columnNeeds.images && !columnNeeds.sources && !columnNeeds.categoryAllowlist) {
+      textColumnIds.push(id);
+    }
+  }
+
+  // PLP pages are fronted by curated banners, not web packshots.
+  const needsImages = kind === "plp" ? false : needs.images;
 
   return {
     needsImages,
-    needsSources,
-    needsCategories,
+    needsSources: needs.sources,
+    needsCategories: needs.categoryAllowlist,
     textColumnIds,
-    toolChoice,
-    searchContentTypes,
+    toolChoice: needs.search ? "required" : "auto",
+    searchContentTypes: needsImages ? ["image", "text"] : ["text"],
     imageCount,
     sourceCount,
     includeResults: needsImages,
-    includeSources: needsSources,
+    includeSources: needs.sources,
   };
 }

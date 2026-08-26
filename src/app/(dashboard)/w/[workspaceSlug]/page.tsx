@@ -32,7 +32,7 @@ import {
   WandSparkles,
   Zap,
 } from "lucide-react";
-import { useWorkspaceContext } from "./layout";
+import { useWorkspaceContext } from "./workspace-context";
 import { useRole } from "@/hooks/use-role";
 import { useCredits } from "@/hooks/use-credits";
 import { useWallet } from "@/hooks/use-wallet";

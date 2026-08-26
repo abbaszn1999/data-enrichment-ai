@@ -67,7 +67,7 @@ import {
   StreamingMarkdown,
   resetRevealedMessages,
 } from "@/components/streaming-markdown";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useSyncStore, type SyncMessage, type SyncMode, type SyncWorkingMemory, type SyncActionReceipt } from "@/store/sync-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { getWorkspaceIntegration, type WorkspaceIntegration } from "@/lib/supabase";

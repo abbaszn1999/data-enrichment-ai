@@ -3,7 +3,12 @@
  * Public surface for `/api/enrich` and related callers.
  */
 
-export type { EnrichSettings, EnrichColumnConfig, EnrichAgentResult } from "./types";
+export type {
+  EnrichSettings,
+  EnrichColumnConfig,
+  EnrichAgentParams,
+  EnrichAgentResult,
+} from "./types";
 export {
   ENRICHMENT_OPENAI_MODELS,
   resolveEnrichOpenAiModel,
@@ -18,4 +23,12 @@ export {
   sanitizeCategoriesOutput,
   buildCategoryAllowlist,
 } from "./categories";
-export { enrichProductRow } from "./agent";
+export { enrichRow, enrichProductRow } from "./agent";
+export {
+  getColumnSpec,
+  hasColumnSpec,
+  listColumnSpecs,
+  resolveEnabledColumns,
+  type ColumnSpec,
+  type SpecContext,
+} from "./columns/registry";

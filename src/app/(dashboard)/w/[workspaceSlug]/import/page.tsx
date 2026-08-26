@@ -11,6 +11,7 @@ import {
   Database,
   FileSpreadsheet,
   FolderOpen,
+  FolderTree,
   Loader2,
   Plus,
   Sparkles,
@@ -29,9 +30,10 @@ import {
   type ProjectSortOption,
 } from "@/components/media/project-list-controls";
 import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
-import { useWorkspaceContext } from "../layout";
+import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import { getImportSessions, deleteImportSession, type ImportSession } from "@/lib/supabase";
+import type { SessionKind } from "@/types";
 
 const STATUS_LABEL: Record<string, string> = {
   matching: "Matching",
@@ -41,6 +43,16 @@ const STATUS_LABEL: Record<string, string> = {
   completed: "Ready",
   cancelled: "Cancelled",
 };
+
+function sessionKindOf(session: ImportSession): SessionKind {
+  return (session.kind as SessionKind) ?? "product";
+}
+
+const KIND_FILTERS: { value: "all" | SessionKind; label: string }[] = [
+  { value: "all", label: "All types" },
+  { value: "product", label: "Products" },
+  { value: "plp", label: "PLP pages" },
+];
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -97,6 +109,7 @@ export default function ImportPage() {
   const [projectSort, setProjectSort] =
     useState<ProjectSortOption>("updated_desc");
   const [projectPage, setProjectPage] = useState(1);
+  const [kindFilter, setKindFilter] = useState<"all" | SessionKind>("all");
   const [deleteTarget, setDeleteTarget] = useState<ImportSession | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
 
@@ -116,9 +129,19 @@ export default function ImportPage() {
         (s) => s.status !== "completed" && s.status !== "cancelled"
       ).length,
       products: sessions.reduce((sum, s) => sum + (s.total_rows || 0), 0),
+      // A workspace mixing both kinds cannot call this total "Products".
+      hasPlp: sessions.some((s) => sessionKindOf(s) === "plp"),
+      hasProduct: sessions.some((s) => sessionKindOf(s) === "product"),
     }),
     [sessions]
   );
+
+  const rowsMetricLabel =
+    projectStats.hasPlp && projectStats.hasProduct
+      ? "Rows"
+      : projectStats.hasPlp
+        ? "Pages"
+        : "Products";
 
   const filteredProjects = useMemo(() => {
     const query = projectSearch.trim().toLowerCase();
@@ -128,6 +151,10 @@ export default function ImportPage() {
         session.name.toLowerCase().includes(query) ||
         (session.notes || "").toLowerCase().includes(query);
       if (!matchesSearch) return false;
+
+      if (kindFilter !== "all" && sessionKindOf(session) !== kindFilter) {
+        return false;
+      }
 
       if (projectStatusFilter === "ready") {
         if (session.status !== "completed") return false;
@@ -149,6 +176,7 @@ export default function ImportPage() {
     });
     return sortProjectsByOption(filtered, projectSort);
   }, [
+    kindFilter,
     projectDateFilter,
     projectSearch,
     projectSort,
@@ -167,7 +195,7 @@ export default function ImportPage() {
 
   useEffect(() => {
     setProjectPage(1);
-  }, [projectSearch, projectStatusFilter, projectDateFilter, projectSort]);
+  }, [projectSearch, projectStatusFilter, projectDateFilter, projectSort, kindFilter]);
 
   useEffect(() => {
     if (projectPage !== safeProjectPage) setProjectPage(safeProjectPage);
@@ -242,7 +270,7 @@ export default function ImportPage() {
               { label: "Projects", value: projectStats.total, icon: FolderOpen },
               { label: "Ready", value: projectStats.ready, icon: Check },
               { label: "Processing", value: projectStats.processing, icon: Loader2 },
-              { label: "Products", value: projectStats.products.toLocaleString(), icon: Database },
+              { label: rowsMetricLabel, value: projectStats.products.toLocaleString(), icon: Database },
             ].map((metric, index) => (
               <motion.div
                 key={metric.label}
@@ -298,6 +326,23 @@ export default function ImportPage() {
             onSortChange={setProjectSort}
           />
 
+          <div className="flex items-center gap-1.5 border-b bg-muted/10 px-4 py-2">
+            {KIND_FILTERS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setKindFilter(option.value)}
+                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                  kindFilter === option.value
+                    ? "bg-[#400095] text-white dark:bg-[#F76D01]"
+                    : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
           {loading ? (
             <div className="flex h-64 items-center justify-center">
               <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#400095]/10 dark:bg-[#F76D01]/10">
@@ -336,6 +381,8 @@ export default function ImportPage() {
                     STATUS_LABEL[session.status] ?? session.status;
                   const isReady = session.status === "completed";
                   const progress = sessionProgress(session);
+                  const kind = sessionKindOf(session);
+                  const isPlp = kind === "plp";
 
                   return (
                     <motion.article
@@ -357,12 +404,19 @@ export default function ImportPage() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-3">
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#F76D01]/10 to-[#400095]/10 text-[#6B358D] transition-transform group-hover:scale-105 dark:text-[#C8A8D2]">
-                            <FileSpreadsheet className="h-4 w-4" />
+                            {isPlp ? (
+                              <FolderTree className="h-4 w-4" />
+                            ) : (
+                              <FileSpreadsheet className="h-4 w-4" />
+                            )}
                           </div>
                           <div className="min-w-0">
                             <h3 className="truncate text-sm font-black transition-colors group-hover:text-[#400095] dark:group-hover:text-[#F76D01]">
                               {session.name}
                             </h3>
+                            <span className="mt-0.5 inline-block rounded-full bg-muted/60 px-1.5 py-px text-[8px] font-bold uppercase tracking-wider text-muted-foreground">
+                              {isPlp ? "PLP pages" : "Products"}
+                            </span>
                           </div>
                         </div>
                         <Badge
@@ -385,7 +439,7 @@ export default function ImportPage() {
                             {session.total_rows || 0}
                           </p>
                           <p className="text-[9px] text-muted-foreground">
-                            Products
+                            {isPlp ? "Pages" : "Products"}
                           </p>
                         </div>
                         <div className="rounded-lg bg-muted/35 px-2 py-2">

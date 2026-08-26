@@ -145,12 +145,14 @@ export function matchSupplierRows(
 export function generateDiff(
   supplierData: Record<string, any>,
   masterData: Record<string, any>,
-  columnMapping: Record<string, string>
+  columnMapping: Record<string, string>,
+  /** Identity column to skip; it matched by definition so it is never a change. */
+  idColumn: string = "sku"
 ): Record<string, { old: string; new: string }> {
   const diff: Record<string, { old: string; new: string }> = {};
 
   for (const [supplierCol, systemCol] of Object.entries(columnMapping)) {
-    if (systemCol === "sku") continue; // Don't diff the match column
+    if (systemCol === idColumn) continue;
     const newVal = String(supplierData[supplierCol] ?? "");
     const oldVal = String(masterData[systemCol] ?? "");
     if (newVal && newVal !== oldVal) {

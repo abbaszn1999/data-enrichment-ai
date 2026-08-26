@@ -56,6 +56,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  ChevronDown,
   ImageIcon,
   Maximize2,
 } from "lucide-react";
@@ -764,26 +765,44 @@ function ImageUrlsCell({
       ) : (
         <div className="flex items-center gap-1">
           {list.slice(0, 3).map((img, i) => (
-            <button
+            <div
               key={`${img.imageUrl}:${i}`}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                openDialog(i);
-              }}
-              className="group/image relative h-10 w-10 shrink-0 overflow-hidden rounded border border-border/40 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-              aria-label={`Preview image ${i + 1}`}
-              title={img.title || "Product image"}
+              className="group/image relative h-10 w-10 shrink-0"
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={img.imageUrl}
-                data-original-url={img.imageUrl}
-                alt={img.title || "Product"}
-                className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
-                onError={handleImgError}
-              />
-            </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openDialog(i);
+                }}
+                className="block h-full w-full overflow-hidden rounded border border-border/40 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                aria-label={`Preview image ${i + 1}`}
+                title={img.title || "Product image"}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={img.imageUrl}
+                  data-original-url={img.imageUrl}
+                  alt={img.title || "Product"}
+                  className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
+                  onError={handleImgError}
+                />
+              </button>
+              {isEditable && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeAt(i);
+                  }}
+                  className="absolute -right-1.5 -top-1.5 z-10 flex h-[18px] w-[18px] items-center justify-center rounded-full border bg-background text-destructive opacity-0 shadow-sm transition-opacity hover:bg-destructive hover:text-destructive-foreground focus:opacity-100 group-hover/image:opacity-100"
+                  aria-label={`Remove image ${i + 1}`}
+                  title="Remove image"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              )}
+            </div>
           ))}
           {list.length > 3 && (
             <button
@@ -1061,17 +1080,152 @@ function ImageUrlsCell({
   );
 }
 
+// --- FAQ Cell (question/answer pairs) ---
+function FaqCell({
+  items,
+  isEditable,
+  rowId,
+  enrichKey,
+}: {
+  items: { question: string; answer: string }[];
+  isEditable: boolean;
+  rowId: string;
+  enrichKey: string;
+}) {
+  const { updateEnrichedCellValue } = useSheetStore();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(items);
+
+  const openDialog = useCallback(() => {
+    setDraft(items.map((i) => ({ ...i })));
+    setOpen(true);
+  }, [items]);
+
+  const commit = useCallback(() => {
+    const cleaned = draft.filter(
+      (i) => i.question.trim() !== "" && i.answer.trim() !== ""
+    );
+    updateEnrichedCellValue(rowId, enrichKey as any, cleaned);
+    setOpen(false);
+  }, [draft, rowId, enrichKey, updateEnrichedCellValue]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={openDialog}
+        className="flex w-full items-start gap-1 text-left"
+        title={`${items.length} question${items.length === 1 ? "" : "s"} — click to view`}
+      >
+        <span className="shrink-0 rounded bg-primary/10 px-1 text-[9px] font-semibold text-primary">
+          {items.length} Q
+        </span>
+        <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+          {items[0]?.question || "—"}
+        </span>
+      </button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-sm">
+              FAQ ({draft.length} question{draft.length === 1 ? "" : "s"})
+            </DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[60vh] space-y-3 overflow-y-auto">
+            {draft.map((item, index) => (
+              <div key={index} className="space-y-1 rounded-lg border p-2.5">
+                <div className="flex items-start gap-2">
+                  <textarea
+                    value={item.question}
+                    readOnly={!isEditable}
+                    onChange={(e) => {
+                      const next = [...draft];
+                      next[index] = { ...next[index], question: e.target.value };
+                      setDraft(next);
+                    }}
+                    rows={1}
+                    placeholder="Question"
+                    className="flex-1 resize-y rounded border bg-background px-1.5 py-1 text-[11px] font-semibold outline-none focus:ring-1 focus:ring-primary/50"
+                  />
+                  {isEditable && (
+                    <button
+                      type="button"
+                      onClick={() => setDraft(draft.filter((_, i) => i !== index))}
+                      className="mt-1 shrink-0 text-muted-foreground hover:text-destructive"
+                      aria-label={`Remove question ${index + 1}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  value={item.answer}
+                  readOnly={!isEditable}
+                  onChange={(e) => {
+                    const next = [...draft];
+                    next[index] = { ...next[index], answer: e.target.value };
+                    setDraft(next);
+                  }}
+                  rows={3}
+                  placeholder="Answer"
+                  className="w-full resize-y rounded border bg-background px-1.5 py-1 text-[11px] leading-snug outline-none focus:ring-1 focus:ring-primary/50"
+                />
+              </div>
+            ))}
+            {draft.length === 0 && (
+              <p className="py-4 text-center text-xs text-muted-foreground">
+                No questions yet.
+              </p>
+            )}
+          </div>
+          {isEditable && (
+            <div className="flex items-center justify-between gap-2 border-t pt-3">
+              <button
+                type="button"
+                onClick={() => setDraft([...draft, { question: "", answer: "" }])}
+                className="flex items-center gap-1 rounded-md border border-dashed px-2 py-1 text-[10px] text-muted-foreground hover:border-primary/40 hover:text-primary"
+              >
+                <Plus className="h-3 w-3" /> Add question
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="rounded px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={commit}
+                  className="rounded bg-primary px-3 py-1 text-[10px] font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 // --- Editable Enriched Cell ---
 function EditableEnrichedCell({
   value,
   rowId,
   enrichKey,
   isEditable,
+  maxChars,
 }: {
   value: unknown;
   rowId: string;
   enrichKey: string;
   isEditable: boolean;
+  /** SEO character budget; shows a live counter and an over-budget warning. */
+  maxChars?: number;
 }) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [editing, setEditing] = useState(false);
@@ -1123,7 +1277,21 @@ function EditableEnrichedCell({
           rows={Math.min(6, Math.max(2, Math.ceil(draft.length / 40)))}
           className="w-full bg-background border border-primary/30 rounded px-1.5 py-1 text-[11px] leading-snug outline-none focus:ring-1 focus:ring-primary/50 resize-y min-h-[2rem]"
         />
-        <div className="flex justify-end gap-1 mt-1">
+        <div className="flex items-center justify-end gap-1 mt-1">
+          {maxChars != null && (
+            <span
+              className={`mr-auto font-mono text-[9px] ${
+                draft.length > maxChars
+                  ? "font-semibold text-destructive"
+                  : draft.length > maxChars * 0.9
+                    ? "text-amber-600"
+                    : "text-muted-foreground/60"
+              }`}
+              title={`Recommended limit: ${maxChars} characters`}
+            >
+              {draft.length}/{maxChars}
+            </span>
+          )}
           <button
             onClick={() => setEditing(false)}
             className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded"
@@ -1176,6 +1344,12 @@ function EditableEnrichedCell({
     if (value[0] && typeof value[0] === "object" && "uri" in value[0]) {
       const sources = value as { title: string; uri: string }[];
       return <SourceUrlsCell sources={sources} isEditable={isEditable} rowId={rowId} enrichKey={enrichKey} />;
+    }
+
+    // FAQ - question/answer pairs get their own editor
+    if (value[0] && typeof value[0] === "object" && "question" in value[0]) {
+      const faq = value as { question: string; answer: string }[];
+      return <FaqCell items={faq} isEditable={isEditable} rowId={rowId} enrichKey={enrichKey} />;
     }
 
     // Editable string array (features, keywords, bullets)
@@ -1299,6 +1473,16 @@ function EditableEnrichedCell({
     );
   }
 
+  const overBudget = maxChars != null && str.length > maxChars;
+  const budgetBadge = overBudget ? (
+    <span
+      className="ml-1 inline-block align-middle rounded bg-destructive/10 px-1 font-mono text-[9px] font-semibold text-destructive"
+      title={`${str.length} characters — over the ${maxChars} character limit`}
+    >
+      {str.length}/{maxChars}
+    </span>
+  ) : null;
+
   if (str.length > 80) {
     return (
       <Tooltip>
@@ -1308,6 +1492,7 @@ function EditableEnrichedCell({
             className={`text-[11px] leading-snug break-words whitespace-pre-wrap w-full group ${isEditable ? "cursor-text" : "cursor-default"}`}
           >
             {str}
+            {budgetBadge}
             {isEditable && (
               <span className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors block mt-0.5">
                 Click to edit
@@ -1328,6 +1513,7 @@ function EditableEnrichedCell({
       className={`text-[11px] leading-snug break-words whitespace-pre-wrap w-full group ${isEditable ? "cursor-text" : ""}`}
     >
       {str}
+      {budgetBadge}
       {isEditable && (
         <span className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors block mt-0.5">
           Click to edit
@@ -1399,6 +1585,13 @@ function RowPreviewPanel({
                       <a key={i} href={s.uri} target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-500 hover:underline flex items-center gap-1">
                         <ExternalLink className="h-2.5 w-2.5 shrink-0" />{s.title}
                       </a>
+                    ));
+                  } else if (val.length > 0 && typeof val[0] === "object" && "question" in val[0]) {
+                    display = (val as { question: string; answer: string }[]).map((item, i) => (
+                      <div key={i} className="mb-1.5 last:mb-0">
+                        <div className="text-[11px] font-semibold">{item.question}</div>
+                        <div className="text-[11px] text-muted-foreground leading-snug">{item.answer}</div>
+                      </div>
                     ));
                   } else {
                     display = (val as string[]).map((item, i) => (
@@ -1551,6 +1744,7 @@ export function DataTable() {
     toggleRowSelection,
     selectAllRows,
     deselectAllRows,
+    selectRowsByIds,
     deleteSelectedRows,
     selectByStatus,
     invertSelection,
@@ -1569,10 +1763,16 @@ export function DataTable() {
     saveStatus,
     enrichingTab,
     enrichingExistingColumns,
+    sessionKind,
   } = useSheetStore();
 
   const { role } = useWorkspaceStore();
   const isViewer = role === "viewer";
+
+  const sheetLabels =
+    sessionKind === "plp"
+      ? { existing: "Existing pages", new: "New pages" }
+      : { existing: "Existing", new: "New" };
 
   const [globalFilter, setGlobalFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -1580,10 +1780,12 @@ export function DataTable() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [showColumnVisibility, setShowColumnVisibility] = useState(false);
+  const [showSelectMenu, setShowSelectMenu] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const currentPageRowIdsRef = useRef<string[]>([]);
   const columnResizeMode: ColumnResizeMode = "onChange";
   const [dragOverColId, setDragOverColId] = useState<string | null>(null);
   const dragColIdRef = useRef<string | null>(null);
@@ -1708,7 +1910,7 @@ export function DataTable() {
     cols.push({
       id: "select",
       header: () => (
-        <div className="flex items-center justify-center">
+        <div className="relative flex items-center justify-center gap-0.5">
           <input
             type="checkbox"
             checked={allSelected}
@@ -1718,6 +1920,55 @@ export function DataTable() {
             onChange={() => (allSelected ? deselectAllRows() : selectAllRows())}
             className="h-3.5 w-3.5 rounded border-muted-foreground/40 accent-primary cursor-pointer"
           />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowSelectMenu((v) => !v);
+            }}
+            className="flex h-4 w-3.5 items-center justify-center text-muted-foreground/60 hover:text-foreground"
+            aria-label="Selection options"
+            title="Selection options"
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+          {showSelectMenu && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowSelectMenu(false)} />
+              <div className="absolute left-1/2 top-full z-50 mt-1 w-36 -translate-x-1/2 rounded-lg border bg-popover shadow-lg py-1 text-left animate-in fade-in-0 zoom-in-95 duration-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    selectRowsByIds(currentPageRowIdsRef.current);
+                    setShowSelectMenu(false);
+                  }}
+                  className="w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-muted/60 transition-colors"
+                >
+                  Select page ({currentPageRowIdsRef.current.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    selectAllRows();
+                    setShowSelectMenu(false);
+                  }}
+                  className="w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-muted/60 transition-colors"
+                >
+                  Select all ({sheetFilteredRows.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    deselectAllRows();
+                    setShowSelectMenu(false);
+                  }}
+                  className="w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-muted/60 transition-colors"
+                >
+                  Clear selection
+                </button>
+              </div>
+            </>
+          )}
         </div>
       ),
       cell: ({ row }) => (
@@ -1881,6 +2132,7 @@ export function DataTable() {
               rowId={row.original.id}
               enrichKey={enrichCol.id}
               isEditable={canEditEnriched}
+              maxChars={enrichCol.maxChars}
             />
           );
         },
@@ -1908,6 +2160,9 @@ export function DataTable() {
     toggleRowSelection,
     selectAllRows,
     deselectAllRows,
+    selectRowsByIds,
+    showSelectMenu,
+    sheetFilteredRows,
     renameColumn,
     activeSheet,
     enrichingTab,
@@ -1941,6 +2196,9 @@ export function DataTable() {
 
   // Virtual scrolling with dynamic row heights (within current page)
   const { rows: tableRows } = table.getRowModel();
+  useEffect(() => {
+    currentPageRowIdsRef.current = tableRows.map((r) => r.original.id);
+  }, [tableRows]);
   const columnSizingState = table.getState().columnSizing;
   const rowVirtualizer = useVirtualizer({
     count: tableRows.length,
@@ -2009,7 +2267,7 @@ export function DataTable() {
                 }`}
               >
                 <Package className="h-3 w-3" />
-                Existing ({sheetCounts.existing})
+                {sheetLabels.existing} ({sheetCounts.existing})
               </button>
               <div className="w-px h-5 bg-border" />
               <button
@@ -2024,7 +2282,7 @@ export function DataTable() {
                 }`}
               >
                 <FileSpreadsheet className="h-3 w-3" />
-                New ({sheetCounts.new})
+                {sheetLabels.new} ({sheetCounts.new})
               </button>
             </div>
 

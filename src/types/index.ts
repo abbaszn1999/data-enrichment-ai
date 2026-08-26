@@ -30,19 +30,45 @@ export interface ColumnMapping {
   enriched: EnrichmentColumn[];
 }
 
+/**
+ * What a Catalog Intelligence session enriches:
+ * - "product": supplier catalog rows matched against master products
+ * - "plp": category / collection listing pages
+ */
+export type SessionKind = "product" | "plp";
+
+export const DEFAULT_SESSION_KIND: SessionKind = "product";
+
+export type EnrichmentColumnType =
+  | "text"
+  | "list"
+  | "imageUrls"
+  | "sourceUrls"
+  | "categories"
+  | "faq"
+  | "internalLinks"
+  | "keywords";
+
+export interface FaqItem {
+  question: string;
+  answer: string;
+}
+
 export interface EnrichmentColumn {
   id: string;
   label: string;
   description: string; // This will serve as the AI Prompt instruction
-  type: "text" | "list" | "imageUrls" | "sourceUrls" | "categories"; // The expected output type from AI
+  type: EnrichmentColumnType; // The expected output type from AI
   enabled: boolean;
   isCustom?: boolean;
   imageCount?: number; // Number of images to fetch (1-10), only for imageUrls type
   sourceCount?: number; // Number of sources to fetch (1-10), only for sourceUrls type
   maxCategories?: number; // Max number of categories to assign (1-5), only for categories type
+  itemCount?: number; // Number of items to return, for faq / internalLinks / keywords types
+  maxChars?: number; // Hard character budget enforced server-side (SEO meta limits)
   customInstruction?: string; // Custom instruction for this column
-  writingTone?: WritingTone; // Per-column writing tone (for text columns like Enhanced Title, Marketing Description)
-  contentLength?: ContentLength; // Per-column content length (for text columns like Enhanced Title, Marketing Description)
+  writingTone?: WritingTone; // Per-column writing tone (for text columns)
+  contentLength?: ContentLength; // Per-column content length (for text columns)
 }
 
 export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
@@ -92,6 +118,148 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     customInstruction: "Find authoritative product pages and reviews",
   },
 ];
+
+/**
+ * PLP (category page) output columns. The first eight are on by default; the
+ * rest are opt-in. There is deliberately no imageUrls column here — web image
+ * search returns product packshots, which are wrong for a listing page banner.
+ */
+export const PLP_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
+  {
+    id: "seoTitle",
+    label: "SEO Title",
+    description:
+      "Write the meta title (title tag) for this category listing page.",
+    type: "text",
+    enabled: true,
+    maxChars: 60,
+    writingTone: "professional",
+    contentLength: "short",
+  },
+  {
+    id: "metaDescription",
+    label: "Meta Description",
+    description:
+      "Write the meta description for this category listing page, ending with a soft call to action.",
+    type: "text",
+    enabled: true,
+    maxChars: 160,
+    writingTone: "persuasive",
+  },
+  {
+    id: "h1",
+    label: "H1 Heading",
+    description:
+      "Write the on-page H1 heading. It should read naturally for shoppers and may differ from the meta title.",
+    type: "text",
+    enabled: true,
+    maxChars: 70,
+    writingTone: "professional",
+  },
+  {
+    id: "introCopy",
+    label: "Intro Copy",
+    description:
+      "Write the short introduction shown above the product grid (roughly 40-80 words).",
+    type: "text",
+    enabled: true,
+    maxChars: 600,
+    writingTone: "persuasive",
+    contentLength: "short",
+  },
+  {
+    id: "seoCopy",
+    label: "SEO Copy",
+    description:
+      "Write the longer supporting copy shown below the product grid (roughly 300-600 words), organised into short paragraphs.",
+    type: "text",
+    enabled: true,
+    writingTone: "professional",
+    contentLength: "long",
+  },
+  {
+    id: "targetKeyword",
+    label: "Target Keyword",
+    description:
+      "Identify the single primary search keyword this category page should rank for.",
+    type: "text",
+    enabled: true,
+    maxChars: 80,
+  },
+  {
+    id: "secondaryKeywords",
+    label: "Secondary Keywords",
+    description:
+      "List supporting keywords and close variants this page should also cover.",
+    type: "keywords",
+    enabled: true,
+    itemCount: 5,
+  },
+  {
+    id: "faq",
+    label: "FAQ",
+    description:
+      "Write frequently asked questions with answers for this category, suitable for FAQPage structured data.",
+    type: "faq",
+    enabled: true,
+    itemCount: 4,
+  },
+  {
+    id: "parentCategory",
+    label: "Parent Category",
+    description:
+      "Pick the parent category this page belongs under, from the store category list.",
+    type: "categories",
+    enabled: false,
+    maxCategories: 1,
+  },
+  {
+    id: "internalLinks",
+    label: "Internal Links",
+    description:
+      "Suggest related sibling or child categories to link to from this page.",
+    type: "internalLinks",
+    enabled: false,
+    itemCount: 5,
+  },
+  {
+    id: "slug",
+    label: "URL Slug",
+    description:
+      "Write the URL slug for this category page: lowercase words separated by hyphens, no spaces or punctuation.",
+    type: "text",
+    enabled: false,
+    maxChars: 75,
+  },
+  {
+    id: "breadcrumbLabel",
+    label: "Breadcrumb Label",
+    description:
+      "Write a very short label for this category in breadcrumb navigation.",
+    type: "text",
+    enabled: false,
+    maxChars: 30,
+  },
+  {
+    id: "sourceUrls",
+    label: "Source URLs",
+    description: "Web sources used to research this category page.",
+    type: "sourceUrls",
+    enabled: false,
+    sourceCount: 3,
+    customInstruction:
+      "Find competitor category pages and authoritative references",
+  },
+];
+
+/** Default output columns for a session, by kind. */
+export function getDefaultEnrichmentColumns(
+  kind: SessionKind | null | undefined
+): EnrichmentColumn[] {
+  const source =
+    kind === "plp" ? PLP_ENRICHMENT_COLUMNS : DEFAULT_ENRICHMENT_COLUMNS;
+  return source.map((col) => ({ ...col }));
+}
 
 export interface EnrichmentEvent {
   type: "progress" | "row_complete" | "row_error" | "done" | "error";
@@ -152,6 +320,8 @@ export interface EnrichmentPreset {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /** Presets saved before the product/plp split have no kind and count as product. */
+  kind?: SessionKind;
   settings: EnrichmentPresetSettings;
 }
 
@@ -365,6 +535,10 @@ export const DEFAULT_CMS_CATEGORY_CONFIG: CmsCategoryConfig = {
 export interface SheetState {
   workspaceId: string | null;
   projectId: string | null;
+  /** What this session enriches; drives columns, prompts and table labels. */
+  sessionKind: SessionKind;
+  /** Step 2 was skipped, so autosave must not drop that decision. */
+  matchingSkipped: boolean;
   fileName: string | null;
   rows: ProductRow[];
   originalColumns: string[];

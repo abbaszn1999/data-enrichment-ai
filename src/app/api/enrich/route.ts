@@ -10,10 +10,14 @@ import {
   updateCachedCredits,
 } from "@/lib/workspace-context";
 import { sumCosts } from "@/lib/ai-pricing";
-import { enrichProductRow, type EnrichSettings } from "@/lib/enrich";
+import { enrichRow, type EnrichSettings } from "@/lib/enrich";
 import {
   resolveEnrichmentModel,
   type CategoryItem,
+  type EnrichmentColumnType,
+  type SessionKind,
+  type WritingTone,
+  type ContentLength,
 } from "@/types";
 
 export const maxDuration = 300;
@@ -36,6 +40,8 @@ type EnrichBody = {
     imageCount?: number;
     sourceCount?: number;
     maxCategories?: number;
+    itemCount?: number;
+    maxChars?: number;
     customInstruction?: string;
     writingTone?: string;
     contentLength?: string;
@@ -45,6 +51,7 @@ type EnrichBody = {
     thinkingLevel?: string;
     outputLanguage?: string;
   };
+  kind?: SessionKind;
   cmsType?: string;
   workspaceCategories?: CategoryItem[];
   categoriesRawRows?: Record<string, string>[];
@@ -65,6 +72,7 @@ export async function POST(request: NextRequest) {
       categoriesRawRows,
       workspaceId,
     } = body;
+    const kind: SessionKind = body.kind === "plp" ? "plp" : "product";
 
     if (!row?.originalData) {
       return NextResponse.json({ error: "No row provided" }, { status: 400 });
@@ -115,41 +123,33 @@ export async function POST(request: NextRequest) {
     };
 
     console.log(
-      `[API enrich] row ${row.rowIndex} | tier: ${enrichSettings.enrichmentModel} | cols: ${enabledColumns.join(",")}`
+      `[API enrich] ${kind} row ${row.rowIndex} | tier: ${enrichSettings.enrichmentModel} | cols: ${enabledColumns.join(",")}`
     );
 
-    const enriched = await enrichProductRow(
-      row.originalData,
+    const enriched = await enrichRow({
+      productData: row.originalData,
       enabledColumns,
-      enrichmentColumns?.map((c) => ({
+      enrichmentColumns: enrichmentColumns?.map((c) => ({
         id: c.id,
         label: c.label,
         description: c.description,
-        type: (c.type || "text") as
-          | "text"
-          | "list"
-          | "imageUrls"
-          | "sourceUrls"
-          | "categories",
+        type: (c.type || "text") as EnrichmentColumnType,
         enabled: c.enabled !== false,
         imageCount: c.imageCount,
         sourceCount: c.sourceCount,
         maxCategories: c.maxCategories,
+        itemCount: c.itemCount,
+        maxChars: c.maxChars,
         customInstruction: c.customInstruction,
-        writingTone: c.writingTone as
-          | "professional"
-          | "persuasive"
-          | "simple"
-          | "technical"
-          | "custom"
-          | undefined,
-        contentLength: c.contentLength as "short" | "medium" | "long" | undefined,
+        writingTone: c.writingTone as WritingTone | undefined,
+        contentLength: c.contentLength as ContentLength | undefined,
       })),
-      enrichSettings,
+      settings: enrichSettings,
+      kind,
       cmsType,
       workspaceCategories,
-      categoriesRawRows
-    );
+      categoriesRawRows,
+    });
 
     const rowCostSummary = sumCosts(enriched.costs);
 
@@ -170,7 +170,7 @@ export async function POST(request: NextRequest) {
             p_workspace_id: workspaceId,
             p_operation: "ai_enrichment",
             p_uid: user.id,
-            p_entity_type: "import_row",
+            p_entity_type: kind === "plp" ? "import_plp_row" : "import_row",
             p_entity_id: row.id,
             p_details: {
               rowIndex: row.rowIndex,

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { useWorkspaceContext } from "@/app/(dashboard)/w/[workspaceSlug]/layout";
+import { useWorkspaceContext } from "@/app/(dashboard)/w/[workspaceSlug]/workspace-context";
 import {
   FAQ_TEMPLATES,
   LINK_TEMPLATES,

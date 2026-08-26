@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { useWorkspaceContext } from "../../layout";
+import { useWorkspaceContext } from "../../workspace-context";
 import { loadProductsJson, saveProductsJson, type MasterProductJson } from "@/lib/storage-helpers";
 import { parseExcelFile } from "@/lib/excel";
 

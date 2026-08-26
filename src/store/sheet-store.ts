@@ -7,6 +7,7 @@ import type {
   EnrichedData,
   SheetState,
   EnrichmentSettings,
+  SessionKind,
 } from "@/types";
 import { DEFAULT_ENRICHMENT_COLUMNS, DEFAULT_ENRICHMENT_SETTINGS, resolveEnrichmentModel } from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
@@ -46,6 +47,7 @@ interface SheetActions {
   toggleRowSelection: (rowId: string) => void;
   selectAllRows: () => void;
   deselectAllRows: () => void;
+  selectRowsByIds: (rowIds: string[]) => void;
   selectRowRange: (startIdx: number, endIdx: number) => void;
   deleteSelectedRows: () => void;
   selectByStatus: (status: ProductRow["status"]) => void;
@@ -84,7 +86,9 @@ interface SheetActions {
   // Persistence
   restoreSession: () => Promise<boolean>;
   // Supabase project
-  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>) => void;
+  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean) => void;
+  /** Replace the whole AI configuration, e.g. when applying a saved setting. */
+  applyEnrichmentPreset: (settings: { sourceColumns?: string[]; enrichmentColumns?: EnrichmentColumn[]; enrichmentSettings?: EnrichmentSettings }) => void;
   setProjectId: (id: string | null) => void;
   setSaveStatus: (status: SheetState["saveStatus"]) => void;
   markUnsaved: () => void;
@@ -104,6 +108,8 @@ type SheetStore = SheetState & SheetActions;
 const initialState: SheetState = {
   workspaceId: null,
   projectId: null,
+  sessionKind: "product",
+  matchingSkipped: false,
   fileName: null,
   rows: [],
   originalColumns: [],
@@ -291,6 +297,17 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
           ...r,
           selected: sheetIds.has(r.id) ? false : r.selected,
         })),
+      };
+    }),
+
+  // Replace the whole selection with exactly the given row IDs (e.g. "select
+  // current page only"), regardless of active sheet.
+  selectRowsByIds: (rowIds) =>
+    set((state) => {
+      const idSet = new Set(rowIds);
+      return {
+        selectedRowIds: idSet,
+        rows: state.rows.map((r) => ({ ...r, selected: idSet.has(r.id) })),
       };
     }),
 
@@ -676,10 +693,12 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   },
 
   // Supabase project
-  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility) => {
+  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped) => {
     set({
       workspaceId,
       projectId,
+      sessionKind: sessionKind ?? "product",
+      matchingSkipped: matchingSkipped ?? false,
       fileName,
       originalColumns: columns,
       rows,
@@ -700,6 +719,45 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   },
 
   setProjectId: (id) => set({ projectId: id }),
+
+  /**
+   * Apply a saved setting over the live configuration. Enriched cells are
+   * deliberately preserved: values are keyed by column id, so a column that is
+   * turned off here comes back with its data intact if re-enabled.
+   */
+  applyEnrichmentPreset: ({ sourceColumns, enrichmentColumns, enrichmentSettings }) =>
+    set((state) => {
+      const next: Partial<SheetState> = {};
+
+      if (enrichmentColumns) {
+        // Keep custom columns the preset does not mention, so a user's own
+        // columns are not silently dropped by loading a setting.
+        const presetIds = new Set(enrichmentColumns.map((c) => c.id));
+        const orphanCustom = state.enrichmentColumns.filter(
+          (c) => c.isCustom && !presetIds.has(c.id)
+        );
+        next.enrichmentColumns = [
+          ...enrichmentColumns.map((col) => ({ ...col })),
+          ...orphanCustom.map((col) => ({ ...col, enabled: false })),
+        ];
+      }
+
+      if (sourceColumns) {
+        // Only columns that exist in this file can be sources. Checked against
+        // the merged column list so a source added by this preset survives.
+        const available = new Set([
+          ...state.originalColumns,
+          ...(next.enrichmentColumns ?? state.enrichmentColumns).map((c) => c.id),
+        ]);
+        next.sourceColumns = sourceColumns.filter((c) => available.has(c));
+      }
+
+      if (enrichmentSettings) {
+        next.enrichmentSettings = normalizeEnrichmentSettings(enrichmentSettings);
+      }
+
+      return { ...next, undoVersion: state.undoVersion + 1 };
+    }),
 
   setSaveStatus: (status) => set({ saveStatus: status, ...(status === "saved" ? { lastSavedAt: Date.now() } : {}) }),
 
@@ -768,6 +826,8 @@ async function persistProject() {
     const { updateImportSession } = await import("@/lib/supabase");
 
     const projectJson = {
+      kind: s.sessionKind,
+      matchingSkipped: s.matchingSkipped,
       columns: s.originalColumns,
       rows: s.rows.map((r) => ({
         id: r.id,
