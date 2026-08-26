@@ -1139,7 +1139,14 @@ export default function ProductsVisualizerPage() {
       if (result.signedUrls) setSignedUrls(result.signedUrls);
       setSaveStatus("saved");
 
-      if (result.status === "completed") {
+      if (result.status === "running") {
+        setGenerationRun({
+          total: result.worksheet?.activeRun?.total ?? rowIds.length,
+          completed: result.worksheet?.activeRun?.completed ?? 0,
+          runId: result.runId,
+        });
+        toast.message("Generation continues in the background");
+      } else if (result.status === "completed") {
         toast.success(
           result.message ||
             `Generated ${result.completed ?? 0} product${
@@ -1161,7 +1168,6 @@ export default function ProductsVisualizerPage() {
     } finally {
       setGenerating(false);
       setStopping(false);
-      setGenerationRun(null);
       invalidateCredits();
     }
   };

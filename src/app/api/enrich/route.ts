@@ -3,7 +3,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
-import { createAdminClient } from "@/lib/supabase-admin";
 import {
   getWorkspaceContext,
   isContextSubscriptionActive,
@@ -11,6 +10,8 @@ import {
 } from "@/lib/workspace-context";
 import { sumCosts } from "@/lib/ai-pricing";
 import { enrichRow, type EnrichSettings } from "@/lib/enrich";
+import { deductCreditsIdempotent } from "@/lib/jobs/credits";
+import { patchProjectRowsAdmin } from "@/lib/jobs/project-json";
 import {
   resolveEnrichmentModel,
   type CategoryItem,
@@ -29,6 +30,7 @@ type EnrichRow = {
 };
 
 type EnrichBody = {
+  sessionId?: string;
   row?: EnrichRow;
   enabledColumns?: string[];
   enrichmentColumns?: Array<{
@@ -64,6 +66,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as EnrichBody;
     const {
       row,
+      sessionId,
       enabledColumns,
       enrichmentColumns,
       settings,
@@ -153,36 +156,58 @@ export async function POST(request: NextRequest) {
 
     const rowCostSummary = sumCosts(enriched.costs);
 
+    if (workspaceId && sessionId) {
+      const originalPatches: Record<string, string> = {};
+      const enrichedData: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(enriched.data as Record<string, unknown>)) {
+        if (key.startsWith("existing__")) {
+          originalPatches[key.replace("existing__", "")] = String(value ?? "");
+        } else {
+          enrichedData[key] = value;
+        }
+      }
+      await patchProjectRowsAdmin({
+        workspaceId,
+        sessionId,
+        patches: [
+          {
+            id: row.id,
+            status: "done",
+            errorMessage: undefined,
+            enrichedData,
+            originalData: Object.keys(originalPatches).length ? originalPatches : undefined,
+          },
+        ],
+      });
+    }
+
     if (
       workspaceId &&
       ctx?.subscription &&
       rowCostSummary.totalCredits > 0
     ) {
       try {
-        const admin = createAdminClient();
         const ownerUserId =
           ctx.subscription.user_id ?? ctx.ownerId ?? user.id;
-        const { data: deductResult, error: deductError } = await admin.rpc(
-          "deduct_user_credits",
-          {
-            p_user_id: ownerUserId,
-            p_amount: rowCostSummary.totalCredits,
-            p_workspace_id: workspaceId,
-            p_operation: "ai_enrichment",
-            p_uid: user.id,
-            p_entity_type: kind === "plp" ? "import_plp_row" : "import_row",
-            p_entity_id: row.id,
-            p_details: {
-              rowIndex: row.rowIndex,
-              enrichmentModel: enrichSettings.enrichmentModel,
-              totalCost: rowCostSummary.totalCost,
-              totalTokens: rowCostSummary.totalTokens,
-            },
-          }
-        );
-        if (deductError) {
-          console.error(`[API enrich] Credit RPC failed: ${deductError.message}`);
-        } else if (deductResult && !deductResult.success) {
+        const deductResult = await deductCreditsIdempotent({
+          ownerUserId,
+          workspaceId,
+          actorUserId: user.id,
+          amount: rowCostSummary.totalCredits,
+          operation: "ai_enrichment",
+          entityType: kind === "plp" ? "import_plp_row" : "import_row",
+          entityId: row.id,
+          idempotencyKey: sessionId
+            ? `ai_enrichment:${sessionId}:${row.id}`
+            : `ai_enrichment:${workspaceId}:${row.id}`,
+          details: {
+            rowIndex: row.rowIndex,
+            enrichmentModel: enrichSettings.enrichmentModel,
+            totalCost: rowCostSummary.totalCost,
+            totalTokens: rowCostSummary.totalTokens,
+          },
+        });
+        if (!deductResult.success) {
           console.warn(
             `[API enrich] Credit rejected: ${deductResult.error || "unknown"}`
           );
@@ -190,15 +215,14 @@ export async function POST(request: NextRequest) {
             { error: deductResult.error || "NO_CREDITS" },
             { status: 402, headers }
           );
-        } else {
-          const remaining = Number(deductResult?.remaining);
-          if (Number.isFinite(remaining)) {
-            updateCachedCredits(workspaceId, remaining);
-          }
-          console.log(
-            `[API enrich] Deducted ${rowCostSummary.totalCredits} credits. Remaining: ${deductResult?.remaining}`
-          );
         }
+        const remaining = Number(deductResult.remaining);
+        if (Number.isFinite(remaining)) {
+          updateCachedCredits(workspaceId, remaining);
+        }
+        console.log(
+          `[API enrich] Deducted ${rowCostSummary.totalCredits} credits. Remaining: ${deductResult.remaining}`
+        );
       } catch (err) {
         console.error(
           `[API enrich] Credit exception: ${(err as Error).message}`

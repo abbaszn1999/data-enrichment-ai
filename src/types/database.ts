@@ -405,6 +405,97 @@ export interface Database {
         };
         Update: {};
       };
+      job_runs: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          kind: "catalog" | "gallery" | "visualizer";
+          session_id: string;
+          created_by: string;
+          status:
+            | "queued"
+            | "running"
+            | "completed"
+            | "failed"
+            | "cancelled"
+            | "paused_no_credits";
+          target_ids: string[];
+          completed_count: number;
+          failed_count: number;
+          heartbeat_at: string | null;
+          cancel_requested: boolean;
+          task_run_id: string | null;
+          last_error: string | null;
+          settings: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          kind: "catalog" | "gallery" | "visualizer";
+          session_id: string;
+          created_by: string;
+          status?:
+            | "queued"
+            | "running"
+            | "completed"
+            | "failed"
+            | "cancelled"
+            | "paused_no_credits";
+          target_ids?: string[];
+          completed_count?: number;
+          failed_count?: number;
+          heartbeat_at?: string | null;
+          cancel_requested?: boolean;
+          task_run_id?: string | null;
+          last_error?: string | null;
+          settings?: Json;
+        };
+        Update: {
+          status?:
+            | "queued"
+            | "running"
+            | "completed"
+            | "failed"
+            | "cancelled"
+            | "paused_no_credits";
+          completed_count?: number;
+          failed_count?: number;
+          heartbeat_at?: string | null;
+          cancel_requested?: boolean;
+          task_run_id?: string | null;
+          last_error?: string | null;
+          settings?: Json;
+          updated_at?: string;
+        };
+      };
+      notifications: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          user_id: string;
+          job_run_id: string;
+          event: "completed" | "failed" | "paused_no_credits";
+          title: string;
+          body: string;
+          href: string;
+          read_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          user_id: string;
+          job_run_id: string;
+          event: "completed" | "failed" | "paused_no_credits";
+          title: string;
+          body?: string;
+          href?: string;
+          read_at?: string | null;
+        };
+        Update: {
+          read_at?: string | null;
+        };
+      };
     };
   };
 }

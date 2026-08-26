@@ -1544,6 +1544,10 @@ export default function ProductsGalleryPage() {
       }
       if (result.status === "cancelled") {
         toast.message("Generation cancelled");
+      } else if (result.status === "running") {
+        toast.message("Generation is running in the background", {
+          description: "You can leave this page. We'll notify you when it finishes.",
+        });
       } else if ((result.failed ?? 0) > 0) {
         toast.message(
           `Finished with ${result.completed ?? 0} ready, ${result.failed} failed`
@@ -1564,7 +1568,6 @@ export default function ProductsGalleryPage() {
       setIsStoppingGeneration(false);
       invalidateCredits();
       if (receivedResult) {
-        setGenerationRun(null);
         return;
       }
       try {
@@ -1654,6 +1657,19 @@ export default function ProductsGalleryPage() {
       receivedResult = true;
       if (result.worksheet) setWorksheet(result.worksheet);
       if (result.signedUrls) setSignedUrls(result.signedUrls);
+      if (
+        result.worksheet?.activeRun &&
+        (result.worksheet.activeRun.status === "running" ||
+          result.worksheet.activeRun.status === "queued")
+      ) {
+        setGenerationRun({
+          total: result.worksheet.activeRun.total,
+          completed:
+            result.worksheet.activeRun.completed + result.worksheet.activeRun.failed,
+          runId: result.worksheet.activeRun.id,
+        });
+        toast.message("Generation is running in the background");
+      }
       if (result.session) {
         worksheetRevisionRef.current = Number(
           result.session.worksheet_revision ?? worksheetRevisionRef.current
@@ -1672,15 +1688,7 @@ export default function ProductsGalleryPage() {
     } finally {
       setIsGenerating(false);
       setIsStoppingGeneration(false);
-      setGenerationRun(null);
       invalidateCredits();
-      if (receivedResult) return;
-      try {
-        const fresh = await getGallerySession(workspace.id, projectId);
-        applySessionPayload(fresh.session, fresh.worksheet, false, fresh.signedUrls);
-      } catch {
-        // ignore
-      }
     }
   };
 

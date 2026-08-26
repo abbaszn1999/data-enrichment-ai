@@ -87,6 +87,7 @@ interface SheetActions {
   restoreSession: () => Promise<boolean>;
   // Supabase project
   loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean) => void;
+  applyProjectRows: (rows: ProductRow[], progress?: { completed: number; total: number; errors: number }) => void;
   /** Replace the whole AI configuration, e.g. when applying a saved setting. */
   applyEnrichmentPreset: (settings: { sourceColumns?: string[]; enrichmentColumns?: EnrichmentColumn[]; enrichmentSettings?: EnrichmentSettings }) => void;
   setProjectId: (id: string | null) => void;
@@ -718,6 +719,21 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     });
   },
 
+  applyProjectRows: (rows, progress) => {
+    const errorCount = progress?.errors ?? rows.filter((r) => r.status === "error").length;
+    const completed = progress?.completed ?? rows.filter((r) => r.status === "done").length;
+    const total = progress?.total ?? get().totalToEnrich;
+    set({
+      rows: rows.map((r) => ({ ...r, selected: r.selected !== false })),
+      completedEnrich: completed,
+      errorCount,
+      enrichProgress: total > 0 ? Math.round((completed / total) * 100) : 0,
+      totalToEnrich: total || get().totalToEnrich,
+      saveStatus: "saved",
+      lastSavedAt: Date.now(),
+    });
+  },
+
   setProjectId: (id) => set({ projectId: id }),
 
   /**
@@ -890,6 +906,7 @@ useSheetStore.subscribe((state, prevState) => {
 
   const hasChanges = versionChanged || configChanged || rowCountChanged || enrichDataChanged;
   if (!hasChanges) return;
+  if (state.isEnriching) return;
 
   // Mark as unsaved
   if (state.saveStatus === "saved") {
@@ -911,14 +928,4 @@ useSheetStore.subscribe((state, prevState) => {
     enrichedSinceLastSave = 0;
     await persistProject();
   }, debounceMs);
-});
-
-// Force save when enrichment finishes (to catch any remaining unsaved rows)
-useSheetStore.subscribe((state, prevState) => {
-  if (prevState.isEnriching && !state.isEnriching && state.workspaceId && state.projectId) {
-    // Enrichment just stopped — force save immediately
-    if (saveTimeout) clearTimeout(saveTimeout);
-    enrichedSinceLastSave = 0;
-    persistProject();
-  }
 });

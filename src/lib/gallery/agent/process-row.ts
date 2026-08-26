@@ -67,7 +67,14 @@ export async function deductGalleryCredits(params: {
     p_uid: params.actorUserId,
     p_entity_type: "gallery_session",
     p_entity_id: params.sessionId,
-    p_details: { ...params.details, rowId: params.rowId },
+        p_details: {
+          ...params.details,
+          rowId: params.rowId,
+          idempotencyKey:
+            typeof params.details.idempotencyKey === "string"
+              ? params.details.idempotencyKey
+              : `${params.operation ?? "gallery_google"}:${params.sessionId}:${params.rowId}`,
+        },
   });
   if (error) return { success: false, error: error.message };
   if (!data?.success) {

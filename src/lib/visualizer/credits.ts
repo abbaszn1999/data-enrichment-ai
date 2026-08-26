@@ -27,7 +27,14 @@ export async function deductVisualizerCredits(params: {
     p_uid: params.actorUserId,
     p_entity_type: "visualizer_session",
     p_entity_id: params.sessionId,
-    p_details: { ...params.details, rowId: params.rowId },
+    p_details: {
+      ...params.details,
+      rowId: params.rowId,
+      idempotencyKey:
+        typeof params.details.idempotencyKey === "string"
+          ? params.details.idempotencyKey
+          : `${params.operation}:${params.sessionId}:${params.rowId}`,
+    },
   });
   if (error) return { success: false, error: error.message };
   if (!data?.success) {

@@ -55,6 +55,7 @@ import { useSyncStore } from "@/store/sync-store";
 import { SubscriptionGate, SubscriptionBanner } from "@/components/subscription-gate";
 import { AutommerceLogo } from "@/components/brand/autommerce-logo";
 import { WorkspaceContext } from "./workspace-context";
+import { JobInbox } from "@/components/job-inbox";
 
 export default function WorkspaceLayout({
   children,
@@ -503,6 +504,8 @@ export default function WorkspaceLayout({
                   <span className="text-muted-foreground/60">/ {formatCredits(credits.total)}</span>
                 </Link>
               )}
+
+              {workspace?.id && <JobInbox workspaceId={workspace.id} />}
 
               <button
                 onClick={() => setTheme(theme === "dark" ? "light" : "dark")}

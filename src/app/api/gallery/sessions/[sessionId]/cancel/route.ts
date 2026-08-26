@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireGalleryAuth } from "@/lib/gallery/auth";
+import { loadActiveJobForSession, requestJobCancel } from "@/lib/jobs/repo";
 
 type Ctx = { params: Promise<{ sessionId: string }> };
 
@@ -42,6 +43,15 @@ export async function POST(request: NextRequest, context: Ctx) {
       { error: "Generation is no longer running" },
       { status: 409, headers: auth.headers }
     );
+  }
+
+  const active = await loadActiveJobForSession(auth.admin, {
+    kind: "gallery",
+    sessionId,
+    workspaceId,
+  });
+  if (active) {
+    await requestJobCancel(auth.admin, active.id, workspaceId).catch(() => undefined);
   }
 
   return NextResponse.json(

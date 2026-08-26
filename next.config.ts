@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  serverExternalPackages: ["@renderinc/sdk"],
   outputFileTracingIncludes: {
     "/api/market-research/**": ["./src/lib/market-research/skills/*.md"],
   },

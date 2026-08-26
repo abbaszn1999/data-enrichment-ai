@@ -205,6 +205,7 @@ export async function processImagesRow(params: {
               operation: "visualizer_images",
               details: {
                 runId: params.runId,
+                idempotencyKey: `${params.runId}:visualizer_images:${row.id}:${placeholder.index}`,
                 model: result.model,
                 phase: "images",
                 placeholderIndex: placeholder.index,

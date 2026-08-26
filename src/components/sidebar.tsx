@@ -68,7 +68,9 @@ import {
   type EnrichmentColumn,
 } from "@/types";
 import type { EnrichSettings } from "@/lib/enrich";
+import type { ProjectJson } from "@/lib/storage-helpers";
 import { getEnrichmentPresets, saveEnrichmentPreset } from "@/lib/supabase";
+import type { ProductRow } from "@/types";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -79,6 +81,19 @@ function downloadBlob(blob: Blob, filename: string) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+function projectJsonToProductRows(project: ProjectJson): ProductRow[] {
+  return project.rows.map((r, idx) => ({
+    id: r.id,
+    rowIndex: r.rowIndex ?? idx,
+    selected: true,
+    status: r.status as ProductRow["status"],
+    errorMessage: r.errorMessage,
+    originalData: r.originalData || {},
+    enrichedData: r.enrichedData || {},
+    matchType: r.matchType,
+  }));
 }
 
 export function Sidebar() {
@@ -95,6 +110,9 @@ export function Sidebar() {
     selectedRowIds,
     activeSheet,
     sessionKind,
+    workspaceId: sheetWorkspaceId,
+    projectId,
+    applyProjectRows,
     applyEnrichmentPreset,
     toggleEnrichmentColumn,
     setAllEnrichmentColumns,
@@ -129,6 +147,8 @@ export function Sidebar() {
   } = useSheetStore();
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const enrichRunIdRef = useRef<string | null>(null);
+  const enrichPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPlp = sessionKind === "plp";
 
   const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
@@ -239,7 +259,27 @@ export function Sidebar() {
     );
   }, [activeSheet, enrichmentColumns, rows, selectedRowIds]);
 
-  const handleStopEnrich = useCallback(() => {
+  const handleStopEnrich = useCallback(async () => {
+    const workspaceId = workspace?.id || sheetWorkspaceId;
+    if (enrichPollRef.current) {
+      clearTimeout(enrichPollRef.current);
+      enrichPollRef.current = null;
+    }
+    if (workspaceId) {
+      try {
+        await fetch("/api/enrich/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspaceId,
+            sessionId: projectId,
+            runId: enrichRunIdRef.current,
+          }),
+        });
+      } catch {
+        // Cancellation is best-effort; the orchestrator also watches the flag.
+      }
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -247,21 +287,117 @@ export function Sidebar() {
     setIsEnriching(false);
     setPaused(false);
     setEnrichingContext(null, []);
-    // Reset processing rows back to pending
     for (const row of rows) {
       if (row.status === "processing") {
         setRowStatus(row.id, "pending");
       }
     }
-    toast.info("Enrichment stopped");
-  }, [rows, setIsEnriching, setPaused, setRowStatus, setEnrichingContext]);
+    toast.info("Enrichment stop requested");
+  }, [
+    workspace?.id,
+    sheetWorkspaceId,
+    projectId,
+    rows,
+    setIsEnriching,
+    setPaused,
+    setRowStatus,
+    setEnrichingContext,
+  ]);
+
+  const applyStatusPayload = useCallback(
+    (payload: {
+      run?: {
+        id: string;
+        status: string;
+        completed_count: number;
+        failed_count: number;
+        target_ids: string[];
+      } | null;
+      project?: ProjectJson | null;
+    }) => {
+      if (payload.project) {
+        const productRows = projectJsonToProductRows(payload.project);
+        const total = payload.run?.target_ids.length || productRows.length;
+        applyProjectRows(productRows, {
+          completed: payload.run?.completed_count ?? productRows.filter((r) => r.status === "done").length,
+          total,
+          errors: payload.run?.failed_count ?? productRows.filter((r) => r.status === "error").length,
+        });
+      }
+    },
+    [applyProjectRows]
+  );
+
+  const pollEnrichRun = useCallback(async () => {
+    const workspaceId = workspace?.id || sheetWorkspaceId;
+    if (!workspaceId || !projectId) return false;
+    const params = new URLSearchParams({
+      workspaceId,
+      sessionId: projectId,
+    });
+    if (enrichRunIdRef.current) params.set("runId", enrichRunIdRef.current);
+    const res = await fetch(`/api/enrich/status?${params.toString()}`);
+    if (!res.ok) return false;
+    const data = (await res.json()) as {
+      run?: {
+        id: string;
+        status: string;
+        completed_count: number;
+        failed_count: number;
+        target_ids: string[];
+      } | null;
+      project?: ProjectJson | null;
+    };
+    if (data.run?.id) enrichRunIdRef.current = data.run.id;
+    applyStatusPayload(data);
+    const active =
+      data.run && (data.run.status === "queued" || data.run.status === "running");
+    if (!active) {
+      setIsEnriching(false);
+      setEnrichingContext(null, []);
+      invalidateCredits();
+      if (data.run?.status === "paused_no_credits") {
+        setLastError("NO_CREDITS");
+        toast.error("No credits remaining", {
+          description: "Enrichment paused. Add credits and resume from this session.",
+        });
+      } else if (data.run?.status === "failed") {
+        toast.error("Enrichment failed");
+      } else if (data.run?.status === "completed") {
+        toast.success("Enrichment complete", {
+          description: `${data.run.completed_count} rows processed`,
+        });
+      }
+      return false;
+    }
+    const run = data.run;
+    if (!run) return false;
+    setIsEnriching(true);
+    setEnrichProgress(
+      run.completed_count + run.failed_count,
+      run.target_ids.length
+    );
+    invalidateCredits();
+    return true;
+  }, [
+    workspace?.id,
+    sheetWorkspaceId,
+    projectId,
+    applyStatusPayload,
+    setIsEnriching,
+    setEnrichingContext,
+    setEnrichProgress,
+    invalidateCredits,
+  ]);
 
   const handleEnrich = useCallback(async () => {
     const isNewTab = enrichOutputTab === "new";
     if ((isNewTab ? enabledColumns.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
+    const workspaceId = workspace?.id || sheetWorkspaceId;
+    if (!workspaceId || !projectId) {
+      toast.error("Session is not saved yet");
+      return;
+    }
 
     setIsEnriching(true);
     setPaused(false);
@@ -269,264 +405,124 @@ export function Sidebar() {
     setLastError(null);
     setEnrichingContext(isNewTab ? "new" : "existing", isNewTab ? [] : existingColumnsToEnrich);
 
-    for (const row of enrichableRows) {
-      setRowStatus(row.id, "processing");
+    const resolvedLanguage = enrichmentSettings.outputLanguage === "custom"
+      ? enrichmentSettings.customLanguage || "English"
+      : enrichmentSettings.outputLanguage;
+
+    const enrichSettings: EnrichSettings = {
+      enrichmentModel: resolveEnrichmentModel(enrichmentSettings.enrichmentModel),
+      outputLanguage: resolvedLanguage,
+    };
+
+    let workspaceCategories: CategoryItem[] | undefined;
+    let categoriesRawRows: Record<string, string>[] | undefined;
+    const categoriesEnabled = enabledColumns.some((id) =>
+      ["categories", "parentCategory", "internalLinks"].includes(id)
+    );
+    if (categoriesEnabled && workspaceId) {
+      try {
+        const catRes = await fetch(`/api/categories?workspaceId=${workspaceId}`);
+        if (catRes.ok) {
+          const catData = await catRes.json();
+          workspaceCategories = catData.categories;
+          categoriesRawRows = catData.rawRows?.length ? catData.rawRows : undefined;
+        }
+      } catch (err: unknown) {
+        console.warn("[Sidebar] Failed to fetch categories:", (err as Error)?.message);
+      }
     }
 
+    const existingAsEnrichCols = !isNewTab
+      ? existingColumnsToEnrich.map((col) => {
+          const displayLabel = col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col");
+          const customInstruction = existingColumnInstructions[col]?.trim();
+          return {
+            id: `existing__${col}`,
+            label: displayLabel,
+            description: customInstruction
+              ? customInstruction
+              : `Fill in the "${displayLabel}" field for this product. Use the available product data to generate an accurate and appropriate value.`,
+            type: "text" as const,
+            enabled: true,
+            isCustom: true,
+          };
+        })
+      : [];
+
     try {
-      const resolvedLanguage = enrichmentSettings.outputLanguage === "custom"
-        ? enrichmentSettings.customLanguage || "English"
-        : enrichmentSettings.outputLanguage;
-
-      const enrichSettings: EnrichSettings = {
-        enrichmentModel: resolveEnrichmentModel(enrichmentSettings.enrichmentModel),
-        outputLanguage: resolvedLanguage,
-      };
-
-      // Determine which source columns are enriched (AI-generated) vs original
-      const enrichedColIds = new Set(enrichmentColumns.map((c) => c.id));
-
-      // Fetch workspace categories if categories column is enabled
-      let workspaceCategories: CategoryItem[] | undefined;
-      let categoriesRawRows: Record<string, string>[] | undefined;
-      // Any column validated against the store category tree needs the allowlist.
-      const categoriesEnabled = enabledColumns.some((id) =>
-        ["categories", "parentCategory", "internalLinks"].includes(id)
-      );
-      if (categoriesEnabled && workspace?.id) {
-        try {
-          const catRes = await fetch(`/api/categories?workspaceId=${workspace.id}`);
-          if (catRes.ok) {
-            const catData = await catRes.json();
-            workspaceCategories = catData.categories;
-            categoriesRawRows = catData.rawRows?.length ? catData.rawRows : undefined;
-          }
-        } catch (err: any) {
-          console.warn("[Sidebar] Failed to fetch categories:", err?.message);
-        }
-      }
-
-      // Cookie auth via same-origin /api/enrich (Render)
-      const enrichHeaders: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-
-      const isNewTab = enrichOutputTab === "new";
-
-      const existingAsEnrichCols = !isNewTab
-        ? existingColumnsToEnrich.map((col) => {
-            const displayLabel = col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col");
-            const customInstruction = existingColumnInstructions[col]?.trim();
-            return {
-              id: `existing__${col}`,
-              label: displayLabel,
-              description: customInstruction
-                ? customInstruction
-                : `Fill in the "${displayLabel}" field for this product. Use the available product data to generate an accurate and appropriate value.`,
-              type: "text" as const,
-              enabled: true,
-              isCustom: true,
-            };
-          })
-        : [];
-
-      const commonPayload = {
-        enabledColumns: isNewTab
-          ? enabledColumns
-          : existingColumnsToEnrich.map((c) => `existing__${c}`),
-        enrichmentColumns: isNewTab
-          ? enrichmentColumns.filter((c) => c.enabled)
-          : existingAsEnrichCols,
-        settings: enrichSettings,
-        kind: sessionKind,
-        cmsType: workspace?.cms_type || undefined,
-        workspaceCategories,
-        categoriesRawRows,
-        workspaceId: workspace?.id,
-      };
-
-      let completedCount = 0;
-      let rowIndex = 0;
-      let stopAll = false;
-
-      // Define concurrent worker to pull and process tasks from the queue
-      const runWorker = async () => {
-        while (!stopAll && !controller.signal.aborted) {
-          const currentIdx = rowIndex++;
-          if (currentIdx >= enrichableRows.length) break;
-
-          const r = enrichableRows[currentIdx];
-          setRowStatus(r.id, "processing");
-
-          try {
-            const MAX_FIELD_CHARS = 800;
-            const filteredData: Record<string, string> = {};
-            for (const col of sourceColumns) {
-              if (enrichedColIds.has(col)) {
-                const val = r.enrichedData?.[col];
-                if (val !== undefined && val !== null && val !== "") {
-                  if (Array.isArray(val)) {
-                    filteredData[col] = val
-                      .map((item) =>
-                        typeof item === "object" && item !== null
-                          ? (item.uri || item.imageUrl || item.pageUrl || item.title || JSON.stringify(item))
-                          : String(item)
-                      )
-                      .join(", ");
-                  } else {
-                    filteredData[col] = String(val);
-                  }
-                }
-              } else if (r.originalData[col] !== undefined) {
-                filteredData[col] = r.originalData[col];
-              }
-              if (filteredData[col] && filteredData[col].length > MAX_FIELD_CHARS) {
-                filteredData[col] = filteredData[col].slice(0, MAX_FIELD_CHARS);
-              }
-            }
-
-            const response = await fetch("/api/enrich", {
-              method: "POST",
-              headers: enrichHeaders,
-              signal: controller.signal,
-              body: JSON.stringify({
-                row: { id: r.id, rowIndex: r.rowIndex, originalData: filteredData },
-                ...commonPayload,
-              }),
-            });
-
-            if (controller.signal.aborted || stopAll) {
-              setRowStatus(r.id, "pending");
-              break;
-            }
-
-            if (response.status === 402) {
-              stopAll = true; // Stop all other workers immediately
-              let errorCode = "NO_CREDITS";
-              try {
-                const errorBody = await response.json();
-                if (typeof errorBody?.error === "string" && errorBody.error) {
-                  errorCode = errorBody.error;
-                }
-              } catch {}
-
-              setIsEnriching(false);
-              setLastError(errorCode);
-
-              if (errorCode === "INACTIVE_SUBSCRIPTION") {
-                toast.error("Subscription inactive", {
-                  description: "Your subscription is not active. Renew or reactivate your subscription to use AI credits.",
-                  duration: 8000,
-                });
-              } else {
-                toast.error("No credits remaining", {
-                  description: "Your AI credits have run out. Please upgrade your plan or wait for the monthly reset.",
-                  duration: 8000,
-                });
-              }
-              break;
-            }
-
-            completedCount++;
-
-            if (!response.ok) {
-              let errorMsg = `API error: ${response.status}`;
-              try {
-                const errBody = await response.json();
-                if (typeof errBody?.error === "string" && errBody.error) {
-                  errorMsg = errBody.error;
-                }
-              } catch {}
-              setRowStatus(r.id, "error", errorMsg);
-              setEnrichProgress(completedCount, enrichableRows.length);
-              incrementError();
-              if (response.status >= 500) setLastError(errorMsg);
-              
-              // Worker cooldown on error
-              await new Promise((resolve) => setTimeout(resolve, 2000));
-              continue;
-            }
-
-            const result = await response.json();
-
-            if (controller.signal.aborted || stopAll) {
-              setRowStatus(r.id, "pending");
-              break;
-            }
-
-            if (result.status === "done" && result.data) {
-              const enrichedResult: Record<string, any> = {};
-              for (const [key, value] of Object.entries(result.data as Record<string, any>)) {
-                if (key.startsWith("existing__")) {
-                  const colName = key.replace("existing__", "");
-                  updateCellValue(r.id, colName, String(value ?? ""));
-                } else {
-                  enrichedResult[key] = value;
-                }
-              }
-              if (Object.keys(enrichedResult).length > 0) {
-                setRowEnrichedData(r.id, enrichedResult);
-              } else {
-                setRowStatus(r.id, "done");
-              }
-              setEnrichProgress(completedCount, enrichableRows.length);
-              invalidateCredits();
-            } else {
-              setRowStatus(r.id, "error", result.error || "Unknown error");
-              setEnrichProgress(completedCount, enrichableRows.length);
-              incrementError();
-              if (result.error) setLastError(result.error);
-            }
-
-            // Small worker cooldown to prevent rate limiting
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-          } catch (err: any) {
-            if (err instanceof DOMException && err.name === "AbortError") {
-              setRowStatus(r.id, "pending");
-              break;
-            }
-            completedCount++;
-            setRowStatus(r.id, "error", err?.message || "Enrichment request failed");
-            setEnrichProgress(completedCount, enrichableRows.length);
-            incrementError();
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-          }
-        }
-      };
-
-      // Run up to 5 concurrent workers
-      const CONCURRENCY_LIMIT = 5;
-      const workers: Promise<void>[] = [];
-      const numWorkers = Math.min(CONCURRENCY_LIMIT, enrichableRows.length);
-
-      for (let i = 0; i < numWorkers; i++) {
-        // Slightly stagger worker startup to avoid instant rate limiting spikes
-        if (i > 0) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-        workers.push(runWorker());
-      }
-
-      await Promise.all(workers);
-
-      setIsEnriching(false);
-      setEnrichingContext(null, []);
-      toast.success("Enrichment complete", {
-        description: `${completedCount} rows processed`,
+      const response = await fetch("/api/enrich/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId,
+          sessionId: projectId,
+          rowIds: enrichableRows.map((r) => r.id),
+          enabledColumns: isNewTab
+            ? enabledColumns
+            : existingColumnsToEnrich.map((c) => `existing__${c}`),
+          enrichmentColumns: isNewTab
+            ? enrichmentColumns.filter((c) => c.enabled)
+            : existingAsEnrichCols,
+          settings: enrichSettings,
+          kind: sessionKind,
+          cmsType: workspace?.cms_type || undefined,
+          sourceColumns,
+          workspaceCategories,
+          categoriesRawRows,
+        }),
       });
-      invalidateCredits();
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+
+      if (response.status === 402) {
+        setIsEnriching(false);
+        setEnrichingContext(null, []);
+        let errorCode = "NO_CREDITS";
+        try {
+          const errorBody = await response.json();
+          if (typeof errorBody?.error === "string") errorCode = errorBody.error;
+        } catch {}
+        setLastError(errorCode);
+        toast.error(
+          errorCode === "INACTIVE_SUBSCRIPTION"
+            ? "Subscription inactive"
+            : "No credits remaining"
+        );
         return;
       }
+
+      if (response.status === 409) {
+        const body = (await response.json().catch(() => ({}))) as { runId?: string };
+        if (body.runId) enrichRunIdRef.current = body.runId;
+      } else if (!response.ok) {
+        const errBody = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(errBody.error || `Start failed (${response.status})`);
+      } else {
+        const body = (await response.json()) as { runId?: string };
+        if (body.runId) enrichRunIdRef.current = body.runId;
+      }
+
+      toast.message("Enrichment is running in the background", {
+        description: "You can leave this page. We'll notify you when it finishes.",
+      });
+
+      const tick = async () => {
+        try {
+          const keep = await pollEnrichRun();
+          if (keep) {
+            enrichPollRef.current = setTimeout(tick, 2500);
+          }
+        } catch (error) {
+          console.error("Enrichment poll failed:", error);
+          enrichPollRef.current = setTimeout(tick, 4000);
+        }
+      };
+      void tick();
+    } catch (error) {
       console.error("Enrichment failed:", error);
       const errMsg = error instanceof Error ? error.message : "Unknown error occurred";
       setLastError(errMsg);
       toast.error("Enrichment failed", { description: errMsg });
       setIsEnriching(false);
       setEnrichingContext(null, []);
-    } finally {
-      abortControllerRef.current = null;
     }
   }, [
     enrichableRows,
@@ -539,16 +535,43 @@ export function Sidebar() {
     sourceColumns,
     sessionKind,
     workspace,
+    sheetWorkspaceId,
+    projectId,
+    pollEnrichRun,
     setIsEnriching,
     setPaused,
     setEnrichProgress,
-    setRowStatus,
-    setRowEnrichedData,
-    updateCellValue,
-    incrementError,
-    invalidateCredits,
     setEnrichingContext,
   ]);
+
+  useEffect(() => {
+    const workspaceId = workspace?.id || sheetWorkspaceId;
+    if (!workspaceId || !projectId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const keep = await pollEnrichRun();
+        if (cancelled || !keep) return;
+        const tick = async () => {
+          if (cancelled) return;
+          const still = await pollEnrichRun();
+          if (still && !cancelled) {
+            enrichPollRef.current = setTimeout(tick, 2500);
+          }
+        };
+        enrichPollRef.current = setTimeout(tick, 2500);
+      } catch {
+        // No active run.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (enrichPollRef.current) {
+        clearTimeout(enrichPollRef.current);
+        enrichPollRef.current = null;
+      }
+    };
+  }, [workspace?.id, sheetWorkspaceId, projectId, pollEnrichRun]);
 
   const doneCount = rows.filter((r) => r.status === "done").length;
   const failedCount = rows.filter((r) => r.status === "error").length;

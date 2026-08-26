@@ -147,6 +147,7 @@ export async function processDescriptionRow(params: {
         operation: "visualizer_description",
         details: {
           runId: params.runId,
+          idempotencyKey: `${params.runId}:visualizer_description:${row.id}`,
           model: result.model,
           phase: "description",
           cost: result.cost.totalCost,
