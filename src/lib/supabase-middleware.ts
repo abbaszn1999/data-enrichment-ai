@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isAdminInternalPath, isAdminPublicPath } from "@/lib/platform-admin/paths";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -46,9 +47,10 @@ export async function updateSession(request: NextRequest) {
     pathname.endsWith(".js") ||
     pathname.endsWith(".css");
   const isDemoRoute = pathname.startsWith("/demo");
+  const isAdminRoute = isAdminPublicPath(pathname) || isAdminInternalPath(pathname);
   const isApiRoute = pathname.startsWith("/api");
 
-  if (isPublicRoute || isDemoRoute || isApiRoute) {
+  if (isPublicRoute || isDemoRoute || isAdminRoute || isApiRoute) {
     return supabaseResponse;
   }
 
