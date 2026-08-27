@@ -4,22 +4,38 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
-import { FilterSelect } from "@/components/platform-admin/filter-select";
+import { DataToolbar } from "@/components/platform-admin/data-toolbar";
 import { PageHeader } from "@/components/platform-admin/page-header";
+import { pageCount, paginate } from "@/components/platform-admin/pagination-bar";
 import { IntegrationStatusBadge } from "@/components/platform-admin/status-badge";
 import { adminJson } from "@/lib/platform-admin/client-api";
 import { formatRelative } from "@/lib/platform-admin/format";
 import { PROVIDER_LABELS } from "@/lib/platform-admin/labels";
+import { sortRows, toggleSort, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveIntegrationsPayload } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
 import type { AdminIntegrationProvider } from "@/lib/platform-admin/types";
+
+type IntegrationTableRow = {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  provider: AdminIntegrationProvider | null;
+  storeName: string;
+  baseUrl: string;
+  status: "connected" | "error" | "disconnected" | "none";
+  lastSyncAt: string | null;
+};
 
 export default function AdminIntegrationsPage() {
   const [data, setData] = useState<LiveIntegrationsPayload>({ integrations: [], unconnected: [] });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
   const [provider, setProvider] = useState("all");
   const [status, setStatus] = useState("all");
+  const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<SortState>({ key: "store", dir: "asc" });
 
   useEffect(() => {
     adminJson<LiveIntegrationsPayload>("/api/platform-admin/integrations")
@@ -28,13 +44,67 @@ export default function AdminIntegrationsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const connected = useMemo(() => {
-    return data.integrations.filter((item) => {
+  const allRows = useMemo<IntegrationTableRow[]>(() => {
+    const connected: IntegrationTableRow[] = data.integrations.map((item) => ({
+      id: item.id,
+      workspaceId: item.workspaceId,
+      workspaceName: item.workspaceName,
+      provider: item.provider,
+      storeName: item.storeName,
+      baseUrl: item.baseUrl,
+      status: item.status,
+      lastSyncAt: item.lastSyncAt,
+    }));
+    const unconnected: IntegrationTableRow[] = data.unconnected.map((workspace) => ({
+      id: `unconnected-${workspace.id}`,
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      provider: null,
+      storeName: "—",
+      baseUrl: "",
+      status: "none",
+      lastSyncAt: null,
+    }));
+    return [...connected, ...unconnected];
+  }, [data]);
+
+  const resetPage = () => setPage(1);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return allRows.filter((item) => {
       if (provider !== "all" && item.provider !== provider) return false;
       if (status !== "all" && item.status !== status) return false;
-      return true;
+      if (!q) return true;
+      return (
+        item.storeName.toLowerCase().includes(q) ||
+        item.workspaceName.toLowerCase().includes(q) ||
+        item.baseUrl.toLowerCase().includes(q)
+      );
     });
-  }, [data.integrations, provider, status]);
+  }, [allRows, query, provider, status]);
+
+  const sorted = useMemo(
+    () =>
+      sortRows(filtered, sort, {
+        store: (row) => row.storeName,
+        workspace: (row) => row.workspaceName,
+        provider: (row) => row.provider,
+        status: (row) => row.status,
+        updated: (row) => (row.lastSyncAt ? new Date(row.lastSyncAt).getTime() : null),
+      }),
+    [filtered, sort]
+  );
+
+  const rows = paginate(sorted, page);
+  const hasFilters = query.trim() !== "" || provider !== "all" || status !== "all";
+
+  const clearFilters = () => {
+    setQuery("");
+    setProvider("all");
+    setStatus("all");
+    setPage(1);
+  };
 
   if (loading) return <PageLoader label="Loading integrations" />;
 
@@ -45,46 +115,84 @@ export default function AdminIntegrationsPage() {
         description="Connected Shopify, WooCommerce, and WordPress stores. No store credentials are shown."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <FilterSelect
-          label="Provider"
-          value={provider}
-          onChange={setProvider}
-          options={[
-            { value: "all", label: "All providers" },
-            { value: "shopify", label: "Shopify" },
-            { value: "woocommerce", label: "WooCommerce" },
-            { value: "wordpress", label: "WordPress" },
-          ]}
-        />
-        <FilterSelect
-          label="Status"
-          value={status}
-          onChange={setStatus}
-          options={[
-            { value: "all", label: "All statuses" },
-            { value: "connected", label: "Connected" },
-            { value: "error", label: "Error" },
-            { value: "disconnected", label: "Disconnected" },
-          ]}
-        />
-      </div>
       <AdminTable
-        rows={connected}
+        rows={rows}
         rowKey={(row) => row.id}
-        empty="No integrations match."
+        sort={sort}
+        onSort={(key) => setSort((current) => toggleSort(current, key))}
+        emptyTitle={allRows.length === 0 ? "No workspaces yet" : "No matching integrations"}
+        emptyDescription={
+          allRows.length === 0
+            ? "Store connections will appear here as workspaces connect Shopify, WooCommerce, or WordPress."
+            : "Try a different search or clear the active filters."
+        }
+        onClearFilters={hasFilters ? clearFilters : undefined}
+        toolbar={
+          <DataToolbar
+            search={query}
+            onSearch={(value) => {
+              setQuery(value);
+              resetPage();
+            }}
+            searchPlaceholder="Store, workspace, or URL"
+            noun="rows"
+            resultCount={filtered.length}
+            totalCount={allRows.length}
+            filters={[
+              {
+                id: "provider",
+                label: "Provider",
+                value: provider,
+                onChange: (value) => {
+                  setProvider(value);
+                  resetPage();
+                },
+                options: [
+                  { value: "all", label: "All providers" },
+                  { value: "shopify", label: "Shopify" },
+                  { value: "woocommerce", label: "WooCommerce" },
+                  { value: "wordpress", label: "WordPress" },
+                ],
+              },
+              {
+                id: "status",
+                label: "Status",
+                value: status,
+                onChange: (value) => {
+                  setStatus(value);
+                  resetPage();
+                },
+                options: [
+                  { value: "all", label: "All statuses" },
+                  { value: "connected", label: "Connected" },
+                  { value: "error", label: "Error" },
+                  { value: "disconnected", label: "Disconnected" },
+                  { value: "none", label: "Not connected" },
+                ],
+              },
+            ]}
+          />
+        }
+        pagination={{
+          page,
+          pageCount: pageCount(filtered.length),
+          total: filtered.length,
+          onPage: setPage,
+        }}
         columns={[
           {
             header: "Store",
+            sortKey: "store",
             cell: (row) => (
               <div>
                 <div className="font-medium">{row.storeName}</div>
-                <div className="text-xs text-muted-foreground">{row.baseUrl}</div>
+                {row.baseUrl ? <div className="text-xs text-muted-foreground">{row.baseUrl}</div> : null}
               </div>
             ),
           },
           {
             header: "Workspace",
+            sortKey: "workspace",
             cell: (row) => (
               <Link href={adminRoutes.workspace(row.workspaceId)} className="hover:underline">
                 {row.workspaceName}
@@ -93,26 +201,23 @@ export default function AdminIntegrationsPage() {
           },
           {
             header: "Provider",
-            cell: (row) => PROVIDER_LABELS[row.provider as AdminIntegrationProvider] ?? row.provider,
+            sortKey: "provider",
+            cell: (row) =>
+              row.provider ? PROVIDER_LABELS[row.provider] : <span className="text-muted-foreground">—</span>,
           },
-          { header: "Status", cell: (row) => <IntegrationStatusBadge status={row.status} /> },
+          {
+            header: "Status",
+            sortKey: "status",
+            cell: (row) => <IntegrationStatusBadge status={row.status} />,
+          },
           {
             header: "Updated",
+            sortKey: "updated",
             className: "text-muted-foreground",
             cell: (row) => (row.lastSyncAt ? formatRelative(row.lastSyncAt) : "—"),
           },
         ]}
       />
-      {data.unconnected.length > 0 && provider === "all" && status === "all" ? (
-        <p className="text-xs text-muted-foreground">
-          {data.unconnected.length} workspaces have no store connected:{" "}
-          {data.unconnected
-            .slice(0, 6)
-            .map((workspace) => workspace.name)
-            .join(", ")}
-          {data.unconnected.length > 6 ? "…" : ""}
-        </p>
-      ) : null}
     </>
   );
 }

@@ -117,24 +117,28 @@ export default function AdminUserDetailPage() {
 
       <Panel title="Owned workspaces">
         <AdminTable
+          embedded
           rows={user.ownedWorkspaces}
           rowKey={(row) => row.id}
           onRowClick={(row) => router.push(adminRoutes.workspace(row.id))}
-          empty="This user does not own a workspace."
+          emptyTitle="No owned workspaces"
+          emptyDescription="This user does not own a workspace."
           columns={[
             { header: "Workspace", cell: (row) => row.name },
             { header: "Slug", className: "text-muted-foreground", cell: (row) => `/${row.slug}` },
-            { header: "Members", cell: (row) => row.memberCount },
+            { header: "Members", numeric: true, cell: (row) => row.memberCount },
           ]}
         />
       </Panel>
 
       <Panel title="Memberships">
         <AdminTable
+          embedded
           rows={user.memberships}
           rowKey={(row) => `${row.workspaceId}:${row.userId}`}
           onRowClick={(row) => router.push(adminRoutes.workspace(row.workspaceId))}
-          empty="No workspace memberships."
+          emptyTitle="No memberships"
+          emptyDescription="This user is not a member of any workspace."
           columns={[
             { header: "Workspace", cell: (row) => row.workspaceName },
             { header: "Role", cell: (row) => ROLE_LABELS[row.role] },

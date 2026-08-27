@@ -36,6 +36,7 @@ export type LiveWorkspaceListRow = {
   createdAt: string;
   memberCount: number;
   planName: string | null;
+  planId: string | null;
   creditsRemaining: number | null;
   walletUsd: number;
   integrationProvider: string | null;

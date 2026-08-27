@@ -116,9 +116,11 @@ export default function AdminWorkspaceDetailPage() {
 
       <Panel title="Members">
         <AdminTable
+          embedded
           rows={workspace.members}
           rowKey={(row) => `${row.userId}:${row.role}`}
           onRowClick={(row) => router.push(adminRoutes.user(row.userId))}
+          emptyTitle="No members"
           columns={[
             {
               header: "Member",

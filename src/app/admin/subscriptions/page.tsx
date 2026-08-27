@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
-import { FilterSelect } from "@/components/platform-admin/filter-select";
+import { DataToolbar } from "@/components/platform-admin/data-toolbar";
 import { PageHeader } from "@/components/platform-admin/page-header";
-import { PaginationBar, pageCount, paginate } from "@/components/platform-admin/pagination-bar";
+import { pageCount, paginate } from "@/components/platform-admin/pagination-bar";
 import { PersonCell } from "@/components/platform-admin/person-cell";
 import { PlanBadge, SubscriptionStatusBadge } from "@/components/platform-admin/status-badge";
 import { adminJson } from "@/lib/platform-admin/client-api";
 import { formatCredits, formatDate } from "@/lib/platform-admin/format";
+import { PLAN_FILTER_OPTIONS, sortRows, toggleSort, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveSubscriptionRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
 
@@ -19,9 +20,13 @@ export default function AdminSubscriptionsPage() {
   const [subscriptions, setSubscriptions] = useState<LiveSubscriptionRow[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [plan, setPlan] = useState("all");
+  const [cycle, setCycle] = useState("all");
+  const [cancel, setCancel] = useState("all");
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<SortState>({ key: "mrr", dir: "desc" });
 
   useEffect(() => {
     adminJson<{ subscriptions: LiveSubscriptionRow[] }>("/api/platform-admin/subscriptions")
@@ -30,15 +35,49 @@ export default function AdminSubscriptionsPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const resetPage = () => setPage(1);
+
   const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
     return subscriptions.filter((sub) => {
       if (status !== "all" && sub.status !== status) return false;
       if (plan !== "all" && sub.planId !== plan) return false;
-      return true;
+      if (cycle !== "all" && sub.billingCycle !== cycle) return false;
+      if (cancel === "yes" && !sub.cancelAtPeriodEnd) return false;
+      if (cancel === "no" && sub.cancelAtPeriodEnd) return false;
+      if (!q) return true;
+      return sub.fullName.toLowerCase().includes(q) || sub.email.toLowerCase().includes(q);
     });
-  }, [subscriptions, status, plan]);
+  }, [subscriptions, query, status, plan, cycle, cancel]);
 
-  const rows = paginate(filtered, page);
+  const sorted = useMemo(
+    () =>
+      sortRows(filtered, sort, {
+        owner: (row) => row.fullName,
+        plan: (row) => row.planName,
+        status: (row) => row.status,
+        cycle: (row) => row.billingCycle,
+        mrr: (row) => row.mrr,
+        credits: (row) => row.creditsUsed,
+        remaining: (row) => row.remaining,
+        period: (row) => (row.currentPeriodEnd ? new Date(row.currentPeriodEnd).getTime() : null),
+        cancel: (row) => row.cancelAtPeriodEnd,
+      }),
+    [filtered, sort]
+  );
+
+  const rows = paginate(sorted, page);
+  const hasFilters =
+    query.trim() !== "" || status !== "all" || plan !== "all" || cycle !== "all" || cancel !== "all";
+
+  const clearFilters = () => {
+    setQuery("");
+    setStatus("all");
+    setPlan("all");
+    setCycle("all");
+    setCancel("all");
+    setPage(1);
+  };
 
   if (loading) return <PageLoader label="Loading subscriptions" />;
 
@@ -49,68 +88,143 @@ export default function AdminSubscriptionsPage() {
         description="Owner-level plans. Workspace members share the owner's credits."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <FilterSelect
-          label="Status"
-          value={status}
-          onChange={(value) => { setStatus(value); setPage(1); }}
-          options={[
-            { value: "all", label: "All statuses" },
-            { value: "active", label: "Active" },
-            { value: "trialing", label: "Trialing" },
-            { value: "past_due", label: "Past due" },
-            { value: "cancelled", label: "Cancelled" },
-            { value: "expired", label: "Expired" },
-            { value: "incomplete", label: "Incomplete" },
-          ]}
-        />
-        <FilterSelect
-          label="Plan"
-          value={plan}
-          onChange={(value) => { setPlan(value); setPage(1); }}
-          options={[
-            { value: "all", label: "All plans" },
-            { value: "free", label: "Free" },
-            { value: "starter", label: "Starter" },
-            { value: "growth", label: "Growth" },
-            { value: "pro", label: "Pro" },
-          ]}
-        />
-      </div>
       <AdminTable
         rows={rows}
         rowKey={(row) => row.id}
         onRowClick={(row) => router.push(adminRoutes.user(row.userId))}
-        empty="No subscriptions match."
+        sort={sort}
+        onSort={(key) => setSort((current) => toggleSort(current, key))}
+        emptyTitle={subscriptions.length === 0 ? "No subscriptions yet" : "No matching subscriptions"}
+        emptyDescription={
+          subscriptions.length === 0
+            ? "Owner plans will appear here once customers subscribe."
+            : "Try a different search or clear the active filters."
+        }
+        onClearFilters={hasFilters ? clearFilters : undefined}
+        toolbar={
+          <DataToolbar
+            search={query}
+            onSearch={(value) => {
+              setQuery(value);
+              resetPage();
+            }}
+            searchPlaceholder="Owner name or email"
+            noun="subscriptions"
+            resultCount={filtered.length}
+            totalCount={subscriptions.length}
+            filters={[
+              {
+                id: "status",
+                label: "Status",
+                value: status,
+                onChange: (value) => {
+                  setStatus(value);
+                  resetPage();
+                },
+                options: [
+                  { value: "all", label: "All statuses" },
+                  { value: "active", label: "Active" },
+                  { value: "trialing", label: "Trialing" },
+                  { value: "past_due", label: "Past due" },
+                  { value: "cancelled", label: "Cancelled" },
+                  { value: "expired", label: "Expired" },
+                  { value: "incomplete", label: "Incomplete" },
+                ],
+              },
+              {
+                id: "plan",
+                label: "Plan",
+                value: plan,
+                onChange: (value) => {
+                  setPlan(value);
+                  resetPage();
+                },
+                options: [...PLAN_FILTER_OPTIONS],
+              },
+              {
+                id: "cycle",
+                label: "Cycle",
+                value: cycle,
+                onChange: (value) => {
+                  setCycle(value);
+                  resetPage();
+                },
+                options: [
+                  { value: "all", label: "All cycles" },
+                  { value: "monthly", label: "Monthly" },
+                  { value: "yearly", label: "Yearly" },
+                ],
+              },
+              {
+                id: "cancel",
+                label: "Cancel",
+                value: cancel,
+                onChange: (value) => {
+                  setCancel(value);
+                  resetPage();
+                },
+                options: [
+                  { value: "all", label: "Any cancel state" },
+                  { value: "yes", label: "Cancels at period end" },
+                  { value: "no", label: "Renewing" },
+                ],
+              },
+            ]}
+          />
+        }
+        pagination={{
+          page,
+          pageCount: pageCount(filtered.length),
+          total: filtered.length,
+          onPage: setPage,
+        }}
         columns={[
           {
             header: "Owner",
+            sortKey: "owner",
             cell: (row) => (
               <PersonCell name={row.fullName} email={row.email} href={adminRoutes.user(row.userId)} />
             ),
           },
-          { header: "Plan", cell: (row) => <PlanBadge name={row.planName} /> },
-          { header: "Status", cell: (row) => <SubscriptionStatusBadge status={row.status} /> },
-          { header: "Cycle", cell: (row) => row.billingCycle },
-          { header: "MRR", cell: (row) => `$${row.mrr.toFixed(0)}` },
+          { header: "Plan", sortKey: "plan", cell: (row) => <PlanBadge name={row.planName} /> },
+          { header: "Status", sortKey: "status", cell: (row) => <SubscriptionStatusBadge status={row.status} /> },
+          { header: "Cycle", sortKey: "cycle", cell: (row) => row.billingCycle },
+          {
+            header: "MRR",
+            sortKey: "mrr",
+            numeric: true,
+            cell: (row) => `$${row.mrr.toFixed(0)}`,
+          },
           {
             header: "Credits",
-            cell: (row) =>
-              `${formatCredits(row.creditsUsed)} / ${formatCredits(row.periodCredits)}`,
+            sortKey: "credits",
+            numeric: true,
+            cell: (row) => `${formatCredits(row.creditsUsed)} / ${formatCredits(row.periodCredits)}`,
           },
-          { header: "Remaining", cell: (row) => formatCredits(row.remaining) },
+          {
+            header: "Remaining",
+            sortKey: "remaining",
+            numeric: true,
+            cell: (row) => formatCredits(row.remaining),
+          },
           {
             header: "Period end",
+            sortKey: "period",
             className: "text-muted-foreground",
             cell: (row) => (row.currentPeriodEnd ? formatDate(row.currentPeriodEnd) : "—"),
           },
           {
             header: "Cancel",
-            cell: (row) => (row.cancelAtPeriodEnd ? "At period end" : "—"),
+            sortKey: "cancel",
+            cell: (row) =>
+              row.cancelAtPeriodEnd ? (
+                <span className="text-amber-600 dark:text-amber-400">At period end</span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              ),
           },
         ]}
       />
-      <PaginationBar page={page} pageCount={pageCount(filtered.length)} onPage={setPage} total={filtered.length} />
     </>
   );
 }

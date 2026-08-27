@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
+import { DataToolbar } from "@/components/platform-admin/data-toolbar";
 import { PageHeader } from "@/components/platform-admin/page-header";
-import { PaginationBar, pageCount, paginate } from "@/components/platform-admin/pagination-bar";
-import { SearchInput } from "@/components/platform-admin/search-input";
+import { LEDGER_PAGE_SIZE, pageCount, paginate } from "@/components/platform-admin/pagination-bar";
 import { adminJson } from "@/lib/platform-admin/client-api";
 import { formatDateTime } from "@/lib/platform-admin/format";
+import { DATE_WINDOW_OPTIONS, inDateWindow, sortRows, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveAuditRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
 
@@ -17,7 +18,10 @@ export default function AdminAuditPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [entity, setEntity] = useState("all");
+  const [dateWindow, setDateWindow] = useState<DateWindow>("all");
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<SortState>({ key: "when", dir: "desc" });
 
   useEffect(() => {
     adminJson<{ events: LiveAuditRow[] }>("/api/platform-admin/audit")
@@ -26,10 +30,23 @@ export default function AdminAuditPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const entityOptions = useMemo(() => {
+    const types = [...new Set(events.map((event) => event.entityType).filter(Boolean))] as string[];
+    types.sort();
+    return [
+      { value: "all", label: "All entities" },
+      ...types.map((type) => ({ value: type, label: type })),
+    ];
+  }, [events]);
+
+  const resetPage = () => setPage(1);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return events;
     return events.filter((event) => {
+      if (entity !== "all" && event.entityType !== entity) return false;
+      if (!inDateWindow(event.createdAt, dateWindow)) return false;
+      if (!q) return true;
       return (
         event.action.toLowerCase().includes(q) ||
         event.userName.toLowerCase().includes(q) ||
@@ -38,9 +55,29 @@ export default function AdminAuditPage() {
         (event.entityId ?? "").toLowerCase().includes(q)
       );
     });
-  }, [events, query]);
+  }, [events, query, entity, dateWindow]);
 
-  const rows = paginate(filtered, page, 14);
+  const sorted = useMemo(
+    () =>
+      sortRows(filtered, sort, {
+        when: (row) => new Date(row.createdAt).getTime(),
+        user: (row) => row.userName,
+        workspace: (row) => row.workspaceName,
+        action: (row) => row.action,
+        entity: (row) => row.entityType,
+      }),
+    [filtered, sort]
+  );
+
+  const rows = paginate(sorted, page, LEDGER_PAGE_SIZE);
+  const hasFilters = query.trim() !== "" || entity !== "all" || dateWindow !== "all";
+
+  const clearFilters = () => {
+    setQuery("");
+    setEntity("all");
+    setDateWindow("all");
+    setPage(1);
+  };
 
   if (loading) return <PageLoader label="Loading activity" />;
 
@@ -51,19 +88,70 @@ export default function AdminAuditPage() {
         description="Workspace actions from the product: imports, catalog changes, and related events."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <SearchInput
-        value={query}
-        onChange={(value) => { setQuery(value); setPage(1); }}
-        placeholder="Action, user, or workspace"
-      />
       <AdminTable
         rows={rows}
         rowKey={(row) => row.id}
-        empty="No activity yet."
+        sort={sort}
+        onSort={(key) => setSort((current) => toggleSort(current, key))}
+        emptyTitle={events.length === 0 ? "No activity yet" : "No matching activity"}
+        emptyDescription={
+          events.length === 0
+            ? "Imports, catalog changes, and other workspace events will appear here."
+            : "Try a different search or clear the active filters."
+        }
+        onClearFilters={hasFilters ? clearFilters : undefined}
+        toolbar={
+          <DataToolbar
+            search={query}
+            onSearch={(value) => {
+              setQuery(value);
+              resetPage();
+            }}
+            searchPlaceholder="Action, user, or workspace"
+            noun="events"
+            resultCount={filtered.length}
+            totalCount={events.length}
+            filters={[
+              {
+                id: "entity",
+                label: "Entity",
+                value: entity,
+                onChange: (value) => {
+                  setEntity(value);
+                  resetPage();
+                },
+                options: entityOptions,
+              },
+              {
+                id: "window",
+                label: "Date",
+                value: dateWindow,
+                onChange: (value) => {
+                  setDateWindow(value as DateWindow);
+                  resetPage();
+                },
+                options: [...DATE_WINDOW_OPTIONS],
+              },
+            ]}
+          />
+        }
+        pagination={{
+          page,
+          pageCount: pageCount(filtered.length, LEDGER_PAGE_SIZE),
+          total: filtered.length,
+          pageSize: LEDGER_PAGE_SIZE,
+          onPage: setPage,
+        }}
         columns={[
-          { header: "When", className: "text-muted-foreground", cell: (row) => formatDateTime(row.createdAt) },
+          {
+            header: "When",
+            sortKey: "when",
+            className: "text-muted-foreground",
+            cell: (row) => formatDateTime(row.createdAt),
+          },
           {
             header: "User",
+            sortKey: "user",
             cell: (row) => (
               <Link href={adminRoutes.user(row.userId)} className="hover:underline">
                 {row.userName}
@@ -72,22 +160,23 @@ export default function AdminAuditPage() {
           },
           {
             header: "Workspace",
+            sortKey: "workspace",
             cell: (row) => (
               <Link href={adminRoutes.workspace(row.workspaceId)} className="hover:underline">
                 {row.workspaceName}
               </Link>
             ),
           },
-          { header: "Action", cell: (row) => row.action },
+          { header: "Action", sortKey: "action", cell: (row) => row.action },
           {
             header: "Entity",
+            sortKey: "entity",
             className: "text-muted-foreground",
             cell: (row) =>
               row.entityType ? `${row.entityType}${row.entityId ? ` · ${row.entityId.slice(0, 8)}` : ""}` : "—",
           },
         ]}
       />
-      <PaginationBar page={page} pageCount={pageCount(filtered.length, 14)} onPage={setPage} total={filtered.length} />
     </>
   );
 }

@@ -208,6 +208,7 @@ export async function loadLiveWorkspaces(): Promise<LiveWorkspaceListRow[]> {
         row.user_id as string,
         {
           planName: plan?.display_name ?? plan?.name ?? null,
+          planId: (plan?.name as string | null) ?? null,
           remaining: balance.remaining,
         },
       ];
@@ -228,6 +229,7 @@ export async function loadLiveWorkspaces(): Promise<LiveWorkspaceListRow[]> {
       createdAt: row.created_at as string,
       memberCount: memberCount.get(row.id as string) ?? 0,
       planName: sub?.planName ?? null,
+      planId: sub?.planId ?? null,
       creditsRemaining: sub?.remaining ?? null,
       walletUsd: walletByWs.get(row.id as string) ?? 0,
       integrationProvider: integration?.provider ?? null,

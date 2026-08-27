@@ -15,7 +15,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         <div className="flex min-h-0 flex-1">
           <AdminSidebar collapsed={collapsed} onToggle={() => setCollapsed((value) => !value)} />
           <main className="min-h-0 flex-1 overflow-auto">
-            <div className="mx-auto w-full max-w-6xl space-y-5 p-5">{children}</div>
+            <div className="mx-auto w-full max-w-[88rem] space-y-5 p-5">{children}</div>
           </main>
         </div>
       </div>
