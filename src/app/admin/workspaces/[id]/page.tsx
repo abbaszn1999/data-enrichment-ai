@@ -15,7 +15,7 @@ import { SignInAsButton } from "@/components/platform-admin/sign-in-as-button";
 import { IntegrationStatusBadge, PlanBadge } from "@/components/platform-admin/status-badge";
 import { Button } from "@/components/ui/button";
 import { adminJson } from "@/lib/platform-admin/client-api";
-import { formatCredits, formatDate, formatUsd } from "@/lib/platform-admin/format";
+import { formatCredits, formatDate, formatUsd, formatBytes } from "@/lib/platform-admin/format";
 import { PROVIDER_LABELS, ROLE_LABELS } from "@/lib/platform-admin/labels";
 import type { LiveWorkspaceDetail } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
@@ -99,6 +99,18 @@ export default function AdminWorkspaceDetailPage() {
             value: workspace.creditsRemaining == null ? "—" : formatCredits(workspace.creditsRemaining),
           },
           { label: "Wallet USD", value: formatUsd(workspace.walletUsd) },
+          {
+            label: "Storage",
+            value: (
+              <span className="tabular-nums">
+                {formatBytes(workspace.storageBytes)}
+                <span className="ml-1.5 font-normal text-muted-foreground">
+                  · {workspace.objectCount.toLocaleString("en-US")}{" "}
+                  {workspace.objectCount === 1 ? "file" : "files"}
+                </span>
+              </span>
+            ),
+          },
           {
             label: "Store",
             value: workspace.integrationProvider ? (

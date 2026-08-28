@@ -1,6 +1,7 @@
 import type { User } from "@supabase/supabase-js";
 import { adminCreditBalance, unwrapRelation } from "./credit-balance";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { loadWorkspaceUsageMap, sumUsage, usageOf } from "./usage";
 import type { AdminMemberRole, AdminSubscriptionStatus } from "./types";
 import type {
   LiveMember,
@@ -92,21 +93,36 @@ export async function loadLiveUsers(): Promise<LiveUserListRow[]> {
   const authUsers = await listAuthUsers();
   const ids = authUsers.map((user) => user.id);
 
-  const [{ data: profiles, error: profileError }, { data: members, error: memberError }, { data: subs, error: subError }] =
-    await Promise.all([
+  const [
+    { data: profiles, error: profileError },
+    { data: members, error: memberError },
+    { data: subs, error: subError },
+    { data: owned, error: ownedError },
+    usageByWorkspace,
+  ] = await Promise.all([
     admin.from("profiles").select("id, full_name").in("id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
     admin.from("workspace_members").select("user_id"),
     admin.from("user_subscriptions").select("user_id, status, plan_id, subscription_plans(name, display_name)"),
+    admin.from("workspaces").select("id, owner_id"),
+    loadWorkspaceUsageMap(),
   ]);
   if (profileError) throw new Error(profileError.message);
   if (memberError) throw new Error(memberError.message);
   if (subError) throw new Error(subError.message);
+  if (ownedError) throw new Error(ownedError.message);
 
   const nameById = new Map((profiles ?? []).map((row) => [row.id as string, row.full_name as string]));
   const memberCount = new Map<string, number>();
   for (const row of members ?? []) {
     const id = row.user_id as string;
     memberCount.set(id, (memberCount.get(id) ?? 0) + 1);
+  }
+  const ownedByUser = new Map<string, string[]>();
+  for (const row of owned ?? []) {
+    const ownerId = row.owner_id as string;
+    const list = ownedByUser.get(ownerId) ?? [];
+    list.push(row.id as string);
+    ownedByUser.set(ownerId, list);
   }
   const subByUser = new Map(
     (subs ?? []).map((row) => {
@@ -125,6 +141,7 @@ export async function loadLiveUsers(): Promise<LiveUserListRow[]> {
   return authUsers
     .map((user) => {
       const sub = subByUser.get(user.id);
+      const usage = sumUsage((ownedByUser.get(user.id) ?? []).map((id) => usageOf(usageByWorkspace, id)));
       return {
         id: user.id,
         fullName: displayName(user, nameById.get(user.id)),
@@ -132,6 +149,9 @@ export async function loadLiveUsers(): Promise<LiveUserListRow[]> {
         createdAt: user.created_at,
         lastSeenAt: user.last_sign_in_at ?? null,
         workspaceCount: memberCount.get(user.id) ?? 0,
+        storageBytes: usage.storageBytes,
+        objectCount: usage.objectCount,
+        dbBytes: usage.dbBytes,
         planName: sub?.planName ?? null,
         planId: sub?.planId ?? null,
         subscriptionStatus: sub?.status ?? null,
@@ -157,14 +177,21 @@ export async function loadLiveWorkspaces(): Promise<LiveWorkspaceListRow[]> {
   const rows = workspaces ?? [];
   const ownerIds = [...new Set(rows.map((row) => row.owner_id as string))];
 
-  const [{ data: profiles, error: profileError }, { data: members, error: memberError }, { data: wallets, error: walletError }, { data: integrations, error: integrationError }, { data: subs, error: subError }] =
-    await Promise.all([
-      admin.from("profiles").select("id, full_name").in("id", ownerIds.length ? ownerIds : ["00000000-0000-0000-0000-000000000000"]),
-      admin.from("workspace_members").select("workspace_id"),
-      admin.from("workspace_wallets").select("workspace_id, balance_usd"),
-      admin.from("workspace_integrations").select("workspace_id, provider, status"),
-      admin.from("user_subscriptions").select("user_id, status, billing_cycle, credits_used, bonus_credits, subscription_plans(name, display_name, monthly_ai_credits)"),
-    ]);
+  const [
+    { data: profiles, error: profileError },
+    { data: members, error: memberError },
+    { data: wallets, error: walletError },
+    { data: integrations, error: integrationError },
+    { data: subs, error: subError },
+    usageByWorkspace,
+  ] = await Promise.all([
+    admin.from("profiles").select("id, full_name").in("id", ownerIds.length ? ownerIds : ["00000000-0000-0000-0000-000000000000"]),
+    admin.from("workspace_members").select("workspace_id"),
+    admin.from("workspace_wallets").select("workspace_id, balance_usd"),
+    admin.from("workspace_integrations").select("workspace_id, provider, status"),
+    admin.from("user_subscriptions").select("user_id, status, billing_cycle, credits_used, bonus_credits, subscription_plans(name, display_name, monthly_ai_credits)"),
+    loadWorkspaceUsageMap(),
+  ]);
   if (profileError) throw new Error(profileError.message);
   if (memberError) throw new Error(memberError.message);
   if (walletError) throw new Error(walletError.message);
@@ -219,6 +246,7 @@ export async function loadLiveWorkspaces(): Promise<LiveWorkspaceListRow[]> {
     const ownerId = row.owner_id as string;
     const integration = integrationByWs.get(row.id as string);
     const sub = subByUser.get(ownerId);
+    const usage = usageOf(usageByWorkspace, row.id as string);
     return {
       id: row.id as string,
       name: row.name as string,
@@ -232,6 +260,9 @@ export async function loadLiveWorkspaces(): Promise<LiveWorkspaceListRow[]> {
       planId: sub?.planId ?? null,
       creditsRemaining: sub?.remaining ?? null,
       walletUsd: walletByWs.get(row.id as string) ?? 0,
+      storageBytes: usage.storageBytes,
+      objectCount: usage.objectCount,
+      dbBytes: usage.dbBytes,
       integrationProvider: integration?.provider ?? null,
       integrationStatus: (integration?.status as LiveWorkspaceListRow["integrationStatus"]) ?? null,
     };

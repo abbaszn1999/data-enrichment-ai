@@ -13,7 +13,7 @@ import { pageCount, paginate } from "@/components/platform-admin/pagination-bar"
 import { PersonCell } from "@/components/platform-admin/person-cell";
 import { IntegrationStatusBadge, PlanBadge } from "@/components/platform-admin/status-badge";
 import { adminJson } from "@/lib/platform-admin/client-api";
-import { formatCredits, formatUsd, initials } from "@/lib/platform-admin/format";
+import { formatBytes, formatCredits, formatUsd, initials } from "@/lib/platform-admin/format";
 import { PLAN_FILTER_OPTIONS, sortRows, toggleSort, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveWorkspaceListRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
@@ -81,6 +81,7 @@ export default function AdminWorkspacesPage() {
         members: (row) => row.memberCount,
         credits: (row) => row.creditsRemaining,
         wallet: (row) => row.walletUsd,
+        storage: (row) => row.storageBytes,
         store: (row) => row.integrationProvider,
       }),
     [filtered, sort]
@@ -312,6 +313,16 @@ export default function AdminWorkspacesPage() {
               numeric: true,
               cell: (row) => (
                 <span className={cn(row.walletUsd <= 0 && "text-muted-foreground")}>{formatUsd(row.walletUsd)}</span>
+              ),
+            },
+            {
+              header: "Storage",
+              sortKey: "storage",
+              numeric: true,
+              cell: (row) => (
+                <span className={cn("tabular-nums", row.storageBytes <= 0 && "text-muted-foreground")}>
+                  {formatBytes(row.storageBytes)}
+                </span>
               ),
             },
             {

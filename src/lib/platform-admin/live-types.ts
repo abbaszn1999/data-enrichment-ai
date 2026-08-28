@@ -20,6 +20,9 @@ export type LiveUserListRow = {
   createdAt: string;
   lastSeenAt: string | null;
   workspaceCount: number;
+  storageBytes: number;
+  objectCount: number;
+  dbBytes: number;
   planName: string | null;
   planId: string | null;
   subscriptionStatus: AdminSubscriptionStatus | null;
@@ -39,6 +42,9 @@ export type LiveWorkspaceListRow = {
   planId: string | null;
   creditsRemaining: number | null;
   walletUsd: number;
+  storageBytes: number;
+  objectCount: number;
+  dbBytes: number;
   integrationProvider: string | null;
   integrationStatus: "connected" | "error" | "disconnected" | null;
 };

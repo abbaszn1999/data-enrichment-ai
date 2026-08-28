@@ -14,7 +14,7 @@ import { SignInAsButton } from "@/components/platform-admin/sign-in-as-button";
 import { PlanBadge, SubscriptionStatusBadge, UserStatusBadge } from "@/components/platform-admin/status-badge";
 import { Button } from "@/components/ui/button";
 import { adminJson } from "@/lib/platform-admin/client-api";
-import { formatCredits, formatDate, formatRelative } from "@/lib/platform-admin/format";
+import { formatCredits, formatDate, formatRelative, formatBytes } from "@/lib/platform-admin/format";
 import { ROLE_LABELS } from "@/lib/platform-admin/labels";
 import type { LiveUserDetail } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
@@ -90,6 +90,17 @@ export default function AdminUserDetailPage() {
             value: user.subscriptionStatus ? <SubscriptionStatusBadge status={user.subscriptionStatus} /> : "—",
           },
           { label: "Workspaces", value: String(user.workspaceCount) },
+          {
+            label: "Storage (owned)",
+            value: (
+              <span className="tabular-nums">
+                {formatBytes(user.storageBytes)}
+                <span className="ml-1.5 font-normal text-muted-foreground">
+                  · {user.objectCount.toLocaleString("en-US")} {user.objectCount === 1 ? "file" : "files"}
+                </span>
+              </span>
+            ),
+          },
         ]}
       />
 
@@ -130,6 +141,13 @@ export default function AdminUserDetailPage() {
             { header: "Workspace", cell: (row) => row.name },
             { header: "Slug", className: "text-muted-foreground", cell: (row) => `/${row.slug}` },
             { header: "Members", numeric: true, cell: (row) => row.memberCount },
+            {
+              header: "Storage",
+              numeric: true,
+              cell: (row) => (
+                <span className="tabular-nums">{formatBytes(row.storageBytes)}</span>
+              ),
+            },
           ]}
         />
       </Panel>

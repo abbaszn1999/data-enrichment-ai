@@ -12,7 +12,7 @@ import { PageHeader } from "@/components/platform-admin/page-header";
 import { pageCount, paginate } from "@/components/platform-admin/pagination-bar";
 import { PlanBadge, SubscriptionStatusBadge, UserStatusBadge } from "@/components/platform-admin/status-badge";
 import { adminJson } from "@/lib/platform-admin/client-api";
-import { formatRelative, initials } from "@/lib/platform-admin/format";
+import { formatBytes, formatRelative, initials } from "@/lib/platform-admin/format";
 import { PLAN_FILTER_OPTIONS, matchesLastSeen, sortRows, toggleSort, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveUserListRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
@@ -93,6 +93,7 @@ export default function AdminUsersPage() {
         plan: (row) => row.planName,
         subscription: (row) => row.subscriptionStatus,
         workspaces: (row) => row.workspaceCount,
+        storage: (row) => row.storageBytes,
         status: (row) => row.status,
         lastSeen: (row) => (row.lastSeenAt ? new Date(row.lastSeenAt).getTime() : null),
       }),
@@ -338,6 +339,16 @@ export default function AdminUsersPage() {
               cell: (user) => (
                 <span className={cn(user.workspaceCount === 0 && "text-muted-foreground")}>
                   {user.workspaceCount}
+                </span>
+              ),
+            },
+            {
+              header: "Storage",
+              sortKey: "storage",
+              numeric: true,
+              cell: (user) => (
+                <span className={cn("tabular-nums", user.storageBytes <= 0 && "text-muted-foreground")}>
+                  {formatBytes(user.storageBytes)}
                 </span>
               ),
             },

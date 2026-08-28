@@ -9,15 +9,21 @@ function LoadingSpinner() {
   return <PageLoader label="Authenticating..." className="min-h-screen" />;
 }
 
+function safeAuthNextPath(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/workspaces";
+  return raw;
+}
+
 /**
  * Client-side auth callback handler.
  *
  * Handles TWO Supabase auth flows:
- * 1. PKCE flow: ?code= in query params (magic links for existing users)
- * 2. Implicit flow: #access_token in hash fragment (confirmation emails for new users)
+ * 1. PKCE flow: ?code= in query params (magic links / email confirmation)
+ * 2. Implicit flow: #access_token in hash fragment (older confirmation emails)
  *
- * Server-side route.ts CANNOT read hash fragments — that's why we need
- * a client-side page that runs in the browser.
+ * createBrowserClient auto-exchanges ?code= during initialize. This page must
+ * wait for that session first — a second exchangeCodeForSession fails and used
+ * to dump confirmed users on /login?error=auth_callback_error.
  */
 export default function AuthCallbackPage() {
   return (
@@ -55,9 +61,19 @@ function AuthCallbackHandler() {
     router.refresh();
   }
 
+  async function continueIfSession(next: string): Promise<boolean> {
+    const { data } = await supabase.auth.getSession();
+    if (!data.session?.user) return false;
+    await finalizeRedirect(data.session.user, next);
+    return true;
+  }
+
   async function handleCallback() {
-    const next = searchParams.get("next") || "/workspaces";
+    const next = safeAuthNextPath(searchParams.get("next"));
     const code = searchParams.get("code");
+
+    // PKCE client may already have exchanged ?code= during initialize.
+    if (await continueIfSession(next)) return;
 
     // ── Flow 1: PKCE — ?code= in query params ──
     // Must use client-side exchange so the PKCE code verifier stored in the
@@ -69,6 +85,7 @@ function AuthCallbackHandler() {
         return;
       }
       console.error("[auth/callback] Code exchange failed:", error?.message);
+      if (await continueIfSession(next)) return;
       router.replace(`/login?error=auth_callback_error`);
       return;
     }
@@ -99,7 +116,7 @@ function AuthCallbackHandler() {
     if (tokenHash && type) {
       const { error, data } = await supabase.auth.verifyOtp({
         token_hash: tokenHash,
-        type: type as any,
+        type: type as "signup" | "invite" | "magiclink" | "recovery" | "email_change" | "email",
       });
       if (!error && data?.user) {
         await finalizeRedirect(data.user, next);
@@ -108,7 +125,7 @@ function AuthCallbackHandler() {
       console.error("[auth/callback] verifyOtp failed:", error?.message);
     }
 
-    // No valid auth data found
+    if (await continueIfSession(next)) return;
     router.replace(`/login?error=auth_callback_error`);
   }
 
