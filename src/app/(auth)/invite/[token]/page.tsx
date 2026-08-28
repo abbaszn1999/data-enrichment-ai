@@ -69,14 +69,18 @@ export default function InvitePage() {
 
     async function joinOrSetup() {
       let keepLoader = false;
+      console.log("[invite/token] joinOrSetup: user=", user?.email, "inviteEmail=", invite?.email);
       try {
         const needsAccountSetup = await fetchNeedsAccountSetup();
+        console.log("[invite/token] needsAccountSetup=", needsAccountSetup);
         if (needsAccountSetup) {
           keepLoader = true;
+          console.log("[invite/token] redirecting to /setup");
           router.replace(`/invite/${token}/setup`);
           return;
         }
 
+        console.log("[invite/token] accepting invite directly (no setup needed)");
         const res = await fetch("/api/team/invite-accept", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -85,9 +89,11 @@ export default function InvitePage() {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to accept invite");
         const slug = json.workspaceSlug || invite.workspaces?.slug;
+        console.log("[invite/token] invite accepted, redirecting to workspace", slug);
         keepLoader = true;
         window.location.href = slug ? `/w/${slug}` : "/workspaces";
       } catch (err: any) {
+        console.error("[invite/token] joinOrSetup failed:", err);
         setError(err?.message || "Failed to accept invite");
       } finally {
         if (!keepLoader) setAccepting(false);

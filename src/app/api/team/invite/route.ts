@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
       process.env.NEXT_PUBLIC_APP_URL ||
       "http://localhost:4000";
     const inviteUrl = `${origin}/invite/${invite.token}`;
-    const callbackUrl = `${origin}/auth/callback?next=/invite/${invite.token}`;
+    const callbackUrl = `${origin}/auth/callback?next=${encodeURIComponent(`/invite/${invite.token}`)}&email=${encodeURIComponent(email)}`;
 
     let emailSent = false;
 
@@ -123,7 +123,9 @@ export async function POST(request: NextRequest) {
       console.warn(`[Invite] signInWithOtp failed for ${email}: ${otpSendErr.message}`);
     } else {
       emailSent = true;
-      console.log(`[Invite] Sent magic link to ${isExistingUser ? "existing" : "new"} user ${email}`);
+      console.log(
+        `[Invite] Sent magic link to ${isExistingUser ? "existing" : "new"} user ${email}, callbackUrl=${callbackUrl}`
+      );
     }
 
     return NextResponse.json({

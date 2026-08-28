@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
       request.headers.get("origin") ||
       process.env.NEXT_PUBLIC_APP_URL ||
       "http://localhost:4000";
-    const callbackUrl = `${origin}/auth/callback?next=/invite/${invite.token}`;
+    const callbackUrl = `${origin}/auth/callback?next=${encodeURIComponent(`/invite/${invite.token}`)}&email=${encodeURIComponent(invite.email)}`;
 
     // Use signInWithOtp for all users (PKCE-compatible, sends magic link with ?code= flow).
     // shouldCreateUser=true to handle edge case where user doesn't exist yet.
@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
 
     if (!otpSendErr) {
       emailSent = true;
-      console.log(`[Invite Resend] Sent magic link to ${invite.email}`);
+      console.log(`[Invite Resend] Sent magic link to ${invite.email}, callbackUrl=${callbackUrl}`);
     } else {
       console.warn(`[Invite Resend] signInWithOtp failed: ${otpSendErr.message}`);
     }

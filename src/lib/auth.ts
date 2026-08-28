@@ -3,9 +3,8 @@ import { createClient } from "@/lib/supabase-browser";
 export async function signUp(email: string, password: string, fullName: string, redirectTo?: string) {
   const supabase = createClient();
   const callbackBase = `${window.location.origin}/auth/callback`;
-  const callbackUrl = redirectTo
-    ? `${callbackBase}?next=${encodeURIComponent(redirectTo)}`
-    : `${callbackBase}?next=/workspaces`;
+  const nextParam = redirectTo ? encodeURIComponent(redirectTo) : "/workspaces";
+  const callbackUrl = `${callbackBase}?next=${nextParam}&email=${encodeURIComponent(email)}`;
 
   const { data, error } = await supabase.auth.signUp({
     email,

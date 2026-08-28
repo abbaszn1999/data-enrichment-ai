@@ -44,17 +44,21 @@ export async function fetchNeedsAccountSetup(): Promise<boolean> {
       const res = await fetch("/api/team/account-setup-needed", { cache: "no-store" });
       if (res.ok) {
         const json = await res.json();
+        console.log("[account-setup] account-setup-needed →", json);
         return !!json?.needsAccountSetup;
       }
+      console.warn("[account-setup] account-setup-needed responded", res.status, "attempt", attempt);
       if (res.status === 401 && attempt === 0) {
         await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }
       break;
-    } catch {
+    } catch (err) {
+      console.error("[account-setup] account-setup-needed fetch failed:", err);
       break;
     }
   }
+  console.warn("[account-setup] falling back to needsAccountSetup=true (fail-safe)");
   return true;
 }
 
@@ -124,10 +128,13 @@ export async function userNeedsAccountSetup(
     : [];
   const providersFromIdentities = (user?.identities ?? []).map((identity) => identity.provider);
 
-  return needsAccountSetupFromSignals({
+  const signals: AccountSetupSignals = {
     membershipCount: members.count ?? 0,
     ownedWorkspaceCount: owned.count ?? 0,
     hasPassword: passwordRpc.data === true,
     oauthProviders: [...providersFromMeta, ...providersFromIdentities].map(String),
-  });
+  };
+  const result = needsAccountSetupFromSignals(signals);
+  console.log("[account-setup] userNeedsAccountSetup", { userId, email: user?.email, ...signals, result });
+  return result;
 }
