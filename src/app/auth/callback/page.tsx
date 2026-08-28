@@ -66,9 +66,31 @@ function AuthCallbackHandler() {
     return true;
   }
 
+  function redirectToLoginWithError(next: string) {
+    const hash = window.location.hash ? window.location.hash.slice(1) : "";
+    const hashParams = hash ? new URLSearchParams(hash) : null;
+    const errorCode =
+      searchParams.get("error_code") || hashParams?.get("error_code") || "";
+    const params = new URLSearchParams({ error: "auth_callback_error" });
+    if (errorCode) params.set("error_code", errorCode);
+    if (next && next !== "/workspaces") params.set("redirect", next);
+    router.replace(`/login?${params.toString()}`);
+  }
+
   async function handleCallback() {
     const next = safeAuthNextPath(searchParams.get("next"));
     const code = searchParams.get("code");
+
+    // Supabase rejected the link before any ?code= arrived (expired/consumed
+    // OTP, denied access, etc). Surface the real reason instead of a generic
+    // "authentication failed" and keep the invite path so the user can retry.
+    const topLevelError = searchParams.get("error");
+    if (topLevelError) {
+      console.error("[auth/callback] Supabase returned an error:", topLevelError, searchParams.get("error_code"));
+      if (await continueIfSession(next)) return;
+      redirectToLoginWithError(next);
+      return;
+    }
 
     // PKCE client may already have exchanged ?code= during initialize.
     if (await continueIfSession(next)) return;
@@ -84,7 +106,7 @@ function AuthCallbackHandler() {
       }
       console.error("[auth/callback] Code exchange failed:", error?.message);
       if (await continueIfSession(next)) return;
-      router.replace(`/login?error=auth_callback_error`);
+      redirectToLoginWithError(next);
       return;
     }
 
@@ -124,7 +146,7 @@ function AuthCallbackHandler() {
     }
 
     if (await continueIfSession(next)) return;
-    router.replace(`/login?error=auth_callback_error`);
+    redirectToLoginWithError(next);
   }
 
   /**

@@ -21,23 +21,29 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  // Detect auth errors from callback redirect or hash fragment
+  // Detect auth errors from callback redirect (query string takes priority;
+  // older links may only carry the error in the hash fragment).
   const urlError = searchParams.get("error");
+  const isInviteRedirect = redirect.startsWith("/invite/");
   const [error, setError] = useState(() => {
-    if (urlError === "auth_callback_error") {
-      // Check hash fragment for more details (runs client-side)
-      if (typeof window !== "undefined") {
-        const hash = window.location.hash;
-        if (hash.includes("otp_expired")) {
-          return "The invite link has expired. Please ask the workspace owner to resend the invite.";
-        }
-        if (hash.includes("access_denied")) {
-          return "Access denied. The link may be invalid or expired.";
-        }
-      }
-      return "Authentication failed. Please try signing in manually.";
+    if (urlError !== "auth_callback_error") return "";
+
+    let errorCode = searchParams.get("error_code") || "";
+    if (!errorCode && typeof window !== "undefined") {
+      const hash = window.location.hash;
+      if (hash.includes("otp_expired")) errorCode = "otp_expired";
+      else if (hash.includes("access_denied")) errorCode = "access_denied";
     }
-    return "";
+
+    if (errorCode === "otp_expired") {
+      return isInviteRedirect
+        ? "This invite link has expired or was already used. Ask the workspace owner to resend the invite, then open the new link right away."
+        : "This sign-in link has expired or was already used. Request a new one and open it right away.";
+    }
+    if (errorCode === "access_denied") {
+      return "Access denied. The link may be invalid or expired.";
+    }
+    return "Authentication failed. Please try signing in manually.";
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -79,9 +85,19 @@ function LoginForm() {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          {error}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            {error}
+          </div>
+          {isInviteRedirect && (
+            <Link
+              href={redirect}
+              className="block text-center text-xs text-primary hover:underline"
+            >
+              Back to invite
+            </Link>
+          )}
         </div>
       )}
 
