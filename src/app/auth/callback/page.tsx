@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
 import { PageLoader } from "@/components/brand/page-loader";
-import { inviteRedirectAfterAuth } from "@/lib/team/account-setup";
+import { fetchNeedsAccountSetup, inviteRedirectAfterAuth } from "@/lib/team/account-setup";
 
 function LoadingSpinner() {
   return <PageLoader label="Authenticating..." className="min-h-screen" />;
@@ -154,24 +154,7 @@ function AuthCallbackHandler() {
    * emails that do not already have a completed account.
    */
   async function getInviteSetupRedirect(next: string): Promise<string | null> {
-    let needsAccountSetup = false;
-    try {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const res = await fetch("/api/team/account-setup-needed", { cache: "no-store" });
-        if (res.ok) {
-          const json = await res.json();
-          needsAccountSetup = !!json?.needsAccountSetup;
-          break;
-        }
-        if (res.status === 401 && attempt === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          continue;
-        }
-        break;
-      }
-    } catch {
-      needsAccountSetup = false;
-    }
+    const needsAccountSetup = await fetchNeedsAccountSetup();
 
     let pendingInviteToken: string | null = null;
     if (needsAccountSetup) {

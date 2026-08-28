@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { PageLoader } from "@/components/brand/page-loader";
 import { createClient } from "@/lib/supabase-browser";
-import { displayNameFromEmail } from "@/lib/team/account-setup";
+import { displayNameFromEmail, fetchNeedsAccountSetup } from "@/lib/team/account-setup";
 
 function destinationFromAccept(json: { workspaceSlug?: string | null }, fallbackSlug?: string) {
   const slug = json.workspaceSlug || fallbackSlug;
@@ -66,14 +66,11 @@ export default function InviteSetupPage() {
       setInferredName(existingName || displayNameFromEmail(email));
 
       try {
-        const [lookupRes, setupRes] = await Promise.all([
+        const [lookupRes, needsAccountSetup] = await Promise.all([
           fetch(`/api/team/invite-lookup?token=${token}`),
-          fetch("/api/team/account-setup-needed", { cache: "no-store" }),
+          fetchNeedsAccountSetup(),
         ]);
         const json = await lookupRes.json();
-        const setupJson = setupRes.ok
-          ? await setupRes.json()
-          : { needsAccountSetup: false };
 
         if (!lookupRes.ok) {
           setFatalError(json.error || "Invalid invite.");
@@ -87,7 +84,7 @@ export default function InviteSetupPage() {
           return;
         }
 
-        if (!setupJson.needsAccountSetup) {
+        if (!needsAccountSetup) {
           router.replace(`/invite/${token}`);
           return;
         }

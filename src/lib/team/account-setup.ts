@@ -31,6 +31,33 @@ export function displayNameFromEmail(email: string): string {
     .join(" ");
 }
 
+/**
+ * Right after a magic-link verification, the browser session may not have
+ * synced to the server's httpOnly cookies yet, so this API 401s briefly.
+ * Retry once before giving up, and — since this gates whether we skip
+ * password creation entirely — fail safe by assuming setup IS needed rather
+ * than silently joining the workspace with no password.
+ */
+export async function fetchNeedsAccountSetup(): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const res = await fetch("/api/team/account-setup-needed", { cache: "no-store" });
+      if (res.ok) {
+        const json = await res.json();
+        return !!json?.needsAccountSetup;
+      }
+      if (res.status === 401 && attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        continue;
+      }
+      break;
+    } catch {
+      break;
+    }
+  }
+  return true;
+}
+
 export function inviteTokenFromPath(path: string): string | null {
   const match = path.match(/^\/invite\/([a-zA-Z0-9]+)(?:\/setup)?\/?$/);
   return match?.[1] ?? null;

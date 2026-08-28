@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useAuth } from "@/hooks/use-auth";
 import { signOut } from "@/lib/auth";
+import { fetchNeedsAccountSetup } from "@/lib/team/account-setup";
 
 export default function InvitePage() {
   const router = useRouter();
@@ -69,13 +70,8 @@ export default function InvitePage() {
     async function joinOrSetup() {
       let keepLoader = false;
       try {
-        const statusRes = await fetch("/api/team/account-setup-needed", {
-          cache: "no-store",
-        });
-        const status = statusRes.ok
-          ? await statusRes.json()
-          : { needsAccountSetup: false };
-        if (status.needsAccountSetup) {
+        const needsAccountSetup = await fetchNeedsAccountSetup();
+        if (needsAccountSetup) {
           keepLoader = true;
           router.replace(`/invite/${token}/setup`);
           return;
