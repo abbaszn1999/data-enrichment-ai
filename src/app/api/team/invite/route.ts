@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { createClient } from "@/lib/supabase-server";
 import { getOwnerSubscription, isSubscriptionActive } from "@/lib/stripe";
+import { findAuthUserIdByEmail } from "@/lib/team/account-setup";
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,22 +65,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check if user already exists in auth.users directly.
-    // We cannot use profiles.full_name because inviteUserByEmail creates an auth.users
-    // record with no full_name, making the user appear "new" on subsequent invites → 422.
-    const { data: listData } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-    const existingAuthUser = listData?.users?.find(
-      (u) => u.email?.toLowerCase() === email.toLowerCase()
-    );
-    const isExistingUser = !!existingAuthUser;
+    const existingAuthUserId = await findAuthUserIdByEmail(adminClient, email);
+    const isExistingUser = !!existingAuthUserId;
 
-    // Check if already a member of this workspace
-    if (existingAuthUser) {
+    if (existingAuthUserId) {
       const { data: existingMember } = await adminClient
         .from("workspace_members")
         .select("id")
         .eq("workspace_id", workspaceId)
-        .eq("user_id", existingAuthUser.id)
+        .eq("user_id", existingAuthUserId)
         .maybeSingle();
 
       if (existingMember) {

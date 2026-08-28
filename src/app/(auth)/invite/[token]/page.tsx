@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
-import { CheckCircle2, AlertCircle, Building2, Mail, LogOut } from "lucide-react";
+import { AlertCircle, Building2, Mail, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageLoader } from "@/components/brand/page-loader";
@@ -18,7 +18,6 @@ export default function InvitePage() {
   const [loading, setLoading] = useState(true);
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
   const [invite, setInvite] = useState<any>(null);
   const [isExistingUser, setIsExistingUser] = useState(false);
   const [emailMismatch, setEmailMismatch] = useState(false);
@@ -53,7 +52,7 @@ export default function InvitePage() {
 
   // Step 2: If user is logged in + invite loaded → check email match, then accept
   useEffect(() => {
-    if (!invite || !sessionReady || !user || success || acceptAttempted.current) return;
+    if (!invite || !sessionReady || !user || acceptAttempted.current) return;
 
     // Check email mismatch
     const inviteEmail = invite.email?.toLowerCase();
@@ -65,19 +64,42 @@ export default function InvitePage() {
 
     acceptAttempted.current = true;
     setAccepting(true);
-    fetch("/api/team/invite-accept", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ inviteId: invite.id }),
-    })
-      .then(async (res) => {
+    const inviteId = invite.id;
+
+    async function joinOrSetup() {
+      let keepLoader = false;
+      try {
+        const statusRes = await fetch("/api/team/account-setup-needed", {
+          cache: "no-store",
+        });
+        const status = statusRes.ok
+          ? await statusRes.json()
+          : { needsAccountSetup: false };
+        if (status.needsAccountSetup) {
+          keepLoader = true;
+          router.replace(`/invite/${token}/setup`);
+          return;
+        }
+
+        const res = await fetch("/api/team/invite-accept", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ inviteId }),
+        });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to accept invite");
-        setSuccess(true);
-      })
-      .catch((err: any) => setError(err?.message || "Failed to accept invite"))
-      .finally(() => setAccepting(false));
-  }, [invite, user, sessionReady, success]);
+        const slug = json.workspaceSlug || invite.workspaces?.slug;
+        keepLoader = true;
+        window.location.href = slug ? `/w/${slug}` : "/workspaces";
+      } catch (err: any) {
+        setError(err?.message || "Failed to accept invite");
+      } finally {
+        if (!keepLoader) setAccepting(false);
+      }
+    }
+
+    void joinOrSetup();
+  }, [invite, user, sessionReady, router, token]);
 
   const handleSignOutAndRedirect = async () => {
     await signOut();
@@ -108,22 +130,6 @@ export default function InvitePage() {
     );
   }
 
-  if (success && invite) {
-    return (
-      <Card className="p-8 flex flex-col items-center gap-3 text-center">
-        <CheckCircle2 className="h-8 w-8 text-green-600" />
-        <h2 className="text-lg font-bold">You&apos;ve joined!</h2>
-        <p className="text-sm text-muted-foreground">
-          You are now a member of <strong>{invite.workspaces?.name}</strong> as <strong>{invite.role}</strong>.
-        </p>
-        <Button className="mt-2" onClick={() => router.push(`/w/${invite.workspaces?.slug}`)}>
-          Go to Workspace
-        </Button>
-      </Card>
-    );
-  }
-
-  // Logged in but email doesn't match the invite
   if (emailMismatch && user && invite) {
     return (
       <Card className="p-8 flex flex-col items-center gap-4 text-center max-w-md mx-auto">
@@ -189,7 +195,7 @@ export default function InvitePage() {
             <div className="text-left">
               <p className="text-sm font-medium">Check your email</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                We sent an invitation link to <strong>{invite?.email}</strong>. Click the link in that email to set up your account and join the workspace.
+                We sent an invitation link to <strong>{invite?.email}</strong>. Click it to create a password and join.
               </p>
             </div>
           </div>

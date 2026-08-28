@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { findAuthUserIdByEmail, userNeedsAccountSetup } from "@/lib/team/account-setup";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -39,13 +40,10 @@ export async function GET(request: NextRequest) {
     .eq("id", invite.workspace_id)
     .single();
 
-  // Check if user already exists in auth.users directly.
-  // Cannot use profiles.full_name — inviteUserByEmail creates auth.users with no full_name.
-  const { data: listData } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-  const existingAuthUser = listData?.users?.find(
-    (u) => u.email?.toLowerCase() === invite.email.toLowerCase()
-  );
-  const isExistingUser = !!existingAuthUser;
+  const existingAuthUserId = await findAuthUserIdByEmail(adminClient, invite.email);
+  const isExistingUser = existingAuthUserId
+    ? !(await userNeedsAccountSetup(adminClient, existingAuthUserId))
+    : false;
 
   return NextResponse.json({ invite, workspace, isExistingUser });
 }

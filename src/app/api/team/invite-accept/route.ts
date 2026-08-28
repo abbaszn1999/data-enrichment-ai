@@ -36,13 +36,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invite not found or already used" }, { status: 404 });
   }
 
+  if (
+    !user.email ||
+    String(invite.email || "").toLowerCase() !== user.email.toLowerCase()
+  ) {
+    return NextResponse.json(
+      { error: "This invite was sent to a different email" },
+      { status: 403 }
+    );
+  }
+
   // Check not already a member
   const { data: existing } = await admin
     .from("workspace_members")
     .select("id")
     .eq("workspace_id", invite.workspace_id)
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
 
   if (!existing) {
     if (resolvedFullName) {
@@ -76,5 +86,15 @@ export async function POST(request: NextRequest) {
     .update({ accepted_at: new Date().toISOString(), status: "accepted" })
     .eq("id", inviteId);
 
-  return NextResponse.json({ success: true, workspaceId: invite.workspace_id });
+  const { data: workspace } = await admin
+    .from("workspaces")
+    .select("slug")
+    .eq("id", invite.workspace_id)
+    .single();
+
+  return NextResponse.json({
+    success: true,
+    workspaceId: invite.workspace_id,
+    workspaceSlug: workspace?.slug ?? null,
+  });
 }

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "motion/react";
+import { motion } from "motion/react";
 import { PageLoader } from "@/components/brand/page-loader";
 import {
   Plus,
@@ -25,6 +25,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -37,10 +44,9 @@ import { useAuth } from "@/hooks/use-auth";
 
 export default function WorkspacesPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, sessionReady } = useAuth();
   const [workspaces, setWorkspaces] = useState<WorkspaceWithRole[]>([]);
   const [loading, setLoading] = useState(true);
-  const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState<any[]>([]);
   const [acceptingInvite, setAcceptingInvite] = useState<string | null>(null);
   const [checkingLimit, setCheckingLimit] = useState(false);
@@ -123,7 +129,7 @@ export default function WorkspacesPage() {
     }
   };
 
-  if (loading) {
+  if (loading || !sessionReady) {
     return <PageLoader className="min-h-screen" />;
   }
 
@@ -258,7 +264,9 @@ export default function WorkspacesPage() {
 
         {workspaces.length > 0 && (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {workspaces.map((ws, i) => (
+            {workspaces.map((ws, i) => {
+              const isOwner = ws.owner_id === user?.id;
+              return (
               <motion.div
                 key={ws.id}
                 initial={{ opacity: 0, y: 12 }}
@@ -267,17 +275,33 @@ export default function WorkspacesPage() {
                 className="group relative overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#6B358D]/40 hover:shadow-lg dark:hover:border-[#F76D01]/40"
               >
                 <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095] opacity-0 transition-opacity group-hover:opacity-100" />
-                <Link href={`/w/${ws.slug}`} className="block p-5">
+                <Link href={`/w/${ws.slug}`} className="block p-5 pr-12">
                   <div className="flex items-start gap-4">
                     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#400095]/10 to-[#F76D01]/10">
                       <Building2 className="h-6 w-6 text-[#6B358D] dark:text-[#F76D01]" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <h3 className="truncate text-base font-bold">{ws.name}</h3>
                         <Badge variant="secondary" className="shrink-0 text-[9px]">
                           {ws.cms_type}
                         </Badge>
+                        {isOwner ? (
+                          <Badge
+                            variant="outline"
+                            className="h-5 shrink-0 gap-1 border-[#6B358D]/20 bg-[#400095]/10 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-[#6B358D] dark:border-[#F76D01]/25 dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
+                          >
+                            <Crown className="h-2.5 w-2.5" />
+                            Owner
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant="outline"
+                            className="h-5 shrink-0 border-emerald-500/20 bg-emerald-500/10 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400"
+                          >
+                            Access
+                          </Badge>
+                        )}
                       </div>
                       {ws.description && (
                         <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
@@ -291,62 +315,54 @@ export default function WorkspacesPage() {
                         <span className="flex items-center gap-1">
                           <Users className="h-3 w-3" /> Team
                         </span>
+                        {!isOwner && ws.memberRole && (
+                          <span className="capitalize">
+                            {ws.memberRole}
+                          </span>
+                        )}
                         <ArrowRight className="ml-auto h-3.5 w-3.5 text-muted-foreground/30 transition-all group-hover:translate-x-0.5 group-hover:text-[#6B358D] dark:group-hover:text-[#F76D01]" />
                       </div>
                     </div>
                   </div>
                 </Link>
 
-                {ws.owner_id === user?.id && (
-                  <div className="absolute top-3 right-3">
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setMenuOpen(menuOpen === ws.id ? null : ws.id);
-                      }}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
-                    >
-                      <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
-                    </button>
-                    <AnimatePresence>
-                      {menuOpen === ws.id && (
-                        <>
-                          <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(null)} />
-                          <motion.div
-                            initial={{ opacity: 0, y: -4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -4 }}
-                            transition={{ duration: 0.15 }}
-                            className="absolute right-0 top-8 z-40 w-40 rounded-lg border bg-popover py-1 shadow-lg"
-                          >
-                            <button
-                              onClick={() => {
-                                setMenuOpen(null);
-                                router.push(`/w/${ws.slug}/settings`);
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted"
-                            >
-                              <Settings className="h-3.5 w-3.5" /> Settings
-                            </button>
-                            <div className="my-1 border-t" />
-                            <button
-                              onClick={() => {
-                                setMenuOpen(null);
-                                handleDelete(ws.id);
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-destructive hover:bg-destructive/10"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" /> Delete
-                            </button>
-                          </motion.div>
-                        </>
-                      )}
-                    </AnimatePresence>
+                {isOwner && (
+                  <div className="absolute top-3 right-3 z-20">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={`Options for ${ws.name}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/50 bg-background/80 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-44">
+                        <DropdownMenuItem
+                          className="text-xs"
+                          onClick={() => router.push(`/w/${ws.slug}/settings`)}
+                        >
+                          <Settings className="h-3.5 w-3.5" />
+                          Settings
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          className="text-xs"
+                          onClick={() => handleDelete(ws.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 )}
               </motion.div>
-            ))}
+              );
+            })}
 
             {canCreate && (
               <motion.button

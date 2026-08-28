@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
 import { PageLoader } from "@/components/brand/page-loader";
+import { inviteRedirectAfterAuth } from "@/lib/team/account-setup";
 
 function LoadingSpinner() {
   return <PageLoader label="Authenticating..." className="min-h-screen" />;
@@ -46,12 +47,9 @@ function AuthCallbackHandler() {
     handleCallback();
   }, []);
 
-  async function finalizeRedirect(
-    user: { created_at: string; last_sign_in_at?: string | null; user_metadata?: any },
-    next: string
-  ) {
+  async function finalizeRedirect(next: string) {
     await supabase.auth.getSession();
-    const redirect = await getInviteSetupRedirect(user, next);
+    const redirect = await getInviteSetupRedirect(next);
     if (redirect) {
       router.replace(redirect);
       router.refresh();
@@ -64,7 +62,7 @@ function AuthCallbackHandler() {
   async function continueIfSession(next: string): Promise<boolean> {
     const { data } = await supabase.auth.getSession();
     if (!data.session?.user) return false;
-    await finalizeRedirect(data.session.user, next);
+    await finalizeRedirect(next);
     return true;
   }
 
@@ -81,7 +79,7 @@ function AuthCallbackHandler() {
     if (code) {
       const { data, error } = await supabase.auth.exchangeCodeForSession(code);
       if (!error && data?.user) {
-        await finalizeRedirect(data.user, next);
+        await finalizeRedirect(next);
         return;
       }
       console.error("[auth/callback] Code exchange failed:", error?.message);
@@ -103,7 +101,7 @@ function AuthCallbackHandler() {
           refresh_token: refreshToken,
         });
         if (!error && data?.user) {
-          await finalizeRedirect(data.user, next);
+          await finalizeRedirect(next);
           return;
         }
         console.error("[auth/callback] Session set failed:", error?.message);
@@ -119,7 +117,7 @@ function AuthCallbackHandler() {
         type: type as "signup" | "invite" | "magiclink" | "recovery" | "email_change" | "email",
       });
       if (!error && data?.user) {
-        await finalizeRedirect(data.user, next);
+        await finalizeRedirect(next);
         return;
       }
       console.error("[auth/callback] verifyOtp failed:", error?.message);
@@ -130,37 +128,41 @@ function AuthCallbackHandler() {
   }
 
   /**
-   * If the user is navigating to an invite page and this is their first sign-in
-   * (new user created via invite), redirect to the setup page.
+   * Invite magic links land on /invite/{token}. Setup (password) is only for
+   * emails that do not already have a completed account.
    */
-  async function getInviteSetupRedirect(
-    user: { created_at: string; last_sign_in_at?: string | null; user_metadata?: any },
-    next: string
-  ): Promise<string | null> {
-    const createdAt = new Date(user.created_at).getTime();
-    const lastSignIn = user.last_sign_in_at
-      ? new Date(user.last_sign_in_at).getTime()
-      : 0;
-    const isFirstSignIn = Math.abs(createdAt - lastSignIn) < 120000;
-    if (!isFirstSignIn) return null;
-
-    const inviteMatch = next.match(/^\/invite\/([a-zA-Z0-9]+)$/);
-    if (inviteMatch) {
-      return `/invite/${inviteMatch[1]}/setup`;
-    }
-
+  async function getInviteSetupRedirect(next: string): Promise<string | null> {
+    let needsAccountSetup = false;
     try {
-      const res = await fetch("/api/team/pending-invites", { cache: "no-store" });
-      const json = await res.json();
-      const pendingInvite = json?.invites?.[0];
-      if (res.ok && pendingInvite?.token) {
-        return `/invite/${pendingInvite.token}/setup`;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const res = await fetch("/api/team/account-setup-needed", { cache: "no-store" });
+        if (res.ok) {
+          const json = await res.json();
+          needsAccountSetup = !!json?.needsAccountSetup;
+          break;
+        }
+        if (res.status === 401 && attempt === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          continue;
+        }
+        break;
       }
     } catch {
-      return null;
+      needsAccountSetup = false;
     }
 
-    return null;
+    let pendingInviteToken: string | null = null;
+    if (needsAccountSetup) {
+      try {
+        const res = await fetch("/api/team/pending-invites", { cache: "no-store" });
+        const json = await res.json();
+        pendingInviteToken = res.ok ? json?.invites?.[0]?.token ?? null : null;
+      } catch {
+        pendingInviteToken = null;
+      }
+    }
+
+    return inviteRedirectAfterAuth(next, needsAccountSetup, pendingInviteToken);
   }
 
   return <LoadingSpinner />;

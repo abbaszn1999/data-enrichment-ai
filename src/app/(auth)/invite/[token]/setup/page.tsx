@@ -2,13 +2,26 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { Loader2, Lock, User, Building2, AlertCircle, CheckCircle2, Mail } from "lucide-react";
+import {
+  Lock,
+  Building2,
+  AlertCircle,
+  Mail,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { PageLoader } from "@/components/brand/page-loader";
 import { createClient } from "@/lib/supabase-browser";
+import { displayNameFromEmail } from "@/lib/team/account-setup";
+
+function destinationFromAccept(json: { workspaceSlug?: string | null }, fallbackSlug?: string) {
+  const slug = json.workspaceSlug || fallbackSlug;
+  return slug ? `/w/${slug}` : "/workspaces";
+}
 
 export default function InviteSetupPage() {
   const router = useRouter();
@@ -18,13 +31,14 @@ export default function InviteSetupPage() {
   const [loading, setLoading] = useState(true);
   const [invite, setInvite] = useState<any>(null);
   const [userEmail, setUserEmail] = useState("");
-  const [fullName, setFullName] = useState("");
+  const [inferredName, setInferredName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [fatalError, setFatalError] = useState("");
+  const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [workspaceSlug, setWorkspaceSlug] = useState("");
   const initRef = useRef(false);
 
   useEffect(() => {
@@ -33,230 +47,252 @@ export default function InviteSetupPage() {
 
     async function init() {
       const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-      // 1. Check if user has a valid session (from the invite email link)
-      const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user) {
-        // No session — they need to click the invite email link first
-        setError("NO_SESSION");
+        setFatalError("NO_SESSION");
         setLoading(false);
         return;
       }
 
-      setUserEmail(session.user.email || "");
-      setFullName(session.user.user_metadata?.full_name || "");
+      const email = session.user.email || "";
+      setUserEmail(email);
+      const existingName =
+        typeof session.user.user_metadata?.full_name === "string"
+          ? session.user.user_metadata.full_name.trim()
+          : "";
+      setInferredName(existingName || displayNameFromEmail(email));
 
-      // 2. Load invite details
       try {
-        const res = await fetch(`/api/team/invite-lookup?token=${token}`);
-        const json = await res.json();
-        if (!res.ok) {
-          setError(json.error || "Invalid invite.");
+        const [lookupRes, setupRes] = await Promise.all([
+          fetch(`/api/team/invite-lookup?token=${token}`),
+          fetch("/api/team/account-setup-needed", { cache: "no-store" }),
+        ]);
+        const json = await lookupRes.json();
+        const setupJson = setupRes.ok
+          ? await setupRes.json()
+          : { needsAccountSetup: false };
+
+        if (!lookupRes.ok) {
+          setFatalError(json.error || "Invalid invite.");
           setLoading(false);
           return;
         }
+
+        const inviteEmail = String(json.invite?.email || "").toLowerCase();
+        if (inviteEmail && email.toLowerCase() && inviteEmail !== email.toLowerCase()) {
+          router.replace(`/invite/${token}`);
+          return;
+        }
+
+        if (!setupJson.needsAccountSetup) {
+          router.replace(`/invite/${token}`);
+          return;
+        }
+
         setInvite({ ...json.invite, workspaces: json.workspace });
       } catch {
-        setError("Failed to load invite details.");
+        setFatalError("Failed to load invite details.");
       }
 
       setLoading(false);
     }
 
     init();
-  }, [token]);
+  }, [token, router]);
+
+  const passwordsMatch = password.length > 0 && password === confirmPassword;
+  const passwordReady = password.length >= 6 && passwordsMatch;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
+    setFormError("");
 
     if (!password || !confirmPassword) {
-      setError("Please fill in all fields");
+      setFormError("Enter and confirm your password");
       return;
     }
     if (password.length < 6) {
-      setError("Password must be at least 6 characters");
+      setFormError("Password must be at least 6 characters");
       return;
     }
     if (password !== confirmPassword) {
-      setError("Passwords do not match");
+      setFormError("Passwords do not match");
       return;
     }
 
     setSubmitting(true);
     try {
+      if (!invite?.id) throw new Error("Invite is not available");
       const supabase = createClient();
-
-      // 1. Set the password for this invited user
-      const updateData: any = { password };
-      if (fullName.trim()) {
-        updateData.data = { full_name: fullName.trim() };
+      const updateData: { password: string; data?: { full_name: string } } = {
+        password,
+      };
+      if (inferredName) {
+        updateData.data = { full_name: inferredName };
       }
       const { error: updateErr } = await supabase.auth.updateUser(updateData);
       if (updateErr) throw updateErr;
 
-      // 2. Accept the invite via server API
       const res = await fetch("/api/team/invite-accept", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inviteId: invite.id, fullName: fullName.trim() }),
+        body: JSON.stringify({
+          inviteId: invite.id,
+          fullName: inferredName || undefined,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to accept invite");
 
-      setWorkspaceSlug(invite.workspaces?.slug || "");
-      setSuccess(true);
+      window.location.href = destinationFromAccept(json, invite.workspaces?.slug);
     } catch (err: any) {
-      setError(err?.message || "Something went wrong");
-    } finally {
+      setFormError(err?.message || "Something went wrong");
       setSubmitting(false);
     }
   };
 
-  if (loading) {
+  if (loading || submitting) {
     return (
       <Card className="p-8">
-        <PageLoader className="min-h-0 bg-transparent" />
+        <PageLoader
+          label={submitting ? "Joining workspace..." : undefined}
+          className="min-h-0 bg-transparent"
+        />
       </Card>
     );
   }
 
-  // No session — user needs to click the email link first
-  if (error === "NO_SESSION") {
+  if (fatalError === "NO_SESSION") {
     return (
       <Card className="p-8 flex flex-col items-center gap-4 text-center max-w-md mx-auto">
         <Mail className="h-10 w-10 text-primary" />
-        <h2 className="text-lg font-bold">Check Your Email</h2>
+        <h2 className="text-lg font-bold">Open your invitation email</h2>
         <p className="text-sm text-muted-foreground">
-          We sent you an invitation email. Click the link in that email to set up your account and join the workspace.
+          Click the link we sent you to confirm this email, set a password, and join the workspace.
         </p>
-        <p className="text-xs text-muted-foreground mt-1">
-          If you don&apos;t see the email, check your spam folder.
+        <p className="text-xs text-muted-foreground">
+          If you don&apos;t see it, check spam or ask the workspace owner to resend.
         </p>
       </Card>
     );
   }
 
-  if (success) {
-    return (
-      <Card className="p-8 flex flex-col items-center gap-3 text-center">
-        <CheckCircle2 className="h-8 w-8 text-green-600" />
-        <h2 className="text-lg font-bold">You&apos;re all set!</h2>
-        <p className="text-sm text-muted-foreground">
-          Your account is ready and you&apos;ve joined <strong>{invite?.workspaces?.name}</strong>.
-        </p>
-        <Button className="mt-2" onClick={() => router.push(workspaceSlug ? `/w/${workspaceSlug}` : "/workspaces")}>
-          Go to Workspace
-        </Button>
-      </Card>
-    );
-  }
-
-  if (error && error !== "NO_SESSION") {
+  if (fatalError) {
     return (
       <Card className="p-8 flex flex-col items-center gap-3 text-center">
         <AlertCircle className="h-8 w-8 text-destructive" />
-        <h2 className="text-lg font-bold">Something went wrong</h2>
-        <p className="text-sm text-muted-foreground">{error}</p>
+        <h2 className="text-lg font-bold">This invite can&apos;t be used</h2>
+        <p className="text-sm text-muted-foreground">{fatalError}</p>
       </Card>
     );
   }
+
+  const workspaceName = invite?.workspaces?.name || "the workspace";
+  const mismatchHint =
+    confirmPassword.length > 0 && password !== confirmPassword
+      ? "Passwords do not match"
+      : "";
 
   return (
     <Card className="p-6 space-y-6 max-w-md mx-auto">
       <div className="flex flex-col items-center gap-3 text-center">
-        <Building2 className="h-10 w-10 text-primary" />
-        <div>
-          <h1 className="text-xl font-bold">Set Up Your Account</h1>
-          {invite && (
-            <p className="text-sm text-muted-foreground mt-1">
-              Join <strong>{invite.workspaces?.name}</strong> as <strong>{invite.role}</strong>
-            </p>
-          )}
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#400095]/10 to-[#F76D01]/10">
+          <Building2 className="h-6 w-6 text-[#6B358D] dark:text-[#F76D01]" />
         </div>
+        <div>
+          <h1 className="text-xl font-bold">Create your password</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Join <strong>{workspaceName}</strong>
+            {invite?.role ? (
+              <>
+                {" "}
+                as <strong className="capitalize">{invite.role}</strong>
+              </>
+            ) : null}
+            . Then you&apos;ll go straight in.
+          </p>
+        </div>
+        {userEmail && (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Mail className="h-3.5 w-3.5" />
+            {userEmail}
+          </p>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Email — locked, pre-filled */}
-        <div className="space-y-2">
-          <Label htmlFor="email" className="text-xs font-medium">Email</Label>
-          <div className="relative">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              id="email"
-              type="email"
-              value={userEmail}
-              disabled
-              className="pl-9 h-10 bg-muted/50 cursor-not-allowed"
-            />
-          </div>
-        </div>
-
-        {/* Full Name */}
-        <div className="space-y-2">
-          <Label htmlFor="name" className="text-xs font-medium">Full Name</Label>
-          <div className="relative">
-            <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              id="name"
-              type="text"
-              placeholder="Your name"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              className="pl-9 h-10"
-              autoFocus
-            />
-          </div>
-        </div>
-
-        {/* Password */}
         <div className="space-y-2">
           <Label htmlFor="password" className="text-xs font-medium">
-            Password <span className="text-destructive">*</span>
+            Password
           </Label>
           <div className="relative">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               id="password"
-              type="password"
-              placeholder="Min 6 characters"
+              type={showPassword ? "text" : "password"}
+              placeholder="At least 6 characters"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="pl-9 h-10"
+              className="h-10 pl-9 pr-10"
               autoComplete="new-password"
+              autoFocus
             />
+            <button
+              type="button"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              onClick={() => setShowPassword((open) => !open)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
           </div>
         </div>
 
-        {/* Confirm Password */}
         <div className="space-y-2">
           <Label htmlFor="confirm" className="text-xs font-medium">
-            Confirm Password <span className="text-destructive">*</span>
+            Confirm password
           </Label>
           <div className="relative">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               id="confirm"
-              type="password"
-              placeholder="••••••••"
+              type={showConfirm ? "text" : "password"}
+              placeholder="Re-enter password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              className="pl-9 h-10"
+              className="h-10 pl-9 pr-10"
               autoComplete="new-password"
             />
+            <button
+              type="button"
+              aria-label={showConfirm ? "Hide password" : "Show password"}
+              onClick={() => setShowConfirm((open) => !open)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
           </div>
+          {mismatchHint && (
+            <p className="text-[11px] text-destructive">{mismatchHint}</p>
+          )}
         </div>
 
-        {error && error !== "NO_SESSION" && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+        {formError && (
+          <div className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
             <AlertCircle className="h-4 w-4 shrink-0" />
-            {error}
+            {formError}
           </div>
         )}
 
-        <Button type="submit" className="w-full h-10" disabled={submitting}>
-          {submitting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-          Join Workspace
+        <Button
+          type="submit"
+          className="h-10 w-full rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+          disabled={submitting || !passwordReady}
+        >
+          Join {workspaceName}
         </Button>
       </form>
     </Card>
