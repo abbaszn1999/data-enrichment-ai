@@ -23,6 +23,17 @@ export async function purgeUser(
   admin: SupabaseClient,
   userId: string
 ): Promise<{ workspacesDeleted: number; filesDeleted: number }> {
+  // workspace_invites.email has no FK to auth.users (it must work for emails
+  // that don't have an account yet), so it never cascades on delete. Clean up
+  // any invite addressed *to* this person's email now, while we can still
+  // resolve it — otherwise a stale accepted/pending row lingers forever and
+  // blocks re-inviting the same email later (unique workspace_id+email).
+  const { data: userRecord } = await admin.auth.admin.getUserById(userId);
+  const email = userRecord?.user?.email;
+  if (email) {
+    await admin.from("workspace_invites").delete().ilike("email", email);
+  }
+
   const { data: owned } = await admin
     .from("workspaces")
     .select("id")

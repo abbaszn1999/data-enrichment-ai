@@ -109,7 +109,7 @@ export async function userNeedsAccountSetup(
   admin: SupabaseClient,
   userId: string
 ): Promise<boolean> {
-  const [members, owned, passwordRpc, authUser] = await Promise.all([
+  const [members, owned, authUser] = await Promise.all([
     admin
       .from("workspace_members")
       .select("id", { count: "exact", head: true })
@@ -118,7 +118,6 @@ export async function userNeedsAccountSetup(
       .from("workspaces")
       .select("id", { count: "exact", head: true })
       .eq("owner_id", userId),
-    admin.rpc("auth_user_has_password", { p_user_id: userId }),
     admin.auth.admin.getUserById(userId),
   ]);
 
@@ -128,10 +127,21 @@ export async function userNeedsAccountSetup(
     : [];
   const providersFromIdentities = (user?.identities ?? []).map((identity) => identity.provider);
 
+  // NOTE: auth.users.encrypted_password is NOT a reliable "has a real
+  // password" signal — GoTrue writes a random bcrypt hash into that column
+  // even for users created purely via signInWithOtp({ shouldCreateUser: true
+  // }), who never touched a password field. Confirmed in production: a
+  // brand-new invitee's encrypted_password was a real 60-char bcrypt hash
+  // despite never setting one, which made the old RPC-based check silently
+  // skip password creation for every new invite. We track "the user actually
+  // went through our own set-password flow" explicitly via user_metadata
+  // instead (set in signUp(), updatePassword(), and the invite /setup page).
+  const hasPassword = user?.user_metadata?.password_set === true;
+
   const signals: AccountSetupSignals = {
     membershipCount: members.count ?? 0,
     ownedWorkspaceCount: owned.count ?? 0,
-    hasPassword: passwordRpc.data === true,
+    hasPassword,
     oauthProviders: [...providersFromMeta, ...providersFromIdentities].map(String),
   };
   const result = needsAccountSetupFromSignals(signals);

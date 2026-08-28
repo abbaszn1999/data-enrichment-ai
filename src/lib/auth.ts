@@ -10,7 +10,10 @@ export async function signUp(email: string, password: string, fullName: string, 
     email,
     password,
     options: {
-      data: { full_name: fullName },
+      // password_set marks that this account has a real, user-chosen
+      // password — auth.users.encrypted_password is set (to a random hash)
+      // even for passwordless OTP signups, so it can't be used for this.
+      data: { full_name: fullName, password_set: true },
       emailRedirectTo: callbackUrl,
     },
   });
@@ -63,6 +66,7 @@ export async function updatePassword(newPassword: string) {
   const supabase = createClient();
   const { error } = await supabase.auth.updateUser({
     password: newPassword,
+    data: { password_set: true },
   });
   if (error) throw error;
 }

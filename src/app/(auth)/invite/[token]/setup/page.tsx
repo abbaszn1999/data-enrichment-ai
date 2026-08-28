@@ -124,11 +124,15 @@ export default function InviteSetupPage() {
     try {
       if (!invite?.id) throw new Error("Invite is not available");
       const supabase = createClient();
-      const updateData: { password: string; data?: { full_name: string } } = {
+      const updateData: {
+        password: string;
+        data: { full_name?: string; password_set: true };
+      } = {
         password,
+        data: { password_set: true },
       };
       if (inferredName) {
-        updateData.data = { full_name: inferredName };
+        updateData.data.full_name = inferredName;
       }
       const { error: updateErr } = await supabase.auth.updateUser(updateData);
       if (updateErr) throw updateErr;

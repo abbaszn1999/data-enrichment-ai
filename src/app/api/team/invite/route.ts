@@ -1,8 +1,13 @@
+import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { createClient } from "@/lib/supabase-server";
 import { getOwnerSubscription, isSubscriptionActive } from "@/lib/stripe";
 import { findAuthUserIdByEmail } from "@/lib/team/account-setup";
+
+function cryptoRandomToken(): string {
+  return randomBytes(32).toString("hex");
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -84,10 +89,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create invite record in DB to get the token
-    const { data: invite, error: inviteErr } = await supabase
+    // Create (or reuse) the invite record to get the token. A prior invite to
+    // this email in this workspace may already exist — e.g. it was accepted
+    // and the account was later deleted directly from the Supabase dashboard,
+    // which only removes the auth.users row and never touches
+    // workspace_invites.email (there's no FK on that column to cascade from).
+    // Upsert instead of a plain insert so re-inviting never hits the
+    // workspace_invites_workspace_id_email_key unique constraint.
+    const { data: invite, error: inviteErr } = await adminClient
       .from("workspace_invites")
-      .insert({ workspace_id: workspaceId, email, role, invited_by: user.id })
+      .upsert(
+        {
+          workspace_id: workspaceId,
+          email,
+          role,
+          invited_by: user.id,
+          accepted_at: null,
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          token: cryptoRandomToken(),
+        },
+        { onConflict: "workspace_id,email" }
+      )
       .select()
       .single();
 
