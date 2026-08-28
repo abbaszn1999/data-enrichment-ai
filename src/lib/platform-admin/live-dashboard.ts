@@ -1,7 +1,20 @@
 import { CREDIT_TOPUP_USD_PER_CREDIT } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { adminCreditBalance, unwrapRelation } from "./credit-balance";
-import { creditOperationLabel, walletModuleLabel } from "./labels";
+import { creditOperationLabel, CREDIT_OPERATION_LABELS, JOB_KIND_LABELS, JOB_STATUS_LABELS, WALLET_KIND_LABELS, WALLET_MODULE_LABELS, walletModuleLabel } from "./labels";
+import {
+  dateWindowSinceIso,
+  keysMatchingLabel,
+  lookupNames,
+  pageRange,
+  postgrestIlike,
+  postgrestIn,
+  postgrestOr,
+  searchIdentityIds,
+  looksLikeUuid,
+  type LedgerPage,
+  type LedgerParams,
+} from "./ledger";
 import { loadLiveDirectory } from "./live";
 import { fetchAllRows } from "./live-query";
 import type {
@@ -15,6 +28,7 @@ import type {
   LiveWalletTxRow,
 } from "./live-types";
 import { adminRoutes } from "./paths";
+import { buildOverviewSeries } from "./overview-series";
 import type {
   AdminAttentionItem,
   AdminBillingCycle,
@@ -302,24 +316,213 @@ async function loadJobRows(sinceIso?: string) {
   });
 }
 
+const CREDIT_SORT: Record<string, string> = {
+  when: "created_at",
+  user: "user_id",
+  workspace: "workspace_id",
+  operation: "operation",
+  credits: "credits_used",
+};
+
+const WALLET_SORT: Record<string, string> = {
+  when: "created_at",
+  workspace: "workspace_id",
+  kind: "kind",
+  module: "module",
+  description: "description",
+  amount: "amount_usd",
+};
+
+const JOB_SORT: Record<string, string> = {
+  when: "created_at",
+  workspace: "workspace_id",
+  kind: "kind",
+  status: "status",
+  progress: "completed_count",
+  duration: "updated_at",
+  actor: "created_by",
+  error: "last_error",
+};
+
+const AUDIT_SORT: Record<string, string> = {
+  when: "created_at",
+  user: "user_id",
+  workspace: "workspace_id",
+  action: "action",
+  entity: "entity_type",
+};
+
+export type CreditLedgerQuery = LedgerParams & {
+  operation: string;
+  direction: string;
+};
+
+export type WalletLedgerQuery = LedgerParams & {
+  kind: string;
+  module: string;
+};
+
+export type JobLedgerQuery = LedgerParams & {
+  status: string;
+  kind: string;
+  errorFilter: string;
+};
+
+export type AuditLedgerQuery = LedgerParams & {
+  entity: string;
+};
+
 export async function loadLiveSubscriptions(): Promise<LiveSubscriptionRow[]> {
   const [directory, rows] = await Promise.all([loadLiveDirectory(), loadSubscriptionsRaw()]);
   return rows.map((row) => mapSubscription(row, directory.nameById, directory.emailById));
 }
 
-export async function loadLiveCredits(): Promise<LiveCreditTxRow[]> {
-  const [directory, rows] = await Promise.all([loadLiveDirectory(), loadCreditRows()]);
-  return rows.map((row) => mapCredit(row, directory.nameById, directory.workspaceNameById));
+export async function loadLiveCredits(input: CreditLedgerQuery): Promise<LedgerPage<LiveCreditTxRow>> {
+  const { page, pageSize, q, dateWindow, sort, operation, direction } = input;
+  const { from, to } = pageRange(page, pageSize);
+  const sinceIso = dateWindowSinceIso(dateWindow);
+  const admin = createAdminClient();
+
+  let searchOr: string | null = null;
+  if (q) {
+    const identities = await searchIdentityIds(q);
+    const ops = keysMatchingLabel(q, CREDIT_OPERATION_LABELS);
+    searchOr = postgrestOr([
+      postgrestIn("user_id", identities.userIds),
+      postgrestIn("workspace_id", identities.workspaceIds),
+      postgrestIn("operation", ops),
+      looksLikeUuid(q) ? `user_id.eq.${q}` : null,
+    ]);
+    if (!searchOr) return { rows: [], total: 0, page, pageSize };
+  }
+
+  let query = admin
+    .from("credit_transactions")
+    .select("id, created_at, workspace_id, user_id, operation, credits_used", { count: "exact" });
+  if (operation !== "all") query = query.eq("operation", operation);
+  if (direction === "spend") query = query.gt("credits_used", 0);
+  if (direction === "credit") query = query.lt("credits_used", 0);
+  if (sinceIso) query = query.gte("created_at", sinceIso);
+  if (searchOr) query = query.or(searchOr);
+
+  const column = CREDIT_SORT[sort.key] ?? "created_at";
+  const ascending = sort.dir === "asc";
+  const { data, error, count } = await query
+    .order(column, { ascending })
+    .order("id", { ascending })
+    .range(from, to);
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as CreditRow[];
+  const names = await lookupNames(
+    rows.map((row) => row.user_id),
+    rows.map((row) => row.workspace_id)
+  );
+  return {
+    rows: rows.map((row) => mapCredit(row, names.nameById, names.workspaceNameById)),
+    total: count ?? rows.length,
+    page,
+    pageSize,
+  };
 }
 
-export async function loadLiveWalletTransactions(): Promise<LiveWalletTxRow[]> {
-  const [directory, rows] = await Promise.all([loadLiveDirectory(), loadWalletRows()]);
-  return rows.map((row) => mapWallet(row, directory.nameById, directory.workspaceNameById));
+export async function loadLiveWalletTransactions(input: WalletLedgerQuery): Promise<LedgerPage<LiveWalletTxRow>> {
+  const { page, pageSize, q, dateWindow, sort, kind, module } = input;
+  const { from, to } = pageRange(page, pageSize);
+  const sinceIso = dateWindowSinceIso(dateWindow);
+  const admin = createAdminClient();
+
+  let searchOr: string | null = null;
+  if (q) {
+    const identities = await searchIdentityIds(q);
+    searchOr = postgrestOr([
+      postgrestIn("user_id", identities.userIds),
+      postgrestIn("workspace_id", identities.workspaceIds),
+      postgrestIn("kind", keysMatchingLabel(q, WALLET_KIND_LABELS)),
+      postgrestIn("module", keysMatchingLabel(q, WALLET_MODULE_LABELS)),
+      postgrestIlike("description", q),
+      looksLikeUuid(q) ? `user_id.eq.${q}` : null,
+    ]);
+    if (!searchOr) return { rows: [], total: 0, page, pageSize };
+  }
+
+  let query = admin
+    .from("wallet_transactions")
+    .select("id, created_at, workspace_id, user_id, kind, amount_usd, description, module, status", { count: "exact" });
+  if (kind !== "all") query = query.eq("kind", kind);
+  if (module !== "all") query = query.eq("module", module);
+  if (sinceIso) query = query.gte("created_at", sinceIso);
+  if (searchOr) query = query.or(searchOr);
+
+  const column = WALLET_SORT[sort.key] ?? "created_at";
+  const ascending = sort.dir === "asc";
+  const { data, error, count } = await query
+    .order(column, { ascending })
+    .order("id", { ascending })
+    .range(from, to);
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as WalletRow[];
+  const names = await lookupNames(
+    rows.map((row) => row.user_id).filter((id): id is string => Boolean(id)),
+    rows.map((row) => row.workspace_id)
+  );
+  return {
+    rows: rows.map((row) => mapWallet(row, names.nameById, names.workspaceNameById)),
+    total: count ?? rows.length,
+    page,
+    pageSize,
+  };
 }
 
-export async function loadLiveJobs(): Promise<LiveJobRow[]> {
-  const [directory, rows] = await Promise.all([loadLiveDirectory(), loadJobRows()]);
-  return rows.map((row) => mapJob(row, directory.nameById, directory.workspaceNameById));
+export async function loadLiveJobs(input: JobLedgerQuery): Promise<LedgerPage<LiveJobRow>> {
+  const { page, pageSize, q, dateWindow, sort, status, kind, errorFilter } = input;
+  const { from, to } = pageRange(page, pageSize);
+  const sinceIso = dateWindowSinceIso(dateWindow);
+  const admin = createAdminClient();
+
+  let searchOr: string | null = null;
+  if (q) {
+    const identities = await searchIdentityIds(q);
+    searchOr = postgrestOr([
+      postgrestIn("created_by", identities.userIds),
+      postgrestIn("workspace_id", identities.workspaceIds),
+      postgrestIn("kind", keysMatchingLabel(q, JOB_KIND_LABELS)),
+      postgrestIn("status", keysMatchingLabel(q, JOB_STATUS_LABELS)),
+      postgrestIlike("last_error", q),
+    ]);
+    if (!searchOr) return { rows: [], total: 0, page, pageSize };
+  }
+
+  let query = admin
+    .from("job_runs")
+    .select(
+      "id, created_at, updated_at, workspace_id, created_by, kind, status, target_ids, completed_count, failed_count, last_error",
+      { count: "exact" }
+    );
+  if (status !== "all") query = query.eq("status", status);
+  if (kind !== "all") query = query.eq("kind", kind);
+  if (errorFilter === "yes") query = query.not("last_error", "is", null);
+  if (errorFilter === "no") query = query.is("last_error", null);
+  if (sinceIso) query = query.gte("created_at", sinceIso);
+  if (searchOr) query = query.or(searchOr);
+
+  const column = JOB_SORT[sort.key] ?? "created_at";
+  const ascending = sort.dir === "asc";
+  const { data, error, count } = await query
+    .order(column, { ascending })
+    .order("id", { ascending })
+    .range(from, to);
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as JobRow[];
+  const names = await lookupNames(
+    rows.map((row) => row.created_by),
+    rows.map((row) => row.workspace_id)
+  );
+  return {
+    rows: rows.map((row) => mapJob(row, names.nameById, names.workspaceNameById)),
+    total: count ?? rows.length,
+    page,
+    pageSize,
+  };
 }
 
 export async function loadLiveIntegrations(): Promise<LiveIntegrationsPayload> {
@@ -343,29 +546,65 @@ export async function loadLiveIntegrations(): Promise<LiveIntegrationsPayload> {
   return { integrations, unconnected };
 }
 
-export async function loadLiveAudit(): Promise<LiveAuditRow[]> {
+export async function loadLiveAudit(input: AuditLedgerQuery): Promise<LedgerPage<LiveAuditRow> & { entityTypes: string[] }> {
+  const { page, pageSize, q, dateWindow, sort, entity } = input;
+  const { from, to } = pageRange(page, pageSize);
+  const sinceIso = dateWindowSinceIso(dateWindow);
   const admin = createAdminClient();
-  const [directory, rows] = await Promise.all([
-    loadLiveDirectory(),
-    fetchAllRows<AuditRow>((from, to) =>
-      admin
-        .from("activity_log")
-        .select("id, created_at, workspace_id, user_id, action, entity_type, entity_id")
-        .order("created_at", { ascending: false })
-        .range(from, to)
-    ),
+
+  let searchOr: string | null = null;
+  if (q) {
+    const identities = await searchIdentityIds(q);
+    searchOr = postgrestOr([
+      postgrestIn("user_id", identities.userIds),
+      postgrestIn("workspace_id", identities.workspaceIds),
+      postgrestIlike("action", q),
+      postgrestIlike("entity_type", q),
+      looksLikeUuid(q) ? `user_id.eq.${q}` : null,
+      looksLikeUuid(q) ? `entity_id.eq.${q}` : null,
+    ]);
+    if (!searchOr) return { rows: [], total: 0, page, pageSize, entityTypes: [] };
+  }
+
+  let query = admin
+    .from("activity_log")
+    .select("id, created_at, workspace_id, user_id, action, entity_type, entity_id", { count: "exact" });
+  if (entity !== "all") query = query.eq("entity_type", entity);
+  if (sinceIso) query = query.gte("created_at", sinceIso);
+  if (searchOr) query = query.or(searchOr);
+
+  const column = AUDIT_SORT[sort.key] ?? "created_at";
+  const ascending = sort.dir === "asc";
+  const [{ data, error, count }, typesResult] = await Promise.all([
+    query.order(column, { ascending }).order("id", { ascending }).range(from, to),
+    admin.from("activity_log").select("entity_type").not("entity_type", "is", null).limit(500),
   ]);
-  return rows.map((row) => ({
-    id: row.id,
-    createdAt: row.created_at,
-    workspaceId: row.workspace_id,
-    workspaceName: directory.workspaceNameById.get(row.workspace_id) || row.workspace_id,
-    userId: row.user_id,
-    userName: directory.nameById.get(row.user_id) || row.user_id,
-    action: row.action,
-    entityType: row.entity_type,
-    entityId: row.entity_id,
-  }));
+  if (error) throw new Error(error.message);
+  if (typesResult.error) throw new Error(typesResult.error.message);
+  const rows = (data ?? []) as AuditRow[];
+  const names = await lookupNames(
+    rows.map((row) => row.user_id),
+    rows.map((row) => row.workspace_id)
+  );
+  const entityTypes = [...new Set((typesResult.data ?? []).map((row) => row.entity_type).filter(Boolean))] as string[];
+  entityTypes.sort();
+  return {
+    rows: rows.map((row) => ({
+      id: row.id,
+      createdAt: row.created_at,
+      workspaceId: row.workspace_id,
+      workspaceName: names.workspaceNameById.get(row.workspace_id) || row.workspace_id,
+      userId: row.user_id,
+      userName: names.nameById.get(row.user_id) || row.user_id,
+      action: row.action,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+    })),
+    total: count ?? rows.length,
+    page,
+    pageSize,
+    entityTypes,
+  };
 }
 
 function creditSpendSlices(rows: LiveCreditTxRow[]): AdminSpendSlice[] {
@@ -576,6 +815,7 @@ export async function loadLiveOverview(range: AdminOverviewRange): Promise<LiveO
   ];
 
   const walletTxWorkspaceIds = new Set(walletTxWorkspaceRows.map((row) => row.workspace_id));
+  const completedJobs = jobs.filter((job) => job.status === "completed").length;
 
   return {
     range,
@@ -590,5 +830,11 @@ export async function loadLiveOverview(range: AdminOverviewRange): Promise<LiveO
       integrations,
       workspaceNameById: directory.workspaceNameById,
     }),
+    series: buildOverviewSeries(range, credits, walletTxs),
+    jobHealth: {
+      completed: completedJobs,
+      failed: failedJobs,
+      running: runningCount,
+    },
   };
 }

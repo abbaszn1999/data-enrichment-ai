@@ -37,7 +37,9 @@ export function AdminTable<T>({
   sort,
   onSort,
   pagination,
-  embedded,
+  embedded = false,
+  busy,
+  accent,
 }: {
   rows: T[];
   columns: AdminColumn<T>[];
@@ -58,10 +60,13 @@ export function AdminTable<T>({
     onPage: (page: number) => void;
   };
   embedded?: boolean;
+  busy?: boolean;
+  accent?: boolean;
 }) {
   const clickable = Boolean(onRowClick);
   const colCount = columns.length + (clickable ? 1 : 0);
   const isFilteredEmpty = rows.length === 0 && Boolean(onClearFilters);
+  const showAccent = accent ?? !embedded;
 
   return (
     <div
@@ -70,7 +75,11 @@ export function AdminTable<T>({
         embedded ? "rounded-lg border" : "rounded-xl border shadow-sm"
       )}
     >
+      {showAccent ? (
+        <div className="h-px bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
+      ) : null}
       {toolbar ? <div className="border-b px-4 py-3">{toolbar}</div> : null}
+      <div className={cn("relative", busy && rows.length > 0 && "opacity-60")}>
       <Table>
         <TableHeader className="sticky top-0 z-10 bg-muted/50 backdrop-blur-sm dark:bg-muted/25">
           <TableRow className="hover:bg-transparent">
@@ -178,6 +187,7 @@ export function AdminTable<T>({
           )}
         </TableBody>
       </Table>
+      </div>
       {pagination ? (
         <div className="border-t bg-muted/20 px-4 py-2.5">
           <PaginationBar

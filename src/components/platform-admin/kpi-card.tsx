@@ -1,13 +1,19 @@
 import { cn } from "@/lib/utils";
 import type { AdminKpi } from "@/lib/platform-admin/types";
 
-export function KpiCard({ label, value, hint, tone = "default" }: AdminKpi) {
+export function KpiCard({ label, value, hint, tone = "default", compact }: AdminKpi & { compact?: boolean }) {
   return (
-    <div className="rounded-xl border bg-card p-4 shadow-sm">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
+    <div
+      className={cn(
+        "rounded-xl border bg-card shadow-sm",
+        compact ? "px-3 py-2.5" : "p-4",
+        "dark:border-white/8 dark:bg-[#0d0d10]/90"
+      )}
+    >
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={cn("font-semibold tracking-tight tabular-nums", compact ? "mt-1 text-lg" : "mt-1.5 text-2xl")}>
+        {value}
       </p>
-      <p className="mt-1.5 text-2xl font-semibold tracking-tight">{value}</p>
       {hint ? (
         <p
           className={cn(

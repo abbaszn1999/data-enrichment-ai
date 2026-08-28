@@ -77,6 +77,21 @@ export type LiveOverviewPayload = {
   creditSlices: AdminSpendSlice[];
   walletSlices: AdminSpendSlice[];
   attention: AdminAttentionItem[];
+  series: OverviewDayPoint[];
+  jobHealth: OverviewJobHealth;
+};
+
+export type OverviewDayPoint = {
+  date: string;
+  creditUsd: number;
+  walletUsd: number;
+  credits: number;
+};
+
+export type OverviewJobHealth = {
+  completed: number;
+  failed: number;
+  running: number;
 };
 
 export type LiveSubscriptionRow = {

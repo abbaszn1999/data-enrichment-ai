@@ -7,6 +7,7 @@ import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
 import { BackLink } from "@/components/platform-admin/back-link";
 import { DangerConfirm } from "@/components/platform-admin/danger-confirm";
+import { AdminListLayout, LiveBadge, PageTitle } from "@/components/platform-admin/list-chrome";
 import { PageHeader } from "@/components/platform-admin/page-header";
 import { DetailGrid, Panel } from "@/components/platform-admin/panel";
 import { PersonCell } from "@/components/platform-admin/person-cell";
@@ -66,8 +67,8 @@ export default function AdminWorkspaceDetailPage() {
     <>
       <BackLink href={adminRoutes.workspaces()} label="Workspaces" />
       <PageHeader
-        title={workspace.name}
-        description={`/${workspace.slug}`}
+        title={<PageTitle label={workspace.name} badge={<LiveBadge>/{workspace.slug}</LiveBadge>} />}
+        description={`Owner ${workspace.ownerEmail}`}
         actions={
           <>
             <SignInAsButton userId={workspace.ownerId} email={workspace.ownerEmail} />
@@ -78,6 +79,7 @@ export default function AdminWorkspaceDetailPage() {
         }
       />
 
+      <AdminListLayout>
       <DetailGrid
         items={[
           {
@@ -133,6 +135,7 @@ export default function AdminWorkspaceDetailPage() {
           ]}
         />
       </Panel>
+      </AdminListLayout>
 
       <DangerConfirm
         open={confirmOpen}

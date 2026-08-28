@@ -2,9 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { AlertTriangle, Building2, Plug, PlugZap } from "lucide-react";
 import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
 import { DataToolbar } from "@/components/platform-admin/data-toolbar";
+import { AdminListLayout, LiveBadge, PageTitle, TableToolbar, exclusiveFilter } from "@/components/platform-admin/list-chrome";
+import { OverviewPulseStrip } from "@/components/platform-admin/overview-pulse-strip";
 import { PageHeader } from "@/components/platform-admin/page-header";
 import { pageCount, paginate } from "@/components/platform-admin/pagination-bar";
 import { IntegrationStatusBadge } from "@/components/platform-admin/status-badge";
@@ -96,6 +99,13 @@ export default function AdminIntegrationsPage() {
     [filtered, sort]
   );
 
+  const stats = useMemo(() => {
+    const connected = allRows.filter((row) => row.status === "connected").length;
+    const errors = allRows.filter((row) => row.status === "error").length;
+    const none = allRows.filter((row) => row.status === "none").length;
+    return { connected, errors, none };
+  }, [allRows]);
+
   const rows = paginate(sorted, page);
   const hasFilters = query.trim() !== "" || provider !== "all" || status !== "all";
 
@@ -111,10 +121,49 @@ export default function AdminIntegrationsPage() {
   return (
     <>
       <PageHeader
-        title="Integrations"
+        title={<PageTitle label="Integrations" badge={<LiveBadge>{allRows.length} live</LiveBadge>} />}
         description="Connected Shopify, WooCommerce, and WordPress stores. No store credentials are shown."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      <AdminListLayout>
+        <OverviewPulseStrip
+          items={[
+            {
+              label: "Workspaces",
+              value: String(allRows.length),
+              hint: "With or without a store",
+              icon: Building2,
+              active: !hasFilters,
+              onClick: () => clearFilters(),
+            },
+            {
+              label: "Connected",
+              value: String(stats.connected),
+              hint: "Healthy store links",
+              tone: "ok",
+              icon: PlugZap,
+              active: status === "connected",
+              onClick: () => exclusiveFilter(status === "connected", clearFilters, () => setStatus("connected")),
+            },
+            {
+              label: "Errors",
+              value: String(stats.errors),
+              hint: stats.errors ? "Needs a reconnect" : "No store errors",
+              tone: stats.errors ? "danger" : "ok",
+              icon: AlertTriangle,
+              active: status === "error",
+              onClick: () => exclusiveFilter(status === "error", clearFilters, () => setStatus("error")),
+            },
+            {
+              label: "Not connected",
+              value: String(stats.none),
+              hint: "No integration yet",
+              icon: Plug,
+              active: status === "none",
+              onClick: () => exclusiveFilter(status === "none", clearFilters, () => setStatus("none")),
+            },
+          ]}
+        />
       <AdminTable
         rows={rows}
         rowKey={(row) => row.id}
@@ -128,6 +177,7 @@ export default function AdminIntegrationsPage() {
         }
         onClearFilters={hasFilters ? clearFilters : undefined}
         toolbar={
+          <TableToolbar>
           <DataToolbar
             search={query}
             onSearch={(value) => {
@@ -172,6 +222,7 @@ export default function AdminIntegrationsPage() {
               },
             ]}
           />
+          </TableToolbar>
         }
         pagination={{
           page,
@@ -218,6 +269,7 @@ export default function AdminIntegrationsPage() {
           },
         ]}
       />
+      </AdminListLayout>
     </>
   );
 }

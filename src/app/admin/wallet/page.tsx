@@ -1,69 +1,74 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
 import { DataToolbar } from "@/components/platform-admin/data-toolbar";
+import { AdminListLayout, LiveBadge, PageTitle, TableToolbar } from "@/components/platform-admin/list-chrome";
 import { PageHeader } from "@/components/platform-admin/page-header";
-import { LEDGER_PAGE_SIZE, pageCount, paginate } from "@/components/platform-admin/pagination-bar";
+import { pageCount } from "@/components/platform-admin/pagination-bar";
+import { useDebouncedValue } from "@/components/platform-admin/use-debounced-value";
 import { adminJson } from "@/lib/platform-admin/client-api";
 import { formatDateTime, formatUsd } from "@/lib/platform-admin/format";
 import { WALLET_KIND_LABELS, walletModuleLabel } from "@/lib/platform-admin/labels";
-import { DATE_WINDOW_OPTIONS, inDateWindow, sortRows, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
+import { DATE_WINDOW_OPTIONS, LEDGER_PAGE_SIZE, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveWalletTxRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
 import type { AdminWalletTxKind } from "@/lib/platform-admin/types";
 
 export default function AdminWalletPage() {
-  const [transactions, setTransactions] = useState<LiveWalletTxRow[]>([]);
+  const [rows, setRows] = useState<LiveWalletTxRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(query);
   const [kind, setKind] = useState("all");
   const [module, setModule] = useState("all");
   const [dateWindow, setDateWindow] = useState<DateWindow>("all");
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>({ key: "when", dir: "desc" });
 
-  useEffect(() => {
-    adminJson<{ transactions: LiveWalletTxRow[] }>("/api/platform-admin/wallet")
-      .then((data) => setTransactions(data.transactions))
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
-
   const resetPage = () => setPage(1);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return transactions.filter((tx) => {
-      if (kind !== "all" && tx.kind !== kind) return false;
-      if (module !== "all" && tx.module !== module) return false;
-      if (!inDateWindow(tx.createdAt, dateWindow)) return false;
-      if (!q) return true;
-      return (
-        tx.workspaceName.toLowerCase().includes(q) ||
-        tx.userName.toLowerCase().includes(q) ||
-        tx.description.toLowerCase().includes(q)
-      );
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(LEDGER_PAGE_SIZE),
+      sort: sort.key,
+      dir: sort.dir,
     });
-  }, [transactions, query, kind, module, dateWindow]);
+    if (debouncedQuery.trim()) params.set("q", debouncedQuery.trim());
+    if (kind !== "all") params.set("kind", kind);
+    if (module !== "all") params.set("module", module);
+    if (dateWindow !== "all") params.set("window", dateWindow);
 
-  const sorted = useMemo(
-    () =>
-      sortRows(filtered, sort, {
-        when: (row) => new Date(row.createdAt).getTime(),
-        workspace: (row) => row.workspaceName,
-        kind: (row) => row.kind,
-        module: (row) => row.module,
-        description: (row) => row.description,
-        amount: (row) => row.amountUsd,
-      }),
-    [filtered, sort]
-  );
+    setBusy(true);
+    adminJson<{ transactions: LiveWalletTxRow[]; total: number }>(
+      `/api/platform-admin/wallet?${params}`,
+      { signal: controller.signal }
+    )
+      .then((data) => {
+        setRows(data.transactions);
+        setTotal(data.total);
+        setError("");
+      })
+      .catch((err: Error) => {
+        if (err.name === "AbortError") return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setLoading(false);
+        setBusy(false);
+      });
 
-  const rows = paginate(sorted, page, LEDGER_PAGE_SIZE);
+    return () => controller.abort();
+  }, [page, debouncedQuery, kind, module, dateWindow, sort]);
+
   const hasFilters = query.trim() !== "" || kind !== "all" || module !== "all" || dateWindow !== "all";
 
   const clearFilters = () => {
@@ -79,23 +84,29 @@ export default function AdminWalletPage() {
   return (
     <>
       <PageHeader
-        title="USD wallet"
+        title={<PageTitle label="USD wallet" badge={<LiveBadge>{total} live</LiveBadge>} />}
         description="Real-dollar balance for Market Research, Growth Sync, and Website Restructure. Not AI credits."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      <AdminListLayout>
       <AdminTable
         rows={rows}
         rowKey={(row) => row.id}
+        busy={busy}
         sort={sort}
-        onSort={(key) => setSort((current) => toggleSort(current, key))}
-        emptyTitle={transactions.length === 0 ? "No wallet activity yet" : "No matching wallet rows"}
+        onSort={(key) => {
+          setSort((current) => toggleSort(current, key));
+          resetPage();
+        }}
+        emptyTitle={!hasFilters && total === 0 ? "No wallet activity yet" : "No matching wallet rows"}
         emptyDescription={
-          transactions.length === 0
+          !hasFilters && total === 0
             ? "Top-ups and charges will appear here as workspaces spend USD."
             : "Try a different search or clear the active filters."
         }
         onClearFilters={hasFilters ? clearFilters : undefined}
         toolbar={
+          <TableToolbar label="Ledger">
           <DataToolbar
             search={query}
             onSearch={(value) => {
@@ -104,8 +115,8 @@ export default function AdminWalletPage() {
             }}
             searchPlaceholder="Workspace, user, or description"
             noun="rows"
-            resultCount={filtered.length}
-            totalCount={transactions.length}
+            resultCount={total}
+            totalCount={total}
             filters={[
               {
                 id: "kind",
@@ -150,11 +161,12 @@ export default function AdminWalletPage() {
               },
             ]}
           />
+          </TableToolbar>
         }
         pagination={{
           page,
-          pageCount: pageCount(filtered.length, LEDGER_PAGE_SIZE),
-          total: filtered.length,
+          pageCount: pageCount(total, LEDGER_PAGE_SIZE),
+          total,
           pageSize: LEDGER_PAGE_SIZE,
           onPage: setPage,
         }}
@@ -202,6 +214,7 @@ export default function AdminWalletPage() {
           },
         ]}
       />
+      </AdminListLayout>
     </>
   );
 }

@@ -1,75 +1,72 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
 import { DataToolbar } from "@/components/platform-admin/data-toolbar";
+import { AdminListLayout, LiveBadge, PageTitle, TableToolbar } from "@/components/platform-admin/list-chrome";
 import { PageHeader } from "@/components/platform-admin/page-header";
-import { LEDGER_PAGE_SIZE, pageCount, paginate } from "@/components/platform-admin/pagination-bar";
+import { pageCount } from "@/components/platform-admin/pagination-bar";
+import { useDebouncedValue } from "@/components/platform-admin/use-debounced-value";
 import { adminJson } from "@/lib/platform-admin/client-api";
 import { formatDateTime } from "@/lib/platform-admin/format";
-import { DATE_WINDOW_OPTIONS, inDateWindow, sortRows, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
+import { DATE_WINDOW_OPTIONS, LEDGER_PAGE_SIZE, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveAuditRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
 
 export default function AdminAuditPage() {
-  const [events, setEvents] = useState<LiveAuditRow[]>([]);
+  const [rows, setRows] = useState<LiveAuditRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [entityTypes, setEntityTypes] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(query);
   const [entity, setEntity] = useState("all");
   const [dateWindow, setDateWindow] = useState<DateWindow>("all");
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>({ key: "when", dir: "desc" });
 
-  useEffect(() => {
-    adminJson<{ events: LiveAuditRow[] }>("/api/platform-admin/audit")
-      .then((data) => setEvents(data.events))
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const entityOptions = useMemo(() => {
-    const types = [...new Set(events.map((event) => event.entityType).filter(Boolean))] as string[];
-    types.sort();
-    return [
-      { value: "all", label: "All entities" },
-      ...types.map((type) => ({ value: type, label: type })),
-    ];
-  }, [events]);
-
   const resetPage = () => setPage(1);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return events.filter((event) => {
-      if (entity !== "all" && event.entityType !== entity) return false;
-      if (!inDateWindow(event.createdAt, dateWindow)) return false;
-      if (!q) return true;
-      return (
-        event.action.toLowerCase().includes(q) ||
-        event.userName.toLowerCase().includes(q) ||
-        event.workspaceName.toLowerCase().includes(q) ||
-        (event.entityType ?? "").toLowerCase().includes(q) ||
-        (event.entityId ?? "").toLowerCase().includes(q)
-      );
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(LEDGER_PAGE_SIZE),
+      sort: sort.key,
+      dir: sort.dir,
     });
-  }, [events, query, entity, dateWindow]);
+    if (debouncedQuery.trim()) params.set("q", debouncedQuery.trim());
+    if (entity !== "all") params.set("entity", entity);
+    if (dateWindow !== "all") params.set("window", dateWindow);
 
-  const sorted = useMemo(
-    () =>
-      sortRows(filtered, sort, {
-        when: (row) => new Date(row.createdAt).getTime(),
-        user: (row) => row.userName,
-        workspace: (row) => row.workspaceName,
-        action: (row) => row.action,
-        entity: (row) => row.entityType,
-      }),
-    [filtered, sort]
-  );
+    setBusy(true);
+    adminJson<{ events: LiveAuditRow[]; total: number; entityTypes: string[] }>(
+      `/api/platform-admin/audit?${params}`,
+      { signal: controller.signal }
+    )
+      .then((data) => {
+        setRows(data.events);
+        setTotal(data.total);
+        setEntityTypes(data.entityTypes ?? []);
+        setError("");
+      })
+      .catch((err: Error) => {
+        if (err.name === "AbortError") return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setLoading(false);
+        setBusy(false);
+      });
 
-  const rows = paginate(sorted, page, LEDGER_PAGE_SIZE);
+    return () => controller.abort();
+  }, [page, debouncedQuery, entity, dateWindow, sort]);
+
   const hasFilters = query.trim() !== "" || entity !== "all" || dateWindow !== "all";
 
   const clearFilters = () => {
@@ -84,23 +81,29 @@ export default function AdminAuditPage() {
   return (
     <>
       <PageHeader
-        title="Activity"
+        title={<PageTitle label="Activity" badge={<LiveBadge>{total} live</LiveBadge>} />}
         description="Workspace actions from the product: imports, catalog changes, and related events."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      <AdminListLayout>
       <AdminTable
         rows={rows}
         rowKey={(row) => row.id}
+        busy={busy}
         sort={sort}
-        onSort={(key) => setSort((current) => toggleSort(current, key))}
-        emptyTitle={events.length === 0 ? "No activity yet" : "No matching activity"}
+        onSort={(key) => {
+          setSort((current) => toggleSort(current, key));
+          resetPage();
+        }}
+        emptyTitle={!hasFilters && total === 0 ? "No activity yet" : "No matching activity"}
         emptyDescription={
-          events.length === 0
+          !hasFilters && total === 0
             ? "Imports, catalog changes, and other workspace events will appear here."
             : "Try a different search or clear the active filters."
         }
         onClearFilters={hasFilters ? clearFilters : undefined}
         toolbar={
+          <TableToolbar label="Log">
           <DataToolbar
             search={query}
             onSearch={(value) => {
@@ -109,8 +112,8 @@ export default function AdminAuditPage() {
             }}
             searchPlaceholder="Action, user, or workspace"
             noun="events"
-            resultCount={filtered.length}
-            totalCount={events.length}
+            resultCount={total}
+            totalCount={total}
             filters={[
               {
                 id: "entity",
@@ -120,7 +123,10 @@ export default function AdminAuditPage() {
                   setEntity(value);
                   resetPage();
                 },
-                options: entityOptions,
+                options: [
+                  { value: "all", label: "All entities" },
+                  ...entityTypes.map((type) => ({ value: type, label: type })),
+                ],
               },
               {
                 id: "window",
@@ -134,11 +140,12 @@ export default function AdminAuditPage() {
               },
             ]}
           />
+          </TableToolbar>
         }
         pagination={{
           page,
-          pageCount: pageCount(filtered.length, LEDGER_PAGE_SIZE),
-          total: filtered.length,
+          pageCount: pageCount(total, LEDGER_PAGE_SIZE),
+          total,
           pageSize: LEDGER_PAGE_SIZE,
           onPage: setPage,
         }}
@@ -177,6 +184,7 @@ export default function AdminAuditPage() {
           },
         ]}
       />
+      </AdminListLayout>
     </>
   );
 }

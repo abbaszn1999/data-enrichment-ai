@@ -7,6 +7,7 @@ import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
 import { BackLink } from "@/components/platform-admin/back-link";
 import { DangerConfirm } from "@/components/platform-admin/danger-confirm";
+import { AdminListLayout, LiveBadge, PageTitle } from "@/components/platform-admin/list-chrome";
 import { PageHeader } from "@/components/platform-admin/page-header";
 import { Panel, DetailGrid } from "@/components/platform-admin/panel";
 import { SignInAsButton } from "@/components/platform-admin/sign-in-as-button";
@@ -65,7 +66,7 @@ export default function AdminUserDetailPage() {
     <>
       <BackLink href={adminRoutes.users()} label="Users" />
       <PageHeader
-        title={user.fullName}
+        title={<PageTitle label={user.fullName} badge={<LiveBadge><span className="capitalize">{user.status}</span></LiveBadge>} />}
         description={user.email}
         actions={
           <>
@@ -77,6 +78,7 @@ export default function AdminUserDetailPage() {
         }
       />
 
+      <AdminListLayout>
       <DetailGrid
         items={[
           { label: "Status", value: <UserStatusBadge status={user.status} /> },
@@ -94,6 +96,7 @@ export default function AdminUserDetailPage() {
       {user.subscriptionStatus ? (
         <Panel title="Billing">
           <DetailGrid
+            nested
             items={[
               { label: "Cycle", value: user.billingCycle || "—" },
               { label: "Period end", value: user.currentPeriodEnd ? formatDate(user.currentPeriodEnd) : "—" },
@@ -146,6 +149,7 @@ export default function AdminUserDetailPage() {
           ]}
         />
       </Panel>
+      </AdminListLayout>
 
       <DangerConfirm
         open={confirmOpen}

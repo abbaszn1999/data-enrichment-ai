@@ -2,9 +2,9 @@
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DEFAULT_PAGE_SIZE, LEDGER_PAGE_SIZE } from "@/lib/platform-admin/list-query";
 
-export const DEFAULT_PAGE_SIZE = 12;
-export const LEDGER_PAGE_SIZE = 20;
+export { DEFAULT_PAGE_SIZE, LEDGER_PAGE_SIZE };
 
 export function PaginationBar({
   page,

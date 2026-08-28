@@ -1,3 +1,6 @@
+export const DEFAULT_PAGE_SIZE = 12;
+export const LEDGER_PAGE_SIZE = 20;
+
 export type SortDir = "asc" | "desc";
 
 export type SortState = {

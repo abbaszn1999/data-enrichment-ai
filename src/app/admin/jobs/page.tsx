@@ -1,26 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PageLoader } from "@/components/brand/page-loader";
 import { AdminTable } from "@/components/platform-admin/admin-table";
 import { DataToolbar } from "@/components/platform-admin/data-toolbar";
+import { AdminListLayout, LiveBadge, PageTitle, TableToolbar } from "@/components/platform-admin/list-chrome";
 import { PageHeader } from "@/components/platform-admin/page-header";
-import { LEDGER_PAGE_SIZE, pageCount, paginate } from "@/components/platform-admin/pagination-bar";
+import { pageCount } from "@/components/platform-admin/pagination-bar";
 import { JobStatusBadge } from "@/components/platform-admin/status-badge";
+import { useDebouncedValue } from "@/components/platform-admin/use-debounced-value";
 import { adminJson } from "@/lib/platform-admin/client-api";
 import { formatDateTime, formatDuration } from "@/lib/platform-admin/format";
 import { JOB_KIND_LABELS } from "@/lib/platform-admin/labels";
-import { DATE_WINDOW_OPTIONS, inDateWindow, sortRows, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
+import { DATE_WINDOW_OPTIONS, LEDGER_PAGE_SIZE, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveJobRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
 import type { AdminJobKind } from "@/lib/platform-admin/types";
 
 export default function AdminJobsPage() {
-  const [jobs, setJobs] = useState<LiveJobRow[]>([]);
+  const [rows, setRows] = useState<LiveJobRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(query);
   const [status, setStatus] = useState("all");
   const [kind, setKind] = useState("all");
   const [errorFilter, setErrorFilter] = useState("all");
@@ -28,48 +33,45 @@ export default function AdminJobsPage() {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>({ key: "when", dir: "desc" });
 
-  useEffect(() => {
-    adminJson<{ jobs: LiveJobRow[] }>("/api/platform-admin/jobs")
-      .then((data) => setJobs(data.jobs))
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
-
   const resetPage = () => setPage(1);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return jobs.filter((job) => {
-      if (status !== "all" && job.status !== status) return false;
-      if (kind !== "all" && job.kind !== kind) return false;
-      if (errorFilter === "yes" && !job.lastError) return false;
-      if (errorFilter === "no" && job.lastError) return false;
-      if (!inDateWindow(job.createdAt, dateWindow)) return false;
-      if (!q) return true;
-      return (
-        job.workspaceName.toLowerCase().includes(q) ||
-        job.actorName.toLowerCase().includes(q) ||
-        (job.lastError ?? "").toLowerCase().includes(q)
-      );
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(LEDGER_PAGE_SIZE),
+      sort: sort.key,
+      dir: sort.dir,
     });
-  }, [jobs, query, status, kind, errorFilter, dateWindow]);
+    if (debouncedQuery.trim()) params.set("q", debouncedQuery.trim());
+    if (status !== "all") params.set("status", status);
+    if (kind !== "all") params.set("kind", kind);
+    if (errorFilter !== "all") params.set("error", errorFilter);
+    if (dateWindow !== "all") params.set("window", dateWindow);
 
-  const sorted = useMemo(
-    () =>
-      sortRows(filtered, sort, {
-        when: (row) => new Date(row.createdAt).getTime(),
-        workspace: (row) => row.workspaceName,
-        kind: (row) => row.kind,
-        status: (row) => row.status,
-        progress: (row) => row.completedCount + row.failedCount,
-        duration: (row) => row.durationMs,
-        actor: (row) => row.actorName,
-        error: (row) => row.lastError,
-      }),
-    [filtered, sort]
-  );
+    setBusy(true);
+    adminJson<{ jobs: LiveJobRow[]; total: number }>(
+      `/api/platform-admin/jobs?${params}`,
+      { signal: controller.signal }
+    )
+      .then((data) => {
+        setRows(data.jobs);
+        setTotal(data.total);
+        setError("");
+      })
+      .catch((err: Error) => {
+        if (err.name === "AbortError") return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setLoading(false);
+        setBusy(false);
+      });
 
-  const rows = paginate(sorted, page, LEDGER_PAGE_SIZE);
+    return () => controller.abort();
+  }, [page, debouncedQuery, status, kind, errorFilter, dateWindow, sort]);
+
   const hasFilters =
     query.trim() !== "" || status !== "all" || kind !== "all" || errorFilter !== "all" || dateWindow !== "all";
 
@@ -87,23 +89,29 @@ export default function AdminJobsPage() {
   return (
     <>
       <PageHeader
-        title="Jobs"
+        title={<PageTitle label="Jobs" badge={<LiveBadge>{total} live</LiveBadge>} />}
         description="Queued and completed catalog, gallery, and visualizer job runs."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      <AdminListLayout>
       <AdminTable
         rows={rows}
         rowKey={(row) => row.id}
+        busy={busy}
         sort={sort}
-        onSort={(key) => setSort((current) => toggleSort(current, key))}
-        emptyTitle={jobs.length === 0 ? "No jobs yet" : "No matching jobs"}
+        onSort={(key) => {
+          setSort((current) => toggleSort(current, key));
+          resetPage();
+        }}
+        emptyTitle={!hasFilters && total === 0 ? "No jobs yet" : "No matching jobs"}
         emptyDescription={
-          jobs.length === 0
+          !hasFilters && total === 0
             ? "Catalog, gallery, and visualizer runs will appear here."
             : "Try a different search or clear the active filters."
         }
         onClearFilters={hasFilters ? clearFilters : undefined}
         toolbar={
+          <TableToolbar label="Runs">
           <DataToolbar
             search={query}
             onSearch={(value) => {
@@ -112,8 +120,8 @@ export default function AdminJobsPage() {
             }}
             searchPlaceholder="Workspace, actor, or error"
             noun="jobs"
-            resultCount={filtered.length}
-            totalCount={jobs.length}
+            resultCount={total}
+            totalCount={total}
             filters={[
               {
                 id: "status",
@@ -174,11 +182,12 @@ export default function AdminJobsPage() {
               },
             ]}
           />
+          </TableToolbar>
         }
         pagination={{
           page,
-          pageCount: pageCount(filtered.length, LEDGER_PAGE_SIZE),
-          total: filtered.length,
+          pageCount: pageCount(total, LEDGER_PAGE_SIZE),
+          total,
           pageSize: LEDGER_PAGE_SIZE,
           onPage: setPage,
         }}
@@ -225,6 +234,7 @@ export default function AdminJobsPage() {
           },
         ]}
       />
+      </AdminListLayout>
     </>
   );
 }
