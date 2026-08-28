@@ -133,7 +133,11 @@ export default function WorkspacesPage() {
     return <PageLoader className="min-h-screen" />;
   }
 
-  const canCreate = workspaces.some((ws) => ws.owner_id === user?.id) || workspaces.length === 0;
+  // Always show the create button — /api/workspaces/limit (called on click via
+  // handleNewWorkspaceClick) is the real gate on whether creation is allowed.
+  // A member-only user (invited to someone else's workspace, owns none) must
+  // still be able to create their own first workspace.
+  const canCreate = true;
 
   return (
     <div className="autommerce-dashboard relative min-h-screen overflow-hidden bg-background [font-family:var(--brand-font)]">
