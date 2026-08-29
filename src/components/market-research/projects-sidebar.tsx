@@ -41,6 +41,8 @@ type ProjectsSidebarProps = {
   /** Highest stage opened per project, for the rail badge. */
   openedStageByProject: Record<string, MarketResearchStage>;
   atProjectCap: boolean;
+  canEdit: boolean;
+  canAdmin: boolean;
 };
 
 const AVATAR_TONES = [
@@ -100,6 +102,8 @@ export function ProjectsSidebar({
   onToggleComplete,
   openedStageByProject,
   atProjectCap,
+  canEdit,
+  canAdmin,
 }: ProjectsSidebarProps) {
   const filtered = projects.filter((p) => p.status === filter);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -159,16 +163,18 @@ export function ProjectsSidebar({
           >
             <PanelRight className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            onClick={onNewProject}
-            disabled={atProjectCap}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-border/80 text-muted-foreground hover:text-foreground hover:border-foreground/30 disabled:opacity-40 transition-colors"
-            title={atProjectCap ? "Project limit reached" : "New project"}
-            aria-label="New project"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={onNewProject}
+              disabled={atProjectCap}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-border/80 text-muted-foreground hover:text-foreground hover:border-foreground/30 disabled:opacity-40 transition-colors"
+              title={atProjectCap ? "Project limit reached" : "New project"}
+              aria-label="New project"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          ) : null}
           <div className="no-scrollbar mt-1 flex w-full flex-col items-center gap-2 overflow-y-auto overflow-x-hidden">
             {projects.map((project) => {
               const active = project.id === activeProjectId;
@@ -226,19 +232,21 @@ export function ProjectsSidebar({
             })}
           </div>
 
-          <button
-            type="button"
-            onClick={onNewProject}
-            disabled={atProjectCap}
-            className="mx-3.5 mb-2 flex items-center gap-2 rounded-lg px-1.5 py-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors shrink-0"
-          >
-            <span className="flex h-6 w-6 items-center justify-center rounded-full border border-border/80">
-              <Plus className="h-3.5 w-3.5" />
-            </span>
-            {atProjectCap
-              ? `Limit ${MAX_MARKET_RESEARCH_PROJECTS}/${MAX_MARKET_RESEARCH_PROJECTS}`
-              : "New project"}
-          </button>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={onNewProject}
+              disabled={atProjectCap}
+              className="mx-3.5 mb-2 flex items-center gap-2 rounded-lg px-1.5 py-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors shrink-0"
+            >
+              <span className="flex h-6 w-6 items-center justify-center rounded-full border border-border/80">
+                <Plus className="h-3.5 w-3.5" />
+              </span>
+              {atProjectCap
+                ? `Limit ${MAX_MARKET_RESEARCH_PROJECTS}/${MAX_MARKET_RESEARCH_PROJECTS}`
+                : "New project"}
+            </button>
+          ) : null}
 
           <div className="no-scrollbar flex-1 min-h-0 overflow-y-auto px-2.5 pb-3 space-y-1">
             {filtered.length === 0 ? (
@@ -324,45 +332,53 @@ export function ProjectsSidebar({
                       </div>
                     </button>
 
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-70 hover:bg-background/60 hover:text-foreground group-hover:opacity-100 data-[state=open]:opacity-100 data-[state=open]:bg-background/60"
-                          aria-label={`Options for ${project.name}`}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <MoreVertical className="h-4 w-4" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-40">
-                        <DropdownMenuItem
-                          onClick={() => beginRename(project)}
-                          className="text-xs"
-                        >
-                          Rename
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() =>
-                            onToggleComplete(
-                              project.id,
-                              project.status !== "completed"
-                            )
-                          }
-                          className="text-xs"
-                        >
-                          {project.status === "completed"
-                            ? "Reopen project"
-                            : "Mark complete"}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => setDeleteTarget(project)}
-                          className="text-xs text-destructive focus:text-destructive"
-                        >
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {canEdit || canAdmin ? (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-70 hover:bg-background/60 hover:text-foreground group-hover:opacity-100 data-[state=open]:opacity-100 data-[state=open]:bg-background/60"
+                            aria-label={`Options for ${project.name}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40">
+                          {canEdit ? (
+                            <DropdownMenuItem
+                              onClick={() => beginRename(project)}
+                              className="text-xs"
+                            >
+                              Rename
+                            </DropdownMenuItem>
+                          ) : null}
+                          {canEdit ? (
+                            <DropdownMenuItem
+                              onClick={() =>
+                                onToggleComplete(
+                                  project.id,
+                                  project.status !== "completed"
+                                )
+                              }
+                              className="text-xs"
+                            >
+                              {project.status === "completed"
+                                ? "Reopen project"
+                                : "Mark complete"}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {canAdmin ? (
+                            <DropdownMenuItem
+                              onClick={() => setDeleteTarget(project)}
+                              className="text-xs text-destructive focus:text-destructive"
+                            >
+                              Delete
+                            </DropdownMenuItem>
+                          ) : null}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : null}
                   </div>
                 );
               })

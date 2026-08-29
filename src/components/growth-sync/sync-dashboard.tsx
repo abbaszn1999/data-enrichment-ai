@@ -39,6 +39,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRole } from "@/hooks/use-role";
 import { useWallet } from "@/hooks/use-wallet";
 import { formatMoney } from "@/lib/wallet/format";
 import {
@@ -77,7 +78,8 @@ export function SyncDashboard() {
   const params = useParams<{ workspaceSlug: string }>();
   const slug = params.workspaceSlug ?? "";
   const { user } = useAuth();
-  const { workspace } = useWorkspace(slug, user);
+  const { workspace, role } = useWorkspace(slug, user);
+  const { canEdit, canAdmin } = useRole(role);
   const workspaceId = workspace?.id ?? "";
   const { wallet } = useWallet(workspaceId || null);
   const walletBalance = wallet?.balance ?? 0;
@@ -179,6 +181,7 @@ export function SyncDashboard() {
   );
 
   const handleRun = async (rule: RuleRow) => {
+    if (!canEdit) return;
     setBusyRuleId(rule.id);
     try {
       const { outcome } = await runSyncRule(workspaceId, rule.id);
@@ -214,6 +217,7 @@ export function SyncDashboard() {
   };
 
   const handleToggle = async (rule: RuleRow) => {
+    if (!canEdit) return;
     if (!rule.enabled && !hasWalletBalance) {
       toast.error("Top up the wallet before turning a rule on");
       return;
@@ -234,6 +238,7 @@ export function SyncDashboard() {
   };
 
   const handleInterval = async (rule: RuleRow, interval: SyncInterval) => {
+    if (!canEdit) return;
     setBusyRuleId(rule.id);
     try {
       await updateSyncRule({ workspaceId, ruleId: rule.id, interval });
@@ -249,6 +254,7 @@ export function SyncDashboard() {
   };
 
   const handleDelete = async (rule: RuleRow) => {
+    if (!canAdmin) return;
     setBusyRuleId(rule.id);
     try {
       await deleteSyncRule(workspaceId, rule.id);
@@ -262,6 +268,7 @@ export function SyncDashboard() {
   };
 
   const handleUndo = async (row: ActivityRow) => {
+    if (!canEdit) return;
     setUndoingId(row.id);
     try {
       const res = await undoAssignments(workspaceId, [row.id]);
@@ -322,14 +329,16 @@ export function SyncDashboard() {
             added from now on into a Market research project that is live.
           </p>
         </div>
-        <Button
-          className="h-9 gap-2 rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
-          disabled={!storeConnected || taxonomies.length === 0}
-          onClick={() => setCreateOpen(true)}
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New sync rule
-        </Button>
+        {canEdit ? (
+          <Button
+            className="h-9 gap-2 rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+            disabled={!storeConnected || taxonomies.length === 0}
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New sync rule
+          </Button>
+        ) : null}
       </motion.div>
 
       {/* Stat strip */}
@@ -374,13 +383,15 @@ export function SyncDashboard() {
             The wallet balance is empty. Rules stay paused until it is topped up —
             Sync deducts from the same wallet, at cost.
           </p>
-          <Button
-            size="sm"
-            className="h-7.5 rounded-lg bg-amber-600 text-[11px] text-white hover:bg-amber-600/90"
-            asChild
-          >
-            <Link href={`/w/${slug}/wallet`}>Top up wallet</Link>
-          </Button>
+          {canEdit ? (
+            <Button
+              size="sm"
+              className="h-7.5 rounded-lg bg-amber-600 text-[11px] text-white hover:bg-amber-600/90"
+              asChild
+            >
+              <Link href={`/w/${slug}/wallet`}>Top up wallet</Link>
+            </Button>
+          ) : null}
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card px-4 py-3 shadow-sm">
@@ -424,6 +435,8 @@ export function SyncDashboard() {
                 projects={projects}
                 latestRun={latestRunByRule.get(rule.id)}
                 busy={busyRuleId === rule.id}
+                canEdit={canEdit}
+                canAdmin={canAdmin}
                 onRun={() => void handleRun(rule)}
                 onToggle={() => void handleToggle(rule)}
                 onInterval={(interval) => void handleInterval(rule, interval)}
@@ -457,7 +470,7 @@ export function SyncDashboard() {
                 <ActivityItem
                   key={row.id}
                   row={row}
-                  canUndo={supportsUndo}
+                  canUndo={supportsUndo && canEdit}
                   undoing={undoingId === row.id}
                   onUndo={() => void handleUndo(row)}
                 />
@@ -527,6 +540,7 @@ export function SyncDashboard() {
         taxonomies={taxonomies}
         taxonomyLabel={taxonomyLabel}
         onCreate={async (input) => {
+          if (!canEdit) return;
           await createSyncRule({ workspaceId, ...input });
           await refresh();
         }}
@@ -754,6 +768,8 @@ function RuleCard({
   projects,
   latestRun,
   busy,
+  canEdit,
+  canAdmin,
   onRun,
   onToggle,
   onInterval,
@@ -763,6 +779,8 @@ function RuleCard({
   projects: LiveProjectOption[];
   latestRun?: RunRow;
   busy: boolean;
+  canEdit: boolean;
+  canAdmin: boolean;
   onRun: () => void;
   onToggle: () => void;
   onInterval: (interval: SyncInterval) => void;
@@ -841,14 +859,14 @@ function RuleCard({
         <div className="flex shrink-0 items-center gap-1.5">
           <ScheduleToggle
             value={rule.run_interval}
-            disabled={busy}
+            disabled={busy || !canEdit}
             onChange={onInterval}
           />
           <Button
             size="sm"
             variant="outline"
             className="h-7.5 gap-1 rounded-lg text-[11px]"
-            disabled={busy}
+            disabled={busy || !canEdit}
             onClick={onRun}
           >
             {busy ? (
@@ -863,7 +881,7 @@ function RuleCard({
             role="switch"
             aria-checked={rule.enabled}
             aria-label={rule.enabled ? "Pause rule" : "Activate rule"}
-            disabled={busy}
+            disabled={busy || !canEdit}
             onClick={onToggle}
             className={cn(
               "relative h-5 w-9 rounded-full transition-colors disabled:opacity-50",
@@ -877,16 +895,18 @@ function RuleCard({
               )}
             />
           </button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7.5 w-7.5 p-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
-            disabled={busy}
-            onClick={onDelete}
-            aria-label="Delete rule"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+          {canAdmin ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7.5 w-7.5 p-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+              disabled={busy}
+              onClick={onDelete}
+              aria-label="Delete rule"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

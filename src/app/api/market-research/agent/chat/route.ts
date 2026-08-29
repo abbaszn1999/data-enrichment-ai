@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   agentChatBodySchema,
   jsonError,
-  requireMrRead,
+  requireMrWrite,
 } from "@/lib/market-research/api-schema";
 import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { runStage1AgentChat } from "@/lib/market-research/agent/stage1-chat";
@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     return jsonError("Invalid chat payload", 400);
   }
 
-  const auth = await requireMrRead(parsed.data.workspaceId);
+  const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {

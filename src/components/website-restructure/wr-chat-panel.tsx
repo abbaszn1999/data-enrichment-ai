@@ -100,7 +100,7 @@ export function WrChatPanel({
   const submitCompetitor = (e: FormEvent) => {
     e.preventDefault();
     const text = competitorDraft.trim();
-    if (!text || state.competitors.length >= WR_MAX_COMPETITORS) return;
+    if (!text || readOnly || state.competitors.length >= WR_MAX_COMPETITORS) return;
     onAddCompetitor(text);
     setCompetitorDraft("");
   };

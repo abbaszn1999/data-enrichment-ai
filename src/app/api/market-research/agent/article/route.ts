@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   agentArticleBodySchema,
   jsonError,
-  requireMrRead,
+  requireMrWrite,
 } from "@/lib/market-research/api-schema";
 import { writeArticle } from "@/lib/market-research/agent/stage7-article-writer";
 import {
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
   const parsed = agentArticleBodySchema.safeParse(json);
   if (!parsed.success) return jsonError("Invalid article payload", 400);
 
-  const auth = await requireMrRead(parsed.data.workspaceId);
+  const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   const { article, blogs, projectId, workspaceId } = parsed.data;

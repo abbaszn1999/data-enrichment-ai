@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   agentClusterBodySchema,
   jsonError,
-  requireMrRead,
+  requireMrWrite,
 } from "@/lib/market-research/api-schema";
 import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { runStage5CollectionClustering } from "@/lib/market-research/agent/stage5-collection-clusterer";
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
     return jsonError("Invalid cluster payload", 400);
   }
 
-  const auth = await requireMrRead(parsed.data.workspaceId);
+  const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {

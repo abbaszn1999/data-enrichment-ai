@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   agentSeedsBodySchema,
   jsonError,
-  requireMrRead,
+  requireMrWrite,
 } from "@/lib/market-research/api-schema";
 import {
   fetchStoreCatalog,
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
     return jsonError("Invalid seeds payload", 400);
   }
 
-  const auth = await requireMrRead(parsed.data.workspaceId);
+  const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {

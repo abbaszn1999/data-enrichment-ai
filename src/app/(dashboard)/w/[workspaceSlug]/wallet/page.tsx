@@ -50,6 +50,7 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { useWallet, startWalletCheckoutApi, topUpWalletApi } from "@/hooks/use-wallet";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRole } from "@/hooks/use-role";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {
   PAYMENT_METHODS,
@@ -156,7 +157,8 @@ export default function WalletPage() {
   const searchParams = useSearchParams();
   const slug = params.workspaceSlug as string;
   const { user } = useAuth();
-  const { workspace } = useWorkspace(slug, user);
+  const { workspace, role } = useWorkspace(slug, user);
+  const { canEdit } = useRole(role);
   const workspaceId = workspace?.id ?? "";
   const { wallet, isLoading } = useWallet(workspaceId || null);
   const invalidateWallet = useWorkspaceStore((s) => s.invalidateWallet);
@@ -246,7 +248,7 @@ export default function WalletPage() {
   const amountValid = Number.isFinite(parsedAmount) && parsedAmount >= 5;
 
   const confirmTopUp = async () => {
-    if (!amountValid || !workspaceId) return;
+    if (!amountValid || !workspaceId || !canEdit) return;
     setProcessing(true);
     try {
       if (wallet.allowDevTopup) {
@@ -326,14 +328,16 @@ export default function WalletPage() {
                 <Download className="h-3.5 w-3.5" />
                 Export statement
               </Button>
-              <Button
-                size="sm"
-                className="h-9 gap-2 rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
-                onClick={() => setTopUpOpen(true)}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add funds
-              </Button>
+              {canEdit ? (
+                <Button
+                  size="sm"
+                  className="h-9 gap-2 rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                  onClick={() => setTopUpOpen(true)}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add funds
+                </Button>
+              ) : null}
             </div>
           </motion.header>
         </div>

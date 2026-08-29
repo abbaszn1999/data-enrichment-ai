@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useAuth } from "@/hooks/use-auth";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRole } from "@/hooks/use-role";
 import {
   Dialog,
   DialogContent,
@@ -69,8 +70,8 @@ export function WebsiteRestructureShell() {
   const basePath = `/w/${slug}`;
   const { user } = useAuth();
   const { workspace, role, hasIntegration, isLoading: wsLoading } = useWorkspace(slug, user);
+  const { canEdit, canAdmin } = useRole(role);
   const workspaceId = workspace?.id ?? "";
-  const canWrite = role !== "viewer";
 
   const [projects, setProjects] = useState<WrProjectRowWithUrls[]>([]);
   const [projectLimit, setProjectLimit] = useState(WR_DEFAULT_PROJECT_LIMIT);
@@ -228,6 +229,7 @@ export function WebsiteRestructureShell() {
   const atProjectCap = projectsCreatedTotal >= projectLimit;
 
   const handleNewProject = () => {
+    if (!canEdit) return;
     if (atProjectCap) {
       toast.error("Limit reached", {
         description: `Your plan allows up to ${projectLimit} header project${projectLimit === 1 ? "" : "s"} in total. Upgrade your plan to create more.`,
@@ -242,7 +244,7 @@ export function WebsiteRestructureShell() {
     // Guards against a double-fire: hitting Enter in the input and then also
     // clicking "Create" (or a fast double-click) before the dialog has a
     // chance to close, which used to send two POSTs and create two projects.
-    if (creatingProject) return;
+    if (!canEdit || creatingProject) return;
     setCreatingProject(true);
     const name = createName.trim() || "New header";
     try {
@@ -258,6 +260,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleDeleteProject = async (id: string) => {
+    if (!canAdmin) return;
     try {
       await deleteWrProjectApi(workspaceId, id);
       setResultByProject((prev) => {
@@ -272,6 +275,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleRenameProject = async (id: string, name: string) => {
+    if (!canEdit) return;
     updateProjectLocal(id, { name });
     try {
       await patchWrProjectApi(workspaceId, id, { name });
@@ -281,6 +285,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleToggleComplete = async (id: string, completed: boolean) => {
+    if (!canEdit) return;
     updateProjectLocal(id, { status: completed ? "completed" : "active" });
     try {
       await patchWrProjectApi(workspaceId, id, { status: completed ? "completed" : "active" });
@@ -295,6 +300,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleUploadImages = (files: File[]) => {
+    if (!canEdit) return;
     withProject(async (project) => {
       for (const file of files) {
         try {
@@ -329,6 +335,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleDeleteImage = (imageId: string) => {
+    if (!canEdit) return;
     withProject(async (project) => {
       try {
         await deleteWrAssetApi({ workspaceId, projectId: project.id, kind: "image", imageId });
@@ -342,6 +349,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleUploadLogo = (file: File) => {
+    if (!canEdit) return;
     withProject(async (project) => {
       try {
         const dataBase64 = await fileToBase64(file);
@@ -374,6 +382,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleDeleteLogo = () => {
+    if (!canEdit) return;
     withProject(async (project) => {
       try {
         await deleteWrAssetApi({ workspaceId, projectId: project.id, kind: "logo" });
@@ -385,6 +394,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleDoneWithImages = () => {
+    if (!canEdit) return;
     withProject(async (project) => {
       try {
         await patchWrProjectApi(workspaceId, project.id, { phase: "awaiting_logo" });
@@ -396,6 +406,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleDoneWithLogo = () => {
+    if (!canEdit) return;
     withProject(async (project) => {
       try {
         await patchWrProjectApi(workspaceId, project.id, { phase: "awaiting_competitors" });
@@ -407,6 +418,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleAddCompetitor = (raw: string) => {
+    if (!canEdit) return;
     withProject(async (project) => {
       const next = { ...project.state, competitors: [...project.state.competitors, { raw }] };
       await persistState(project.id, next);
@@ -414,6 +426,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleRemoveCompetitor = (index: number) => {
+    if (!canEdit) return;
     withProject(async (project) => {
       const next = { ...project.state, competitors: project.state.competitors.filter((_, i) => i !== index) };
       await persistState(project.id, next);
@@ -421,6 +434,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleStartBuild = (skipCompetitors: boolean) => {
+    if (!canEdit) return;
     withProject(async (project) => {
       if (skipCompetitors && !project.state.competitorsSkipped) {
         await persistState(project.id, { ...project.state, competitorsSkipped: true });
@@ -451,6 +465,7 @@ export function WebsiteRestructureShell() {
   };
 
   const handleSendEdit = (instruction: string) => {
+    if (!canEdit) return;
     withProject(async (project) => {
       setBusy(true);
       setProgressSteps([]);
@@ -548,7 +563,7 @@ export function WebsiteRestructureShell() {
             <div className="min-h-0 overflow-hidden border-b border-border/60 md:border-b-0">
               <WrChatPanel
                 project={activeProject}
-                canWrite={canWrite}
+                canWrite={canEdit}
                 busy={busy}
                 progressSteps={progressSteps}
                 onUploadImages={handleUploadImages}
@@ -595,7 +610,7 @@ export function WebsiteRestructureShell() {
               Upload a few screenshots of your current header and I&apos;ll design a new one from your store&apos;s
               real categories and navigation.
             </p>
-            {canWrite ? (
+            {canEdit ? (
               <Button
                 onClick={handleNewProject}
                 disabled={atProjectCap}
@@ -623,7 +638,8 @@ export function WebsiteRestructureShell() {
         onToggleComplete={handleToggleComplete}
         atProjectCap={atProjectCap}
         projectLimit={projectLimit}
-        canWrite={canWrite}
+        canEdit={canEdit}
+        canAdmin={canAdmin}
       />
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

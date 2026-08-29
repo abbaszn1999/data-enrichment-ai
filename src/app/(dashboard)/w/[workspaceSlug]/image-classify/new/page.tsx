@@ -14,6 +14,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageLoader } from "@/components/brand/page-loader";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -92,7 +93,7 @@ export default function NewImageClassifyPage() {
   const params = useParams();
   const router = useRouter();
   const slug = params.workspaceSlug as string;
-  const { workspace, role } = useWorkspaceContext();
+  const { workspace, role, wsLoading } = useWorkspaceContext();
   const permissions = useRole(role);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -270,6 +271,10 @@ export default function NewImageClassifyPage() {
       : phase === "preparing"
         ? 5
         : 0;
+
+  if (wsLoading) {
+    return <PageLoader />;
+  }
 
   if (!permissions.canImport) {
     return (

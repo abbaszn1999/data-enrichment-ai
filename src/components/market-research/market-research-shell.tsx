@@ -17,6 +17,7 @@ import { PageLoader } from "@/components/brand/page-loader";
 import { useAuth } from "@/hooks/use-auth";
 import { useWallet } from "@/hooks/use-wallet";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRole } from "@/hooks/use-role";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { previewBalance } from "@/lib/market-research/billing";
 import {
@@ -226,9 +227,11 @@ export function MarketResearchShell() {
   const { user } = useAuth();
   const {
     workspace,
+    role,
     hasIntegration,
     isLoading: wsLoading,
   } = useWorkspace(slug, user);
+  const { canEdit, canAdmin } = useRole(role);
   const workspaceId = workspace?.id ?? "";
   const { wallet } = useWallet(workspaceId || null);
   const invalidateWallet = useWorkspaceStore((s) => s.invalidateWallet);
@@ -607,17 +610,17 @@ export function MarketResearchShell() {
       skipPersistSave.current = false;
       return;
     }
-    if (!workspaceId || !persistRemote.current) return;
+    if (!canEdit || !workspaceId || !persistRemote.current) return;
     const timer = window.setTimeout(() => {
       void saveMrStateApi(workspaceId, persistedSnapshot).catch(() => undefined);
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [hydrated, slug, workspaceId, persistedSnapshot]);
+  }, [hydrated, slug, workspaceId, persistedSnapshot, canEdit]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !canEdit) return;
     if (projects.length === 0) setCreateOpen(true);
-  }, [hydrated, projects.length]);
+  }, [hydrated, projects.length, canEdit]);
 
   const activeProject = useMemo(
     () => projects.find((p) => p.id === activeProjectId) ?? projects[0],
@@ -1258,7 +1261,7 @@ export function MarketResearchShell() {
 
   const startAnalysis = useCallback(
     (opts?: { freshChat?: boolean }) => {
-      if (!activeProject) return;
+      if (!canEdit || !activeProject) return;
       const projectId = activeProject.id;
       const storeLabel = activeProject.storeLabel;
       setInviteOpen(false);
@@ -1405,7 +1408,7 @@ export function MarketResearchShell() {
         }
       })();
     },
-    [activeProject, workspaceId, appendAgent, completeAnalysis]
+    [activeProject, workspaceId, appendAgent, completeAnalysis, canEdit]
   );
 
   const startStage2Prep = useCallback(
@@ -1605,6 +1608,7 @@ export function MarketResearchShell() {
   };
 
   const handleNextFromStage1 = () => {
+    if (!canEdit) return;
     if (!activeProject || !stage1DoneForActive || analyzing) return;
     const projectId = activeProject.id;
     const alreadyOpened = openedMax >= 2;
@@ -1627,6 +1631,7 @@ export function MarketResearchShell() {
   };
 
   const handleNextFromStage2 = () => {
+    if (!canEdit) return;
     if (
       !activeProject ||
       !stage2ReadyForActive ||
@@ -1672,7 +1677,7 @@ export function MarketResearchShell() {
 
   /** Stage 3b — Apify seed-term analysis. Billed per returned seed in chunks of 10 for instant live updates. */
   const runProbe = async (rowIds: string[]) => {
-    if (!activeProject || rowIds.length === 0) return;
+    if (!canEdit || !activeProject || rowIds.length === 0) return;
     if (!workspaceId) {
       toast.error("Workspace is still loading");
       return;
@@ -1796,7 +1801,7 @@ export function MarketResearchShell() {
   };
 
   const handleAddManualSeed = (term: string, canonicalKey: string) => {
-    if (!activeProject) return;
+    if (!canEdit || !activeProject) return;
     const reference = stage3Rows.find(
       (row) => row.canonicalNicheSeed === canonicalKey
     );
@@ -1828,7 +1833,7 @@ export function MarketResearchShell() {
   };
 
   const handleExtract = async () => {
-    if (!activeProject) return;
+    if (!canEdit || !activeProject) return;
     if (!workspaceId) {
       toast.error("Workspace is still loading");
       return;
@@ -2207,7 +2212,7 @@ export function MarketResearchShell() {
   };
 
   const handlePushToStore = async (ids?: string[]) => {
-    if (!activeProject || !workspaceId) return;
+    if (!canEdit || !activeProject || !workspaceId) return;
     const projectId = activeProject.id;
     const targetIds =
       ids && ids.length > 0
@@ -2259,7 +2264,7 @@ export function MarketResearchShell() {
   };
 
   const handleStartContent = async () => {
-    if (!activeProject) return;
+    if (!canEdit || !activeProject) return;
     if (!workspaceId) {
       toast.error("Workspace is still loading");
       return;
@@ -2350,7 +2355,7 @@ export function MarketResearchShell() {
   };
 
   const handleSyncSeo = async () => {
-    if (!activeProject || !workspaceId) return;
+    if (!canEdit || !activeProject || !workspaceId) return;
     const projectId = activeProject.id;
     setSyncingSeoByProject((prev) => ({ ...prev, [projectId]: true }));
     try {
@@ -2404,7 +2409,7 @@ export function MarketResearchShell() {
   };
 
   const handlePush = async () => {
-    if (!activeProject || !workspaceId) return;
+    if (!canEdit || !activeProject || !workspaceId) return;
     const ids = [...clusterSelection].sort();
     if (ids.length === 0) return;
     const usd = collectionPushCostUsd(ids.length);
@@ -2431,6 +2436,7 @@ export function MarketResearchShell() {
   };
 
   const runStrategyBuild = async (projectId: string) => {
+    if (!canEdit) return;
     if (!workspaceId) {
       toast.error("Workspace is still loading");
       return;
@@ -2522,7 +2528,7 @@ export function MarketResearchShell() {
   };
 
   const handleBuildStrategy = () => {
-    if (!activeProject) return;
+    if (!canEdit || !activeProject) return;
     void runStrategyBuild(activeProject.id);
   };
 
@@ -2541,7 +2547,7 @@ export function MarketResearchShell() {
   };
 
   const handleGenerateArticles = async (ids: string[]) => {
-    if (!activeProject || !workspaceId || ids.length === 0) return;
+    if (!canEdit || !activeProject || !workspaceId || ids.length === 0) return;
     const projectId = activeProject.id;
     const rows = (strategyByProject[projectId] ?? []).filter((row) =>
       ids.includes(row.id)
@@ -2603,7 +2609,7 @@ export function MarketResearchShell() {
   };
 
   const handleSyncArticles = async (ids: string[]) => {
-    if (!activeProject || !workspaceId || ids.length === 0) return;
+    if (!canEdit || !activeProject || !workspaceId || ids.length === 0) return;
     const projectId = activeProject.id;
     const generated = articlesByProject[projectId] ?? {};
     const rows = (strategyByProject[projectId] ?? []).filter(
@@ -2773,6 +2779,7 @@ export function MarketResearchShell() {
   };
 
   const handleRenameNiche = (id: string, name: string) => {
+    if (!canEdit) return;
     updateNiches((current) =>
       current.map((niche) =>
         niche.id === id ? { ...niche, name, edited: true } : niche
@@ -2794,6 +2801,7 @@ export function MarketResearchShell() {
   };
 
   const handleDeleteNiche = (id: string) => {
+    if (!canEdit) return;
     updateNiches((current) => current.filter((niche) => niche.id !== id));
     if (activeProject) {
       const projectId = activeProject.id;
@@ -2828,6 +2836,7 @@ export function MarketResearchShell() {
   };
 
   const handleAddNiche = (name: string) => {
+    if (!canEdit) return;
     const newId = `niche-${Date.now()}`;
     updateNiches((current) => [
       ...current,
@@ -2855,6 +2864,7 @@ export function MarketResearchShell() {
   };
 
   const handleMergeNiche = (sourceId: string, targetId: string) => {
+    if (!canEdit) return;
     updateNiches((current) => {
       const source = current.find((n) => n.id === sourceId);
       if (!source) return current;
@@ -2933,7 +2943,7 @@ export function MarketResearchShell() {
   }, [activeProject, startAnalysis]);
 
   const handleSendMessage = (text: string) => {
-    if (!activeProject || analyzing || preparingStage2 || preparingStage3) {
+    if (!canEdit || !activeProject || analyzing || preparingStage2 || preparingStage3) {
       return;
     }
     const projectId = activeProject.id;
@@ -3055,6 +3065,7 @@ export function MarketResearchShell() {
   const namingRequired = projects.length === 0;
 
   const handleNewProject = () => {
+    if (!canEdit) return;
     if (atProjectCap) {
       toast.error("Limit reached", {
         description: `Your plan allows up to ${MAX_MARKET_RESEARCH_PROJECTS} market research projects.`,
@@ -3065,6 +3076,7 @@ export function MarketResearchShell() {
   };
 
   const handleCreateProjectAndAnalyze = async (name: string) => {
+    if (!canEdit) return;
     if (atProjectCap) {
       toast.error("Limit reached", {
         description: `Your plan allows up to ${MAX_MARKET_RESEARCH_PROJECTS} market research projects.`,
@@ -3157,6 +3169,7 @@ export function MarketResearchShell() {
   };
 
   const handleRenameProject = (id: string, name: string) => {
+    if (!canEdit) return;
     setProjects((prev) =>
       prev.map((p) => (p.id === id ? { ...p, name } : p))
     );
@@ -3164,6 +3177,7 @@ export function MarketResearchShell() {
   };
 
   const handleToggleComplete = (id: string, completed: boolean) => {
+    if (!canEdit) return;
     setProjects((prev) =>
       prev.map((p) =>
         p.id === id ? { ...p, status: completed ? "completed" : "active" } : p
@@ -3174,6 +3188,7 @@ export function MarketResearchShell() {
   };
 
   const handleDeleteProject = (id: string) => {
+    if (!canAdmin) return;
     void (async () => {
       if (workspaceId) {
         try {
@@ -3234,7 +3249,7 @@ export function MarketResearchShell() {
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {activeProject ? (
             <AnalysisInvite
-              open={inviteOpen && !analyzing && !createOpen && !inWorkspace}
+              open={inviteOpen && canEdit && !analyzing && !createOpen && !inWorkspace}
               storeLabel={activeProject.storeLabel}
               projectName={activeProject.name}
               onRun={() => startAnalysis({ freshChat: true })}
@@ -3253,7 +3268,7 @@ export function MarketResearchShell() {
             open={createOpen}
             onOpenChange={setCreateOpen}
             onCreate={handleCreateProjectAndAnalyze}
-            required={namingRequired}
+            required={namingRequired && canEdit}
             storeLabel={activeProject?.storeLabel ?? DEFAULT_STORE}
           />
 
@@ -3275,7 +3290,7 @@ export function MarketResearchShell() {
                   messages={stage1Messages}
                   onSendMessage={handleSendMessage}
                   chatBusy={chatBusy}
-                  readOnly={reviewingBrief}
+                  readOnly={reviewingBrief || !canEdit}
                   pendingReread={rereadPending}
                   onConfirmReread={() => startAnalysis({ freshChat: false })}
                   onDismissReread={() => {
@@ -3436,7 +3451,7 @@ export function MarketResearchShell() {
                       onDeleteNiche={handleDeleteNiche}
                       onAddNiche={handleAddNiche}
                       onMergeNiche={handleMergeNiche}
-                      readOnly={reviewingBrief}
+                      readOnly={reviewingBrief || !canEdit}
                       onStartAnalysis={() => {
                         setInviteDismissedIds((prev) => {
                           if (!prev.has(activeProject.id)) return prev;
@@ -3470,7 +3485,7 @@ export function MarketResearchShell() {
                         }
                         nextDisabled={preparingStage3}
                         onNext={handleNextFromStage2}
-                        readOnly={reviewingBrief}
+                        readOnly={reviewingBrief || !canEdit}
                         lockedNicheCount={
                           stage1DoneForActive ? activeNiches.length : undefined
                         }
@@ -3533,7 +3548,7 @@ export function MarketResearchShell() {
                         committed={committedForActive}
                         walletHref={`/w/${slug}/wallet`}
                         walletBalance={wallet?.balance ?? null}
-                        readOnly={reviewingBrief}
+                        readOnly={reviewingBrief || !canEdit}
                       />
                     </div>
                   )}
@@ -3639,6 +3654,7 @@ export function MarketResearchShell() {
                     onSyncArticles={(ids) => void handleSyncArticles(ids)}
                     onArticleChange={handleArticleChange}
                     onArticleTitleChange={handleArticleTitleChange}
+                    readOnly={!canEdit}
                   />
                 </div>
               ) : null}
@@ -3665,6 +3681,8 @@ export function MarketResearchShell() {
           onToggleComplete={handleToggleComplete}
           openedStageByProject={effectiveOpenedStageByProject}
           atProjectCap={atProjectCap}
+          canEdit={canEdit}
+          canAdmin={canAdmin}
         />
       ) : null}
     </div>

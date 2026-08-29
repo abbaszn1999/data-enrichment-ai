@@ -83,7 +83,11 @@ export async function DELETE(request: NextRequest) {
   const parsed = projectRefBodySchema.safeParse(json);
   if (!parsed.success) return jsonError("Invalid delete payload", 400);
 
-  const auth = await requireWrAuth({ workspaceId: parsed.data.workspaceId, requireWrite: true });
+  const auth = await requireWrAuth({
+    workspaceId: parsed.data.workspaceId,
+    requireWrite: true,
+    requireAdmin: true,
+  });
   if (!auth.ok) return auth.response;
 
   try {

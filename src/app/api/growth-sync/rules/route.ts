@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   jsonError,
+  requireMrAdmin,
   requireMrRead,
   requireMrWrite,
 } from "@/lib/market-research/api-schema";
@@ -241,7 +242,7 @@ export async function DELETE(request: NextRequest) {
   const parsed = deleteRuleBodySchema.safeParse(json);
   if (!parsed.success) return jsonError("Invalid payload", 400);
 
-  const auth = await requireMrWrite(parsed.data.workspaceId);
+  const auth = await requireMrAdmin(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   const { error } = await auth.admin

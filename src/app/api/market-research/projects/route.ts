@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   jsonError,
   projectIdSchema,
+  requireMrAdmin,
   requireMrWrite,
   workspaceIdSchema,
 } from "@/lib/market-research/api-schema";
@@ -78,7 +79,7 @@ export async function DELETE(request: NextRequest) {
   const parsed = deleteBodySchema.safeParse(json);
   if (!parsed.success) return jsonError("Invalid delete payload", 400);
 
-  const auth = await requireMrWrite(parsed.data.workspaceId);
+  const auth = await requireMrAdmin(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {

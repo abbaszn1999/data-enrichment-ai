@@ -25,6 +25,7 @@ export type GalleryAuthErr = {
 export async function requireGalleryAuth(options: {
   workspaceId: string;
   requireWrite?: boolean;
+  requireAdmin?: boolean;
   requireCredits?: boolean;
 }): Promise<GalleryAuthOk | GalleryAuthErr> {
   const supabase = await createClient();
@@ -86,6 +87,17 @@ export async function requireGalleryAuth(options: {
   }
 
   if (options.requireWrite && ctx.membershipRole === "viewer") {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Forbidden" }, { status: 403, headers }),
+    };
+  }
+
+  if (
+    options.requireAdmin &&
+    ctx.membershipRole !== "admin" &&
+    ctx.membershipRole !== "owner"
+  ) {
     return {
       ok: false,
       response: NextResponse.json({ error: "Forbidden" }, { status: 403, headers }),

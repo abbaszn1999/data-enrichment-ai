@@ -304,6 +304,10 @@ export async function requireMrWrite(workspaceId: string) {
   return requireGalleryAuth({ workspaceId, requireWrite: true });
 }
 
+export async function requireMrAdmin(workspaceId: string) {
+  return requireGalleryAuth({ workspaceId, requireWrite: true, requireAdmin: true });
+}
+
 export async function requireMrRead(workspaceId: string) {
   return requireGalleryAuth({ workspaceId });
 }

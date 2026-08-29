@@ -36,7 +36,8 @@ type WrProjectsRailProps = {
   onToggleComplete: (id: string, completed: boolean) => void;
   atProjectCap: boolean;
   projectLimit: number;
-  canWrite: boolean;
+  canEdit: boolean;
+  canAdmin: boolean;
 };
 
 const AVATAR_TONES = [
@@ -102,7 +103,8 @@ export function WrProjectsRail({
   onToggleComplete,
   atProjectCap,
   projectLimit,
-  canWrite,
+  canEdit,
+  canAdmin,
 }: WrProjectsRailProps) {
   const filtered = projects.filter((p) => p.status === filter);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -161,7 +163,7 @@ export function WrProjectsRail({
           >
             <PanelRight className="h-4 w-4" />
           </button>
-          {canWrite ? (
+          {canEdit ? (
             <button
               type="button"
               onClick={onNewProject}
@@ -229,7 +231,7 @@ export function WrProjectsRail({
             })}
           </div>
 
-          {canWrite ? (
+          {canEdit ? (
             <button
               type="button"
               onClick={onNewProject}
@@ -323,7 +325,7 @@ export function WrProjectsRail({
                       </div>
                     </button>
 
-                    {canWrite ? (
+                    {canEdit || canAdmin ? (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <button
@@ -336,21 +338,27 @@ export function WrProjectsRail({
                           </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-40">
-                          <DropdownMenuItem onClick={() => beginRename(project)} className="text-xs">
-                            Rename
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => onToggleComplete(project.id, project.status !== "completed")}
-                            className="text-xs"
-                          >
-                            {project.status === "completed" ? "Reopen project" : "Mark complete"}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setDeleteTarget(project)}
-                            className="text-xs text-destructive focus:text-destructive"
-                          >
-                            Delete
-                          </DropdownMenuItem>
+                          {canEdit ? (
+                            <DropdownMenuItem onClick={() => beginRename(project)} className="text-xs">
+                              Rename
+                            </DropdownMenuItem>
+                          ) : null}
+                          {canEdit ? (
+                            <DropdownMenuItem
+                              onClick={() => onToggleComplete(project.id, project.status !== "completed")}
+                              className="text-xs"
+                            >
+                              {project.status === "completed" ? "Reopen project" : "Mark complete"}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {canAdmin ? (
+                            <DropdownMenuItem
+                              onClick={() => setDeleteTarget(project)}
+                              className="text-xs text-destructive focus:text-destructive"
+                            >
+                              Delete
+                            </DropdownMenuItem>
+                          ) : null}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     ) : null}

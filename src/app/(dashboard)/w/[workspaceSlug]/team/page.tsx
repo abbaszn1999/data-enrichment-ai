@@ -19,8 +19,6 @@ import {
   UserPlus,
   Crown,
   ShieldCheck,
-  Eye,
-  PenLine,
   RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -45,7 +43,7 @@ import {
   removeMember,
   updateMemberRole,
 } from "@/lib/supabase";
-import type { Role } from "@/lib/permissions";
+import { RolePermissions } from "@/components/team/role-permissions";
 
 const ROLE_LABELS: Record<string, { label: string; color: string }> = {
   owner: { label: "Owner", color: "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400" },
@@ -568,83 +566,7 @@ export default function TeamPage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
-          <div className="flex items-center gap-3 border-b bg-muted/20 px-5 py-4">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600">
-              <ShieldCheck className="h-4 w-4" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold">Role permissions</h2>
-              <p className="text-[11px] text-muted-foreground">
-                What each role can do in this workspace
-              </p>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-[11px]">
-              <thead className="sticky top-0 z-10">
-                <tr className="border-b border-border bg-card">
-                  <th className="bg-card px-5 py-3 text-left font-semibold text-muted-foreground">
-                    Permission
-                  </th>
-                  {[
-                    { label: "Owner", icon: Crown, color: "text-amber-500" },
-                    {
-                      label: "Admin",
-                      icon: ShieldCheck,
-                      color: "text-violet-500",
-                    },
-                    { label: "Editor", icon: PenLine, color: "text-blue-500" },
-                    { label: "Viewer", icon: Eye, color: "text-muted-foreground" },
-                  ].map((r) => (
-                    <th key={r.label} className="bg-card px-4 py-3 text-center font-semibold">
-                      <div className="flex flex-col items-center gap-1">
-                        <r.icon className={`h-3.5 w-3.5 ${r.color}`} />
-                        <span className={r.color}>{r.label}</span>
-                      </div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  ["Workspace settings", true, true, false, false],
-                  ["Delete workspace", true, false, false, false],
-                  ["Manage team", true, true, false, false],
-                  ["Manage categories", true, true, false, false],
-                  ["Edit / select products", true, true, true, false],
-                  ["Delete all products", true, true, false, false],
-                  ["Upload files", true, true, true, false],
-                  ["New catalog intelligence / enrichment", true, true, true, false],
-                  ["Delete catalog intelligence sessions", true, true, false, false],
-                  ["View data", true, true, true, true],
-                ].map(([label, ...vals]) => (
-                  <tr
-                    key={label as string}
-                    className="border-b last:border-0 hover:bg-muted/30"
-                  >
-                    <td className="px-5 py-2.5 text-muted-foreground">
-                      {label as string}
-                    </td>
-                    {(vals as boolean[]).map((v, i) => (
-                      <td key={i} className="px-4 py-2.5 text-center">
-                        {v ? (
-                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/10">
-                            <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-                          </span>
-                        ) : (
-                          <span className="font-bold text-muted-foreground/30">
-                            —
-                          </span>
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <RolePermissions />
       </div>
 
       {confirmRemoveId &&

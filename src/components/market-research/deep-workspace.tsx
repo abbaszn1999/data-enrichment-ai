@@ -81,6 +81,7 @@ export function DeepWorkspace({
   onSyncArticles,
   onArticleChange,
   onArticleTitleChange,
+  readOnly = false,
 }: {
   projectName: string;
   storeLabel: string;
@@ -139,6 +140,7 @@ export function DeepWorkspace({
   onSyncArticles: (ids: string[]) => void;
   onArticleChange: (articleId: string, patch: Partial<GeneratedArticle>) => void;
   onArticleTitleChange: (articleId: string, title: string) => void;
+  readOnly?: boolean;
 }) {
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
@@ -156,7 +158,8 @@ export function DeepWorkspace({
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-hidden p-4 sm:p-5">
+      <div className="flex-1 min-h-0 overflow-auto p-4 sm:p-5">
+        <div className={readOnly ? "pointer-events-none" : undefined}>
         {!isWorkspaceTab(tab) ? brief : null}
         {tab === "extract" ? (
           <StageExtractPanel
@@ -229,6 +232,7 @@ export function DeepWorkspace({
             onTitleChange={onArticleTitleChange}
           />
         ) : null}
+        </div>
       </div>
     </div>
   );

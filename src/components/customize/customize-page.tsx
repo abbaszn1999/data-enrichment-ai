@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "@/app/(dashboard)/w/[workspaceSlug]/workspace-context";
+import { useRole } from "@/hooks/use-role";
 import {
   FAQ_TEMPLATES,
   FONT_OPTIONS,
@@ -34,7 +35,8 @@ import { SnippetBlock, useAppOrigin } from "./snippet-block";
 export function CustomizePage() {
   const params = useParams<{ workspaceSlug: string }>();
   const slug = params.workspaceSlug ?? "";
-  const { workspace } = useWorkspaceContext();
+  const { workspace, role } = useWorkspaceContext();
+  const { canEdit } = useRole(role);
 
   const [kind, setKind] = useState<WidgetKind>("faq");
   const [links, setLinks] = useState<WidgetStyle | null>(null);
@@ -107,7 +109,7 @@ export function CustomizePage() {
   }, [workspace?.id, workspace?.collection_prefix]);
 
   const handleSaveSettings = async () => {
-    if (!workspace?.id || !links || !faq) return;
+    if (!workspace?.id || !links || !faq || !canEdit) return;
     setSavingSettings(true);
     try {
       await saveWidgetSettings(workspace.id, slug, { links, faq });
@@ -120,7 +122,7 @@ export function CustomizePage() {
   };
 
   const handleSavePrefix = async () => {
-    if (!workspace?.id) return;
+    if (!workspace?.id || !canEdit) return;
     setSavingPrefix(true);
     try {
       const res = await fetch("/api/workspaces/naming-prefix", {
@@ -206,7 +208,7 @@ export function CustomizePage() {
             </div>
             <Button
               onClick={handleSaveSettings}
-              disabled={savingSettings || !links || !faq}
+              disabled={savingSettings || !links || !faq || !canEdit}
               size="sm"
               className="h-9 gap-2 rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
             >
@@ -252,6 +254,7 @@ export function CustomizePage() {
             ))}
           </div>
 
+          <div className={cn(!canEdit && "pointer-events-none opacity-70")}>
           <section className="space-y-2 rounded-2xl border border-border/60 bg-card p-4 shadow-sm">
             <h2 className="text-sm font-black tracking-tight">Templates</h2>
             <div className="grid grid-cols-1 gap-2">
@@ -393,7 +396,7 @@ export function CustomizePage() {
             <div className="pt-2">
               <Button
                 onClick={handleSaveSettings}
-                disabled={savingSettings}
+                disabled={savingSettings || !canEdit}
                 className="w-full gap-2 rounded-xl bg-[#400095] text-white shadow-xs hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                 size="sm"
               >
@@ -406,6 +409,7 @@ export function CustomizePage() {
               </Button>
             </div>
           </section>
+          </div>
         </div>
 
         <div className="space-y-4 min-w-0">
@@ -471,7 +475,7 @@ export function CustomizePage() {
           </div>
           <Button
             onClick={handleSavePrefix}
-            disabled={savingPrefix}
+            disabled={savingPrefix || !canEdit}
             size="sm"
             className="self-start sm:self-auto gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
           >
@@ -491,6 +495,7 @@ export function CustomizePage() {
             onChange={(e) => setNamingPrefix(e.target.value)}
             placeholder="e.g. AI, Smart, Trend"
             className="h-9 rounded-xl bg-background text-xs font-medium"
+            disabled={!canEdit}
           />
         </div>
 

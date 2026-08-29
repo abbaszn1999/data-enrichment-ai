@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   agentIntentBodySchema,
   jsonError,
-  requireMrRead,
+  requireMrWrite,
 } from "@/lib/market-research/api-schema";
 import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { runStage4IntentClassification } from "@/lib/market-research/agent/stage4-intent-classifier";
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     return jsonError("Invalid intent payload", 400);
   }
 
-  const auth = await requireMrRead(parsed.data.workspaceId);
+  const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {

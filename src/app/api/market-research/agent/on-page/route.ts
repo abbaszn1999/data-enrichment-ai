@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   agentOnPageBodySchema,
   jsonError,
-  requireMrRead,
+  requireMrWrite,
 } from "@/lib/market-research/api-schema";
 import {
   fetchStoreCatalog,
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
     return jsonError("Invalid on-page payload", 400);
   }
 
-  const auth = await requireMrRead(parsed.data.workspaceId);
+  const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {

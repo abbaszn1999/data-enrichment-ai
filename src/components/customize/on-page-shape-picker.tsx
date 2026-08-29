@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkspaceContext } from "@/app/(dashboard)/w/[workspaceSlug]/workspace-context";
+import { useRole } from "@/hooks/use-role";
 import {
   FAQ_TEMPLATES,
   LINK_TEMPLATES,
@@ -35,7 +36,8 @@ export function OnPageShapePicker({
 }) {
   const params = useParams<{ workspaceSlug: string }>();
   const slug = params.workspaceSlug ?? "";
-  const { workspace } = useWorkspaceContext();
+  const { workspace, role } = useWorkspaceContext();
+  const { canEdit } = useRole(role);
   const workspaceId = workspace?.id;
   const appOrigin = useAppOrigin();
 
@@ -81,6 +83,7 @@ export function OnPageShapePicker({
 
   const persist = useCallback(
     (next: { links: WidgetStyle; faq: WidgetStyle }) => {
+      if (!canEdit) return;
       saveCustomizeWidgets(slug, next);
       if (!workspaceId) return;
 
@@ -98,7 +101,7 @@ export function OnPageShapePicker({
           .finally(() => setSaving(false));
       }, 500);
     },
-    [slug, workspaceId]
+    [slug, workspaceId, canEdit]
   );
 
   const chooseFaq = (template: string) => {
@@ -145,6 +148,7 @@ export function OnPageShapePicker({
           templates={FAQ_TEMPLATES}
           value={faq.template}
           onChange={chooseFaq}
+          disabled={!canEdit}
         />
         <div className="rounded-xl border border-border/70 p-3">
           <FaqWidgetPreview style={faq} items={content.faqs} quiet />
@@ -157,6 +161,7 @@ export function OnPageShapePicker({
           templates={LINK_TEMPLATES}
           value={links.template}
           onChange={chooseLinks}
+          disabled={!canEdit}
         />
         <div className="rounded-xl border border-border/70 p-3">
           <LinksWidgetPreview style={links} items={linkItems} quiet />
@@ -209,11 +214,13 @@ function ShapeRow({
   templates,
   value,
   onChange,
+  disabled,
 }: {
   label: string;
   templates: readonly { id: string; name: string }[];
   value: string;
   onChange: (id: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="space-y-1.5">
@@ -224,11 +231,13 @@ function ShapeRow({
             key={template.id}
             type="button"
             onClick={() => onChange(template.id)}
+            disabled={disabled}
             className={cn(
               "rounded-full border px-2.5 py-1 text-[11px] font-medium",
               value === template.id
                 ? "border-primary/40 bg-primary/10 text-primary"
-                : "border-border/70 text-muted-foreground hover:text-foreground"
+                : "border-border/70 text-muted-foreground hover:text-foreground",
+              disabled && "opacity-60"
             )}
           >
             {template.name}

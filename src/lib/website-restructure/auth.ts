@@ -29,6 +29,7 @@ export type WrAuthErr = {
 export async function requireWrAuth(options: {
   workspaceId: string;
   requireWrite?: boolean;
+  requireAdmin?: boolean;
 }): Promise<WrAuthOk | WrAuthErr> {
   const supabase = await createClient();
   const {
@@ -66,6 +67,14 @@ export async function requireWrAuth(options: {
   }
 
   if (options.requireWrite && ctx.membershipRole === "viewer") {
+    return { ok: false, response: NextResponse.json({ error: "Forbidden" }, { status: 403, headers }) };
+  }
+
+  if (
+    options.requireAdmin &&
+    ctx.membershipRole !== "admin" &&
+    ctx.membershipRole !== "owner"
+  ) {
     return { ok: false, response: NextResponse.json({ error: "Forbidden" }, { status: 403, headers }) };
   }
 

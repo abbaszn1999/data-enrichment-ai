@@ -69,6 +69,7 @@ import {
   resetRevealedMessages,
 } from "@/components/streaming-markdown";
 import { useWorkspaceContext } from "../workspace-context";
+import { useRole } from "@/hooks/use-role";
 import { useSyncStore, type SyncMessage, type SyncMode, type SyncWorkingMemory, type SyncActionReceipt } from "@/store/sync-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { getWorkspaceIntegration, type WorkspaceIntegration } from "@/lib/supabase";
@@ -668,7 +669,8 @@ export default function SyncPage() {
   const params = useParams();
   const slug = params.workspaceSlug as string;
   const basePath = `/w/${slug}`;
-  const { workspace } = useWorkspaceContext();
+  const { workspace, role } = useWorkspaceContext();
+  const { canEdit } = useRole(role);
   const invalidateCredits = useWorkspaceStore((s) => s.invalidateCredits);
 
   const {
@@ -1243,6 +1245,7 @@ export default function SyncPage() {
   }, [setStreaming, updateLastAssistantMessage, updateLastAssistantProgress]);
 
   const handleUndo = useCallback(() => {
+    if (!canEdit) return;
     const snapshot = undoSheet();
     if (!snapshot) {
       toast.info("There are no previous changes to undo.");
@@ -1253,9 +1256,10 @@ export default function SyncPage() {
     }
     setSheet(snapshot);
     toast.success("The last change was undone.");
-  }, [currentSheet, pushRedoSnapshot, undoSheet, setSheet]);
+  }, [currentSheet, pushRedoSnapshot, undoSheet, setSheet, canEdit]);
 
   const handleRedo = useCallback(() => {
+    if (!canEdit) return;
     const snapshot = redoSheet();
     if (!snapshot) {
       toast.info("There are no changes to redo.");
@@ -1266,7 +1270,7 @@ export default function SyncPage() {
     }
     setSheet(snapshot);
     toast.success("The undone change was restored.");
-  }, [currentSheet, pushSheetSnapshot, redoSheet, setSheet]);
+  }, [currentSheet, pushSheetSnapshot, redoSheet, setSheet, canEdit]);
 
   // Fetch integration on mount
   useEffect(() => {
@@ -1328,6 +1332,7 @@ export default function SyncPage() {
   // File upload handler
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!canEdit) return;
       const files = e.target.files;
       if (!files) return;
       for (let i = 0; i < files.length; i++) {
@@ -1340,7 +1345,7 @@ export default function SyncPage() {
       }
       e.target.value = "";
     },
-    [addPendingAttachment]
+    [addPendingAttachment, canEdit]
   );
 
   // Send message
@@ -1388,6 +1393,7 @@ export default function SyncPage() {
       attachmentPayloads: SyncAttachmentPayload[],
       opts: { preApprovedPlan?: AgentPlan } = {}
     ) => {
+      if (!canEdit) return;
       setStreaming(true);
       const controller = new AbortController();
       abortControllerRef.current = controller;
@@ -1457,10 +1463,12 @@ export default function SyncPage() {
       setPendingPlan,
       updateLastAssistantMessage,
       updateLastAssistantProgress,
+      canEdit,
     ]
   );
 
   const handleSend = useCallback(async () => {
+    if (!canEdit) return;
     const trimmed = input.trim();
     if (!trimmed && pendingAttachments.length === 0) return;
     if (isStreaming) return;
@@ -1532,18 +1540,19 @@ export default function SyncPage() {
     setChatBlockedReason,
     clearPendingAttachments,
     runAgent,
+    canEdit,
   ]);
 
   // User confirms the pending plan — re-runs the agent with `preApprovedPlan`
   // so the server skips the confirmation gate and executes immediately.
   const handleConfirmPlan = useCallback(async () => {
-    if (!pendingPlan) return;
+    if (!canEdit || !pendingPlan) return;
     const { plan, userMessage, attachmentPayloads } = pendingPlan;
     setPendingPlan(null);
     updateLastAssistantMessage("");
     updateLastAssistantProgress(["Executing approved plan..."]);
     await runAgent(userMessage, attachmentPayloads, { preApprovedPlan: plan });
-  }, [pendingPlan, runAgent, updateLastAssistantMessage, updateLastAssistantProgress]);
+  }, [pendingPlan, runAgent, updateLastAssistantMessage, updateLastAssistantProgress, canEdit]);
 
   // User dismisses the pending plan
   const handleDismissPlan = useCallback(() => {
@@ -1560,6 +1569,7 @@ export default function SyncPage() {
   // the user for confirmation (apply is in the "red" tier).
   const handleApplySync = useCallback(async () => {
     if (
+      !canEdit ||
       !workspace?.id ||
       !integration ||
       !currentSheet ||
@@ -1601,12 +1611,13 @@ export default function SyncPage() {
     pendingChangeCount,
     runAgent,
     workspace?.id,
+    canEdit,
   ]);
 
   // Continue (load more) — sends a follow-up agent message that uses the
   // remembered targets / cursor in working memory to fetch the next page.
   const handleContinueLoad = useCallback(async () => {
-    if (isStreaming || !workspace?.id || !integration) return;
+    if (!canEdit || isStreaming || !workspace?.id || !integration) return;
     const message = "Continue loading more products from where we left off.";
     addMessage({
       id: crypto.randomUUID(),
@@ -1622,15 +1633,16 @@ export default function SyncPage() {
       progress: ["Loading more products…"],
     });
     await runAgent(message, []);
-  }, [addMessage, integration, isStreaming, runAgent, workspace?.id]);
+  }, [addMessage, integration, isStreaming, runAgent, workspace?.id, canEdit]);
 
   // Handle quick prompt click
   const handleQuickPrompt = useCallback(
     (prompt: string) => {
+      if (!canEdit) return;
       setInput(prompt);
       textareaRef.current?.focus();
     },
-    []
+    [canEdit]
   );
 
   // Handle keyboard submit
@@ -1801,9 +1813,9 @@ export default function SyncPage() {
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder="Describe what you want to do..."
+            placeholder={canEdit ? "Describe what you want to do..." : "View only"}
             rows={1}
-            disabled={isStreaming || !!chatBlockedReason}
+            disabled={isStreaming || !!chatBlockedReason || !canEdit}
             className="w-full resize-none rounded-xl border bg-muted/30 px-4 py-3 pr-12 text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-[#6B358D]/30 focus:border-[#6B358D]/40 dark:focus:ring-[#F76D01]/30 dark:focus:border-[#F76D01]/40 disabled:opacity-50 transition-all"
             style={{ maxHeight: 200 }}
           />
@@ -1812,7 +1824,7 @@ export default function SyncPage() {
         <Button
           size="icon"
           onClick={isStreaming ? handleStopStreaming : handleSend}
-          disabled={!!chatBlockedReason || (!isStreaming && !input.trim() && pendingAttachments.length === 0)}
+          disabled={!canEdit || !!chatBlockedReason || (!isStreaming && !input.trim() && pendingAttachments.length === 0)}
           className="h-10 w-10 rounded-xl shrink-0 bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
         >
           {isStreaming ? (
@@ -1837,7 +1849,8 @@ export default function SyncPage() {
           <TooltipTrigger asChild>
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              disabled={!canEdit}
+              className="flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-40"
               aria-label="Upload files"
             >
               <Paperclip className="h-4 w-4" />
@@ -2135,7 +2148,7 @@ export default function SyncPage() {
                       </div>
                     )}
                     {/* Intent Preview: Confirm/Cancel buttons */}
-                    {msg.role === "assistant" && pendingPlan && msg === messages[messages.length - 1] && (
+                    {msg.role === "assistant" && pendingPlan && msg === messages[messages.length - 1] && canEdit && (
                       <div className="mt-3 flex items-center gap-2">
                         <Button
                           size="sm"
@@ -2200,7 +2213,7 @@ export default function SyncPage() {
                       size="sm"
                       variant="ghost"
                       className="h-7 px-2.5 text-[11px] opacity-70 hover:opacity-100"
-                      disabled={isStreaming}
+                      disabled={isStreaming || !canEdit}
                       onClick={() =>
                         void runAgent(taxonomyPrompt(integration?.provider), [])
                       }
@@ -2215,7 +2228,7 @@ export default function SyncPage() {
                       size="sm"
                       variant="ghost"
                       className="h-7 px-2.5 text-[11px] opacity-70 hover:opacity-100"
-                      disabled={isStreaming}
+                      disabled={isStreaming || !canEdit}
                       onClick={() =>
                         void runAgent("اعرض كل المنتجات", [])
                       }
@@ -2233,7 +2246,7 @@ export default function SyncPage() {
                     variant="outline"
                     className="h-7 px-2.5 text-[11px] gap-1"
                     onClick={handleContinueLoad}
-                    disabled={isStreaming}
+                    disabled={isStreaming || !canEdit}
                     title="Load the next page of products from the connected store"
                   >
                     Continue (load more)
@@ -2256,7 +2269,7 @@ export default function SyncPage() {
                     variant="ghost"
                     className="h-7 px-2.5 text-[11px] gap-1"
                     onClick={handleUndo}
-                    disabled={isStreaming}
+                    disabled={isStreaming || !canEdit}
                   >
                     <Undo2 className="h-3.5 w-3.5" />
                     Undo
@@ -2268,7 +2281,7 @@ export default function SyncPage() {
                     variant="ghost"
                     className="h-7 px-2.5 text-[11px] gap-1"
                     onClick={handleRedo}
-                    disabled={isStreaming}
+                    disabled={isStreaming || !canEdit}
                   >
                     <Redo2 className="h-3.5 w-3.5" />
                     Redo
@@ -2288,7 +2301,7 @@ export default function SyncPage() {
                 </Badge>
                 <Dialog>
                   <DialogTrigger asChild>
-                    <Button size="sm" variant="outline" className="h-7 px-3 text-[11px]" disabled={pendingChangeCount === 0}>
+                    <Button size="sm" variant="outline" className="h-7 px-3 text-[11px]" disabled={pendingChangeCount === 0 || !canEdit}>
                       Review
                     </Button>
                   </DialogTrigger>
@@ -2363,7 +2376,7 @@ export default function SyncPage() {
                     <DialogFooter showCloseButton>
                       <Button
                         className="rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
-                        disabled={pendingChangeCount === 0 || isApplying}
+                        disabled={pendingChangeCount === 0 || isApplying || !canEdit}
                         onClick={handleApplySync}
                       >
                         {isApplying ? "Syncing..." : "Sync"}
@@ -2374,7 +2387,7 @@ export default function SyncPage() {
                 <Button
                   size="sm"
                   className="h-7 px-3 text-[11px] rounded-lg bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
-                  disabled={pendingChangeCount === 0 || isApplying}
+                  disabled={pendingChangeCount === 0 || isApplying || !canEdit}
                   onClick={handleApplySync}
                 >
                   {isApplying ? "Syncing..." : "Sync"}
@@ -2531,7 +2544,8 @@ export default function SyncPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.35, delay: i * 0.03 }}
                   onClick={() => handleQuickPrompt(qp.prompt)}
-                  className="group flex items-start gap-3 p-3.5 rounded-xl border border-border/60 hover:border-[#6B358D]/40 hover:bg-[#400095]/5 dark:hover:border-[#F76D01]/40 dark:hover:bg-[#F76D01]/5 text-left transition-all"
+                  disabled={!canEdit}
+                  className="group flex items-start gap-3 p-3.5 rounded-xl border border-border/60 hover:border-[#6B358D]/40 hover:bg-[#400095]/5 dark:hover:border-[#F76D01]/40 dark:hover:bg-[#F76D01]/5 text-left transition-all disabled:pointer-events-none disabled:opacity-50"
                 >
                   <div className="h-8 w-8 rounded-lg bg-muted flex items-center justify-center shrink-0 group-hover:bg-[#400095]/10 dark:group-hover:bg-[#F76D01]/10 transition-colors">
                     <qp.icon className="h-4 w-4 text-muted-foreground group-hover:text-[#6B358D] dark:group-hover:text-[#F76D01] transition-colors" />
