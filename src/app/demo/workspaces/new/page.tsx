@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, Loader2, ArrowRight, Store } from "lucide-react";
+import { Building2, Loader2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CmsTypeSelect } from "@/components/cms-type-select";
 
 function generateSlug(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50);
@@ -42,15 +43,26 @@ export default function DemoNewWorkspacePage() {
       </div>
 
       <Card className="p-6 space-y-5">
-        <div className="space-y-2">
-          <Label className="text-xs">Workspace Name</Label>
-          <Input
-            placeholder="e.g. My Electronics Store"
-            value={name}
-            onChange={(e) => handleNameChange(e.target.value)}
-            className="h-10"
-            autoFocus
-          />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(14rem,1fr)]">
+          <div className="space-y-2">
+            <Label className="text-xs">Workspace Name</Label>
+            <Input
+              placeholder="e.g. My Electronics Store"
+              value={name}
+              onChange={(e) => handleNameChange(e.target.value)}
+              className="h-10"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-2">
+            <Label className="text-xs">CMS / Platform</Label>
+            <CmsTypeSelect
+              value={cmsType}
+              onChange={setCmsType}
+              emptyLabel="Select your platform..."
+              className="h-10 rounded-lg"
+            />
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -62,43 +74,6 @@ export default function DemoNewWorkspacePage() {
             rows={2}
             className="w-full px-3 py-2 text-sm rounded-lg border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-xs">Store Platform (CMS)</Label>
-          <select
-            value={cmsType}
-            onChange={(e) => setCmsType(e.target.value)}
-            className="w-full h-10 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
-            <option value="">Select your platform...</option>
-            <optgroup label="International">
-              <option value="shopify">Shopify</option>
-              <option value="woocommerce">WooCommerce</option>
-              <option value="magento">Magento / Adobe Commerce</option>
-              <option value="bigcommerce">BigCommerce</option>
-              <option value="prestashop">PrestaShop</option>
-              <option value="opencart">OpenCart</option>
-            </optgroup>
-            <optgroup label="Middle East">
-              <option value="salla">Salla (سلة)</option>
-              <option value="zid">Zid (زد)</option>
-            </optgroup>
-            <optgroup label="Marketplaces">
-              <option value="amazon">Amazon</option>
-              <option value="noon">Noon</option>
-              <option value="ebay">eBay</option>
-            </optgroup>
-            <optgroup label="Other">
-              <option value="custom_csv">Custom CSV</option>
-              <option value="custom_api">Custom API</option>
-            </optgroup>
-          </select>
-          {cmsType && (
-            <p className="text-[10px] text-muted-foreground">
-              Export format will be optimized for <span className="font-semibold capitalize">{cmsType.replace('_', ' ')}</span>
-            </p>
-          )}
         </div>
 
         <div className="space-y-2">

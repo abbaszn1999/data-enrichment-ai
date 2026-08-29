@@ -11,13 +11,13 @@ import {
   Sparkles,
   Brain,
   Building2,
-  Store,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { CmsTypeSelect } from "@/components/cms-type-select";
 
 export default function DemoSettingsPage() {
   const [wsName, setWsName] = useState("TechStore Electronics");
@@ -48,9 +48,19 @@ export default function DemoSettingsPage() {
           <Building2 className="h-4 w-4" /> General
         </h2>
 
-        <div className="space-y-2">
-          <Label className="text-xs">Workspace Name</Label>
-          <Input value={wsName} onChange={(e) => setWsName(e.target.value)} className="h-9" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(16rem,1fr)]">
+          <div className="space-y-2">
+            <Label className="text-xs">Workspace Name</Label>
+            <Input value={wsName} onChange={(e) => setWsName(e.target.value)} className="h-9" />
+          </div>
+          <div className="space-y-2">
+            <Label className="text-xs">CMS / Platform</Label>
+            <CmsTypeSelect
+              value={cmsType}
+              onChange={setCmsType}
+              className="h-9 rounded-lg"
+            />
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -73,43 +83,6 @@ export default function DemoSettingsPage() {
               <Upload className="h-3.5 w-3.5" /> Upload Logo
             </Button>
           </div>
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-xs flex items-center gap-1.5">
-            <Store className="h-3 w-3" /> Store Platform (CMS)
-          </Label>
-          <select
-            value={cmsType}
-            onChange={(e) => setCmsType(e.target.value)}
-            className="w-full h-9 px-3 text-xs rounded-lg border bg-background"
-          >
-            <option value="">Select your platform...</option>
-            <optgroup label="International">
-              <option value="shopify">Shopify</option>
-              <option value="woocommerce">WooCommerce</option>
-              <option value="magento">Magento / Adobe Commerce</option>
-              <option value="bigcommerce">BigCommerce</option>
-              <option value="prestashop">PrestaShop</option>
-              <option value="opencart">OpenCart</option>
-            </optgroup>
-            <optgroup label="Middle East">
-              <option value="salla">Salla (سلة)</option>
-              <option value="zid">Zid (زد)</option>
-            </optgroup>
-            <optgroup label="Marketplaces">
-              <option value="amazon">Amazon</option>
-              <option value="noon">Noon</option>
-              <option value="ebay">eBay</option>
-            </optgroup>
-            <optgroup label="Other">
-              <option value="custom_csv">Custom CSV</option>
-              <option value="custom_api">Custom API</option>
-            </optgroup>
-          </select>
-          <p className="text-[10px] text-muted-foreground">
-            This determines the export format and required fields for your products.
-          </p>
         </div>
 
         <div className="space-y-2">

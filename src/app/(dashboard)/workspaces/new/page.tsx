@@ -14,16 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { createWorkspace } from "@/lib/supabase";
-
-const CMS_TYPES = [
-  { value: "shopify", label: "Shopify" },
-  { value: "woocommerce", label: "WooCommerce" },
-  { value: "bigcommerce", label: "BigCommerce" },
-  { value: "salla", label: "Salla" },
-  { value: "zid", label: "Zid" },
-  { value: "magento", label: "Magento" },
-  { value: "custom", label: "Custom / Other" },
-];
+import { DEFAULT_CMS_TYPE } from "@/lib/cms-types";
+import { CmsTypeSelect } from "@/components/cms-type-select";
 
 function generateSlug(name: string): string {
   return name
@@ -41,7 +33,7 @@ export default function NewWorkspacePage() {
   const [slug, setSlug] = useState("");
   const [slugEdited, setSlugEdited] = useState(false);
   const [description, setDescription] = useState("");
-  const [cmsType, setCmsType] = useState("custom");
+  const [cmsType, setCmsType] = useState(DEFAULT_CMS_TYPE);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -87,7 +79,7 @@ export default function NewWorkspacePage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-lg mx-auto p-6 space-y-6">
+      <div className="mx-auto max-w-xl space-y-6 p-6">
         <Link
           href="/workspaces"
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
@@ -116,18 +108,31 @@ export default function NewWorkspacePage() {
 
         <Card className="p-6">
           <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="name" className="text-xs font-medium">
-                Workspace Name <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="name"
-                placeholder="e.g. My Electronics Store"
-                value={name}
-                onChange={(e) => handleNameChange(e.target.value)}
-                className="h-10"
-                autoFocus
-              />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(14rem,1fr)]">
+              <div className="space-y-2">
+                <Label htmlFor="name" className="text-xs font-medium">
+                  Workspace Name <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="name"
+                  placeholder="e.g. My Electronics Store"
+                  value={name}
+                  onChange={(e) => handleNameChange(e.target.value)}
+                  className="h-10"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="cms" className="text-xs font-medium">
+                  CMS / Platform
+                </Label>
+                <CmsTypeSelect
+                  id="cms"
+                  value={cmsType}
+                  onChange={setCmsType}
+                  className="h-10 rounded-lg"
+                />
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -147,27 +152,6 @@ export default function NewWorkspacePage() {
                   className="h-9 text-sm font-mono"
                 />
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="cms" className="text-xs font-medium">
-                CMS / Platform Type
-              </Label>
-              <select
-                id="cms"
-                value={cmsType}
-                onChange={(e) => setCmsType(e.target.value)}
-                className="w-full h-10 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                {CMS_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[10px] text-muted-foreground">
-                Determines default export templates and field suggestions
-              </p>
             </div>
 
             <div className="space-y-2">

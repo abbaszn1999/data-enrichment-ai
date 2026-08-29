@@ -41,16 +41,8 @@ import {
   disconnectWorkspaceIntegration,
   type WorkspaceIntegration,
 } from "@/lib/supabase";
-
-const CMS_TYPES = [
-  { value: "shopify", label: "Shopify" },
-  { value: "woocommerce", label: "WooCommerce" },
-  { value: "bigcommerce", label: "BigCommerce" },
-  { value: "salla", label: "Salla" },
-  { value: "zid", label: "Zid" },
-  { value: "magento", label: "Magento" },
-  { value: "custom", label: "Custom / Other" },
-];
+import { cmsTypeLabel, DEFAULT_CMS_TYPE } from "@/lib/cms-types";
+import { CmsTypeSelect } from "@/components/cms-type-select";
 
 type ConfigField = {
   key: string;
@@ -92,7 +84,7 @@ export default function SettingsPage() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [cmsType, setCmsType] = useState("custom");
+  const [cmsType, setCmsType] = useState(DEFAULT_CMS_TYPE);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -116,7 +108,7 @@ export default function SettingsPage() {
     if (workspace) {
       setName(workspace.name);
       setDescription(workspace.description || "");
-      setCmsType(workspace.cms_type || "custom");
+      setCmsType(workspace.cms_type || DEFAULT_CMS_TYPE);
     }
   }, [workspace]);
 
@@ -355,8 +347,7 @@ export default function SettingsPage() {
             },
             {
               label: "CMS",
-              value:
-                CMS_TYPES.find((t) => t.value === cmsType)?.label || cmsType,
+              value: cmsTypeLabel(cmsType),
               icon: Globe,
               style: "bg-blue-500/10 text-blue-600",
             },
@@ -418,30 +409,24 @@ export default function SettingsPage() {
             </div>
           </div>
           <div className="space-y-4 p-5">
-            <div className="space-y-2">
-              <Label className="text-xs font-semibold">Workspace Name</Label>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="h-10"
-                disabled={!permissions.canAdmin}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs font-semibold">CMS / Platform Type</Label>
-              <select
-                value={cmsType}
-                onChange={(e) => setCmsType(e.target.value)}
-                className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
-                disabled={!permissions.canAdmin}
-              >
-                {CMS_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1.35fr)_minmax(16rem,1fr)]">
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Workspace Name</Label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="h-10"
+                  disabled={!permissions.canAdmin}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">CMS / Platform</Label>
+                <CmsTypeSelect
+                  value={cmsType}
+                  onChange={setCmsType}
+                  disabled={!permissions.canAdmin}
+                />
+              </div>
             </div>
 
             <div className="space-y-2">

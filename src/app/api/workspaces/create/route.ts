@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { getUserSubscription, isSubscriptionActive } from "@/lib/stripe";
+import { DEFAULT_CMS_TYPE, isSupportedCmsType } from "@/lib/cms-types";
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,6 +18,14 @@ export async function POST(req: NextRequest) {
 
     if (!name?.trim() || !slug?.trim()) {
       return NextResponse.json({ error: "Name and slug are required" }, { status: 400 });
+    }
+
+    const resolvedCmsType = cms_type || DEFAULT_CMS_TYPE;
+    if (!isSupportedCmsType(resolvedCmsType)) {
+      return NextResponse.json(
+        { error: "Only Shopify and WooCommerce are supported right now" },
+        { status: 400 }
+      );
     }
 
     const admin = createAdminClient();
@@ -52,7 +61,7 @@ export async function POST(req: NextRequest) {
         name: name.trim(),
         slug: slug.trim(),
         description: description?.trim() || "",
-        cms_type: cms_type || "custom",
+        cms_type: resolvedCmsType,
         owner_id: user.id,
       })
       .select()
