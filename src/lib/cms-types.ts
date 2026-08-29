@@ -24,6 +24,12 @@ export function isSupportedCmsType(value: string): value is SupportedCmsType {
   return SUPPORTED_CMS_TYPES.includes(value as SupportedCmsType);
 }
 
+export function parseSupportedCmsType(
+  value: string | null | undefined
+): SupportedCmsType {
+  return value && isSupportedCmsType(value) ? value : DEFAULT_CMS_TYPE;
+}
+
 export function cmsTypeLabel(value: string): string {
   return CMS_TYPES.find((t) => t.value === value)?.label ?? value;
 }

@@ -41,7 +41,7 @@ import {
   disconnectWorkspaceIntegration,
   type WorkspaceIntegration,
 } from "@/lib/supabase";
-import { cmsTypeLabel, DEFAULT_CMS_TYPE } from "@/lib/cms-types";
+import { cmsTypeLabel, parseSupportedCmsType, DEFAULT_CMS_TYPE } from "@/lib/cms-types";
 import { CmsTypeSelect } from "@/components/cms-type-select";
 
 type ConfigField = {
@@ -108,7 +108,7 @@ export default function SettingsPage() {
     if (workspace) {
       setName(workspace.name);
       setDescription(workspace.description || "");
-      setCmsType(workspace.cms_type || DEFAULT_CMS_TYPE);
+      setCmsType(parseSupportedCmsType(workspace.cms_type));
     }
   }, [workspace]);
 
@@ -423,7 +423,7 @@ export default function SettingsPage() {
                 <Label className="text-xs font-semibold">CMS / Platform</Label>
                 <CmsTypeSelect
                   value={cmsType}
-                  onChange={setCmsType}
+                  onChange={(value) => setCmsType(parseSupportedCmsType(value))}
                   disabled={!permissions.canAdmin}
                 />
               </div>

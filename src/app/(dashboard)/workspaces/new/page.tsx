@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { createWorkspace } from "@/lib/supabase";
-import { DEFAULT_CMS_TYPE } from "@/lib/cms-types";
+import { DEFAULT_CMS_TYPE, parseSupportedCmsType } from "@/lib/cms-types";
 import { CmsTypeSelect } from "@/components/cms-type-select";
 
 function generateSlug(name: string): string {
@@ -129,7 +129,7 @@ export default function NewWorkspacePage() {
                 <CmsTypeSelect
                   id="cms"
                   value={cmsType}
-                  onChange={setCmsType}
+                  onChange={(value) => setCmsType(parseSupportedCmsType(value))}
                   className="h-10 rounded-lg"
                 />
               </div>
