@@ -43,6 +43,7 @@ import {
   removeMember,
   updateMemberRole,
 } from "@/lib/supabase";
+import type { Role } from "@/lib/permissions";
 import { RolePermissions } from "@/components/team/role-permissions";
 
 const ROLE_LABELS: Record<string, { label: string; color: string }> = {
