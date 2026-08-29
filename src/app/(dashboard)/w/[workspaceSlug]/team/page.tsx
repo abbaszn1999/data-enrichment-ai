@@ -20,7 +20,9 @@ import {
   Crown,
   ShieldCheck,
   RefreshCw,
+  ChevronDown,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -73,6 +75,7 @@ export default function TeamPage() {
   const [inviteEmailSent, setInviteEmailSent] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [resendingInvite, setResendingInvite] = useState<string | null>(null);
+  const [updatingRoleId, setUpdatingRoleId] = useState<string | null>(null);
 
   const pendingInviteCount = invites.length;
   const currentMemberCount = members.length;
@@ -163,11 +166,22 @@ export default function TeamPage() {
   };
 
   const handleRoleChange = async (memberId: string, newRole: Role) => {
+    const target = members.find((m) => m.id === memberId);
+    if (!target || target.role === newRole || target.role === "owner") return;
+    setUpdatingRoleId(memberId);
     try {
       await updateMemberRole(memberId, newRole);
-      refreshTeam();
+      await refreshTeam();
+      toast.success(
+        `Role updated to ${ROLE_LABELS[newRole]?.label ?? newRole}`
+      );
+      if (target.user_id === user?.id) {
+        window.location.reload();
+      }
     } catch (err: any) {
-      alert(err?.message || "Failed to update role");
+      toast.error(err?.message || "Failed to update role");
+    } finally {
+      setUpdatingRoleId(null);
     }
   };
 
@@ -513,29 +527,45 @@ export default function TeamPage() {
                         </div>
                       </td>
                       <td className="px-5 py-3.5">
-                        {permissions.canAdmin &&
-                        member.role !== "owner" &&
-                        member.user_id !== user?.id ? (
-                          <select
-                            value={member.role}
-                            onChange={(e) =>
-                              handleRoleChange(
-                                member.id,
-                                e.target.value as Role
-                              )
-                            }
-                            className="h-7 cursor-pointer rounded-md border bg-background px-2.5 text-[11px] font-semibold outline-none hover:border-[#6B358D]/50 dark:hover:border-[#F76D01]/50 focus:ring-1 focus:ring-ring"
-                          >
-                            <option value="admin">Admin</option>
-                            <option value="editor">Editor</option>
-                            <option value="viewer">Viewer</option>
-                          </select>
+                        {permissions.canAdmin && member.role !== "owner" ? (
+                          <div className="relative inline-flex items-center">
+                            <select
+                              value={member.role}
+                              disabled={updatingRoleId === member.id}
+                              onChange={(e) =>
+                                handleRoleChange(
+                                  member.id,
+                                  e.target.value as Role
+                                )
+                              }
+                              aria-label={`Change role for ${
+                                member.profiles?.full_name ||
+                                member.email ||
+                                "member"
+                              }`}
+                              title="Change role to Admin, Editor, or Viewer"
+                              className="h-8 cursor-pointer appearance-none rounded-md border bg-background py-1 pl-2.5 pr-7 text-[11px] font-semibold outline-none hover:border-[#6B358D]/50 focus:ring-1 focus:ring-ring disabled:cursor-wait disabled:opacity-70 dark:hover:border-[#F76D01]/50"
+                            >
+                              <option value="admin">Admin</option>
+                              <option value="editor">Editor</option>
+                              <option value="viewer">Viewer</option>
+                            </select>
+                            {updatingRoleId === member.id ? (
+                              <Loader2 className="pointer-events-none absolute right-1.5 h-3 w-3 animate-spin text-muted-foreground" />
+                            ) : (
+                              <ChevronDown className="pointer-events-none absolute right-1.5 h-3 w-3 text-muted-foreground" />
+                            )}
+                          </div>
                         ) : (
                           <Badge
                             variant="secondary"
                             className={`gap-1 text-[9px] ${rl.color}`}
                           >
-                            <Shield className="h-2.5 w-2.5" />
+                            {member.role === "owner" ? (
+                              <Crown className="h-2.5 w-2.5" />
+                            ) : (
+                              <Shield className="h-2.5 w-2.5" />
+                            )}
                             {rl.label}
                           </Badge>
                         )}

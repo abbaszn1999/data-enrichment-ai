@@ -531,7 +531,7 @@ export default function ProductsVisualizerPage() {
   };
 
   const deleteProject = async () => {
-    if (!workspace || !deleteTarget) return;
+    if (!workspace || !deleteTarget || !canAdmin) return;
     setDeletingProject(true);
     try {
       await deleteVisualizerSession({
@@ -933,8 +933,8 @@ export default function ProductsVisualizerPage() {
   }, [settings.productImageColumn, worksheet]);
 
   const tableMinWidthPx = useMemo(
-    () => Math.max(900, 56 + displayColumns.length * 160),
-    [displayColumns.length]
+    () => Math.max(900, (canEdit ? 56 : 0) + displayColumns.length * 160),
+    [canEdit, displayColumns.length]
   );
 
   useEffect(() => {
@@ -956,6 +956,7 @@ export default function ProductsVisualizerPage() {
     rows.length > 0 && rows.every((row) => selectedRowIds.has(row.id));
 
   const toggleRow = (rowId: string) => {
+    if (!canEdit) return;
     setSelectedRowIds((current) => {
       const next = new Set(current);
       if (next.has(rowId)) next.delete(rowId);
@@ -965,6 +966,7 @@ export default function ProductsVisualizerPage() {
   };
 
   const toggleAllRows = () => {
+    if (!canEdit) return;
     setSelectedRowIds((current) => {
       if (rows.length > 0 && rows.every((row) => current.has(row.id))) {
         return new Set();
@@ -972,6 +974,11 @@ export default function ProductsVisualizerPage() {
       return new Set(rows.map((row) => row.id));
     });
   };
+
+  useEffect(() => {
+    if (canEdit) return;
+    setSelectedRowIds(new Set());
+  }, [canEdit]);
 
   const selectedGenerateTargets = useMemo(() => {
     return rows
@@ -1242,7 +1249,8 @@ export default function ProductsVisualizerPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {showGenerationBanner ? (
+            {canEdit &&
+              (showGenerationBanner ? (
               <Button
                 type="button"
                 size="sm"
@@ -1263,7 +1271,6 @@ export default function ProductsVisualizerPage() {
                 type="button"
                 size="sm"
                 disabled={
-                  !canEdit ||
                   !settingsReady ||
                   selectedRowIds.size === 0 ||
                   selectedGenerateTargets.length === 0 ||
@@ -1278,7 +1285,7 @@ export default function ProductsVisualizerPage() {
                   ? ` (${selectedGenerateTargets.length})`
                   : ""}
               </Button>
-            )}
+            ))}
             {(imagesReadyCount > 0 ||
               session.status === "completed" ||
               session.status === "paused" ||
@@ -1685,12 +1692,13 @@ export default function ProductsVisualizerPage() {
               <div>
                 <h2 className="text-xs font-semibold">Worksheet</h2>
                 <p className="text-[11px] text-muted-foreground">
-                  Select products, then press Generate. Description runs first, then images on the same row.
-                  Open the eye to review AI output.
+                  {canEdit
+                    ? "Select products, then press Generate. Description runs first, then images on the same row. Open the eye to review AI output."
+                    : "View product descriptions and images. Open the eye to review AI output."}
                 </p>
               </div>
               <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                {selectedRowIds.size > 0 ? (
+                {canEdit && selectedRowIds.size > 0 ? (
                   <span>
                     {selectedRowIds.size} of {rows.length} selected
                   </span>
@@ -1757,15 +1765,17 @@ export default function ProductsVisualizerPage() {
                 >
                   <thead className="sticky top-0 z-20 border-b bg-muted text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm">
                     <tr>
-                      <th className="sticky left-0 top-0 z-30 w-10 bg-muted px-3 py-3">
-                        <input
-                          type="checkbox"
-                          checked={allRowsSelected}
-                          onChange={toggleAllRows}
-                          className="h-3.5 w-3.5 accent-primary"
-                          aria-label="Select all products"
-                        />
-                      </th>
+                      {canEdit && (
+                        <th className="sticky left-0 top-0 z-30 w-10 bg-muted px-3 py-3">
+                          <input
+                            type="checkbox"
+                            checked={allRowsSelected}
+                            onChange={toggleAllRows}
+                            className="h-3.5 w-3.5 accent-primary"
+                            aria-label="Select all products"
+                          />
+                        </th>
+                      )}
                       {displayColumns.map((column) => (
                         <th
                           key={column}
@@ -1785,7 +1795,7 @@ export default function ProductsVisualizerPage() {
                     {rows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={displayColumns.length + 1}
+                          colSpan={displayColumns.length + (canEdit ? 1 : 0)}
                           className="px-3 py-8 text-center text-muted-foreground"
                         >
                           No rows in this worksheet.
@@ -1815,6 +1825,7 @@ export default function ProductsVisualizerPage() {
                               selectedRowIds.has(row.id) ? "bg-primary/5" : ""
                             }`}
                           >
+                            {canEdit && (
                             <td
                               className={`sticky left-0 z-10 px-3 py-3 ${
                                 selectedRowIds.has(row.id)
@@ -1830,6 +1841,7 @@ export default function ProductsVisualizerPage() {
                                 aria-label={`Select row ${row.rowIndex + 1}`}
                               />
                             </td>
+                            )}
                             {displayColumns.map((column) => {
                               if (column === RESULT_DESCRIPTION) {
                                 return (

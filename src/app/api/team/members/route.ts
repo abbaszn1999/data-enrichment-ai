@@ -127,7 +127,8 @@ export async function PATCH(request: NextRequest) {
       .single();
     if (!target) return NextResponse.json({ error: "Member not found" }, { status: 404 });
 
-    // Cannot change owner role
+    // Owner and admin can set admin / editor / viewer — including demoting an
+    // admin. The workspace owner role cannot be changed.
     if (target.role === "owner") {
       return NextResponse.json({ error: "Cannot change the owner's role" }, { status: 403 });
     }

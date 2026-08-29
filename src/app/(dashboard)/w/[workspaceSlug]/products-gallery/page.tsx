@@ -960,6 +960,7 @@ export default function ProductsGalleryPage() {
   };
 
   const toggleRow = (rowId: string) => {
+    if (!canEdit) return;
     setSelectedRowIds((current) => {
       const next = new Set(current);
       if (next.has(rowId)) next.delete(rowId);
@@ -1180,8 +1181,12 @@ export default function ProductsGalleryPage() {
   ]);
 
   const tableMinWidthPx = useMemo(
-    () => Math.max(900, 56 + displayColumns.length * 160 + 80),
-    [displayColumns.length]
+    () =>
+      Math.max(
+        900,
+        (canEdit ? 56 : 0) + displayColumns.length * 160 + (canEdit ? 80 : 0)
+      ),
+    [canEdit, displayColumns.length]
   );
 
   const rows = useMemo(() => worksheet?.rows ?? [], [worksheet?.rows]);
@@ -1283,6 +1288,7 @@ export default function ProductsGalleryPage() {
   }, [rows, selectedRowIds, worksheetFilter, worksheetSearch]);
 
   const toggleAllRows = () => {
+    if (!canEdit) return;
     setSelectedRowIds((current) => {
       const allVisibleSelected =
         visibleRows.length > 0 &&
@@ -1295,6 +1301,15 @@ export default function ProductsGalleryPage() {
       return next;
     });
   };
+
+  useEffect(() => {
+    if (canEdit) return;
+    setSelectedRowIds(new Set());
+    setShowDeleteRows(false);
+    setWorksheetFilter((current) =>
+      current === "selected" ? "all" : current
+    );
+  }, [canEdit]);
 
   const openProject = (sessionId: string) => {
     router.push(`${pathname}?project=${sessionId}`, { scroll: false });
@@ -3088,15 +3103,17 @@ export default function ProductsGalleryPage() {
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
               <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-md border bg-background px-3 py-2 shadow-sm">
                 <div className="flex flex-wrap items-center gap-3">
-                  <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
-                    <input
-                      type="checkbox"
-                      checked={allVisibleSelected}
-                      onChange={toggleAllRows}
-                      className="h-3.5 w-3.5 accent-primary"
-                    />
-                    Select visible
-                  </label>
+                  {canEdit && (
+                    <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={toggleAllRows}
+                        className="h-3.5 w-3.5 accent-primary"
+                      />
+                      Select visible
+                    </label>
+                  )}
                   <div className="relative w-52">
                     <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -3114,7 +3131,7 @@ export default function ProductsGalleryPage() {
                     className="h-8 rounded-md border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
                   >
                     <option value="all">All products</option>
-                    <option value="selected">Selected</option>
+                    {canEdit && <option value="selected">Selected</option>}
                     <option value="not-started">Not started</option>
                     <option value="ready">Ready</option>
                   </select>
@@ -3122,9 +3139,11 @@ export default function ProductsGalleryPage() {
                 <div className="flex flex-col items-end gap-1">
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-muted-foreground">
-                      {selectedRowIds.size} of {rows.length} products selected
+                      {canEdit
+                        ? `${selectedRowIds.size} of ${rows.length} products selected`
+                        : `${rows.length} products`}
                     </span>
-                    {selectedRowIds.size > 0 && (
+                    {canEdit && selectedRowIds.size > 0 && (
                       <Button
                         type="button"
                         variant="destructive"
@@ -3142,32 +3161,35 @@ export default function ProductsGalleryPage() {
                         Delete ({selectedRowIds.size})
                       </Button>
                     )}
-                    {showGenerationBanner ? (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        className="gap-1.5 text-xs"
-                        disabled={!canEdit || isStoppingGeneration}
-                        onClick={() => void stopGeneration()}
-                      >
-                        {isStoppingGeneration ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Square className="h-3.5 w-3.5 fill-current" />
-                        )}
-                        {isStoppingGeneration ? "Stopping…" : "Stop"}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        className="gap-1.5 text-xs"
-                        disabled={generateDisabled}
-                        onClick={() => runGeneration(Array.from(selectedRowIds))}
-                      >
-                        <WandSparkles className="h-3.5 w-3.5" />
-                        {generateButtonLabel}
-                      </Button>
-                    )}
+                    {canEdit &&
+                      (showGenerationBanner ? (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="gap-1.5 text-xs"
+                          disabled={isStoppingGeneration}
+                          onClick={() => void stopGeneration()}
+                        >
+                          {isStoppingGeneration ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Square className="h-3.5 w-3.5 fill-current" />
+                          )}
+                          {isStoppingGeneration ? "Stopping…" : "Stop"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="gap-1.5 text-xs"
+                          disabled={generateDisabled}
+                          onClick={() =>
+                            runGeneration(Array.from(selectedRowIds))
+                          }
+                        >
+                          <WandSparkles className="h-3.5 w-3.5" />
+                          {generateButtonLabel}
+                        </Button>
+                      ))}
                   </div>
                 </div>
               </div>
@@ -3222,15 +3244,17 @@ export default function ProductsGalleryPage() {
                 >
                   <thead className="sticky top-0 z-20 border-b bg-muted text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm">
                     <tr>
-                      <th className="sticky left-0 top-0 z-30 w-10 bg-muted px-3 py-3">
-                        <input
-                          type="checkbox"
-                          checked={allVisibleSelected}
-                          onChange={toggleAllRows}
-                          className="h-3.5 w-3.5 accent-primary"
-                          aria-label="Select visible products"
-                        />
-                      </th>
+                      {canEdit && (
+                        <th className="sticky left-0 top-0 z-30 w-10 bg-muted px-3 py-3">
+                          <input
+                            type="checkbox"
+                            checked={allVisibleSelected}
+                            onChange={toggleAllRows}
+                            className="h-3.5 w-3.5 accent-primary"
+                            aria-label="Select visible products"
+                          />
+                        </th>
+                      )}
                       {displayColumns.map((column) => (
                         <th
                           key={column}
@@ -3243,16 +3267,20 @@ export default function ProductsGalleryPage() {
                           {columnLabel(column)}
                         </th>
                       ))}
-                      <th className="sticky right-0 top-0 z-30 w-16 border-l bg-muted px-3 py-3 shadow-[-8px_0_12px_-10px_rgba(0,0,0,0.65)]">
-                        Edit
-                      </th>
+                      {canEdit && (
+                        <th className="sticky right-0 top-0 z-30 w-16 border-l bg-muted px-3 py-3 shadow-[-8px_0_12px_-10px_rgba(0,0,0,0.65)]">
+                          Edit
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
                     {visibleRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={displayColumns.length + 2}
+                          colSpan={
+                            displayColumns.length + (canEdit ? 2 : 0)
+                          }
                           className="px-3 py-8 text-center text-muted-foreground"
                         >
                           {rows.length === 0
@@ -3288,6 +3316,7 @@ export default function ProductsGalleryPage() {
                               selectedRowIds.has(row.id) ? "bg-primary/5" : ""
                             }`}
                           >
+                            {canEdit && (
                             <td
                               className={`sticky left-0 z-10 px-3 py-3 ${
                                 selectedRowIds.has(row.id) ? "bg-primary/5" : "bg-background"
@@ -3301,6 +3330,7 @@ export default function ProductsGalleryPage() {
                                 aria-label={`Select row ${row.rowIndex + 1}`}
                               />
                             </td>
+                            )}
                             {displayColumns.map((column) => {
                               if (column === RESULT_MAIN) {
                                 const mainImages = getRowMainPaths(row)
@@ -3589,6 +3619,7 @@ export default function ProductsGalleryPage() {
                                 </td>
                               );
                             })}
+                            {canEdit && (
                             <td className="sticky right-0 z-20 border-l bg-background px-3 py-3 shadow-[-8px_0_12px_-10px_rgba(0,0,0,0.65)]">
                               {isEditing ? (
                                 <button
@@ -3608,7 +3639,7 @@ export default function ProductsGalleryPage() {
                               ) : (
                                 <button
                                   type="button"
-                                  disabled={!canEdit || (!!editingRowId && editingRowId !== row.id)}
+                                  disabled={!!editingRowId && editingRowId !== row.id}
                                   onClick={() => startEditingRow(row)}
                                   className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
                                   aria-label={`Edit row ${row.rowIndex + 1}`}
@@ -3617,6 +3648,7 @@ export default function ProductsGalleryPage() {
                                 </button>
                               )}
                             </td>
+                            )}
                           </tr>
                         );
                       })
@@ -3646,7 +3678,13 @@ export default function ProductsGalleryPage() {
             </div>
           </main>
         </div>
-        <Dialog open={showDeleteRows} onOpenChange={setShowDeleteRows}>
+        <Dialog
+          open={showDeleteRows && canEdit}
+          onOpenChange={(open) => {
+            if (!canEdit) return;
+            setShowDeleteRows(open);
+          }}
+        >
           <DialogContent className="max-w-md">
             <DialogHeader>
               <DialogTitle>Delete selected products?</DialogTitle>
@@ -3669,7 +3707,9 @@ export default function ProductsGalleryPage() {
               <Button
                 type="button"
                 variant="destructive"
-                disabled={deletingRows || selectedRowIds.size === 0}
+                disabled={
+                  !canEdit || deletingRows || selectedRowIds.size === 0
+                }
                 onClick={() => void deleteSelectedRows()}
               >
                 {deletingRows ? (
