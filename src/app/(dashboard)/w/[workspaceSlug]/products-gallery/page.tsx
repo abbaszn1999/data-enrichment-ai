@@ -59,6 +59,8 @@ import {
   type ProjectSortOption,
 } from "@/components/media/project-list-controls";
 import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
+import { TableSelectHeader } from "@/components/table-select-header";
+import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
 import {
   Dialog,
   DialogContent,
@@ -349,6 +351,8 @@ export default function ProductsGalleryPage() {
   const [worksheetFilter, setWorksheetFilter] = useState<"all" | "selected" | "not-started" | "ready">(
     "all"
   );
+  const [worksheetPageIndex, setWorksheetPageIndex] = useState(0);
+  const [worksheetPageSize, setWorksheetPageSize] = useState(25);
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [rowDraft, setRowDraft] = useState<RowDraft | null>(null);
 
@@ -1184,7 +1188,7 @@ export default function ProductsGalleryPage() {
     () =>
       Math.max(
         900,
-        (canEdit ? 56 : 0) + displayColumns.length * 160 + (canEdit ? 80 : 0)
+        (canEdit ? 72 : 0) + displayColumns.length * 160 + (canEdit ? 80 : 0)
       ),
     [canEdit, displayColumns.length]
   );
@@ -1204,7 +1208,7 @@ export default function ProductsGalleryPage() {
     const table = viewport.querySelector("table");
     if (table) observer.observe(table);
     return () => observer.disconnect();
-  }, [displayColumns, rows.length]);
+  }, [displayColumns, rows.length, worksheetPageIndex, worksheetPageSize]);
 
   const projectStats = useMemo(
     () => ({
@@ -1287,19 +1291,70 @@ export default function ProductsGalleryPage() {
     });
   }, [rows, selectedRowIds, worksheetFilter, worksheetSearch]);
 
-  const toggleAllRows = () => {
+  const worksheetPageCount = Math.max(
+    1,
+    Math.ceil(visibleRows.length / worksheetPageSize) || 1
+  );
+  const safeWorksheetPageIndex = Math.min(
+    worksheetPageIndex,
+    worksheetPageCount - 1
+  );
+  const pageRows = useMemo(() => {
+    const start = safeWorksheetPageIndex * worksheetPageSize;
+    return visibleRows.slice(start, start + worksheetPageSize);
+  }, [safeWorksheetPageIndex, visibleRows, worksheetPageSize]);
+  const pageRowIds = useMemo(() => pageRows.map((row) => row.id), [pageRows]);
+  const pageAllSelected =
+    pageRowIds.length > 0 && pageRowIds.every((id) => selectedRowIds.has(id));
+  const pageSomeSelected =
+    !pageAllSelected && pageRowIds.some((id) => selectedRowIds.has(id));
+  const readyVisibleCount = useMemo(
+    () => visibleRows.filter((row) => row.status === "ready").length,
+    [visibleRows]
+  );
+
+  useEffect(() => {
+    setWorksheetPageIndex(0);
+  }, [projectId, worksheetSearch, worksheetFilter, worksheetPageSize]);
+
+  useEffect(() => {
+    if (worksheetPageIndex !== safeWorksheetPageIndex) {
+      setWorksheetPageIndex(safeWorksheetPageIndex);
+    }
+  }, [safeWorksheetPageIndex, worksheetPageIndex]);
+
+  const goToWorksheetPage = (index: number) => {
+    setWorksheetPageIndex(Math.max(0, Math.min(index, worksheetPageCount - 1)));
+    tableScrollRef.current?.scrollTo({ top: 0 });
+  };
+
+  const togglePageSelection = () => {
     if (!canEdit) return;
-    setSelectedRowIds((current) => {
-      const allVisibleSelected =
-        visibleRows.length > 0 &&
-        visibleRows.every((row) => current.has(row.id));
-      if (!allVisibleSelected) {
-        return new Set([...current, ...visibleRows.map((row) => row.id)]);
-      }
-      const next = new Set(current);
-      for (const row of visibleRows) next.delete(row.id);
-      return next;
-    });
+    if (pageAllSelected) {
+      const pageSet = new Set(pageRowIds);
+      setSelectedRowIds((current) => {
+        const next = new Set(current);
+        for (const id of pageSet) next.delete(id);
+        return next;
+      });
+      return;
+    }
+    setSelectedRowIds(new Set(pageRowIds));
+  };
+
+  const selectCurrentPage = () => {
+    if (!canEdit) return;
+    setSelectedRowIds(new Set(pageRowIds));
+  };
+
+  const selectAllFilteredRows = () => {
+    if (!canEdit) return;
+    setSelectedRowIds(new Set(visibleRows.map((row) => row.id)));
+  };
+
+  const clearRowSelection = () => {
+    if (!canEdit) return;
+    setSelectedRowIds(new Set());
   };
 
   useEffect(() => {
@@ -2235,8 +2290,6 @@ export default function ProductsGalleryPage() {
     const title = activeSession?.name ?? "Gallery project";
     const fileLabel = activeSession?.source_file_name ?? "Worksheet";
     const productCount = activeSession?.total_rows ?? rows.length;
-    const allVisibleSelected =
-      visibleRows.length > 0 && visibleRows.every((row) => selectedRowIds.has(row.id));
     const generateDisabled =
       !canEdit ||
       selectedRowIds.size === 0 ||
@@ -3103,17 +3156,6 @@ export default function ProductsGalleryPage() {
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
               <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-md border bg-background px-3 py-2 shadow-sm">
                 <div className="flex flex-wrap items-center gap-3">
-                  {canEdit && (
-                    <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
-                      <input
-                        type="checkbox"
-                        checked={allVisibleSelected}
-                        onChange={toggleAllRows}
-                        className="h-3.5 w-3.5 accent-primary"
-                      />
-                      Select visible
-                    </label>
-                  )}
                   <div className="relative w-52">
                     <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -3227,7 +3269,7 @@ export default function ProductsGalleryPage() {
                 </div>
               )}
 
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
               <div
                 ref={tableScrollRef}
                 onScroll={(event) => {
@@ -3236,22 +3278,25 @@ export default function ProductsGalleryPage() {
                       event.currentTarget.scrollLeft;
                   }
                 }}
-                className="min-h-0 w-full flex-1 overflow-auto rounded-lg border [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                className="min-h-0 w-full flex-1 overflow-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               >
                 <table
                   className="text-left text-xs"
                   style={{ minWidth: `${tableMinWidthPx}px`, width: "max-content" }}
                 >
-                  <thead className="sticky top-0 z-20 border-b bg-muted text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm">
+                  <thead className="sticky top-0 z-20 overflow-visible border-b bg-muted text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm">
                     <tr>
                       {canEdit && (
-                        <th className="sticky left-0 top-0 z-30 w-10 bg-muted px-3 py-3">
-                          <input
-                            type="checkbox"
-                            checked={allVisibleSelected}
-                            onChange={toggleAllRows}
-                            className="h-3.5 w-3.5 accent-primary"
-                            aria-label="Select visible products"
+                        <th className="sticky left-0 top-0 z-30 w-16 overflow-visible bg-muted px-2 py-3">
+                          <TableSelectHeader
+                            allSelected={pageAllSelected}
+                            someSelected={pageSomeSelected}
+                            pageCount={pageRowIds.length}
+                            totalCount={visibleRows.length}
+                            onTogglePage={togglePageSelection}
+                            onSelectPage={selectCurrentPage}
+                            onSelectAll={selectAllFilteredRows}
+                            onClear={clearRowSelection}
                           />
                         </th>
                       )}
@@ -3289,7 +3334,7 @@ export default function ProductsGalleryPage() {
                         </td>
                       </tr>
                     ) : (
-                      visibleRows.map((row) => {
+                      pageRows.map((row) => {
                         const isEditing = editingRowId === row.id && rowDraft;
                         const rowIsBusy =
                           row.status === "generating" || row.status === "queued";
@@ -3318,7 +3363,7 @@ export default function ProductsGalleryPage() {
                           >
                             {canEdit && (
                             <td
-                              className={`sticky left-0 z-10 px-3 py-3 ${
+                              className={`sticky left-0 z-10 px-2 py-3 ${
                                 selectedRowIds.has(row.id) ? "bg-primary/5" : "bg-background"
                               }`}
                             >
@@ -3326,7 +3371,7 @@ export default function ProductsGalleryPage() {
                                 type="checkbox"
                                 checked={selectedRowIds.has(row.id)}
                                 onChange={() => toggleRow(row.id)}
-                                className="h-3.5 w-3.5 accent-primary"
+                                className="mx-auto block h-3.5 w-3.5 accent-primary"
                                 aria-label={`Select row ${row.rowIndex + 1}`}
                               />
                             </td>
@@ -3665,7 +3710,7 @@ export default function ProductsGalleryPage() {
                         event.currentTarget.scrollLeft;
                     }
                   }}
-                  className="z-30 mt-1 h-4 w-full shrink-0 overflow-x-auto overflow-y-hidden border-x border-b bg-background"
+                  className="z-30 h-4 w-full shrink-0 overflow-x-auto overflow-y-hidden border-t bg-background"
                   aria-label="Worksheet horizontal scrollbar"
                 >
                   <div
@@ -3674,6 +3719,18 @@ export default function ProductsGalleryPage() {
                   />
                 </div>
               )}
+              <WorksheetPaginationBar
+                pageIndex={safeWorksheetPageIndex}
+                pageSize={worksheetPageSize}
+                totalRows={visibleRows.length}
+                readyCount={readyVisibleCount}
+                colCount={displayColumns.length}
+                onPageChange={goToWorksheetPage}
+                onPageSizeChange={(size) => {
+                  setWorksheetPageSize(size);
+                  tableScrollRef.current?.scrollTo({ top: 0 });
+                }}
+              />
               </div>
             </div>
           </main>

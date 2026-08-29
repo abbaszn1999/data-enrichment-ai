@@ -52,6 +52,8 @@ import {
   type ProjectSortOption,
 } from "@/components/media/project-list-controls";
 import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
+import { TableSelectHeader } from "@/components/table-select-header";
+import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
 import {
   createVisualizerSession,
   deleteVisualizerSession,
@@ -248,6 +250,8 @@ export default function ProductsVisualizerPage() {
   const [generating, setGenerating] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+  const [worksheetPageIndex, setWorksheetPageIndex] = useState(0);
+  const [worksheetPageSize, setWorksheetPageSize] = useState(25);
   const [reviewRowId, setReviewRowId] = useState<string | null>(null);
   const [reviewTab, setReviewTab] = useState<"preview" | "html" | "briefs">(
     "preview"
@@ -933,7 +937,7 @@ export default function ProductsVisualizerPage() {
   }, [settings.productImageColumn, worksheet]);
 
   const tableMinWidthPx = useMemo(
-    () => Math.max(900, (canEdit ? 56 : 0) + displayColumns.length * 160),
+    () => Math.max(900, (canEdit ? 72 : 0) + displayColumns.length * 160),
     [canEdit, displayColumns.length]
   );
 
@@ -950,10 +954,40 @@ export default function ProductsVisualizerPage() {
     const table = viewport.querySelector("table");
     if (table) observer.observe(table);
     return () => observer.disconnect();
-  }, [displayColumns, rows.length, projectId]);
+  }, [displayColumns, rows.length, projectId, worksheetPageIndex, worksheetPageSize]);
 
-  const allRowsSelected =
-    rows.length > 0 && rows.every((row) => selectedRowIds.has(row.id));
+  const worksheetPageCount = Math.max(
+    1,
+    Math.ceil(rows.length / worksheetPageSize) || 1
+  );
+  const safeWorksheetPageIndex = Math.min(
+    worksheetPageIndex,
+    worksheetPageCount - 1
+  );
+  const pageRows = useMemo(() => {
+    const start = safeWorksheetPageIndex * worksheetPageSize;
+    return rows.slice(start, start + worksheetPageSize);
+  }, [rows, safeWorksheetPageIndex, worksheetPageSize]);
+  const pageRowIds = useMemo(() => pageRows.map((row) => row.id), [pageRows]);
+  const pageAllSelected =
+    pageRowIds.length > 0 && pageRowIds.every((id) => selectedRowIds.has(id));
+  const pageSomeSelected =
+    !pageAllSelected && pageRowIds.some((id) => selectedRowIds.has(id));
+
+  useEffect(() => {
+    setWorksheetPageIndex(0);
+  }, [projectId, worksheetPageSize]);
+
+  useEffect(() => {
+    if (worksheetPageIndex !== safeWorksheetPageIndex) {
+      setWorksheetPageIndex(safeWorksheetPageIndex);
+    }
+  }, [safeWorksheetPageIndex, worksheetPageIndex]);
+
+  const goToWorksheetPage = (index: number) => {
+    setWorksheetPageIndex(Math.max(0, Math.min(index, worksheetPageCount - 1)));
+    tableScrollRef.current?.scrollTo({ top: 0 });
+  };
 
   const toggleRow = (rowId: string) => {
     if (!canEdit) return;
@@ -965,14 +999,33 @@ export default function ProductsVisualizerPage() {
     });
   };
 
-  const toggleAllRows = () => {
+  const togglePageSelection = () => {
     if (!canEdit) return;
-    setSelectedRowIds((current) => {
-      if (rows.length > 0 && rows.every((row) => current.has(row.id))) {
-        return new Set();
-      }
-      return new Set(rows.map((row) => row.id));
-    });
+    if (pageAllSelected) {
+      const pageSet = new Set(pageRowIds);
+      setSelectedRowIds((current) => {
+        const next = new Set(current);
+        for (const id of pageSet) next.delete(id);
+        return next;
+      });
+      return;
+    }
+    setSelectedRowIds(new Set(pageRowIds));
+  };
+
+  const selectCurrentPage = () => {
+    if (!canEdit) return;
+    setSelectedRowIds(new Set(pageRowIds));
+  };
+
+  const selectAllRows = () => {
+    if (!canEdit) return;
+    setSelectedRowIds(new Set(rows.map((row) => row.id)));
+  };
+
+  const clearRowSelection = () => {
+    if (!canEdit) return;
+    setSelectedRowIds(new Set());
   };
 
   useEffect(() => {
@@ -1746,7 +1799,7 @@ export default function ProductsVisualizerPage() {
               </div>
             )}
 
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
               <div
                 ref={tableScrollRef}
                 onScroll={(event) => {
@@ -1755,7 +1808,7 @@ export default function ProductsVisualizerPage() {
                       event.currentTarget.scrollLeft;
                   }
                 }}
-                className="min-h-0 w-full flex-1 overflow-auto rounded-lg border [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                className="min-h-0 w-full flex-1 overflow-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               >
                 <table
                   className="w-full text-left text-xs"
@@ -1763,16 +1816,19 @@ export default function ProductsVisualizerPage() {
                     minWidth: `${Math.max(tableMinWidthPx, tableViewportWidth || 0)}px`,
                   }}
                 >
-                  <thead className="sticky top-0 z-20 border-b bg-muted text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm">
+                  <thead className="sticky top-0 z-20 overflow-visible border-b bg-muted text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm">
                     <tr>
                       {canEdit && (
-                        <th className="sticky left-0 top-0 z-30 w-10 bg-muted px-3 py-3">
-                          <input
-                            type="checkbox"
-                            checked={allRowsSelected}
-                            onChange={toggleAllRows}
-                            className="h-3.5 w-3.5 accent-primary"
-                            aria-label="Select all products"
+                        <th className="sticky left-0 top-0 z-30 w-16 overflow-visible bg-muted px-2 py-3">
+                          <TableSelectHeader
+                            allSelected={pageAllSelected}
+                            someSelected={pageSomeSelected}
+                            pageCount={pageRowIds.length}
+                            totalCount={rows.length}
+                            onTogglePage={togglePageSelection}
+                            onSelectPage={selectCurrentPage}
+                            onSelectAll={selectAllRows}
+                            onClear={clearRowSelection}
                           />
                         </th>
                       )}
@@ -1802,7 +1858,7 @@ export default function ProductsVisualizerPage() {
                         </td>
                       </tr>
                     ) : (
-                      rows.map((row) => {
+                      pageRows.map((row) => {
                         const hasDescription = !!row.generatedDescription?.trim();
                         const descriptionIsLoading =
                           row.status === "generating" &&
@@ -1827,7 +1883,7 @@ export default function ProductsVisualizerPage() {
                           >
                             {canEdit && (
                             <td
-                              className={`sticky left-0 z-10 px-3 py-3 ${
+                              className={`sticky left-0 z-10 px-2 py-3 ${
                                 selectedRowIds.has(row.id)
                                   ? "bg-primary/5"
                                   : "bg-background"
@@ -1837,7 +1893,7 @@ export default function ProductsVisualizerPage() {
                                 type="checkbox"
                                 checked={selectedRowIds.has(row.id)}
                                 onChange={() => toggleRow(row.id)}
-                                className="h-3.5 w-3.5 accent-primary"
+                                className="mx-auto block h-3.5 w-3.5 accent-primary"
                                 aria-label={`Select row ${row.rowIndex + 1}`}
                               />
                             </td>
@@ -2042,7 +2098,7 @@ export default function ProductsVisualizerPage() {
                         event.currentTarget.scrollLeft;
                     }
                   }}
-                  className="z-30 mt-1 h-4 w-full shrink-0 overflow-x-auto overflow-y-hidden border-x border-b bg-background"
+                  className="z-30 h-4 w-full shrink-0 overflow-x-auto overflow-y-hidden border-t bg-background"
                   aria-label="Worksheet horizontal scrollbar"
                 >
                   <div
@@ -2051,6 +2107,19 @@ export default function ProductsVisualizerPage() {
                   />
                 </div>
               )}
+              <WorksheetPaginationBar
+                pageIndex={safeWorksheetPageIndex}
+                pageSize={worksheetPageSize}
+                totalRows={rows.length}
+                readyCount={imagesReadyCount}
+                readyLabel="ready"
+                colCount={displayColumns.length}
+                onPageChange={goToWorksheetPage}
+                onPageSizeChange={(size) => {
+                  setWorksheetPageSize(size);
+                  tableScrollRef.current?.scrollTo({ top: 0 });
+                }}
+              />
             </div>
 
             {(() => {

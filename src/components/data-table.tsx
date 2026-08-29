@@ -56,7 +56,6 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  ChevronDown,
   ImageIcon,
   Maximize2,
 } from "lucide-react";
@@ -72,6 +71,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { TableSelectHeader } from "@/components/table-select-header";
 import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import type { ProductRow } from "@/types";
@@ -1781,12 +1781,12 @@ export function DataTable() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [showColumnVisibility, setShowColumnVisibility] = useState(false);
-  const [showSelectMenu, setShowSelectMenu] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const currentPageRowIdsRef = useRef<string[]>([]);
+  const [pageRowIds, setPageRowIds] = useState<string[]>([]);
   const columnResizeMode: ColumnResizeMode = "onChange";
   const [dragOverColId, setDragOverColId] = useState<string | null>(null);
   const dragColIdRef = useRef<string | null>(null);
@@ -1805,8 +1805,20 @@ export function DataTable() {
   }, [sheetFilteredRows, selectedRowIds]);
 
   const allSelected = sheetFilteredRows.length > 0 && sheetSelectedCount === sheetFilteredRows.length;
-  const someSelected = sheetSelectedCount > 0 && sheetSelectedCount < sheetFilteredRows.length;
   const anySelected = sheetSelectedCount > 0;
+  const pageAllSelected =
+    pageRowIds.length > 0 && pageRowIds.every((id) => selectedRowIds.has(id));
+  const pageSomeSelected =
+    !pageAllSelected && pageRowIds.some((id) => selectedRowIds.has(id));
+
+  const togglePageSelection = useCallback(() => {
+    if (pageAllSelected) {
+      const pageSet = new Set(pageRowIds);
+      selectRowsByIds([...selectedRowIds].filter((id) => !pageSet.has(id)));
+    } else {
+      selectRowsByIds(pageRowIds);
+    }
+  }, [pageAllSelected, pageRowIds, selectedRowIds, selectRowsByIds]);
 
   // Count rows per sheet
   const sheetCounts = useMemo(() => {
@@ -1911,66 +1923,16 @@ export function DataTable() {
     cols.push({
       id: "select",
       header: () => (
-        <div className="relative flex items-center justify-center gap-0.5">
-          <input
-            type="checkbox"
-            checked={allSelected}
-            ref={(el) => {
-              if (el) el.indeterminate = someSelected;
-            }}
-            onChange={() => (allSelected ? deselectAllRows() : selectAllRows())}
-            className="h-3.5 w-3.5 rounded border-muted-foreground/40 accent-primary cursor-pointer"
-          />
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowSelectMenu((v) => !v);
-            }}
-            className="flex h-4 w-3.5 items-center justify-center text-muted-foreground/60 hover:text-foreground"
-            aria-label="Selection options"
-            title="Selection options"
-          >
-            <ChevronDown className="h-3 w-3" />
-          </button>
-          {showSelectMenu && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowSelectMenu(false)} />
-              <div className="absolute left-1/2 top-full z-50 mt-1 w-36 -translate-x-1/2 rounded-lg border bg-popover shadow-lg py-1 text-left animate-in fade-in-0 zoom-in-95 duration-100">
-                <button
-                  type="button"
-                  onClick={() => {
-                    selectRowsByIds(currentPageRowIdsRef.current);
-                    setShowSelectMenu(false);
-                  }}
-                  className="w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-muted/60 transition-colors"
-                >
-                  Select page ({currentPageRowIdsRef.current.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    selectAllRows();
-                    setShowSelectMenu(false);
-                  }}
-                  className="w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-muted/60 transition-colors"
-                >
-                  Select all ({sheetFilteredRows.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    deselectAllRows();
-                    setShowSelectMenu(false);
-                  }}
-                  className="w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-muted/60 transition-colors"
-                >
-                  Clear selection
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+        <TableSelectHeader
+          allSelected={pageAllSelected}
+          someSelected={pageSomeSelected}
+          pageCount={pageRowIds.length}
+          totalCount={sheetFilteredRows.length}
+          onTogglePage={togglePageSelection}
+          onSelectPage={() => selectRowsByIds(pageRowIds)}
+          onSelectAll={selectAllRows}
+          onClear={deselectAllRows}
+        />
       ),
       cell: ({ row }) => (
         <div className="flex items-center gap-2 justify-center">
@@ -2156,13 +2118,14 @@ export function DataTable() {
     rows,
     isEnriching,
     selectedRowIds,
-    allSelected,
-    someSelected,
+    pageRowIds,
+    pageAllSelected,
+    pageSomeSelected,
+    togglePageSelection,
     toggleRowSelection,
     selectAllRows,
     deselectAllRows,
     selectRowsByIds,
-    showSelectMenu,
     sheetFilteredRows,
     renameColumn,
     activeSheet,
@@ -2198,7 +2161,13 @@ export function DataTable() {
   // Virtual scrolling with dynamic row heights (within current page)
   const { rows: tableRows } = table.getRowModel();
   useEffect(() => {
-    currentPageRowIdsRef.current = tableRows.map((r) => r.original.id);
+    const ids = tableRows.map((r) => r.original.id);
+    currentPageRowIdsRef.current = ids;
+    setPageRowIds((prev) =>
+      prev.length === ids.length && prev.every((id, i) => id === ids[i])
+        ? prev
+        : ids
+    );
   }, [tableRows]);
   const columnSizingState = table.getState().columnSizing;
   const rowVirtualizer = useVirtualizer({
@@ -2424,7 +2393,9 @@ export function DataTable() {
                 return (
                   <div
                     key={header.id}
-                    className={`h-9 px-3 flex items-center border-r last:border-r-0 overflow-hidden relative transition-all group/dragcol ${
+                    className={`h-9 px-3 flex items-center border-r last:border-r-0 relative transition-all group/dragcol ${
+                      header.column.id === "select" ? "overflow-visible z-20" : "overflow-hidden"
+                    } ${
                       isDragOver && isOrigCol
                         ? "border-l-2 border-l-primary border-border/40 bg-primary/5"
                         : "border-border/40"
