@@ -54,14 +54,14 @@ const ROLES: {
 }[] = [
   {
     label: "Owner",
-    hint: "Full control, billing, and workspace deletion",
+    hint: "Full control, including member roles, billing, and workspace deletion",
     icon: Crown,
     iconWrap: "bg-amber-500/12 text-amber-500",
     text: "text-amber-500",
   },
   {
     label: "Admin",
-    hint: "Operate and administer, except billing",
+    hint: "Operate and administer, except billing and roles",
     icon: ShieldCheck,
     iconWrap: "bg-violet-500/12 text-violet-500",
     text: "text-violet-500",
@@ -140,7 +140,8 @@ const GROUPS: PermGroup[] = [
   {
     label: "Account",
     rows: [
-      { page: "Team", action: "Manage members & invites", access: ADMIN },
+      { page: "Team", action: "Invite members", access: ADMIN },
+      { page: "Team", action: "Change member roles", access: OWNER },
       { page: "Settings", action: "Workspace & integrations", access: ADMIN },
       { page: "Subscription", action: "Manage plan & billing", access: OWNER },
       { page: "Workspace", action: "Delete workspace", access: OWNER },
@@ -237,7 +238,7 @@ export function RolePermissions() {
         ))}
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="max-h-[480px] overflow-auto overscroll-contain [scrollbar-gutter:stable]">
         <table className="w-full min-w-[720px] text-[11px]">
           <thead className="sticky top-0 z-10">
             <tr className="border-b border-border/60">

@@ -127,21 +127,22 @@ export async function PATCH(request: NextRequest) {
       .single();
     if (!target) return NextResponse.json({ error: "Member not found" }, { status: 404 });
 
-    // Owner and admin can set admin / editor / viewer — including demoting an
-    // admin. The workspace owner role cannot be changed.
+    // Only the workspace owner can assign or change roles.
     if (target.role === "owner") {
       return NextResponse.json({ error: "Cannot change the owner's role" }, { status: 403 });
     }
 
-    // Verify caller is admin+ in this workspace
     const { data: caller } = await admin
       .from("workspace_members")
       .select("role")
       .eq("workspace_id", target.workspace_id)
       .eq("user_id", user.id)
       .single();
-    if (!caller || !["owner", "admin"].includes(caller.role)) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!caller || caller.role !== "owner") {
+      return NextResponse.json(
+        { error: "Only the workspace owner can change member roles" },
+        { status: 403 }
+      );
     }
 
     const { error } = await admin

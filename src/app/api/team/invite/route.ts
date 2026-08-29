@@ -17,6 +17,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
+    if (!["admin", "editor", "viewer"].includes(role)) {
+      return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+    }
+
     // Verify caller is authenticated and is owner/admin
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -33,6 +37,13 @@ export async function POST(request: NextRequest) {
 
     if (!member || !["owner", "admin"].includes(member.role)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    if (role === "admin" && member.role !== "owner") {
+      return NextResponse.json(
+        { error: "Only the workspace owner can invite an admin" },
+        { status: 403 }
+      );
     }
 
     const adminClient = createAdminClient();

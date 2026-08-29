@@ -93,6 +93,9 @@ export default function TeamPage() {
       return;
     }
     setInviteError("");
+    if (!permissions.isOwner && inviteRole === "admin") {
+      setInviteRole("editor");
+    }
     setShowInvite((prev) => !prev);
   };
 
@@ -166,6 +169,7 @@ export default function TeamPage() {
   };
 
   const handleRoleChange = async (memberId: string, newRole: Role) => {
+    if (!permissions.isOwner) return;
     const target = members.find((m) => m.id === memberId);
     if (!target || target.role === newRole || target.role === "owner") return;
     setUpdatingRoleId(memberId);
@@ -175,9 +179,6 @@ export default function TeamPage() {
       toast.success(
         `Role updated to ${ROLE_LABELS[newRole]?.label ?? newRole}`
       );
-      if (target.user_id === user?.id) {
-        window.location.reload();
-      }
     } catch (err: any) {
       toast.error(err?.message || "Failed to update role");
     } finally {
@@ -360,7 +361,7 @@ export default function TeamPage() {
                     onChange={(e) => setInviteRole(e.target.value as Role)}
                     className="h-10 w-full rounded-md border bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-ring"
                   >
-                    <option value="admin">Admin</option>
+                    {permissions.isOwner && <option value="admin">Admin</option>}
                     <option value="editor">Editor</option>
                     <option value="viewer">Viewer</option>
                   </select>
@@ -527,7 +528,7 @@ export default function TeamPage() {
                         </div>
                       </td>
                       <td className="px-5 py-3.5">
-                        {permissions.canAdmin && member.role !== "owner" ? (
+                        {permissions.isOwner && member.role !== "owner" ? (
                           <div className="relative inline-flex items-center">
                             <select
                               value={member.role}
@@ -543,7 +544,7 @@ export default function TeamPage() {
                                 member.email ||
                                 "member"
                               }`}
-                              title="Change role to Admin, Editor, or Viewer"
+                              title="Only the owner can change roles"
                               className="h-8 cursor-pointer appearance-none rounded-md border bg-background py-1 pl-2.5 pr-7 text-[11px] font-semibold outline-none hover:border-[#6B358D]/50 focus:ring-1 focus:ring-ring disabled:cursor-wait disabled:opacity-70 dark:hover:border-[#F76D01]/50"
                             >
                               <option value="admin">Admin</option>
