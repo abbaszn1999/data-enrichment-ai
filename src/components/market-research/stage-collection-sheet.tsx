@@ -8,6 +8,7 @@ import {
   Check,
   CheckCircle2,
   ExternalLink,
+  FileText,
   Filter,
   Layers,
   Loader2,
@@ -47,6 +48,7 @@ import {
 } from "./workspace-data";
 import { cn } from "@/lib/utils";
 import { FuturisticAiLoader } from "./futuristic-ai-loader";
+import { CollectionProposalDialog } from "./collection-proposal-dialog";
 
 export function StageCollectionSheet({
   collections,
@@ -80,6 +82,7 @@ export function StageCollectionSheet({
     type: "candidates" | "assigned";
   } | null>(null);
   const [confirmPushOpen, setConfirmPushOpen] = useState(false);
+  const [proposalOpen, setProposalOpen] = useState(false);
 
   // Collections sheet filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -733,6 +736,14 @@ export function StageCollectionSheet({
             </strong>{" "}
             of {collections.length} collections selected
           </div>
+          <span>·</span>
+          <span className="font-medium text-foreground">
+            ${USD_PER_COLLECTION.toFixed(2)} / collection
+          </span>
+          <span>·</span>
+          <span className="font-bold text-primary">
+            Total: {formatUsd(pushTotalCost)}
+          </span>
           {paid ? (
             <>
               <span>·</span>
@@ -741,20 +752,21 @@ export function StageCollectionSheet({
                 <span>Pushed to Store</span>
               </span>
             </>
-          ) : selected.size > 0 ? (
-            <>
-              <span>·</span>
-              <span className="font-medium text-foreground">
-                ${USD_PER_COLLECTION.toFixed(2)} / collection
-              </span>
-              <span>·</span>
-              <span className="font-bold text-primary">
-                Total: {formatUsd(pushTotalCost)}
-              </span>
-            </>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 gap-1.5 px-3 text-xs font-semibold"
+            aria-label="Open proposal"
+            disabled={selected.size === 0}
+            onClick={() => setProposalOpen(true)}
+          >
+            <FileText className="h-3.5 w-3.5" />
+            Proposal
+          </Button>
           <Button
             size="sm"
             onClick={() => setConfirmPushOpen(true)}
@@ -784,6 +796,12 @@ export function StageCollectionSheet({
           </Button>
         </div>
       </div>
+
+      <CollectionProposalDialog
+        open={proposalOpen}
+        onOpenChange={setProposalOpen}
+        collections={collections.filter((c) => selected.has(c.id))}
+      />
 
       {/* ========================================================================= */}
       {/* MODAL POP-UP: CONFIRM STORE PUSH & WALLET DEDUCTION                      */}

@@ -6,6 +6,7 @@ import { StageContentPanel } from "./stage-content-panel";
 import { StageExtractPanel } from "./stage-extract-panel";
 import { StageStrategyPanel } from "./stage-strategy-panel";
 import { WorkspaceStepper } from "./workspace-stepper";
+import { cn } from "@/lib/utils";
 import type {
   CollectionContent,
   ExtractedKeyword,
@@ -158,8 +159,20 @@ export function DeepWorkspace({
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-auto p-4 sm:p-5">
-        <div className={readOnly ? "pointer-events-none" : undefined}>
+      <div
+        className={cn(
+          "flex-1 min-h-0 p-4 sm:p-5",
+          tab === "collections"
+            ? "flex flex-col overflow-hidden"
+            : "overflow-auto"
+        )}
+      >
+        <div
+          className={cn(
+            readOnly && "pointer-events-none",
+            tab === "collections" && "flex min-h-0 flex-1 flex-col overflow-hidden"
+          )}
+        >
         {!isWorkspaceTab(tab) ? brief : null}
         {tab === "extract" ? (
           <StageExtractPanel

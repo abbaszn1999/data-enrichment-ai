@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   Check,
@@ -13,6 +13,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   MOCK_NICHES,
   countProductsForCollections,
   formatProductCount,
@@ -21,6 +26,31 @@ import {
   type MockNiche,
 } from "./mock-data";
 import { cn } from "@/lib/utils";
+
+/** Minimum SKUs recommended to dominate a niche or PLP in catalog scope. */
+const MIN_SCOPE_SKUS = 500;
+
+function belowSkuFloor(count: number) {
+  return count < MIN_SCOPE_SKUS;
+}
+
+function SkuFloorTooltip({
+  count,
+  children,
+}: {
+  count: number;
+  children: ReactNode;
+}) {
+  if (!belowSkuFloor(count)) return children;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right" className="max-w-[240px] text-balance">
+        Does not have enough SKUs — fewer than {MIN_SCOPE_SKUS} products.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 type StageSelectPanelProps = {
   project: MarketResearchProject;
@@ -178,12 +208,23 @@ export function StageSelectPanel({
             visibleNiches.map((niche) => {
               const state = nicheState(niche);
               const isCollapsed = Boolean(collapsed[niche.id]) && !query;
+              const nicheThin = belowSkuFloor(niche.productCount);
               return (
                 <div
                   key={niche.id}
-                  className="rounded-xl border border-border/70 bg-card overflow-hidden"
+                  className={cn(
+                    "rounded-xl border bg-card overflow-hidden",
+                    nicheThin ? "border-amber-500/40" : "border-border/70"
+                  )}
                 >
-                  <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-2.5">
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 border-b px-3 py-2.5",
+                      nicheThin
+                        ? "border-amber-500/25 bg-amber-500/[0.08]"
+                        : "border-border/60 bg-muted/30"
+                    )}
+                  >
                     <button
                       type="button"
                       onClick={() => toggleNiche(niche)}
@@ -196,28 +237,42 @@ export function StageSelectPanel({
                       }
                       aria-pressed={state === "all"}
                     >
-                      <span
-                        className={cn(
-                          "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                          state === "all"
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : state === "some"
-                              ? "border-primary bg-primary/15 text-primary"
-                              : "border-muted-foreground/40 bg-background"
-                        )}
-                        aria-hidden
-                      >
-                        {state === "all" ? (
-                          <Check className="h-3 w-3" />
-                        ) : state === "some" ? (
-                          <Minus className="h-3 w-3" />
-                        ) : null}
-                      </span>
+                      <SkuFloorTooltip count={niche.productCount}>
+                        <span
+                          tabIndex={0}
+                          className={cn(
+                            "flex h-4 w-4 shrink-0 items-center justify-center rounded border outline-none",
+                            nicheThin &&
+                              "ring-2 ring-amber-500/50 ring-offset-1 ring-offset-background",
+                            state === "all"
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : state === "some"
+                                ? "border-primary bg-primary/15 text-primary"
+                                : nicheThin
+                                  ? "border-amber-500 bg-amber-500/15"
+                                  : "border-muted-foreground/40 bg-background"
+                          )}
+                          aria-hidden
+                        >
+                          {state === "all" ? (
+                            <Check className="h-3 w-3" />
+                          ) : state === "some" ? (
+                            <Minus className="h-3 w-3" />
+                          ) : null}
+                        </span>
+                      </SkuFloorTooltip>
                       <span className="text-sm font-semibold truncate">
                         {niche.name}
                       </span>
                     </button>
-                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+                    <span
+                      className={cn(
+                        "text-xs tabular-nums shrink-0",
+                        nicheThin
+                          ? "font-medium text-amber-700 dark:text-amber-400"
+                          : "text-muted-foreground"
+                      )}
+                    >
                       {formatProductCount(niche.productCount)} products
                     </span>
                     <button
@@ -248,6 +303,7 @@ export function StageSelectPanel({
                     <ul className="divide-y divide-border/50">
                       {niche.collections.map((collection) => {
                         const isOn = selected.has(collection.id);
+                        const plpThin = belowSkuFloor(collection.productCount);
                         return (
                           <li key={collection.id}>
                             <button
@@ -260,20 +316,29 @@ export function StageSelectPanel({
                                 readOnly
                                   ? "cursor-default"
                                   : "hover:bg-muted/40",
-                                isOn && "bg-primary/5"
+                                plpThin && "bg-amber-500/[0.06]",
+                                isOn && !plpThin && "bg-primary/5",
+                                isOn && plpThin && "bg-amber-500/10"
                               )}
                             >
-                              <span
-                                className={cn(
-                                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                                  isOn
-                                    ? "border-primary bg-primary text-primary-foreground"
-                                    : "border-muted-foreground/40 bg-background"
-                                )}
-                                aria-hidden
-                              >
-                                {isOn ? <Check className="h-3 w-3" /> : null}
-                              </span>
+                              <SkuFloorTooltip count={collection.productCount}>
+                                <span
+                                  tabIndex={0}
+                                  className={cn(
+                                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border outline-none",
+                                    plpThin &&
+                                      "ring-2 ring-amber-500/50 ring-offset-1 ring-offset-background",
+                                    isOn
+                                      ? "border-primary bg-primary text-primary-foreground"
+                                      : plpThin
+                                        ? "border-amber-500 bg-amber-500/15"
+                                        : "border-muted-foreground/40 bg-background"
+                                  )}
+                                  aria-hidden
+                                >
+                                  {isOn ? <Check className="h-3 w-3" /> : null}
+                                </span>
+                              </SkuFloorTooltip>
                               <span className="min-w-0 flex-1">
                                 <span className="flex items-center gap-2">
                                   <span className="text-sm truncate">
@@ -297,7 +362,14 @@ export function StageSelectPanel({
                                     : ""}
                                 </span>
                               </span>
-                              <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+                              <span
+                                className={cn(
+                                  "text-xs tabular-nums shrink-0",
+                                  plpThin
+                                    ? "font-medium text-amber-700 dark:text-amber-400"
+                                    : "text-muted-foreground"
+                                )}
+                              >
                                 {formatProductCount(collection.productCount)}
                               </span>
                             </button>
