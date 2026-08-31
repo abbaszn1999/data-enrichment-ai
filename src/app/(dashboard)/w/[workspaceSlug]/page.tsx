@@ -230,9 +230,6 @@ function AgentConstellation({ basePath }: { basePath: string }) {
         </motion.div>
         <div className="mt-4 text-center">
           <div className="text-xs font-black text-slate-950 dark:text-white">AI Core</div>
-          <div className="mt-0.5 flex items-center justify-center gap-1.5 text-[8px] uppercase tracking-[.24em] text-[#400095] dark:text-[#C8A8D2]">
-            <StatusPulse /> live orchestration
-          </div>
         </div>
       </div>
 

@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "workflow": "tsx --tsconfig tsconfig.json workflows/index.ts"
+    "workflow": "tsx --tsconfig tsconfig.json workflows/index.ts",
+    "stripe:setup-test": "tsx scripts/setup-local-stripe.ts",
+    "stripe:listen": "stripe listen --forward-to localhost:4000/api/webhooks/stripe"
   },
   "dependencies": {
     "@google/genai": "^2.13.0",

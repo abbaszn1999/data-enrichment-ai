@@ -9,12 +9,47 @@ const BUCKET = "workspace-files";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
+/**
+ * Storage GET requests are served through a CDN that can hand back a copy that
+ * predates the write we just made. A run reads → mutates → writes this blob many
+ * times per session, so a stale read silently resurrects old rows and erases
+ * finished ones. A unique query string per request forces a cache miss.
+ */
+async function downloadFresh(path: string): Promise<string | null> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) return null;
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  const response = await fetch(
+    `${url}/storage/v1/object/${BUCKET}/${encoded}?cb=${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`,
+    {
+      cache: "no-store",
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        "Cache-Control": "no-cache",
+      },
+    }
+  );
+  if (response.status === 404 || response.status === 400) return "";
+  if (!response.ok) {
+    throw new Error(`Storage download failed (${response.status})`);
+  }
+  return response.text();
+}
+
 export async function loadProjectJsonAdmin(
   workspaceId: string,
   sessionId: string,
   admin: Admin = createAdminClient()
 ): Promise<ProjectJson | null> {
   const path = getProjectStoragePath(workspaceId, sessionId);
+  const fresh = await downloadFresh(path);
+  if (fresh !== null) {
+    return fresh === "" ? null : (JSON.parse(fresh) as ProjectJson);
+  }
   const { data, error } = await admin.storage.from(BUCKET).download(path);
   if (error) {
     const message = error.message || "";

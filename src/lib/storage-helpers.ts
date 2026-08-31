@@ -29,7 +29,26 @@ export async function saveJsonToStorage(storagePath: string, data: unknown): Pro
 
 export async function loadJsonFromStorage<T = unknown>(storagePath: string): Promise<T | null> {
   const supabase = createClient();
-  // Use download (not public URL) to bypass CDN cache
+
+  // A plain download can be answered from the storage CDN with a copy that
+  // predates a very recent write (e.g. results a background job just saved).
+  // A one-off signed URL plus a cache buster guarantees a fresh object.
+  try {
+    const signed = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(storagePath, 60);
+    if (signed.data?.signedUrl) {
+      const response = await fetch(
+        `${signed.data.signedUrl}&cb=${Date.now()}`,
+        { cache: "no-store" }
+      );
+      if (response.status === 404) return null;
+      if (response.ok) return (await response.json()) as T;
+    }
+  } catch {
+    // Fall through to the SDK download below.
+  }
+
   const { data, error } = await supabase.storage
     .from(BUCKET)
     .download(storagePath);

@@ -419,6 +419,17 @@ export default function ProductsVisualizerPage() {
           if (done > lastCreditsProgressRef.current) {
             lastCreditsProgressRef.current = done;
             invalidateCredits();
+            // A row just finished — fetch its signed image URL now instead of
+            // waiting for the run to finish or a manual page reload.
+            getVisualizerSession(workspace.id, projectId, { includeSignedUrls: true })
+              .then((withUrls) => {
+                if (!cancelled && withUrls.signedUrls) {
+                  setSignedUrls((current) => ({ ...current, ...withUrls.signedUrls }));
+                }
+              })
+              .catch(() => {
+                // The next completed row or a manual refresh will retry this.
+              });
           }
           if (fresh.session.cancel_requested) setStopping(true);
         } else if (!generating) {

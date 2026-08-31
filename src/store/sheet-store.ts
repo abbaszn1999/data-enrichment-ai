@@ -180,10 +180,17 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   addCustomEnrichmentColumn: (col) =>
     set((state) => {
-      const id = col.label.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-      // Check if it already exists
-      if (state.enrichmentColumns.some((c) => c.id === id)) {
-        return state;
+      const slug =
+        col.label
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_|_$/g, "") || "column";
+      const taken = new Set(state.enrichmentColumns.map((c) => c.id));
+      let id = `custom_${slug}`;
+      let n = 2;
+      while (taken.has(id)) {
+        id = `custom_${slug}_${n}`;
+        n += 1;
       }
       const newCol: EnrichmentColumn = {
         ...col,
@@ -717,6 +724,12 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       saveStatus: "saved",
       lastSavedAt: Date.now(),
     });
+    // A cross-session module-level "last saved" fingerprint would otherwise
+    // read as changed the instant a *different* project's data replaces it,
+    // scheduling a phantom autosave a few seconds after every page open —
+    // one that can race an in-progress background enrichment run and
+    // overwrite its freshly written results with this stale snapshot.
+    markProjectSnapshotAsSaved();
   },
 
   applyProjectRows: (rows, progress) => {
@@ -830,10 +843,24 @@ function configHash(state: SheetState): string {
   });
 }
 
+/** Re-baseline the "last saved" fingerprint against whatever is in the store
+ * right now (e.g. right after loading a project from Storage). Without this,
+ * opening/switching projects immediately looks "changed" against the
+ * previous project's fingerprint and schedules a save a few seconds later. */
+function markProjectSnapshotAsSaved(): void {
+  lastSavedVersion = useSheetStore.getState().undoVersion;
+  lastSavedConfigHash = configHash(useSheetStore.getState());
+}
+
 // The actual persist function (extracted so it can be called from multiple places)
 async function persistProject() {
   const s = useSheetStore.getState();
   if (!s.workspaceId || !s.projectId || !s.fileName) return;
+  // Re-check at execution time, not just at scheduling time: a debounce timer
+  // armed before enrichment started (e.g. right after opening the page) must
+  // not fire mid-run or right after it finishes and blindly overwrite the
+  // background job's freshly saved results with this stale row snapshot.
+  if (s.isEnriching) return;
 
   useSheetStore.setState({ saveStatus: "saving" });
 

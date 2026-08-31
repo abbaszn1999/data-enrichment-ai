@@ -21,12 +21,13 @@ export function promptLine(
   const { col } = ctx;
   const tone = col.writingTone ? ` tone=${col.writingTone}` : "";
   const length = col.contentLength ? ` length=${col.contentLength}` : "";
-  const custom = col.customInstruction?.trim()
-    ? `\n  Extra: ${col.customInstruction.trim()}`
-    : "";
-  const head = `- ${col.id} (${col.label || col.id})${tone}${length}: ${
-    col.description?.trim() || fallback
-  }${custom}`;
+  const description = col.description?.trim() || fallback;
+  const extraText = col.customInstruction?.trim() || "";
+  const custom =
+    extraText && extraText !== description
+      ? `\n  Extra: ${extraText}`
+      : "";
+  const head = `- ${col.id} (${col.label || col.id})${tone}${length}: ${description}${custom}`;
   const rules = extraRules.filter(Boolean).map((r) => `\n  ${r}`);
   return head + rules.join("");
 }

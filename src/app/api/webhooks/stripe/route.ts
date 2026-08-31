@@ -12,7 +12,11 @@ export async function POST(request: NextRequest) {
 
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
+    const webhookSecret = (process.env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+    if (!webhookSecret) {
+      return NextResponse.json({ error: "Webhook secret is not set" }, { status: 500 });
+    }
+    event = Stripe.webhooks.constructEvent(body, signature, webhookSecret);
   } catch (err: any) {
     console.error("[Stripe Webhook] Signature failed:", err.message);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });

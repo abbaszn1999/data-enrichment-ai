@@ -293,7 +293,6 @@ export function Sidebar() {
         setRowStatus(row.id, "pending");
       }
     }
-    toast.info("Enrichment stop requested");
   }, [
     workspace?.id,
     sheetWorkspaceId,
@@ -317,7 +316,20 @@ export function Sidebar() {
       project?: ProjectJson | null;
     }) => {
       if (payload.project) {
+        const run = payload.run;
+        const runActive =
+          run?.status === "queued" || run?.status === "running";
         const productRows = projectJsonToProductRows(payload.project);
+        if (runActive && run) {
+          // Storage only ever holds pending/done/error. Rows still waiting for
+          // an active run are shown as processing so their cells keep spinning.
+          const targets = new Set(run.target_ids);
+          for (const row of productRows) {
+            if (targets.has(row.id) && row.status === "pending") {
+              row.status = "processing";
+            }
+          }
+        }
         const total = payload.run?.target_ids.length || productRows.length;
         applyProjectRows(productRows, {
           completed: payload.run?.completed_count ?? productRows.filter((r) => r.status === "done").length,
@@ -337,7 +349,9 @@ export function Sidebar() {
       sessionId: projectId,
     });
     if (enrichRunIdRef.current) params.set("runId", enrichRunIdRef.current);
-    const res = await fetch(`/api/enrich/status?${params.toString()}`);
+    const res = await fetch(`/api/enrich/status?${params.toString()}`, {
+      cache: "no-store",
+    });
     if (!res.ok) return false;
     const data = (await res.json()) as {
       run?: {
@@ -367,10 +381,6 @@ export function Sidebar() {
         });
       } else if (shouldToast && data.run?.status === "failed") {
         toast.error("Enrichment failed");
-      } else if (shouldToast && data.run?.status === "completed") {
-        toast.success("Enrichment complete", {
-          description: `${data.run.completed_count} rows processed`,
-        });
       }
       return false;
     }
@@ -409,6 +419,11 @@ export function Sidebar() {
     setEnrichProgress(0, enrichableRows.length);
     setLastError(null);
     setEnrichingContext(isNewTab ? "new" : "existing", isNewTab ? [] : existingColumnsToEnrich);
+    // Show the per-cell spinners immediately instead of waiting for the first
+    // status poll (~2.5 s) to report the run as running.
+    for (const row of enrichableRows) {
+      setRowStatus(row.id, "processing");
+    }
     if (enrichPollRef.current) {
       clearTimeout(enrichPollRef.current);
       enrichPollRef.current = null;
@@ -513,10 +528,6 @@ export function Sidebar() {
 
       enrichPollSawActiveRef.current = true;
 
-      toast.message("Enrichment is running in the background", {
-        description: "You can leave this page. We'll notify you when it finishes.",
-      });
-
       const tick = async () => {
         try {
           const keep = await pollEnrichRun();
@@ -555,6 +566,7 @@ export function Sidebar() {
     setPaused,
     setEnrichProgress,
     setEnrichingContext,
+    setRowStatus,
   ]);
 
   useEffect(() => {
@@ -653,11 +665,18 @@ export function Sidebar() {
 
   const handleAddCustomColumn = useCallback(() => {
     if (!newColLabel.trim()) return;
+    const label = newColLabel.trim();
+    const instruction = newColPrompt.trim();
     addCustomEnrichmentColumn({
-      label: newColLabel.trim(),
-      description: newColPrompt.trim() || `Generate ${newColLabel.trim()} for this product.`,
+      label,
+      description: instruction || `Generate ${label} for this product.`,
+      customInstruction: instruction,
       type: newColType,
     });
+    const added = useSheetStore.getState().enrichmentColumns.at(-1);
+    if (added?.isCustom) {
+      setExpandedColumns((prev) => new Set(prev).add(added.id));
+    }
     setNewColLabel("");
     setNewColPrompt("");
     setNewColType("text");
@@ -990,18 +1009,19 @@ export function Sidebar() {
                       return next;
                     });
                   };
-                  // Any free-text column can carry tone/length, so PLP columns
-                  // get the same controls as the product ones.
-                  const hasToneControls = col.type === "text";
+                  // Built-in free-text columns keep tone/length. Custom columns
+                  // are only a name + instruction — those controls would look
+                  // like the user's wording was replaced by defaults.
+                  const hasToneControls = col.type === "text" && !col.isCustom;
                   const hasSettings =
+                    col.isCustom ||
                     col.type === "imageUrls" ||
                     col.type === "sourceUrls" ||
                     col.type === "categories" ||
                     col.type === "faq" ||
                     col.type === "internalLinks" ||
                     col.type === "keywords" ||
-                    hasToneControls ||
-                    col.isCustom;
+                    hasToneControls;
 
                   return (
                     <div
@@ -1080,7 +1100,50 @@ export function Sidebar() {
                           className="space-y-2.5 border-t border-border/50 px-2 pb-2.5 pt-2"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Writing Tone & length — any free-text column */}
+                          {col.isCustom && (
+                            <>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-medium text-muted-foreground">
+                                  Column name
+                                </label>
+                                <input
+                                  type="text"
+                                  value={col.label}
+                                  onChange={(e) =>
+                                    updateEnrichmentColumnConfig(col.id, {
+                                      label: e.target.value,
+                                    })
+                                  }
+                                  disabled={isEnriching}
+                                  placeholder="Column name"
+                                  className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 normal-case"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-medium text-muted-foreground">
+                                  AI instruction
+                                </label>
+                                <textarea
+                                  value={col.customInstruction ?? col.description ?? ""}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    updateEnrichmentColumnConfig(col.id, {
+                                      customInstruction: value,
+                                      description:
+                                        value.trim() ||
+                                        `Generate ${col.label} for this product.`,
+                                    });
+                                  }}
+                                  disabled={isEnriching}
+                                  rows={3}
+                                  placeholder="AI instruction for this column..."
+                                  className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 resize-none normal-case"
+                                />
+                              </div>
+                            </>
+                          )}
+
+                          {/* Writing Tone & length — built-in free-text columns only */}
                           {hasToneControls && (
                             <>
                               <div className="space-y-1">
@@ -1306,24 +1369,25 @@ export function Sidebar() {
                             </div>
                           )}
 
-                          {/* Custom Instruction — for all expandable columns */}
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-medium text-muted-foreground">
-                              Custom instruction
-                            </label>
-                            <input
-                              type="text"
-                              value={col.customInstruction ?? ""}
-                              onChange={(e) =>
-                                updateEnrichmentColumnConfig(col.id, {
-                                  customInstruction: e.target.value,
-                                })
-                              }
-                              disabled={isEnriching}
-                              placeholder="Add specific instructions for this column..."
-                              className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50"
-                            />
-                          </div>
+                          {!col.isCustom && (
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-medium text-muted-foreground">
+                                Custom instruction
+                              </label>
+                              <input
+                                type="text"
+                                value={col.customInstruction ?? ""}
+                                onChange={(e) =>
+                                  updateEnrichmentColumnConfig(col.id, {
+                                    customInstruction: e.target.value,
+                                  })
+                                }
+                                disabled={isEnriching}
+                                placeholder="Add specific instructions for this column..."
+                                className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50"
+                              />
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1357,14 +1421,14 @@ export function Sidebar() {
                       placeholder="Column name (e.g. Target Audience)"
                       value={newColLabel}
                       onChange={(e) => setNewColLabel(e.target.value)}
-                      className="w-full h-8 px-2.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      className="w-full h-8 px-2.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 normal-case"
                     />
                     <textarea
                       placeholder="AI instruction (e.g. Identify the target audience for this product)"
                       value={newColPrompt}
                       onChange={(e) => setNewColPrompt(e.target.value)}
                       rows={2}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 resize-none"
+                      className="w-full px-2.5 py-1.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 resize-none normal-case"
                     />
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] text-muted-foreground">Output type:</span>

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireGalleryAuth } from "@/lib/gallery/auth";
 import { stripe } from "@/lib/stripe";
 import { getOrCreateWalletStripeCustomer } from "@/lib/wallet/stripe-customer";
+import { stripeCheckoutBlockedReason } from "@/lib/stripe-mode";
 
 const bodySchema = z.object({
   workspaceId: z.string().uuid(),
@@ -19,11 +20,9 @@ const bodySchema = z.object({
  *  webhook (src/app/api/webhooks/stripe/route.ts) once payment clears —
  *  never here, since this request can be abandoned or the tab can close. */
 export async function POST(request: NextRequest) {
-  if (!process.env.STRIPE_SECRET_KEY) {
-    return NextResponse.json(
-      { error: "Card payments are not configured yet" },
-      { status: 503 }
-    );
+  const blocked = stripeCheckoutBlockedReason();
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 503 });
   }
 
   let json: unknown;

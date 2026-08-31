@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, CheckCheck, CircleAlert, CircleCheck, CirclePause, Loader2 } from "lucide-react";
-import { toast } from "sonner";
 import type { AppNotification, JobInboxActiveRun } from "@/lib/jobs/types";
 import { jobKindLabel } from "@/lib/jobs/href";
 
@@ -34,8 +33,6 @@ export function JobInbox({ workspaceId }: { workspaceId: string }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [inProgress, setInProgress] = useState<JobInboxActiveRun[]>([]);
   const [loading, setLoading] = useState(false);
-  const seenIdsRef = useRef<Set<string>>(new Set());
-  const primedRef = useRef(false);
 
   const loadInbox = useCallback(async () => {
     const res = await fetch(
@@ -47,30 +44,12 @@ export function JobInbox({ workspaceId }: { workspaceId: string }) {
       notifications: AppNotification[];
       inProgress: JobInboxActiveRun[];
     };
-    const incoming = data.notifications ?? [];
-    if (primedRef.current) {
-      for (const note of incoming) {
-        if (!note.read_at && !seenIdsRef.current.has(note.id)) {
-          toast.message(note.title, {
-            description: note.body,
-            action: {
-              label: "Open",
-              onClick: () => router.push(note.href),
-            },
-          });
-        }
-      }
-    }
-    primedRef.current = true;
-    seenIdsRef.current = new Set(incoming.map((n) => n.id));
     setUnreadCount(data.unreadCount ?? 0);
-    setNotifications(incoming);
+    setNotifications(data.notifications ?? []);
     setInProgress(data.inProgress ?? []);
-  }, [workspaceId, router]);
+  }, [workspaceId]);
 
   useEffect(() => {
-    primedRef.current = false;
-    seenIdsRef.current = new Set();
     void loadInbox();
     const timer = window.setInterval(() => {
       void loadInbox();

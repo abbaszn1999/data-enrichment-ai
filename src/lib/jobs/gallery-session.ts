@@ -7,6 +7,7 @@ import {
 import { applyGenerationRowPatch } from "@/lib/gallery/generation-worksheet-merge";
 import type { GalleryWorksheetJson } from "@/lib/gallery/types";
 import { galleryError, galleryLog } from "@/lib/gallery/log";
+import { withGalleryWorksheetLock } from "@/lib/gallery/worksheet-lock";
 import { JOB_BATCH_SIZE } from "./config";
 import {
   executeGalleryRow,
@@ -72,9 +73,24 @@ async function runGallerySessionInner(
   let usedCredits = worksheet.activeRun?.usedCredits ?? 0;
   let usedCost = 0;
   let pausedNoCredits = false;
+  let stopObserved = false;
 
   const persist = async () => {
     await persistGalleryWorksheet(admin, workspaceId, sessionId, worksheet!);
+  };
+
+  // Serialize every worksheet mutation through one queue so concurrent rows
+  // never race on the in-memory object or the storage revision.
+  let writeQueue: Promise<void> = Promise.resolve();
+  const commitWorksheet = (mutate: () => void): Promise<void> => {
+    const operation = writeQueue.then(async () => {
+      await withGalleryWorksheetLock(workspaceId, sessionId, async () => {
+        mutate();
+        await persist();
+      });
+    });
+    writeQueue = operation.catch(() => undefined);
+    return operation;
   };
 
   const remainingIds = targetIds.filter((id) => {
@@ -86,80 +102,96 @@ async function runGallerySessionInner(
     options?.processRow ??
     ((rowId: string) => executeGalleryRow({ runId: run.id, rowId }));
 
-  for (let i = 0; i < remainingIds.length; i += JOB_BATCH_SIZE) {
-    if (await isGalleryCancelled(admin, run.id, sessionId, workspaceId)) {
-      markRunCancelled(worksheet, targetIds);
-      break;
-    }
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      if (stopObserved) return;
+      if (await isGalleryCancelled(admin, run.id, sessionId, workspaceId)) {
+        stopObserved = true;
+        return;
+      }
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= remainingIds.length) return;
+      const rowId = remainingIds[index]!;
 
-    const batchIds = remainingIds.slice(i, i + JOB_BATCH_SIZE);
-    for (const rowId of batchIds) {
-      const index = worksheet.rows.findIndex((row) => row.id === rowId);
-      if (index < 0) continue;
-      worksheet.rows[index] = applyGenerationRowPatch({
-        storageRow: worksheet.rows[index],
-        memoryRow: worksheet.rows[index],
-        patch: {
-          status: "generating",
-          generationStage: "planning",
-          generationTarget: settings.targetPhases?.[rowId],
-          errorMessage: undefined,
-        },
-      });
-    }
-    await persist();
-
-    const outcomes = await Promise.all(batchIds.map((rowId) => processRow(rowId)));
-
-    for (const outcome of outcomes) {
-      const index = worksheet.rows.findIndex((row) => row.id === outcome.rowId);
-      if (index < 0) continue;
-      if (outcome.noCredits) {
-        pausedNoCredits = true;
-        const previous = previousStatus[outcome.rowId];
-        worksheet.rows[index] = applyGenerationRowPatch({
-          storageRow: worksheet.rows[index],
-          memoryRow: worksheet.rows[index],
+      await commitWorksheet(() => {
+        const rowIndex = worksheet!.rows.findIndex((row) => row.id === rowId);
+        if (rowIndex < 0) return;
+        worksheet!.rows[rowIndex] = applyGenerationRowPatch({
+          storageRow: worksheet!.rows[rowIndex],
+          memoryRow: worksheet!.rows[rowIndex],
           patch: {
-            status: previous && previous !== "generating" ? previous : "not_started",
-            generationStage: undefined,
-            generationTarget: undefined,
-            errorMessage: "Paused — out of credits",
+            status: "generating",
+            generationStage: "planning",
+            generationTarget: settings.targetPhases?.[rowId],
+            errorMessage: undefined,
           },
         });
-        continue;
-      }
-      worksheet.rows[index] = applyGenerationRowPatch({
-        storageRow: worksheet.rows[index],
-        memoryRow: worksheet.rows[index],
-        patch: {
-          status: outcome.status,
-          generationStage: undefined,
-          generationTarget: undefined,
-          errorMessage: outcome.errorMessage,
-          mainImagePaths: outcome.mainImagePaths,
-          mainImagePath: outcome.mainImagePath,
-          galleryImagePaths: outcome.galleryImagePaths,
-          sourceMeta: outcome.sourceMeta,
-          creditsUsed: outcome.creditsUsed,
-        },
       });
-      usedCredits += outcome.creditsUsed;
-      usedCost += outcome.cost;
-      if (outcome.status === "ready") completed += 1;
-      else failed += 1;
-    }
 
-    if (worksheet.activeRun) {
-      worksheet.activeRun.completed = completed;
-      worksheet.activeRun.failed = failed;
-      worksheet.activeRun.usedCredits = usedCredits;
-    }
-    await persist();
-    await touchJobHeartbeat(admin, run.id, { completed, failed });
+      const outcome: GalleryRowOutcome = await processRow(rowId);
 
-    if (pausedNoCredits) break;
+      await commitWorksheet(() => {
+        const rowIndex = worksheet!.rows.findIndex((row) => row.id === outcome.rowId);
+        if (rowIndex < 0) return;
+        if (outcome.noCredits) {
+          pausedNoCredits = true;
+          stopObserved = true;
+          const previous = previousStatus[outcome.rowId];
+          worksheet!.rows[rowIndex] = applyGenerationRowPatch({
+            storageRow: worksheet!.rows[rowIndex],
+            memoryRow: worksheet!.rows[rowIndex],
+            patch: {
+              status: previous && previous !== "generating" ? previous : "not_started",
+              generationStage: undefined,
+              generationTarget: undefined,
+              errorMessage: "Paused — out of credits",
+            },
+          });
+          return;
+        }
+        worksheet!.rows[rowIndex] = applyGenerationRowPatch({
+          storageRow: worksheet!.rows[rowIndex],
+          memoryRow: worksheet!.rows[rowIndex],
+          patch: {
+            status: outcome.status,
+            generationStage: undefined,
+            generationTarget: undefined,
+            errorMessage: outcome.errorMessage,
+            mainImagePaths: outcome.mainImagePaths,
+            mainImagePath: outcome.mainImagePath,
+            galleryImagePaths: outcome.galleryImagePaths,
+            sourceMeta: outcome.sourceMeta,
+            creditsUsed: outcome.creditsUsed,
+          },
+        });
+        usedCredits += outcome.creditsUsed;
+        usedCost += outcome.cost;
+        if (outcome.status === "ready") completed += 1;
+        else if (!outcome.noCredits) failed += 1;
+
+        if (worksheet!.activeRun) {
+          worksheet!.activeRun.completed = completed;
+          worksheet!.activeRun.failed = failed;
+          worksheet!.activeRun.usedCredits = usedCredits;
+        }
+      });
+
+      // Heartbeat + counts land in job_runs immediately after each row so
+      // polling/Realtime clients see progress in near real time, not once
+      // per JOB_BATCH_SIZE-row batch.
+      await touchJobHeartbeat(admin, run.id, { completed, failed });
+
+      if (pausedNoCredits) return;
+    }
+  };
+
+  const workerCount = Math.min(JOB_BATCH_SIZE, remainingIds.length || 1);
+  if (remainingIds.length > 0) {
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
   }
+  await writeQueue.catch(() => undefined);
 
   const cancelled = await isGalleryCancelled(admin, run.id, sessionId, workspaceId);
   if (cancelled) markRunCancelled(worksheet, targetIds);
