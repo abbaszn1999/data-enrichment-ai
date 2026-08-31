@@ -143,6 +143,8 @@ export async function processScrapingRow(params: {
 
   galleryLog("row", `Processing row ${row.id} (index ${row.rowIndex}) via Scraping`, {
     runPhase,
+    galleryImagesPerRow: settings.imagesPerRow,
+    mainImagesPerRow: settings.main?.imagesPerRow,
   });
   const costs: AiCallCost[] = [];
   const recordUsage = async (_stageKey: string, cost: AiCallCost | null) => {
@@ -423,6 +425,7 @@ export async function processScrapingRow(params: {
       }
 
       for (const candidate of gallerySearch.galleryCandidates) {
+        if (galleryPaths.length >= galleryCount) break;
         if (galleryPaths.includes(candidate.imageUrl)) continue;
         galleryPaths.push(candidate.imageUrl);
         sourceMetaImages.push({

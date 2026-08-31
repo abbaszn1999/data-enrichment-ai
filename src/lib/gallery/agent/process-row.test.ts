@@ -490,4 +490,66 @@ describe("two-stage scraping row", () => {
     ]);
     expect(result.row.galleryImagePaths).toEqual([galleryCandidate.imageUrl]);
   });
+
+  it("keeps at most the requested gallery image count", async () => {
+    mocks.searchGallery.mockResolvedValue(
+      searchGalleryResult([
+        {
+          imageUrl: "https://cdn.example/g1.png",
+          pageUrl: "https://example.com/1",
+          title: "one",
+          width: 0,
+          height: 0,
+          sourceDomain: "example.com",
+        },
+        {
+          imageUrl: "https://cdn.example/g2.png",
+          pageUrl: "https://example.com/2",
+          title: "two",
+          width: 0,
+          height: 0,
+          sourceDomain: "example.com",
+        },
+        {
+          imageUrl: "https://cdn.example/g3.png",
+          pageUrl: "https://example.com/3",
+          title: "three",
+          width: 0,
+          height: 0,
+          sourceDomain: "example.com",
+        },
+        {
+          imageUrl: "https://cdn.example/g4.png",
+          pageUrl: "https://example.com/4",
+          title: "four",
+          width: 0,
+          height: 0,
+          sourceDomain: "example.com",
+        },
+      ])
+    );
+    const existing = row();
+    existing.mainImagePath = "https://cdn.example/main.png";
+    existing.mainImagePaths = ["https://cdn.example/main.png"];
+
+    const result = await processScrapingRow({
+      admin: {} as never,
+      workspaceId: "workspace",
+      sessionId: "session-1",
+      worksheet: worksheet(null, 2),
+      row: existing,
+      ownerUserId: "owner",
+      actorUserId: "actor",
+      runId: "run-gallery-cap",
+      runPhase: "gallery",
+    });
+
+    expect(mocks.searchGallery).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedGalleryImages: 2 })
+    );
+    expect(result.row.galleryImagePaths).toEqual([
+      "https://cdn.example/g1.png",
+      "https://cdn.example/g2.png",
+    ]);
+  });
 });

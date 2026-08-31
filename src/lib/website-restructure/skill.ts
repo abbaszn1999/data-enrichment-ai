@@ -34,7 +34,11 @@ Hard rules, always:
   {{WR_LOGO_SRC}} — never a real URL, a base64 string, or empty. Example:
   <img src="{{WR_LOGO_SRC}}" alt="Store logo" class="wr-logo" />. If the brief
   says there is no logo, still include the tag with that placeholder; the
-  caller decides whether to render it.
+  caller decides whether to render it. The same rule applies when the merchant
+  attaches a logo image in chat: keep the placeholder — the platform swaps the
+  file. If they attach a color palette or a screenshot, read the real hex
+  values / layout from that image and apply them in CSS. Never invent URLs
+  and never dump attached image bytes into the HTML.
 - Dropdown / mega menus must open and close via click or keyboard focus, not
   hover-only — hover-only breaks on touch devices and fails accessibility.
   Attach real event listeners in the <script> (no inline onclick=""). Every

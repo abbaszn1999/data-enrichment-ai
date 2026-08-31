@@ -1,15 +1,27 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type FormEvent, type ClipboardEvent } from "react";
 import { Bot, ImagePlus, Loader2, Send, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 import {
+  WR_MAX_CHAT_ATTACHMENTS,
   WR_MAX_COMPETITORS,
   WR_MAX_EDIT_MESSAGES,
   WR_MAX_IMAGES,
+  type WrChatAttachment,
   type WrPhase,
 } from "@/lib/website-restructure/types";
 import type { WrProjectRowWithUrls } from "@/lib/website-restructure/client-api";
+import {
+  WR_CHAT_IMAGE_ACCEPT,
+  WR_CHAT_IMAGE_ONLY_INSTRUCTION,
+  takeWrChatImages,
+  wrChatImageFilesFromClipboard,
+  wrChatImageFilesFromList,
+} from "@/lib/website-restructure/wr-chat-images";
 import { WrProgressTrace } from "./wr-progress-trace";
+
+type PendingChatImage = { id: string; file: File; previewUrl: string };
 
 type WrChatPanelProps = {
   project: WrProjectRowWithUrls;
@@ -25,7 +37,7 @@ type WrChatPanelProps = {
   onAddCompetitor: (raw: string) => void;
   onRemoveCompetitor: (index: number) => void;
   onStartBuild: (skipCompetitors: boolean) => void;
-  onSendEdit: (instruction: string) => void;
+  onSendEdit: (instruction: string, files: File[]) => void;
 };
 
 function AgentBubble({ children }: { children: React.ReactNode }) {
@@ -41,11 +53,65 @@ function AgentBubble({ children }: { children: React.ReactNode }) {
   );
 }
 
-function UserBubble({ children }: { children: React.ReactNode }) {
+function ChatImageThumbs({
+  items,
+  size = "md",
+  tone = "onLight",
+  onRemove,
+}: {
+  items: Array<{ id: string; src: string; alt: string }>;
+  size?: "sm" | "md";
+  tone?: "onDark" | "onLight";
+  onRemove?: (id: string) => void;
+}) {
+  const box = size === "sm" ? "h-11 w-11" : "h-14 w-14";
+  const frame =
+    tone === "onDark"
+      ? "border-white/15 bg-white/10"
+      : "border-border/70 bg-muted";
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((item) => (
+        <div
+          key={item.id}
+          className={`group relative ${box} overflow-hidden rounded-lg border ${frame}`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={item.src} alt={item.alt} className="h-full w-full object-cover" />
+          {onRemove ? (
+            <button
+              type="button"
+              onClick={() => onRemove(item.id)}
+              className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition-opacity group-hover:opacity-100"
+              aria-label={`Remove ${item.alt}`}
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function UserBubble({
+  text,
+  attachments,
+  imageUrls,
+}: {
+  text: string;
+  attachments?: WrChatAttachment[];
+  imageUrls: Record<string, string>;
+}) {
+  const thumbs = (attachments ?? [])
+    .map((att) => ({ id: att.id, src: imageUrls[att.id] ?? "", alt: att.filename }))
+    .filter((t) => t.src);
+  const showText = text.trim() && text.trim() !== WR_CHAT_IMAGE_ONLY_INSTRUCTION;
   return (
     <div className="flex justify-end animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
-      <div className="max-w-[88%] rounded-2xl rounded-tr-md bg-foreground px-3.5 py-2.5 text-xs leading-relaxed text-background whitespace-pre-wrap">
-        {children}
+      <div className="max-w-[88%] space-y-1.5 rounded-2xl rounded-tr-md bg-foreground px-2.5 py-2 text-xs leading-relaxed text-background">
+        {thumbs.length > 0 ? <ChatImageThumbs items={thumbs} size="sm" tone="onDark" /> : null}
+        {showText ? <div className="whitespace-pre-wrap px-1 py-0.5">{text}</div> : null}
       </div>
     </div>
   );
@@ -59,7 +125,8 @@ const PHASE_PROMPTS: Record<WrPhase, string> = {
   awaiting_competitors:
     "Optionally, name up to 4 competitor stores (a brand name, or a URL) and I'll look at how their headers are organized before building yours.",
   building: "Building your header now — this takes a moment.",
-  editing: "Your header is ready on the right. Tell me what to change, or download it when you're happy.",
+  editing:
+    "Your header is ready on the right. Tell me what to change, or paste an image — a logo, a color palette, a screenshot — and I'll use it.",
   locked: "The edit limit for this project has been reached. You can still preview and download the header.",
   failed: "The last build failed. You can try again below.",
 };
@@ -82,19 +149,87 @@ export function WrChatPanel({
 }: WrChatPanelProps) {
   const [competitorDraft, setCompetitorDraft] = useState("");
   const [editDraft, setEditDraft] = useState("");
+  const [pending, setPending] = useState<PendingChatImage[]>([]);
+  const [composerDragOver, setComposerDragOver] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
 
   const { phase, state } = project;
   const readOnly = !canWrite;
   const editMessagesLeft = Math.max(0, WR_MAX_EDIT_MESSAGES - project.editMessagesUsed);
+  const composerLocked = busy || editMessagesLeft === 0;
+
+  useEffect(() => {
+    return () => {
+      pending.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+    };
+    // Revoke leftover blob URLs if the panel unmounts mid-compose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const queuePending = (files: File[]) => {
+    const { accepted, rejectedReason } = takeWrChatImages(files, pending.length);
+    if (rejectedReason && accepted.length === 0) {
+      toast.error(rejectedReason);
+      return;
+    }
+    if (rejectedReason) toast.error(rejectedReason);
+    if (accepted.length === 0) return;
+    setPending((prev) => [
+      ...prev,
+      ...accepted.map((file) => ({
+        id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()),
+        file,
+        previewUrl: URL.createObjectURL(file),
+      })),
+    ]);
+  };
+
+  const removePending = (id: string) => {
+    setPending((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((p) => p.id !== id);
+    });
+  };
 
   const submitEdit = (e: FormEvent) => {
     e.preventDefault();
     const text = editDraft.trim();
-    if (!text || busy || readOnly) return;
-    onSendEdit(text);
+    if ((!text && pending.length === 0) || busy || readOnly || editMessagesLeft === 0) return;
+    const files = pending.map((p) => p.file);
+    pending.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+    setPending([]);
     setEditDraft("");
+    onSendEdit(text, files);
+  };
+
+  const handleComposerPaste = (e: ClipboardEvent) => {
+    if (composerLocked || readOnly) return;
+    const files = wrChatImageFilesFromClipboard(e.clipboardData);
+    if (files.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    queuePending(files);
+    const pastedText = e.clipboardData.getData("text/plain");
+    if (pastedText) setEditDraft((d) => d + pastedText);
+  };
+
+  const handleComposerDragOver = (e: DragEvent) => {
+    if (composerLocked || readOnly) return;
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    e.preventDefault();
+    setComposerDragOver(true);
+  };
+
+  const handleComposerDrop = (e: DragEvent) => {
+    setComposerDragOver(false);
+    if (composerLocked || readOnly) return;
+    const files = wrChatImageFilesFromList(e.dataTransfer.files);
+    if (files.length === 0) return;
+    e.preventDefault();
+    queuePending(files);
   };
 
   const submitCompetitor = (e: FormEvent) => {
@@ -104,6 +239,8 @@ export function WrChatPanel({
     onAddCompetitor(text);
     setCompetitorDraft("");
   };
+
+  const canSend = !composerLocked && (editDraft.trim().length > 0 || pending.length > 0);
 
   return (
     <aside className="autommerce-dashboard flex h-full min-h-0 w-full flex-col bg-muted/20 [font-family:var(--brand-font)]">
@@ -133,7 +270,24 @@ export function WrChatPanel({
         {busy && phase !== "editing" && phase !== "locked" ? <WrProgressTrace steps={progressSteps} done={false} /> : null}
 
         {phase === "awaiting_images" && !readOnly ? (
-          <div className="space-y-2 rounded-2xl border border-border/60 bg-card p-3">
+          <div
+            className="space-y-2 rounded-2xl border border-border/60 bg-card p-3"
+            onPaste={(e) => {
+              const files = wrChatImageFilesFromClipboard(e.clipboardData);
+              if (files.length === 0) return;
+              e.preventDefault();
+              onUploadImages(files);
+            }}
+            onDragOver={(e) => {
+              if ([...e.dataTransfer.types].includes("Files")) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              const files = wrChatImageFilesFromList(e.dataTransfer.files);
+              if (files.length === 0) return;
+              e.preventDefault();
+              onUploadImages(files);
+            }}
+          >
             <div className="grid grid-cols-3 gap-2">
               {state.images.map((img) => (
                 <div key={img.id} className="group relative aspect-square overflow-hidden rounded-lg border border-border/60 bg-muted">
@@ -173,7 +327,8 @@ export function WrChatPanel({
               }}
             />
             <p className="text-[11px] text-muted-foreground">
-              {state.images.length}/{WR_MAX_IMAGES} uploaded — include one with the menu open if possible.
+              {state.images.length}/{WR_MAX_IMAGES} uploaded — paste or drop a screenshot, and include one with the menu
+              open if possible.
             </p>
             <button
               type="button"
@@ -187,7 +342,24 @@ export function WrChatPanel({
         ) : null}
 
         {phase === "awaiting_logo" && !readOnly ? (
-          <div className="space-y-2 rounded-2xl border border-border/60 bg-card p-3">
+          <div
+            className="space-y-2 rounded-2xl border border-border/60 bg-card p-3"
+            onPaste={(e) => {
+              const files = wrChatImageFilesFromClipboard(e.clipboardData);
+              if (files.length === 0) return;
+              e.preventDefault();
+              if (files[0]) onUploadLogo(files[0]);
+            }}
+            onDragOver={(e) => {
+              if ([...e.dataTransfer.types].includes("Files")) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              const files = wrChatImageFilesFromList(e.dataTransfer.files);
+              if (files.length === 0) return;
+              e.preventDefault();
+              if (files[0]) onUploadLogo(files[0]);
+            }}
+          >
             {state.logo ? (
               <div className="flex items-center gap-3">
                 <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-lg border border-border/60 bg-muted">
@@ -210,7 +382,7 @@ export function WrChatPanel({
                 className="flex w-full flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border/70 py-6 text-muted-foreground hover:text-foreground hover:border-foreground/40"
               >
                 <ImagePlus className="h-4 w-4" />
-                <span className="text-[11px]">Upload logo</span>
+                <span className="text-[11px]">Upload logo — or paste with Ctrl+V</span>
               </button>
             )}
             <input
@@ -295,7 +467,7 @@ export function WrChatPanel({
 
         {state.chat.map((m) =>
           m.role === "user" ? (
-            <UserBubble key={m.id}>{m.text}</UserBubble>
+            <UserBubble key={m.id} text={m.text} attachments={m.attachments} imageUrls={state.imageUrls} />
           ) : (
             <AgentBubble key={m.id}>
               <span className={m.isError ? "text-destructive" : undefined}>{m.text}</span>
@@ -311,36 +483,76 @@ export function WrChatPanel({
       {(phase === "editing" || phase === "locked") && !readOnly ? (
         <form onSubmit={submitEdit} className="shrink-0 border-t border-border/60 px-3 py-3">
           <div
-            className={`flex items-end gap-2 rounded-2xl border border-border/70 bg-background px-2.5 py-2 ${
-              busy || editMessagesLeft === 0 ? "opacity-70" : ""
-            }`}
+            onPaste={handleComposerPaste}
+            onDragOver={handleComposerDragOver}
+            onDragLeave={() => setComposerDragOver(false)}
+            onDrop={handleComposerDrop}
+            tabIndex={0}
+            className={`rounded-2xl border bg-background px-2.5 py-2 transition-colors ${
+              composerDragOver
+                ? "border-[#400095] ring-2 ring-[#400095]/20 dark:border-[#F76D01] dark:ring-[#F76D01]/20"
+                : "border-border/70"
+            } ${composerLocked ? "opacity-70" : ""}`}
           >
-            <textarea
-              value={editDraft}
-              onChange={(e) => setEditDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submitEdit(e);
+            {pending.length > 0 ? (
+              <div className="mb-2">
+                <ChatImageThumbs
+                  items={pending.map((p) => ({ id: p.id, src: p.previewUrl, alt: p.file.name }))}
+                  onRemove={composerLocked ? undefined : removePending}
+                />
+              </div>
+            ) : null}
+            <div className="flex items-end gap-1.5">
+              <button
+                type="button"
+                disabled={composerLocked || pending.length >= WR_MAX_CHAT_ATTACHMENTS}
+                onClick={() => chatFileInputRef.current?.click()}
+                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
+                aria-label="Attach image"
+                title="Attach image (or paste with Ctrl+V)"
+              >
+                <ImagePlus className="h-4 w-4" />
+              </button>
+              <input
+                ref={chatFileInputRef}
+                type="file"
+                accept={WR_CHAT_IMAGE_ACCEPT}
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  if (files.length > 0) queuePending(files);
+                  e.target.value = "";
+                }}
+              />
+              <textarea
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                onPaste={handleComposerPaste}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submitEdit(e);
+                  }
+                }}
+                disabled={composerLocked}
+                rows={2}
+                placeholder={
+                  editMessagesLeft === 0
+                    ? "Edit limit reached — you can still preview and download"
+                    : "Describe a change, or paste an image…"
                 }
-              }}
-              disabled={busy || editMessagesLeft === 0}
-              rows={2}
-              placeholder={
-                editMessagesLeft === 0
-                  ? "Edit limit reached — you can still preview and download"
-                  : "Describe a change, e.g. \"make the announcement bar dark green\"…"
-              }
-              className="min-h-[44px] max-h-28 flex-1 resize-none bg-transparent px-1 py-1 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
-            />
-            <button
-              type="submit"
-              disabled={busy || editMessagesLeft === 0 || !editDraft.trim()}
-              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#400095] text-white shadow-sm transition-opacity hover:bg-[#6B358D] disabled:opacity-30 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
-              aria-label="Send"
-            >
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-            </button>
+                className="min-h-[44px] max-h-28 flex-1 resize-none bg-transparent px-1 py-1 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+              />
+              <button
+                type="submit"
+                disabled={!canSend}
+                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#400095] text-white shadow-sm transition-opacity hover:bg-[#6B358D] disabled:opacity-30 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                aria-label="Send"
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              </button>
+            </div>
           </div>
         </form>
       ) : null}

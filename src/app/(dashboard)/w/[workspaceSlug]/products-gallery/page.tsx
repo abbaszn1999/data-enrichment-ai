@@ -1587,6 +1587,11 @@ export default function ProductsGalleryPage() {
         settingsSnapshot,
         worksheetSnapshot: worksheet!,
         worksheetRevision: worksheetRevisionRef.current,
+        imagesPerRow:
+          Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4,
+        mainImagesPerRow:
+          Number(activeTab === "scraping" ? scrapingMainImages : aiMainImages) ||
+          1,
         // Mixed selections omit runPhase so the server resolves per row.
         ...(selectionPhase.phase === "mixed"
           ? {}
@@ -1732,6 +1737,11 @@ export default function ProductsGalleryPage() {
         worksheetSnapshot: worksheet!,
         worksheetRevision: worksheetRevisionRef.current,
         retryFailed: true,
+        imagesPerRow:
+          Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4,
+        mainImagesPerRow:
+          Number(activeTab === "scraping" ? scrapingMainImages : aiMainImages) ||
+          1,
         ...(retryPhase.phase === "mixed"
           ? {}
           : { runPhase: retryPhase.phase }),

@@ -1,10 +1,20 @@
 import { createAdminClient } from "@/lib/supabase-admin";
 import { processAiRow } from "@/lib/gallery/agent/process-ai-row";
 import { processScrapingRow } from "@/lib/gallery/agent/process-row";
+import { galleryLog, galleryWarn } from "@/lib/gallery/log";
 import { loadGalleryWorksheetAdmin } from "@/lib/gallery/storage-admin";
-import type { GalleryRow, GalleryRunPhase } from "@/lib/gallery/types";
+import type {
+  GalleryProjectSettings,
+  GalleryRow,
+  GalleryRunPhase,
+  GalleryWorksheetJson,
+} from "@/lib/gallery/types";
 import { isInsufficientCredits } from "./credits";
-import type { GalleryJobSettings } from "./gallery-settings";
+import {
+  hydrateGalleryWorksheetForJob,
+  parseGalleryJobRuntimeSettings,
+  type GalleryJobSettings,
+} from "./gallery-settings";
 import { loadJobRun } from "./repo";
 
 export type GalleryRowTaskInput = {
@@ -27,6 +37,54 @@ export type GalleryRowOutcome = {
   noCredits?: boolean;
 };
 
+async function loadGallerySessionSettings(
+  admin: ReturnType<typeof createAdminClient>,
+  workspaceId: string,
+  sessionId: string
+): Promise<GalleryProjectSettings | null> {
+  const { data, error } = await admin
+    .from("gallery_sessions")
+    .select("settings")
+    .eq("id", sessionId)
+    .eq("workspace_id", workspaceId)
+    .maybeSingle();
+  if (error) {
+    galleryWarn("row:hydrate", "Could not load gallery session settings", {
+      sessionId,
+      error: error.message,
+    });
+    return null;
+  }
+  return parseGalleryJobRuntimeSettings(data?.settings);
+}
+
+export async function resolveGalleryRowWorksheet(params: {
+  admin: ReturnType<typeof createAdminClient>;
+  workspaceId: string;
+  sessionId: string;
+  worksheet: GalleryWorksheetJson;
+  jobSettings: GalleryJobSettings;
+}): Promise<GalleryWorksheetJson> {
+  const fromJob = parseGalleryJobRuntimeSettings(params.jobSettings.runtimeSettings);
+  const runtimeSettings =
+    fromJob ??
+    (await loadGallerySessionSettings(
+      params.admin,
+      params.workspaceId,
+      params.sessionId
+    ));
+  const hydrated = hydrateGalleryWorksheetForJob(params.worksheet, runtimeSettings);
+  const provider = params.jobSettings.provider;
+  const active =
+    provider === "ai" ? hydrated.settings.ai : hydrated.settings.scraping;
+  galleryLog("row:hydrate", "Applied gallery run settings", {
+    source: fromJob ? "job" : runtimeSettings ? "session" : "worksheet-default",
+    galleryImagesPerRow: active.imagesPerRow,
+    mainImagesPerRow: active.main?.imagesPerRow,
+  });
+  return hydrated;
+}
+
 export async function executeGalleryRow(
   input: GalleryRowTaskInput
 ): Promise<GalleryRowOutcome> {
@@ -42,12 +100,28 @@ export async function executeGalleryRow(
     };
   }
   const settings = run.settings as GalleryJobSettings;
-  const worksheet = await loadGalleryWorksheetAdmin(
+  const loaded = await loadGalleryWorksheetAdmin(
     run.workspace_id,
     run.session_id
   );
-  const row = worksheet?.rows.find((candidate) => candidate.id === input.rowId);
-  if (!worksheet || !row) {
+  if (!loaded) {
+    return {
+      rowId: input.rowId,
+      status: "failed",
+      error: "Row not found",
+      creditsUsed: 0,
+      cost: 0,
+    };
+  }
+  const worksheet = await resolveGalleryRowWorksheet({
+    admin,
+    workspaceId: run.workspace_id,
+    sessionId: run.session_id,
+    worksheet: loaded,
+    jobSettings: settings,
+  });
+  const row = worksheet.rows.find((candidate) => candidate.id === input.rowId);
+  if (!row) {
     return {
       rowId: input.rowId,
       status: "failed",

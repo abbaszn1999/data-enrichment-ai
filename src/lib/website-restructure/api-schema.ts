@@ -1,14 +1,23 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
+import { WR_MAX_CHAT_ATTACHMENTS } from "./types";
 
 export const workspaceIdSchema = z.string().uuid();
 export const projectIdSchema = z.string().uuid();
+
+export const wrChatAttachmentSchema = z.object({
+  id: z.string().max(80),
+  storagePath: z.string().max(400),
+  filename: z.string().max(200),
+  mimeType: z.string().min(1).max(100),
+});
 
 export const wrChatMessageSchema = z.object({
   id: z.string().max(80),
   role: z.enum(["agent", "user"]),
   text: z.string().max(4000),
   isError: z.boolean().optional(),
+  attachments: z.array(wrChatAttachmentSchema).max(WR_MAX_CHAT_ATTACHMENTS).optional(),
 });
 
 export const wrUploadedImageSchema = z.object({
@@ -56,7 +65,7 @@ const MAX_UPLOAD_BASE64_CHARS = 11_000_000; // ~8MB decoded, generous for a full
 export const assetUploadBodySchema = z.object({
   workspaceId: workspaceIdSchema,
   projectId: projectIdSchema,
-  kind: z.enum(["image", "logo"]),
+  kind: z.enum(["image", "logo", "chat"]),
   filename: z.string().min(1).max(200),
   mimeType: z.string().min(1).max(100),
   dataBase64: z.string().min(1).max(MAX_UPLOAD_BASE64_CHARS),
@@ -73,9 +82,15 @@ export const buildBodySchema = projectRefBodySchema.extend({
   storeLanguageHint: z.string().max(60).optional(),
 });
 
-export const chatEditBodySchema = projectRefBodySchema.extend({
-  instruction: z.string().min(1).max(2000),
-});
+export const chatEditBodySchema = projectRefBodySchema
+  .extend({
+    instruction: z.string().max(2000),
+    attachments: z.array(wrChatAttachmentSchema).max(WR_MAX_CHAT_ATTACHMENTS).optional(),
+  })
+  .refine(
+    (data) => data.instruction.trim().length > 0 || (data.attachments?.length ?? 0) > 0,
+    { message: "Describe a change or attach an image" }
+  );
 
 export const restoreVersionBodySchema = projectRefBodySchema.extend({
   version: z.number().int().positive(),

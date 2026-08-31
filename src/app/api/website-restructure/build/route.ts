@@ -4,7 +4,6 @@
 // /api/website-restructure/chat instead.
 
 import { NextRequest } from "next/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireWrAuth } from "@/lib/website-restructure/auth";
 import { buildBodySchema, jsonError } from "@/lib/website-restructure/api-schema";
 import {
@@ -13,6 +12,7 @@ import {
   tryLeaseWrProjectBuild,
 } from "@/lib/website-restructure/server-persist";
 import {
+  downloadWrImageAsInline,
   loadWrTaxonomyAdmin,
   saveWrGenerationContextAdmin,
   saveWrVersionAdmin,
@@ -46,16 +46,6 @@ function createNdjsonStream(
       }
     },
   });
-}
-
-async function downloadImageBase64(
-  admin: SupabaseClient,
-  storagePath: string
-): Promise<{ mimeType: string; data: string } | null> {
-  const { data, error } = await admin.storage.from(WR_STORAGE_BUCKET).download(storagePath);
-  if (error || !data) return null;
-  const buf = await data.arrayBuffer();
-  return { mimeType: data.type || "image/jpeg", data: Buffer.from(buf).toString("base64") };
 }
 
 export async function POST(request: NextRequest) {
@@ -94,7 +84,7 @@ export async function POST(request: NextRequest) {
       const downloaded = await Promise.all(
         project.state.images.map(async (img) => ({
           asset: img,
-          image: await downloadImageBase64(auth.admin, img.storagePath),
+          image: await downloadWrImageAsInline(auth.admin, img.storagePath),
         }))
       );
       for (const { asset, image } of downloaded) {
@@ -110,7 +100,7 @@ export async function POST(request: NextRequest) {
       if (images.length === 0) throw new Error("Could not read any uploaded header screenshot.");
 
       const logoImage = project.state.logo
-        ? await downloadImageBase64(auth.admin, project.state.logo.storagePath)
+        ? await downloadWrImageAsInline(auth.admin, project.state.logo.storagePath)
         : null;
       // A logo the merchant uploaded but that can't be read would otherwise be
       // silently skipped, and the brief would come back describing a header

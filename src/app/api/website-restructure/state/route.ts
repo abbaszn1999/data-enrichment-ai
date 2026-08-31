@@ -23,6 +23,9 @@ async function withSignedUrls(
   for (const p of projects) {
     for (const img of p.state.images) allPaths.add(img.storagePath);
     if (p.state.logo) allPaths.add(p.state.logo.storagePath);
+    for (const message of p.state.chat) {
+      for (const att of message.attachments ?? []) allPaths.add(att.storagePath);
+    }
   }
   const urlByPath = new Map<string, string>();
   if (allPaths.size > 0) {
@@ -42,6 +45,12 @@ async function withSignedUrls(
     if (p.state.logo) {
       const url = urlByPath.get(p.state.logo.storagePath);
       if (url) imageUrls[p.state.logo.id] = url;
+    }
+    for (const message of p.state.chat) {
+      for (const att of message.attachments ?? []) {
+        const url = urlByPath.get(att.storagePath);
+        if (url) imageUrls[att.id] = url;
+      }
     }
     return { ...p, state: { ...p.state, imageUrls } };
   });

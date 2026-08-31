@@ -12,6 +12,8 @@ import {
   updateWrProjectState,
 } from "@/lib/website-restructure/server-persist";
 import {
+  downloadWrImageAsInline,
+  isWrChatAttachmentPath,
   loadWrBriefAdmin,
   loadWrTaxonomyAdmin,
   loadWrVersionAdmin,
@@ -20,13 +22,23 @@ import {
 } from "@/lib/website-restructure/storage";
 import { runEdit } from "@/lib/website-restructure/agent";
 import { WR_MAX_EDIT_MESSAGES } from "@/lib/website-restructure/types";
-import type { WrChatMessage, WrVersion } from "@/lib/website-restructure/types";
+import type { WrChatAttachment, WrChatMessage, WrUploadedImage, WrVersion } from "@/lib/website-restructure/types";
+import {
+  resolveWrEditInstruction,
+  wrEditWantsLogoFromAttachments,
+} from "@/lib/website-restructure/wr-chat-images";
 
 export const maxDuration = 300;
 
 type StreamEvent =
   | { type: "status"; message: string }
-  | { type: "version"; data: WrVersion; logoUrl: string | null; editMessagesUsed: number }
+  | {
+      type: "version";
+      data: WrVersion;
+      logoUrl: string | null;
+      logo: WrUploadedImage | null;
+      editMessagesUsed: number;
+    }
   | { type: "error"; error: string };
 
 function createNdjsonStream(
@@ -59,7 +71,19 @@ export async function POST(request: NextRequest) {
 
   const parsed = chatEditBodySchema.safeParse(json);
   if (!parsed.success) return jsonError("Invalid edit payload", 400);
-  const { workspaceId, projectId, instruction } = parsed.data;
+  const attachments = parsed.data.attachments ?? [];
+  const instruction = resolveWrEditInstruction(parsed.data.instruction, attachments.length);
+  if (!instruction) return jsonError("Describe a change or attach an image", 400);
+  const { workspaceId, projectId } = parsed.data;
+
+  for (const att of attachments) {
+    if (!isWrChatAttachmentPath(workspaceId, projectId, att.storagePath)) {
+      return jsonError("Invalid image attachment", 400);
+    }
+    if (!att.mimeType.toLowerCase().startsWith("image/")) {
+      return jsonError("Only image attachments are supported", 400);
+    }
+  }
 
   const auth = await requireWrAuth({ workspaceId, requireWrite: true });
   if (!auth.ok) return auth.response;
@@ -85,8 +109,38 @@ export async function POST(request: NextRequest) {
         throw new Error("Missing prior build data — this project needs a fresh build.");
       }
 
+      const editImages: Array<{ mimeType: string; data: string; filename: string }> = [];
+      if (attachments.length > 0) {
+        push({
+          type: "status",
+          message:
+            attachments.length === 1 ? "Reading your attached image" : `Reading ${attachments.length} attached images`,
+        });
+        for (const att of attachments) {
+          const inline = await downloadWrImageAsInline(auth.admin, att.storagePath);
+          if (!inline) {
+            console.warn(
+              `[website-restructure/chat] attachment "${att.filename}" (${att.storagePath}) could not be read`
+            );
+            continue;
+          }
+          const mimeType = inline.mimeType.toLowerCase().startsWith("image/")
+            ? inline.mimeType
+            : att.mimeType || "image/png";
+          editImages.push({ mimeType, data: inline.data, filename: att.filename });
+        }
+        if (editImages.length === 0) {
+          throw new Error("Could not read the attached image. Try uploading it again.");
+        }
+      }
+
       push({ type: "status", message: "Applying your changes" });
-      const userMessage: WrChatMessage = { id: crypto.randomUUID(), role: "user", text: instruction };
+      const userMessage: WrChatMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        text: instruction,
+        attachments: attachments.length > 0 ? attachments : undefined,
+      };
       const recentChat = [...project.state.chat, userMessage];
 
       const { result } = await runEdit({
@@ -95,6 +149,7 @@ export async function POST(request: NextRequest) {
         taxonomyTree: tree,
         recentChat,
         instruction,
+        images: editImages,
       });
 
       const nextVersionNumber = project.activeVersion + 1;
@@ -112,8 +167,25 @@ export async function POST(request: NextRequest) {
         role: "agent",
         text: result.notes || "Updated your header.",
       };
+
+      const storedAttachments: WrChatAttachment[] = attachments.map((att) => ({
+        id: att.id,
+        storagePath: att.storagePath,
+        filename: att.filename,
+        mimeType: att.mimeType,
+      }));
+      const applyAsLogo = wrEditWantsLogoFromAttachments(instruction, storedAttachments.length);
+      const nextLogo: WrUploadedImage | null = applyAsLogo && storedAttachments[0]
+        ? {
+            id: storedAttachments[0].id,
+            storagePath: storedAttachments[0].storagePath,
+            filename: storedAttachments[0].filename,
+          }
+        : project.state.logo;
+
       await updateWrProjectState(auth.admin, workspaceId, projectId, {
         ...project.state,
+        logo: nextLogo,
         chat: [...recentChat, agentMessage].slice(-60),
       });
 
@@ -125,10 +197,10 @@ export async function POST(request: NextRequest) {
       });
 
       let logoUrl: string | null = null;
-      if (project.state.logo) {
+      if (nextLogo) {
         const { data: signed } = await auth.admin.storage
           .from(WR_STORAGE_BUCKET)
-          .createSignedUrl(project.state.logo.storagePath, 3600);
+          .createSignedUrl(nextLogo.storagePath, 3600);
         logoUrl = signed?.signedUrl ?? null;
       }
 
@@ -136,6 +208,7 @@ export async function POST(request: NextRequest) {
         type: "version",
         data: version,
         logoUrl,
+        logo: nextLogo,
         editMessagesUsed: Math.min(WR_MAX_EDIT_MESSAGES, project.editMessagesUsed + 1),
       });
     } catch (error) {

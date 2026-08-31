@@ -44,10 +44,12 @@ import {
   wrDownloadUrl,
   type WrProjectRowWithUrls,
 } from "@/lib/website-restructure/client-api";
+import { resolveWrEditInstruction, wrChatImageFilename } from "@/lib/website-restructure/wr-chat-images";
 import {
   WR_DEFAULT_PROJECT_LIMIT,
   WR_MAX_EDIT_MESSAGES,
   type WrBuildResult,
+  type WrChatAttachment,
   type WrChatMessage,
 } from "@/lib/website-restructure/types";
 import { WrProjectsRail } from "./wr-projects-rail";
@@ -464,15 +466,52 @@ export function WebsiteRestructureShell() {
     });
   };
 
-  const handleSendEdit = (instruction: string) => {
+  const handleSendEdit = (instruction: string, files: File[] = []) => {
     if (!canEdit) return;
     withProject(async (project) => {
       setBusy(true);
       setProgressSteps([]);
-      const userMessage: WrChatMessage = { id: newId(), role: "user", text: instruction };
-      updateProjectLocal(project.id, { state: { ...project.state, chat: [...project.state.chat, userMessage] } });
+      const extraUrls: Record<string, string> = {};
       try {
-        await runWrEditApi({ workspaceId, projectId: project.id, instruction }, (event) => {
+        const attachments: WrChatAttachment[] = [];
+        if (files.length > 0) {
+          setProgressSteps(["Uploading attached images"]);
+          for (const file of files) {
+            const dataBase64 = await fileToBase64(file);
+            const res = await uploadWrAssetApi({
+              workspaceId,
+              projectId: project.id,
+              kind: "chat",
+              filename: wrChatImageFilename(file),
+              mimeType: file.type || "image/png",
+              dataBase64,
+            });
+            attachments.push({
+              id: res.asset.id,
+              storagePath: res.asset.storagePath,
+              filename: res.asset.filename,
+              mimeType: res.asset.mimeType || file.type || "image/png",
+            });
+            extraUrls[res.asset.id] = res.url ?? "";
+          }
+        }
+
+        const text = resolveWrEditInstruction(instruction, attachments.length);
+        const userMessage: WrChatMessage = {
+          id: newId(),
+          role: "user",
+          text,
+          attachments: attachments.length > 0 ? attachments : undefined,
+        };
+        updateProjectLocal(project.id, {
+          state: {
+            ...project.state,
+            chat: [...project.state.chat, userMessage],
+            imageUrls: { ...project.state.imageUrls, ...extraUrls },
+          },
+        });
+
+        await runWrEditApi({ workspaceId, projectId: project.id, instruction: text, attachments }, (event) => {
           if (event.type === "status") setProgressSteps((prev) => [...prev, event.message]);
           else if (event.type === "version") {
             setResultByProject((prev) => ({ ...prev, [project.id]: event.data.result }));
@@ -482,6 +521,9 @@ export function WebsiteRestructureShell() {
               role: "agent",
               text: event.data.notes || "Updated your header.",
             };
+            const nextLogo = event.logo !== undefined ? event.logo : project.state.logo;
+            const imageUrls = { ...project.state.imageUrls, ...extraUrls };
+            if (nextLogo && event.logoUrl) imageUrls[nextLogo.id] = event.logoUrl;
             updateProjectLocal(project.id, {
               activeVersion: event.data.version,
               editMessagesUsed: event.editMessagesUsed ?? project.editMessagesUsed + 1,
@@ -489,13 +531,22 @@ export function WebsiteRestructureShell() {
                 (event.editMessagesUsed ?? project.editMessagesUsed + 1) >= WR_MAX_EDIT_MESSAGES
                   ? "locked"
                   : "editing",
-              state: { ...project.state, chat: [...project.state.chat, userMessage, agentMessage] },
+              state: {
+                ...project.state,
+                logo: nextLogo,
+                chat: [...project.state.chat, userMessage, agentMessage],
+                imageUrls,
+              },
             });
             void refreshVersions(project.id);
           } else if (event.type === "error") {
             const errorMessage: WrChatMessage = { id: newId(), role: "agent", text: event.error, isError: true };
             updateProjectLocal(project.id, {
-              state: { ...project.state, chat: [...project.state.chat, userMessage, errorMessage] },
+              state: {
+                ...project.state,
+                chat: [...project.state.chat, userMessage, errorMessage],
+                imageUrls: { ...project.state.imageUrls, ...extraUrls },
+              },
             });
             toast.error("Edit failed", { description: event.error });
           }

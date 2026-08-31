@@ -29,6 +29,7 @@ import type {
 } from "@/lib/gallery/types";
 import {
   applyGalleryProjectSettings,
+  getGalleryProjectSettingsFromWorksheet,
   normalizeGalleryWorksheet,
   resolveGalleryRunPhase,
 } from "@/lib/gallery/types";
@@ -488,6 +489,7 @@ async function generateSynchronously(request: NextRequest) {
     .single();
 
   const ownerUserId = auth.ctx.subscription!.user_id as string;
+  runtimeSettings = getGalleryProjectSettingsFromWorksheet(worksheet);
   const jobSettings: GalleryJobSettings = {
     workspaceSlug: workspace?.slug,
     sessionName: session.name,
@@ -499,6 +501,7 @@ async function generateSynchronously(request: NextRequest) {
     ownerUserId,
     actorUserId: auth.user.id,
     estimatedCredits,
+    runtimeSettings,
   };
   const job = await insertJobRun(auth.admin, {
     workspaceId,
@@ -521,6 +524,14 @@ async function generateSynchronously(request: NextRequest) {
     jobId: job.id,
     provider,
     rowCount: targetIds.length,
+    galleryImagesPerRow:
+      provider === "ai"
+        ? runtimeSettings.ai.imagesPerRow
+        : runtimeSettings.scraping.imagesPerRow,
+    mainImagesPerRow:
+      provider === "ai"
+        ? runtimeSettings.ai.main.imagesPerRow
+        : runtimeSettings.scraping.main.imagesPerRow,
   });
 
   return NextResponse.json(

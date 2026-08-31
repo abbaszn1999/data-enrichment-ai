@@ -6,6 +6,7 @@ import { getWrProjectRow, updateWrProjectState } from "@/lib/website-restructure
 import { WR_MAX_IMAGES } from "@/lib/website-restructure/types";
 import {
   WR_STORAGE_BUCKET,
+  wrChatAttachmentPath,
   wrImagePath,
   wrLogoPath,
 } from "@/lib/website-restructure/storage";
@@ -65,21 +66,31 @@ export async function POST(request: NextRequest) {
     const path =
       kind === "logo"
         ? wrLogoPath(workspaceId, projectId, ext)
-        : wrImagePath(workspaceId, projectId, assetId, ext);
+        : kind === "chat"
+          ? wrChatAttachmentPath(workspaceId, projectId, assetId, ext)
+          : wrImagePath(workspaceId, projectId, assetId, ext);
 
     const { error: uploadError } = await auth.admin.storage
       .from(WR_STORAGE_BUCKET)
       .upload(path, buffer, { contentType: mimeType, upsert: true });
     if (uploadError) throw uploadError;
 
-    const asset = { id: assetId, storagePath: path, filename: filename.slice(0, 200) };
+    const asset = {
+      id: assetId,
+      storagePath: path,
+      filename: filename.slice(0, 200),
+      mimeType,
+    };
 
-    const nextState =
-      kind === "logo"
-        ? { ...project.state, logo: asset }
-        : { ...project.state, images: [...project.state.images, asset] };
-
-    await updateWrProjectState(auth.admin, workspaceId, projectId, nextState);
+    // Chat attachments live on the edit message, not in the screenshot/logo slots.
+    if (kind !== "chat") {
+      const stored = { id: asset.id, storagePath: asset.storagePath, filename: asset.filename };
+      const nextState =
+        kind === "logo"
+          ? { ...project.state, logo: stored }
+          : { ...project.state, images: [...project.state.images, stored] };
+      await updateWrProjectState(auth.admin, workspaceId, projectId, nextState);
+    }
 
     const { data: signed } = await auth.admin.storage
       .from(WR_STORAGE_BUCKET)
