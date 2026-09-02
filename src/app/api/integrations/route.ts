@@ -13,6 +13,7 @@ import {
 } from "@/lib/integrations/crypto";
 import { toClientIntegration } from "@/lib/integrations/load";
 import { writeSecurityAuditLog } from "@/lib/security/audit-log";
+import { clearWorkspaceContextCache } from "@/lib/workspace-context";
 
 async function requireAdminWorkspaceMember(workspaceId: string, userId: string) {
   const admin = createAdminClient();
@@ -195,6 +196,8 @@ export async function POST(request: NextRequest) {
       request,
     });
 
+    clearWorkspaceContextCache(workspaceId);
+
     return NextResponse.json({ integration: toClientIntegration(integration) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal error";
@@ -231,6 +234,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
     await deleteWorkspaceDomains(admin, workspaceId);
+    clearWorkspaceContextCache(workspaceId);
     await writeSecurityAuditLog(admin, {
       workspaceId,
       actorId: user.id,

@@ -225,6 +225,7 @@ export default function SettingsPage() {
       setIntegrationSuccess(`Connected to ${savedIntegration.integration_name}`);
       setIntegrationDialogOpen(false);
       resetIntegrationDialog();
+      window.location.reload();
     } catch (err: any) {
       setIntegrationError(err?.message || `Failed to save ${selectedProvider} integration`);
     } finally {
@@ -240,6 +241,7 @@ export default function SettingsPage() {
       await disconnectWorkspaceIntegration(workspace.id);
       setIntegration(null);
       setIntegrationSuccess("Integration disconnected");
+      window.location.reload();
     } catch (err: any) {
       setIntegrationError(err?.message || "Failed to disconnect integration");
     } finally {
