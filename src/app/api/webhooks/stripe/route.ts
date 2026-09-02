@@ -121,7 +121,10 @@ async function handleWalletTopup(
 ) {
   const workspaceId = session.metadata?.workspaceId;
   if (!workspaceId) return;
-  const amountUsd = (session.amount_total ?? 0) / 100;
+  const targetCents = session.metadata?.targetAmountCents
+    ? parseInt(session.metadata.targetAmountCents, 10)
+    : (session.amount_subtotal ?? session.amount_total ?? 0);
+  const amountUsd = targetCents > 0 ? targetCents / 100 : (session.amount_total ?? 0) / 100;
   if (amountUsd <= 0) return;
 
   const credited = await creditWorkspaceWallet(admin, {
@@ -136,6 +139,7 @@ async function handleWalletTopup(
     details: {
       stripeSessionId: session.id,
       stripePaymentIntentId: (session.payment_intent as string) || null,
+      amountPaidUsd: (session.amount_total ?? 0) / 100,
     },
   });
   if (!credited.ok) {

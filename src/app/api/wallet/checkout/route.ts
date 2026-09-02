@@ -57,6 +57,7 @@ export async function POST(request: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: "payment",
+      allow_promotion_codes: true,
       line_items: [
         {
           price_data: {
@@ -76,6 +77,7 @@ export async function POST(request: NextRequest) {
         walletTopup: "1",
         workspaceId: parsed.data.workspaceId,
         userId: auth.user.id,
+        targetAmountCents: String(Math.round(amountUsd * 100)),
       },
     });
 

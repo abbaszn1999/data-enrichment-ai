@@ -1700,6 +1700,7 @@ export function MarketResearchShell() {
     const allResults: Record<string, SeedProbe> = {};
     let totalCostUsd = 0;
     let failedChunks = 0;
+    let lastErrorMessage: string | null = null;
 
     for (let i = 0; i < chunks.length; i++) {
       if (probeGen.current !== gen) return;
@@ -1757,6 +1758,7 @@ export function MarketResearchShell() {
       } catch (error) {
         if (probeGen.current !== gen) return;
         failedChunks++;
+        lastErrorMessage = error instanceof Error ? error.message : "Could not retrieve seed metrics.";
         const failedResult: Record<string, SeedProbe> = {};
         for (const row of chunk) {
           failedResult[row.id] = {
@@ -1795,7 +1797,7 @@ export function MarketResearchShell() {
 
     if (failedChunks > 0 && failedChunks === chunks.length) {
       toast.error("Demand check failed", {
-        description: "Could not retrieve seed metrics. Please try again.",
+        description: lastErrorMessage || "Could not retrieve seed metrics. Please try again.",
       });
     }
   };
