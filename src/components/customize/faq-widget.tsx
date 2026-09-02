@@ -105,7 +105,7 @@ function FaqItem({
 
   return (
     <div
-      className={card ? "rounded-xl px-3" : ""}
+      className={card ? "cp-preview-card rounded-xl px-3" : ""}
       style={{
         borderBottom: bordered ? `1px solid ${style.accentColor}22` : undefined,
         background: card

@@ -54,6 +54,11 @@ import {
   rollupProductCounts,
   type CategoryRef,
 } from "@/lib/categories/tree";
+import {
+  columnSampleValues,
+  mappedNonEmptyCount,
+  suggestCategoryColumnMap,
+} from "@/lib/categories/column-map";
 
 interface TreeNode extends Category {
   children: TreeNode[];
@@ -63,6 +68,69 @@ interface TreeNode extends Category {
 
 function slugify(name: string): string {
   return name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 48);
+}
+
+function ColumnMapRow({
+  label,
+  required,
+  hint,
+  columns,
+  value,
+  onChange,
+  blocked,
+  samples,
+}: {
+  label: string;
+  required?: boolean;
+  hint?: string;
+  columns: string[];
+  value: string;
+  onChange: (next: string) => void;
+  blocked: Set<string>;
+  samples: string[];
+}) {
+  return (
+    <div className="space-y-1.5 rounded-lg border bg-muted/20 p-3">
+      <Label className="text-xs font-semibold">
+        {label}
+        {required ? (
+          <span className="text-destructive"> *</span>
+        ) : (
+          <span className="ml-1 font-normal text-muted-foreground">optional</span>
+        )}
+      </Label>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 w-full rounded-md border bg-background px-2 text-xs"
+      >
+        <option value="">{required ? "Select a column" : "Don't import"}</option>
+        {columns.map((col) => (
+          <option
+            key={col}
+            value={col}
+            disabled={blocked.has(col) && col !== value}
+          >
+            {col}
+          </option>
+        ))}
+      </select>
+      {samples.length > 0 ? (
+        <p
+          className="truncate text-[10px] text-muted-foreground"
+          title={samples.join(" · ")}
+        >
+          Sample: {samples.join(" · ")}
+        </p>
+      ) : value ? (
+        <p className="text-[10px] text-amber-600">
+          No values in the first rows of this column
+        </p>
+      ) : hint ? (
+        <p className="text-[10px] text-muted-foreground">{hint}</p>
+      ) : null}
+    </div>
+  );
 }
 
 export default function CategoriesPage() {
@@ -108,9 +176,14 @@ export default function CategoriesPage() {
   const [nameColumn, setNameColumn] = useState("");
   const [descColumn, setDescColumn] = useState("");
   const [parentColumn, setParentColumn] = useState("");
+  const [idColumn, setIdColumn] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadResult, setUploadResult] = useState<{ imported: number; skipped: number } | null>(null);
+  const [uploadResult, setUploadResult] = useState<{
+    imported: number;
+    updated: number;
+    skipped: number;
+  } | null>(null);
 
   // Helper to convert CategoryJson to Category (with parent_id alias)
   const toCategory = (c: CategoryJson): Category => ({ ...c, parent_id: c.parentId });
@@ -516,19 +589,14 @@ export default function CategoriesPage() {
         });
         setParsedSheet({ columns, rows: rows.map((r) => r.originalData) });
         setPreviewRows(preview);
-        // Auto-detect columns based on workspace CMS type
-        const cmsKey = workspace?.cms_type || "custom";
-        const cmsConfig = CMS_CATEGORY_COLUMNS[cmsKey] ?? CMS_CATEGORY_COLUMNS["custom"];
-        const findCol = (candidates: string[]) =>
-          candidates.find((c) => columns.some((col) => col.toLowerCase() === c.toLowerCase())) ??
-          candidates.find((c) => columns.some((col) => col.toLowerCase().includes(c.toLowerCase())));
-        const detectedName = findCol(cmsConfig.nameColumns);
-        const detectedParent = findCol(cmsConfig.parentColumns);
-        const detectedDesc = findCol(cmsConfig.descColumns);
-        if (detectedName) setNameColumn(detectedName);
-        else if (columns.length > 0) setNameColumn(columns[0]);
-        if (detectedParent) setParentColumn(detectedParent);
-        if (detectedDesc) setDescColumn(detectedDesc);
+        const cmsKey = (workspace?.cms_type || "shopify").toLowerCase();
+        const cmsConfig =
+          CMS_CATEGORY_COLUMNS[cmsKey] ?? CMS_CATEGORY_COLUMNS.shopify;
+        const suggested = suggestCategoryColumnMap(columns, cmsConfig);
+        setNameColumn(suggested.name);
+        setParentColumn(suggested.parent);
+        setDescColumn(suggested.description);
+        setIdColumn(suggested.id);
         setUploadStep(2);
       }
     } catch (err) {
@@ -540,16 +608,13 @@ export default function CategoriesPage() {
 
   const handleSheetImport = async () => {
     if (!workspace || !parsedSheet || !uploadFile || !nameColumn) return;
+    if (mappedNonEmptyCount(parsedSheet.rows, nameColumn) === 0) return;
     setUploading(true);
     setUploadProgress(0);
     try {
-      const cmsKey = workspace?.cms_type || "custom";
-      const cmsConfig = CMS_CATEGORY_COLUMNS[cmsKey] ?? CMS_CATEGORY_COLUMNS["custom"];
-      const idColumn = cmsConfig.idColumns.find((c) => parsedSheet.columns.includes(c)) ?? "";
-
-      // Build incoming categories from sheet rows
       const incomingCats: Category[] = [];
       let skipped = 0;
+      let updatedCount = 0;
       const rowIdToNewId = new Map<string, string>();
       const seenPaths = new Set<string>();
       const pending: Array<Category & { _rawParent: string }> = [];
@@ -562,7 +627,10 @@ export default function CategoriesPage() {
         const rawOriginalId = idColumn && row[idColumn] ? row[idColumn].trim() : null;
         if (rawOriginalId) rowIdToNewId.set(rawOriginalId, newId);
 
-        const slug = name.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 48);
+        const fromName = slugify(name);
+        const slug =
+          fromName ||
+          (rawOriginalId ? slugify(rawOriginalId) || rawOriginalId.slice(0, 48) : newId.slice(0, 8));
         const desc = descColumn ? (row[descColumn] || "").trim() : "";
         pending.push({
           id: newId,
@@ -609,17 +677,12 @@ export default function CategoriesPage() {
       let importedCount: number;
 
       if (uploadMode === "replace") {
-        // Replace: discard all existing, use only incoming
         finalCats = incomingCats;
         importedCount = incomingCats.length;
       } else {
-        // Merge: match by name (case-insensitive)
-        // - Existing categories matched by name → keep existing ID, update fields from new sheet
-        // - New categories not in existing → add them
-        // - Existing categories not in sheet → keep them untouched
         const existingByPath = new Map<string, Category>();
         const existingById = new Map(categories.map((c) => [c.id, c]));
-        const categoryPathKey = (cat: Category, byId: Map<string, Category>) => {
+        const pathKey = (cat: Category, byId: Map<string, Category>) => {
           const names: string[] = [];
           let current: Category | undefined = cat;
           const seen = new Set<string>();
@@ -630,25 +693,22 @@ export default function CategoriesPage() {
           }
           return names.join("\0").toLowerCase();
         };
-        for (const c of categories) existingByPath.set(categoryPathKey(c, existingById), c);
-        const incomingById = new Map(incomingCats.map((c) => [c.id, c]));
+        for (const c of categories) existingByPath.set(pathKey(c, existingById), c);
+        const incomingLookup = new Map(incomingCats.map((c) => [c.id, c]));
 
         const merged: Category[] = [];
         const usedExistingIds = new Set<string>();
-        let updatedCount = 0;
 
         for (const incoming of incomingCats) {
-          const existing = existingByPath.get(categoryPathKey(incoming, incomingById));
+          const existing = existingByPath.get(pathKey(incoming, incomingLookup));
           if (existing) {
-            // Match found — keep existing ID, update description & originalId from sheet
             usedExistingIds.add(existing.id);
-            // Re-map parent from incoming's new ID → existing parent ID
             let parentId = existing.parent_id;
             if (incoming.parent_id) {
-              const parentIncoming = incomingById.get(incoming.parent_id);
+              const parentIncoming = incomingLookup.get(incoming.parent_id);
               if (parentIncoming) {
                 const parentExisting = existingByPath.get(
-                  categoryPathKey(parentIncoming, incomingById)
+                  pathKey(parentIncoming, incomingLookup)
                 );
                 parentId = parentExisting?.id || incoming.parent_id;
               }
@@ -656,19 +716,18 @@ export default function CategoriesPage() {
             merged.push({
               ...existing,
               description: incoming.description || existing.description,
-              originalId: incoming.originalId || (existing as any).originalId,
+              originalId: incoming.originalId || existing.originalId,
               parent_id: parentId,
               parentId: parentId,
             } as Category);
             updatedCount++;
           } else {
-            // New category — resolve parent against existing
             let parentId = incoming.parent_id;
             if (parentId) {
-              const parentIncoming = incomingById.get(parentId);
+              const parentIncoming = incomingLookup.get(parentId);
               if (parentIncoming) {
                 const parentExisting = existingByPath.get(
-                  categoryPathKey(parentIncoming, incomingById)
+                  pathKey(parentIncoming, incomingLookup)
                 );
                 if (parentExisting) parentId = parentExisting.id;
               }
@@ -677,7 +736,6 @@ export default function CategoriesPage() {
           }
         }
 
-        // Add existing categories that were NOT in the sheet (untouched)
         for (const c of categories) {
           if (!usedExistingIds.has(c.id) && !merged.some((m) => m.id === c.id)) {
             merged.push(c);
@@ -686,17 +744,16 @@ export default function CategoriesPage() {
 
         finalCats = merged;
         importedCount = incomingCats.length - updatedCount;
-        skipped += updatedCount; // updated ones count as "updated" not "new"
       }
       setUploadProgress(70);
 
       await saveAll(finalCats);
       setUploadProgress(100);
 
-      setUploadResult({ imported: importedCount, skipped });
+      setUploadResult({ imported: importedCount, updated: updatedCount, skipped });
       setUploadStep(4);
-    } catch (err: any) {
-      alert(err?.message || "Import failed");
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Import failed");
     } finally {
       setUploading(false);
     }
@@ -729,12 +786,24 @@ export default function CategoriesPage() {
     setNameColumn("");
     setDescColumn("");
     setParentColumn("");
+    setIdColumn("");
     setUploadResult(null);
     setUploadProgress(0);
     setUploadMode("merge");
   };
 
   const selectedCat = categories.find((c) => c.id === selected);
+  const mappedNameCount = parsedSheet
+    ? mappedNonEmptyCount(parsedSheet.rows, nameColumn)
+    : 0;
+  const mappingBlocked = useMemo(() => {
+    const used = new Set<string>();
+    for (const col of [nameColumn, parentColumn, descColumn, idColumn]) {
+      if (col) used.add(col);
+    }
+    return used;
+  }, [descColumn, idColumn, nameColumn, parentColumn]);
+  const canContinueMapping = Boolean(nameColumn) && mappedNameCount > 0;
 
   if (loading) {
     return <PageLoader />;
@@ -1156,7 +1225,7 @@ export default function CategoriesPage() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.97 }}
             transition={{ type: "spring", stiffness: 340, damping: 26 }}
-            className="w-full max-w-2xl overflow-hidden rounded-[24px] border bg-background shadow-2xl"
+            className="w-full max-w-3xl overflow-hidden rounded-[24px] border bg-background shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
@@ -1172,7 +1241,7 @@ export default function CategoriesPage() {
 
             {/* Steps indicator */}
             <div className="flex items-center gap-2 px-5 py-3 border-b">
-              {["Upload", "Preview", "Import"].map((s, i) => (
+              {["Upload", "Map", "Import"].map((s, i) => (
                 <div key={s} className="flex items-center gap-2">
                   <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium ${
                     uploadStep > i + 1 ? "bg-green-100 dark:bg-green-900/30 text-green-700" :
@@ -1186,7 +1255,7 @@ export default function CategoriesPage() {
               ))}
             </div>
 
-            <div className="p-5">
+            <div className="max-h-[min(70vh,640px)] overflow-y-auto p-5">
               {/* Step 1: Upload */}
               {uploadStep === 1 && (
                 <div
@@ -1207,29 +1276,102 @@ export default function CategoriesPage() {
                   <Upload className="h-10 w-10 text-muted-foreground" />
                   <div className="text-center">
                     <p className="text-sm font-medium">Drag & drop or click to browse</p>
-                    <p className="text-[10px] text-muted-foreground mt-1">.xlsx, .xls, .csv — {CMS_CATEGORY_COLUMNS[workspace?.cms_type || "custom"]?.hint}</p>
+                    <p className="text-[10px] text-muted-foreground mt-1">.xlsx, .xls, .csv — {CMS_CATEGORY_COLUMNS[(workspace?.cms_type || "shopify").toLowerCase()]?.hint ?? CMS_CATEGORY_COLUMNS.shopify.hint}</p>
                   </div>
                 </div>
               )}
 
-              {/* Step 2: Preview */}
+              {/* Step 2: Map columns */}
               {uploadStep === 2 && parsedSheet && (
                 <div className="space-y-4">
                   <div className="flex items-center gap-3">
                     <FileSpreadsheet className="h-5 w-5 text-green-600" />
                     <div>
                       <div className="text-sm font-medium">{uploadFile?.name}</div>
-                      <div className="text-[10px] text-muted-foreground">{parsedSheet.rows.length} rows · {parsedSheet.columns.length} columns</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {parsedSheet.rows.length} rows · {parsedSheet.columns.length} columns
+                      </div>
                     </div>
                   </div>
 
-                  {/* Preview table */}
+                  <p className="text-xs text-muted-foreground">
+                    Match this file’s columns to category fields. Suggestions are pre-filled — confirm they look right.
+                  </p>
+
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <ColumnMapRow
+                      label="Category name"
+                      required
+                      hint="The label shown in the tree"
+                      columns={parsedSheet.columns}
+                      value={nameColumn}
+                      onChange={setNameColumn}
+                      blocked={mappingBlocked}
+                      samples={columnSampleValues(parsedSheet.rows, nameColumn)}
+                    />
+                    <ColumnMapRow
+                      label="Parent"
+                      hint="Parent name or ID in this sheet"
+                      columns={parsedSheet.columns}
+                      value={parentColumn}
+                      onChange={setParentColumn}
+                      blocked={mappingBlocked}
+                      samples={columnSampleValues(parsedSheet.rows, parentColumn)}
+                    />
+                    <ColumnMapRow
+                      label="Description"
+                      columns={parsedSheet.columns}
+                      value={descColumn}
+                      onChange={setDescColumn}
+                      blocked={mappingBlocked}
+                      samples={columnSampleValues(parsedSheet.rows, descColumn)}
+                    />
+                    <ColumnMapRow
+                      label="ID / Handle"
+                      hint="Used to resolve parent rows"
+                      columns={parsedSheet.columns}
+                      value={idColumn}
+                      onChange={setIdColumn}
+                      blocked={mappingBlocked}
+                      samples={columnSampleValues(parsedSheet.rows, idColumn)}
+                    />
+                  </div>
+
+                  {!nameColumn ? (
+                    <p className="text-[11px] text-amber-600">
+                      Choose a name column to continue. Import cannot guess this for you.
+                    </p>
+                  ) : mappedNameCount === 0 ? (
+                    <p className="text-[11px] text-destructive">
+                      Column <span className="font-medium">{nameColumn}</span> is empty
+                      in every row. Pick the column that actually contains category names.
+                    </p>
+                  ) : mappedNameCount < parsedSheet.rows.length ? (
+                    <p className="text-[11px] text-amber-600">
+                      {mappedNameCount} of {parsedSheet.rows.length} rows have a name in{" "}
+                      <span className="font-medium text-foreground">{nameColumn}</span>
+                      . {parsedSheet.rows.length - mappedNameCount} empty-name rows will be skipped.
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">
+                      All {parsedSheet.rows.length} rows have a name in{" "}
+                      <span className="font-medium text-foreground">{nameColumn}</span>.
+                    </p>
+                  )}
+
                   <div className="overflow-x-auto rounded-lg border">
                     <table className="w-full text-[10px]">
                       <thead>
                         <tr className="bg-muted/50 border-b">
                           {parsedSheet.columns.map((col) => (
-                            <th key={col} className={`text-left px-3 py-2 font-semibold whitespace-nowrap ${col === nameColumn ? "bg-primary/10" : ""}`}>{col}</th>
+                            <th
+                              key={col}
+                              className={`text-left px-3 py-2 font-semibold whitespace-nowrap ${
+                                mappingBlocked.has(col) ? "bg-primary/10" : ""
+                              }`}
+                            >
+                              {col}
+                            </th>
                           ))}
                         </tr>
                       </thead>
@@ -1237,7 +1379,14 @@ export default function CategoriesPage() {
                         {previewRows.map((row, i) => (
                           <tr key={i} className="border-b">
                             {parsedSheet.columns.map((col) => (
-                              <td key={col} className={`px-3 py-1.5 whitespace-nowrap max-w-[200px] truncate ${col === nameColumn ? "font-medium" : ""}`}>{row[col]}</td>
+                              <td
+                                key={col}
+                                className={`px-3 py-1.5 whitespace-nowrap max-w-[200px] truncate ${
+                                  col === nameColumn ? "font-medium" : ""
+                                } ${mappingBlocked.has(col) ? "bg-primary/5" : ""}`}
+                              >
+                                {row[col]}
+                              </td>
                             ))}
                           </tr>
                         ))}
@@ -1246,8 +1395,15 @@ export default function CategoriesPage() {
                   </div>
 
                   <div className="flex justify-between">
-                    <Button variant="outline" size="sm" className="text-xs" onClick={() => setUploadStep(1)}>Back</Button>
-                    <Button size="sm" className="gap-1.5 text-xs" onClick={() => setUploadStep(3)} disabled={!nameColumn}>
+                    <Button variant="outline" size="sm" className="text-xs" onClick={() => setUploadStep(1)}>
+                      Back
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => setUploadStep(3)}
+                      disabled={!canContinueMapping}
+                    >
                       Continue <ArrowRight className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -1296,7 +1452,10 @@ export default function CategoriesPage() {
                     <div className="flex justify-between"><span className="text-muted-foreground">File</span><span className="font-medium">{uploadFile?.name}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Total rows</span><span className="font-medium">{parsedSheet.rows.length}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Name column</span><span className="font-medium">{nameColumn}</span></div>
+                    {parentColumn && <div className="flex justify-between"><span className="text-muted-foreground">Parent column</span><span className="font-medium">{parentColumn}</span></div>}
                     {descColumn && <div className="flex justify-between"><span className="text-muted-foreground">Description column</span><span className="font-medium">{descColumn}</span></div>}
+                    {idColumn && <div className="flex justify-between"><span className="text-muted-foreground">ID / Handle</span><span className="font-medium">{idColumn}</span></div>}
+                    <div className="flex justify-between"><span className="text-muted-foreground">Rows with a name</span><span className="font-medium">{mappedNameCount}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Existing categories</span><span className="font-medium">{categories.length}</span></div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Mode</span>
@@ -1320,7 +1479,12 @@ export default function CategoriesPage() {
 
                   <div className="flex justify-between">
                     <Button variant="outline" size="sm" className="text-xs" onClick={() => setUploadStep(2)} disabled={uploading}>Back</Button>
-                    <Button size="sm" className="gap-1.5 text-xs" onClick={handleSheetImport} disabled={uploading}>
+                    <Button
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={handleSheetImport}
+                      disabled={uploading || !canContinueMapping}
+                    >
                       {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
                       {uploading ? "Importing..." : "Start Import"}
                     </Button>
@@ -1337,10 +1501,14 @@ export default function CategoriesPage() {
                     </div>
                   </div>
                   <h3 className="text-sm font-bold">Import Complete!</h3>
-                  <div className="grid grid-cols-2 gap-4 max-w-xs mx-auto">
+                  <div className="grid grid-cols-3 gap-3 max-w-md mx-auto">
                     <div>
                       <div className="text-2xl font-bold text-green-600">{uploadResult.imported}</div>
                       <div className="text-[10px] text-muted-foreground">Imported</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold text-primary">{uploadResult.updated}</div>
+                      <div className="text-[10px] text-muted-foreground">Updated</div>
                     </div>
                     <div>
                       <div className="text-2xl font-bold text-amber-600">{uploadResult.skipped}</div>
