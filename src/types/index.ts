@@ -480,10 +480,10 @@ export const CMS_CATEGORY_COLUMNS: Record<string, CmsCategoryColumns> = {
   },
   shopify: {
     nameColumns: ["title", "name", "collection"],
-    parentColumns: ["parent_id", "handle"],
-    descColumns: ["body_html", "description"],
-    idColumns: ["id"],
-    hint: "Shopify: title, parent_id, body_html",
+    parentColumns: ["parent_id", "parent_collection", "parent"],
+    descColumns: ["body (html)", "body_html", "description"],
+    idColumns: ["handle", "id"],
+    hint: "Shopify: title, body_html / description, handle",
   },
   woocommerce: {
     nameColumns: ["name", "category_name"],

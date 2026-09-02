@@ -165,7 +165,7 @@ export default function CategoriesPage() {
   };
 
   // Persist to Supabase Storage (both categories.json + categories-raw.json)
-  const persistToStorage = async (cats?: Category[]) => {
+  const persistToStorage = async (cats?: Category[], options?: { force?: boolean }) => {
     if (!workspace) return;
     setSaving(true);
     try {
@@ -187,7 +187,8 @@ export default function CategoriesPage() {
           workspaceId: workspace.id,
           categories: jsons,
           rawRows: buildRawRows(toSave),
-          expectedRevision: taxonomyRevision,
+          expectedRevision: options?.force ? undefined : taxonomyRevision,
+          force: options?.force,
         }),
       });
       const payload = (await res.json().catch(() => ({}))) as {
@@ -196,14 +197,17 @@ export default function CategoriesPage() {
         currentRevision?: number;
       };
       if (res.status === 409) {
-        alert(payload.error || "Someone else changed this taxonomy. Reload and try again.");
-        return;
+        if (typeof payload.currentRevision === "number") {
+          setTaxonomyRevision(payload.currentRevision);
+        }
+        throw new Error(payload.error || "Someone else changed this taxonomy. Reload and try again.");
       }
       if (!res.ok) throw new Error(payload.error || "Failed to save");
       if (typeof payload.revision === "number") setTaxonomyRevision(payload.revision);
       setHasUnsavedChanges(false);
     } catch (err: any) {
       alert(err?.message || "Failed to save");
+      throw err;
     } finally {
       setSaving(false);
     }
@@ -212,7 +216,7 @@ export default function CategoriesPage() {
   // Legacy saveAll — used by import which persists immediately
   const saveAll = async (cats: Category[]) => {
     setCategories(cats);
-    await persistToStorage(cats);
+    await persistToStorage(cats, { force: true });
   };
 
   const categoryRefs: CategoryRef[] = useMemo(
@@ -702,7 +706,7 @@ export default function CategoriesPage() {
     if (!workspace || deleteConfirmText !== "delete") return;
     setDeletingAll(true);
     try {
-      await persistToStorage([]);
+      await persistToStorage([], { force: true });
       setCategories([]);
       setSelected(null);
       setExpanded(new Set());

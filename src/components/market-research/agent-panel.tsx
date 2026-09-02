@@ -65,6 +65,7 @@ export function AgentPanel({
   const pending = stage === 1 && pendingStage1 && !analyzingStage1;
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
 
   useLayoutEffect(() => {
@@ -75,6 +76,9 @@ export function AgentPanel({
 
   useEffect(() => {
     setDraft("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
   }, [stage]);
 
   const canChat =
@@ -85,12 +89,21 @@ export function AgentPanel({
       (stage === 3 && stage1Done && !preparingStage3));
   const inputDisabled = !canChat || chatBusy;
 
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setDraft(e.target.value);
+    e.target.style.height = "auto";
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 112)}px`;
+  };
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const text = draft.trim();
     if (!text || inputDisabled) return;
     onSendMessage(text);
     setDraft("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
   };
 
   const statusLabel = readOnly
@@ -217,14 +230,15 @@ export function AgentPanel({
         </label>
         <div
           className={cn(
-            "flex items-end gap-2 rounded-2xl border border-border/70 bg-background px-2.5 py-2",
+            "flex items-center gap-2 rounded-2xl border border-border/70 bg-background px-2.5 py-1.5",
             inputDisabled && "opacity-70"
           )}
         >
           <textarea
+            ref={textareaRef}
             id={inputId}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={handleTextareaChange}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -232,7 +246,7 @@ export function AgentPanel({
               }
             }}
             disabled={inputDisabled}
-            rows={2}
+            rows={1}
             placeholder={
               busy
                 ? preparingStage3
@@ -248,12 +262,12 @@ export function AgentPanel({
                       ? "Ask about collections, or refine the Stage 1 niches…"
                       : "Ask about these niches, or request another site read…"
             }
-            className="min-h-[44px] max-h-28 flex-1 resize-none bg-transparent px-1 py-1 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+            className="min-h-[36px] max-h-28 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
           <button
             type="submit"
             disabled={inputDisabled || !draft.trim()}
-            className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-foreground text-background transition-opacity disabled:opacity-30"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-foreground text-background transition-opacity disabled:opacity-30"
             aria-label="Send"
           >
             <Send className="h-3.5 w-3.5" />

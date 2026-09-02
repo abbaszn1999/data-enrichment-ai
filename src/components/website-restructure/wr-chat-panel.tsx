@@ -154,6 +154,7 @@ export function WrChatPanel({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
   const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { phase, state } = project;
   const readOnly = !canWrite;
@@ -194,6 +195,12 @@ export function WrChatPanel({
     });
   };
 
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setEditDraft(e.target.value);
+    e.target.style.height = "auto";
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 112)}px`;
+  };
+
   const submitEdit = (e: FormEvent) => {
     e.preventDefault();
     const text = editDraft.trim();
@@ -202,6 +209,9 @@ export function WrChatPanel({
     pending.forEach((p) => URL.revokeObjectURL(p.previewUrl));
     setPending([]);
     setEditDraft("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
     onSendEdit(text, files);
   };
 
@@ -213,7 +223,18 @@ export function WrChatPanel({
     e.stopPropagation();
     queuePending(files);
     const pastedText = e.clipboardData.getData("text/plain");
-    if (pastedText) setEditDraft((d) => d + pastedText);
+    if (pastedText) {
+      setEditDraft((d) => {
+        const next = d + pastedText;
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.style.height = "auto";
+            textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 112)}px`;
+          }
+        }, 0);
+        return next;
+      });
+    }
   };
 
   const handleComposerDragOver = (e: DragEvent) => {
@@ -502,12 +523,12 @@ export function WrChatPanel({
                 />
               </div>
             ) : null}
-            <div className="flex items-end gap-1.5">
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 disabled={composerLocked || pending.length >= WR_MAX_CHAT_ATTACHMENTS}
                 onClick={() => chatFileInputRef.current?.click()}
-                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
                 aria-label="Attach image"
                 title="Attach image (or paste with Ctrl+V)"
               >
@@ -526,8 +547,9 @@ export function WrChatPanel({
                 }}
               />
               <textarea
+                ref={textareaRef}
                 value={editDraft}
-                onChange={(e) => setEditDraft(e.target.value)}
+                onChange={handleTextareaChange}
                 onPaste={handleComposerPaste}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
@@ -536,18 +558,18 @@ export function WrChatPanel({
                   }
                 }}
                 disabled={composerLocked}
-                rows={2}
+                rows={1}
                 placeholder={
                   editMessagesLeft === 0
                     ? "Edit limit reached — you can still preview and download"
                     : "Describe a change, or paste an image…"
                 }
-                className="min-h-[44px] max-h-28 flex-1 resize-none bg-transparent px-1 py-1 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+                className="min-h-[36px] max-h-28 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
               />
               <button
                 type="submit"
                 disabled={!canSend}
-                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#400095] text-white shadow-sm transition-opacity hover:bg-[#6B358D] disabled:opacity-30 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#400095] text-white shadow-sm transition-opacity hover:bg-[#6B358D] disabled:opacity-30 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                 aria-label="Send"
               >
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}

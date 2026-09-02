@@ -133,6 +133,7 @@ export async function PUT(request: NextRequest) {
     categories?: CategoryJson[];
     rawRows?: Record<string, string>[];
     expectedRevision?: number;
+    force?: boolean;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -165,6 +166,7 @@ export async function PUT(request: NextRequest) {
 
   const currentRevision = await loadCategoriesRevision(workspaceId);
   if (
+    !body.force &&
     typeof body.expectedRevision === "number" &&
     body.expectedRevision !== currentRevision
   ) {
