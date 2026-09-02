@@ -112,7 +112,13 @@ import {
   pendingImageDeleteKey,
   stripPendingImageDeletes as stripPendingDeletesFromWorksheet,
 } from "@/lib/gallery/pending-image-deletes";
-import { mergePolledGenerationWorksheet } from "@/lib/gallery/generation-worksheet-merge";
+import {
+  adoptIncomingGenerationWorksheet,
+  galleryRowIsBusy,
+  galleryRunIsActive,
+  mergePolledGenerationWorksheet,
+} from "@/lib/gallery/generation-worksheet-merge";
+import { maxRevision, snapshotRevision } from "@/lib/jobs/snapshot-clock";
 
 type ImageUploadPreview = {
   name: string;
@@ -381,6 +387,7 @@ export default function ProductsGalleryPage() {
   const currentSettingsSignatureRef = useRef("");
   const worksheetRevisionRef = useRef(0);
   const settingsRevisionRef = useRef(0);
+  const worksheetRef = useRef<GalleryWorksheetJson | null>(null);
   const lastSavedRowSignatureRef = useRef("");
   const aiAssetPathsRef = useRef<{
     logoPath: string | null;
@@ -1015,6 +1022,8 @@ export default function ProductsGalleryPage() {
       setEditingRowId(null);
       setRowDraft(null);
       setGenerationRun(null);
+      worksheetRevisionRef.current = 0;
+      worksheetRef.current = null;
       return;
     }
     let cancelled = false;
@@ -1022,6 +1031,8 @@ export default function ProductsGalleryPage() {
     setWorksheet(null);
     setSignedUrls({});
     setSelectedRowIds(new Set());
+    worksheetRevisionRef.current = 0;
+    worksheetRef.current = null;
     setEditingRowId(null);
     setRowDraft(null);
     setGenerationRun(null);
@@ -1072,6 +1083,10 @@ export default function ProductsGalleryPage() {
     };
   }, [workspace?.id, projectId, hasWorksheet]);
 
+  useEffect(() => {
+    worksheetRef.current = worksheet;
+  }, [worksheet]);
+
   const shouldPollGeneration = isGenerating || generationRun !== null;
   const lastCreditsProgressRef = useRef(0);
   useEffect(() => {
@@ -1115,29 +1130,35 @@ export default function ProductsGalleryPage() {
           )
         );
         const done = progress.completed + progress.failed;
-        const jobActive =
-          progress.jobStatus === "running" || progress.jobStatus === "queued";
-        if (jobActive || progress.status === "processing") {
+        const jobStillRunning =
+          progress.jobStatus === "running" ||
+          progress.jobStatus === "queued" ||
+          progress.status === "processing";
+        const localWorksheet = worksheetRef.current;
+        const localBusy = (localWorksheet?.rows ?? []).some(galleryRowIsBusy);
+        const localRunActive = galleryRunIsActive(localWorksheet);
+        if (jobStillRunning) {
           setGenerationRun({
             total: progress.total,
             completed: done,
             runId: progress.jobId || "",
           });
           if (progress.cancelRequested) setIsStoppingGeneration(true);
-        } else if (!isGenerating) {
+        } else if (!isGenerating && !localBusy && !localRunActive) {
           if (lastCreditsProgressRef.current > 0) invalidateCredits();
           setGenerationRun(null);
           setIsStoppingGeneration(false);
         }
-        const revisionChanged =
-          progress.worksheetRevision !== worksheetRevisionRef.current;
         const newlyDone = done > lastCreditsProgressRef.current;
         if (newlyDone) {
           lastCreditsProgressRef.current = done;
           invalidateCredits();
         }
-        if (revisionChanged) {
-          worksheetRevisionRef.current = progress.worksheetRevision;
+        const serverRevision = snapshotRevision(progress.worksheetRevision);
+        const needsWorksheet =
+          serverRevision > worksheetRevisionRef.current ||
+          (!jobStillRunning && (localBusy || localRunActive));
+        if (needsWorksheet) {
           const fresh = await getGallerySession(workspace.id, projectId, {
             includeSignedUrls: false,
           });
@@ -1146,24 +1167,54 @@ export default function ProductsGalleryPage() {
             fresh.worksheet,
             pendingImageDeletesRef.current
           );
+          worksheetRevisionRef.current = maxRevision(
+            worksheetRevisionRef.current,
+            fresh.session.worksheet_revision,
+            freshWorksheet.revision,
+            progress.worksheetRevision
+          );
           const missingSignIds = freshWorksheet.rows
             .filter((row) => row.status === "ready")
             .map((row) => row.id);
-          setActiveSession(fresh.session);
-          setWorksheet((current) => {
-            if (!current) return freshWorksheet;
-            const merged = mergePolledGenerationWorksheet({
-              local: current,
-              polled: freshWorksheet,
-              clientRunActive: isGenerating,
-            });
+          setActiveSession((current) => {
+            const next = fresh.session;
+            if (!current || current.id !== next.id) return next;
             return {
-              ...current,
-              rows: merged.rows,
-              activeRun: merged.activeRun,
-              revision: merged.revision,
+              ...next,
+              worksheet_revision: maxRevision(
+                current.worksheet_revision,
+                next.worksheet_revision
+              ),
             };
           });
+          setWorksheet((current) => {
+            const applied = current
+              ? mergePolledGenerationWorksheet({
+                  local: current,
+                  polled: freshWorksheet,
+                  clientRunActive: isGenerating,
+                })
+              : freshWorksheet;
+            const next = {
+              ...(current ?? applied),
+              rows: applied.rows,
+              activeRun: applied.activeRun,
+              revision: applied.revision,
+            };
+            worksheetRef.current = next;
+            return next;
+          });
+          if (!jobStillRunning && !isGenerating) {
+            const applied = worksheetRef.current;
+            if (
+              applied &&
+              !applied.rows.some(galleryRowIsBusy) &&
+              !galleryRunIsActive(applied)
+            ) {
+              setGenerationRun(null);
+              setIsStoppingGeneration(false);
+            }
+          }
           if (missingSignIds.length > 0) {
             getGallerySession(workspace.id, projectId, {
               includeSignedUrls: false,
@@ -1171,7 +1222,10 @@ export default function ProductsGalleryPage() {
             })
               .then((withUrls) => {
                 if (!cancelled && withUrls.signedUrls) {
-                  setSignedUrls((current) => ({ ...current, ...withUrls.signedUrls }));
+                  setSignedUrls((current) => ({
+                    ...current,
+                    ...withUrls.signedUrls,
+                  }));
                 }
               })
               .catch(() => {
@@ -1625,28 +1679,43 @@ export default function ProductsGalleryPage() {
       });
       receivedResult = true;
       if (result.worksheet) {
-        setWorksheet(result.worksheet);
-        if (result.signedUrls) setSignedUrls(result.signedUrls);
-        if (
-          result.worksheet.activeRun &&
-          (result.worksheet.activeRun.status === "running" ||
-            result.worksheet.activeRun.status === "queued")
-        ) {
+        const incoming = stripPendingImageDeletes(result.worksheet);
+        setWorksheet((current) => {
+          const next = adoptIncomingGenerationWorksheet(current, incoming);
+          worksheetRef.current = next;
+          return next;
+        });
+        if (result.signedUrls) {
+          setSignedUrls((current) => ({ ...current, ...result.signedUrls }));
+        }
+        if (galleryRunIsActive(worksheetRef.current)) {
+          const run = worksheetRef.current!.activeRun!;
           setGenerationRun({
-            total: result.worksheet.activeRun.total,
-            completed:
-              result.worksheet.activeRun.completed + result.worksheet.activeRun.failed,
-            runId: result.worksheet.activeRun.id,
+            total: run.total,
+            completed: run.completed + run.failed,
+            runId: run.id,
           });
-        } else {
+        } else if (result.status === "cancelled") {
           setGenerationRun(null);
         }
       }
       if (result.session) {
-        worksheetRevisionRef.current = Number(
-          result.session.worksheet_revision ?? worksheetRevisionRef.current
+        worksheetRevisionRef.current = maxRevision(
+          worksheetRevisionRef.current,
+          result.session.worksheet_revision
         );
-        setActiveSession(result.session);
+        setActiveSession((current) => {
+          if (!current || current.id !== result.session!.id) {
+            return result.session!;
+          }
+          return {
+            ...result.session!,
+            worksheet_revision: maxRevision(
+              current.worksheet_revision,
+              result.session!.worksheet_revision
+            ),
+          };
+        });
         setSessions((current) => {
           const idx = current.findIndex((s) => s.id === result.session!.id);
           if (idx < 0) return [result.session!, ...current];
@@ -1773,26 +1842,43 @@ export default function ProductsGalleryPage() {
           : { runPhase: retryPhase.phase }),
       });
       receivedResult = true;
-      if (result.worksheet) setWorksheet(result.worksheet);
-      if (result.signedUrls) setSignedUrls(result.signedUrls);
-      if (
-        result.worksheet?.activeRun &&
-        (result.worksheet.activeRun.status === "running" ||
-          result.worksheet.activeRun.status === "queued")
-      ) {
+      if (result.worksheet) {
+        const incoming = stripPendingImageDeletes(result.worksheet);
+        setWorksheet((current) => {
+          const next = adoptIncomingGenerationWorksheet(current, incoming);
+          worksheetRef.current = next;
+          return next;
+        });
+      }
+      if (result.signedUrls) {
+        setSignedUrls((current) => ({ ...current, ...result.signedUrls }));
+      }
+      if (galleryRunIsActive(worksheetRef.current)) {
+        const run = worksheetRef.current!.activeRun!;
         setGenerationRun({
-          total: result.worksheet.activeRun.total,
-          completed:
-            result.worksheet.activeRun.completed + result.worksheet.activeRun.failed,
-          runId: result.worksheet.activeRun.id,
+          total: run.total,
+          completed: run.completed + run.failed,
+          runId: run.id,
         });
         toast.message("Generation is running in the background");
       }
       if (result.session) {
-        worksheetRevisionRef.current = Number(
-          result.session.worksheet_revision ?? worksheetRevisionRef.current
+        worksheetRevisionRef.current = maxRevision(
+          worksheetRevisionRef.current,
+          result.session.worksheet_revision
         );
-        setActiveSession(result.session);
+        setActiveSession((current) => {
+          if (!current || current.id !== result.session!.id) {
+            return result.session!;
+          }
+          return {
+            ...result.session!,
+            worksheet_revision: maxRevision(
+              current.worksheet_revision,
+              result.session!.worksheet_revision
+            ),
+          };
+        });
         setSessions((current) => {
           const idx = current.findIndex((s) => s.id === result.session!.id);
           if (idx < 0) return current;

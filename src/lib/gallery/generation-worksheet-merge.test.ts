@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adoptIncomingGenerationWorksheet,
   applyGenerationRowPatch,
   mergePolledGenerationRow,
   mergePolledGenerationWorksheet,
@@ -253,5 +254,125 @@ describe("generation worksheet merge", () => {
     expect(merged.activeRun?.status).toBe("running");
     expect(merged.rows[0]?.status).toBe("queued");
     expect(merged.rows[0]?.generationStage).toBe("planning");
+  });
+
+  it("takes queued→ready when the poll has new gallery images", () => {
+    const local = row({
+      id: "row-a",
+      status: "queued",
+      generationStage: "planning",
+      generationTarget: "gallery",
+      galleryImagePaths: [],
+    });
+    const polled = row({
+      id: "row-a",
+      status: "ready",
+      galleryImagePaths: ["https://cdn.example/gallery-1.webp"],
+    });
+
+    const merged = mergePolledGenerationRow(local, polled, {
+      clientRunActive: true,
+    });
+
+    expect(merged.status).toBe("ready");
+    expect(merged.galleryImagePaths).toEqual([
+      "https://cdn.example/gallery-1.webp",
+    ]);
+  });
+
+  it("takes ready from a newer worksheet revision while generate is in flight", () => {
+    const local = sheet([
+      row({
+        id: "row-a",
+        status: "queued",
+        generationStage: "planning",
+        generationTarget: "gallery",
+      }),
+    ]);
+    local.revision = 4;
+    const polled = sheet([
+      row({
+        id: "row-a",
+        status: "ready",
+        galleryImagePaths: ["https://cdn.example/g1.webp"],
+      }),
+    ]);
+    polled.revision = 5;
+    polled.activeRun = {
+      ...polled.activeRun!,
+      status: "completed",
+      completed: 1,
+    };
+
+    const merged = mergePolledGenerationWorksheet({
+      local,
+      polled,
+      clientRunActive: true,
+    });
+
+    expect(merged.rows[0]?.status).toBe("ready");
+    expect(merged.activeRun?.status).toBe("completed");
+    expect(merged.revision).toBe(5);
+  });
+
+  it("ignores a stale generate 202 that is older than the polled worksheet", () => {
+    const current = sheet([
+      row({
+        id: "row-a",
+        status: "ready",
+        galleryImagePaths: ["https://cdn.example/g1.webp"],
+      }),
+    ]);
+    current.revision = 6;
+    current.activeRun = {
+      ...current.activeRun!,
+      status: "completed",
+      completed: 1,
+    };
+    const incoming = sheet([
+      row({
+        id: "row-a",
+        status: "queued",
+        generationStage: "planning",
+        generationTarget: "gallery",
+      }),
+    ]);
+    incoming.revision = 5;
+
+    const adopted = adoptIncomingGenerationWorksheet(current, incoming);
+
+    expect(adopted.revision).toBe(6);
+    expect(adopted.rows[0]?.status).toBe("ready");
+    expect(adopted.rows[0]?.galleryImagePaths).toEqual([
+      "https://cdn.example/g1.webp",
+    ]);
+  });
+
+  it("keeps the local worksheet when the poll snapshot is an older revision", () => {
+    const local = sheet([
+      row({
+        id: "row-a",
+        status: "ready",
+        galleryImagePaths: ["https://cdn.example/g1.webp"],
+      }),
+    ]);
+    local.revision = 6;
+    const polled = sheet([
+      row({
+        id: "row-a",
+        status: "queued",
+        generationStage: "planning",
+        generationTarget: "gallery",
+      }),
+    ]);
+    polled.revision = 5;
+
+    const merged = mergePolledGenerationWorksheet({
+      local,
+      polled,
+      clientRunActive: true,
+    });
+
+    expect(merged).toBe(local);
   });
 });

@@ -5,19 +5,54 @@ import {
   type GalleryRowStatus,
   type GalleryWorksheetJson,
 } from "@/lib/gallery/types";
+import {
+  isNewerRevision,
+  isStaleRevision,
+  snapshotRevision,
+} from "@/lib/jobs/snapshot-clock";
 
 function isBusyRowStatus(status: GalleryRowStatus | undefined): boolean {
   return status === "queued" || status === "generating";
 }
 
+function imagePathCount(row: GalleryRow): number {
+  return (
+    getRowMainImagePaths(row).length + (row.galleryImagePaths?.length ?? 0)
+  );
+}
+
+function polledHasNewImageEvidence(local: GalleryRow, polled: GalleryRow): boolean {
+  if (imagePathCount(polled) > imagePathCount(local)) return true;
+  const localMain = getRowMainImagePaths(local);
+  const polledMain = getRowMainImagePaths(polled);
+  const localGallery = local.galleryImagePaths ?? [];
+  const polledGallery = polled.galleryImagePaths ?? [];
+  const hasNew = (next: string[], prev: string[]) =>
+    next.some((path) => !prev.some((existing) => imageRefsMatch(existing, path)));
+  return hasNew(polledMain, localMain) || hasNew(polledGallery, localGallery);
+}
+
+export function galleryRowIsBusy(row: Pick<GalleryRow, "status">): boolean {
+  return isBusyRowStatus(row.status);
+}
+
+export function galleryRunIsActive(
+  worksheet: Pick<GalleryWorksheetJson, "activeRun"> | null | undefined
+): boolean {
+  const status = worksheet?.activeRun?.status;
+  return status === "running" || status === "queued";
+}
+
 /**
  * Merge one polled row onto the client copy while a generate request is in
  * flight. Stale idle/ready snapshots must not wipe optimistic queued UI.
+ * A newer revision, new image paths, or an explicit failure are terminal
+ * evidence and always win — even while POST /generate is still open.
  */
 export function mergePolledGenerationRow(
   local: GalleryRow,
   polled: GalleryRow,
-  options: { clientRunActive: boolean }
+  options: { clientRunActive: boolean; polledIsNewer?: boolean }
 ): GalleryRow {
   const localBusy = isBusyRowStatus(local.status);
   const polledBusy = isBusyRowStatus(polled.status);
@@ -34,13 +69,18 @@ export function mergePolledGenerationRow(
       return polled;
     }
 
-    // Explicit failure / completed progress after the row was already generating.
-    // Do not trust a stale `ready` while we are still only optimistically queued —
-    // that is the common race before the generate route persists the run.
     if (polled.status === "failed") {
       return polled;
     }
+    if (options.polledIsNewer && polled.status === "ready") {
+      return polled;
+    }
     if (polled.status === "ready" && local.status === "generating") {
+      return polled;
+    }
+    // Fast jobs persist `ready` while the client is still only `queued`.
+    // New image paths prove this is not the pre-run snapshot.
+    if (polled.status === "ready" && polledHasNewImageEvidence(local, polled)) {
       return polled;
     }
 
@@ -65,12 +105,19 @@ export function mergePolledGenerationWorksheet(params: {
   clientRunActive: boolean;
 }): GalleryWorksheetJson {
   const { local, polled, clientRunActive } = params;
+  if (isStaleRevision(polled.revision, local.revision)) {
+    return local;
+  }
+  const polledIsNewer = isNewerRevision(polled.revision, local.revision);
   const localById = new Map(local.rows.map((row) => [row.id, row]));
 
   const rows = polled.rows.map((polledRow) => {
     const localRow = localById.get(polledRow.id);
     if (!localRow) return polledRow;
-    return mergePolledGenerationRow(localRow, polledRow, { clientRunActive });
+    return mergePolledGenerationRow(localRow, polledRow, {
+      clientRunActive,
+      polledIsNewer,
+    });
   });
 
   let activeRun = polled.activeRun ?? local.activeRun ?? null;
@@ -82,8 +129,9 @@ export function mergePolledGenerationWorksheet(params: {
     local.activeRun?.status === "queued";
 
   // Keep the local activeRun badge while the client request is still open and
-  // the poll has not yet observed the run (or already dropped a stale copy).
-  if (clientRunActive && !polledRunActive && localRunActive) {
+  // the poll has not yet observed the run. A newer revision without a live
+  // run means the job already finished — do not revive the optimistic badge.
+  if (clientRunActive && !polledRunActive && localRunActive && !polledIsNewer) {
     activeRun = local.activeRun ?? activeRun;
   }
 
@@ -91,7 +139,27 @@ export function mergePolledGenerationWorksheet(params: {
     ...polled,
     rows,
     activeRun,
+    revision: Math.max(snapshotRevision(polled.revision), snapshotRevision(local.revision)),
   };
+}
+
+/**
+ * Apply a generate/PATCH HTTP body without letting a stale 202 wipe a newer
+ * poll snapshot (monotonic revision / last-writer with a clock).
+ */
+export function adoptIncomingGenerationWorksheet(
+  current: GalleryWorksheetJson | null,
+  incoming: GalleryWorksheetJson
+): GalleryWorksheetJson {
+  if (!current) return incoming;
+  if (isStaleRevision(incoming.revision, current.revision)) {
+    return current;
+  }
+  return mergePolledGenerationWorksheet({
+    local: current,
+    polled: incoming,
+    clientRunActive: false,
+  });
 }
 
 /** Paths present in memory but removed from storage (user delete won). */

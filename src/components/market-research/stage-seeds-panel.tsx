@@ -31,7 +31,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -292,7 +291,7 @@ export function StageSeedsPanel({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col space-y-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="space-y-2 shrink-0">
         {stale && onRegenerate && !readOnly ? (
           <div className="flex flex-col gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
@@ -491,9 +490,9 @@ export function StageSeedsPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto custom-scrollbar rounded-xl border border-border/70 bg-card">
+      <div className="min-h-0 flex-1 overflow-auto custom-scrollbar overscroll-contain rounded-xl border border-border/70 bg-card">
         {view === "rows" ? (
-          <Table className="w-full min-w-[880px]">
+          <table className="w-full min-w-[880px] caption-bottom text-sm">
             <TableHeader className="sticky top-0 z-10 bg-card shadow-xs">
               <TableRow className="hover:bg-transparent">
                 <TableHead className="w-10 shrink-0">
@@ -662,7 +661,7 @@ export function StageSeedsPanel({
                 })
               )}
             </TableBody>
-          </Table>
+          </table>
         ) : (
           <div className="divide-y divide-border/60">
             {groups.length === 0 ? (

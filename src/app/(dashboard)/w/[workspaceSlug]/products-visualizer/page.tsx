@@ -68,7 +68,13 @@ import {
   uploadVisualizerAsset,
   VisualizerApiError,
 } from "@/lib/visualizer/client";
-import { mergePolledVisualizerWorksheet } from "@/lib/visualizer/generation-worksheet-merge";
+import {
+  adoptIncomingVisualizerWorksheet,
+  mergePolledVisualizerWorksheet,
+  visualizerRowIsBusy,
+  visualizerRunIsActive,
+} from "@/lib/visualizer/generation-worksheet-merge";
+import { maxRevision, snapshotRevision } from "@/lib/jobs/snapshot-clock";
 import { resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
 import { productDisplayName } from "@/lib/visualizer/row-fields";
 import {
@@ -273,6 +279,7 @@ export default function ProductsVisualizerPage() {
   const stickyScrollRef = useRef<HTMLDivElement>(null);
   const settingsRevisionRef = useRef(0);
   const worksheetRevisionRef = useRef(0);
+  const fencedSessionIdRef = useRef<string | null>(null);
   const settingsRef = useRef(settings);
   const sessionRef = useRef(session);
   const worksheetRef = useRef(worksheet);
@@ -287,9 +294,27 @@ export default function ProductsVisualizerPage() {
     worksheetRef.current = worksheet;
   }, [worksheet]);
   useEffect(() => {
-    settingsRevisionRef.current = Number(session?.settings_revision ?? 0);
-    worksheetRevisionRef.current = Number(session?.worksheet_revision ?? 0);
-  }, [session?.settings_revision, session?.worksheet_revision]);
+    if (!session?.id) {
+      fencedSessionIdRef.current = null;
+      settingsRevisionRef.current = 0;
+      worksheetRevisionRef.current = 0;
+      return;
+    }
+    if (fencedSessionIdRef.current !== session.id) {
+      fencedSessionIdRef.current = session.id;
+      settingsRevisionRef.current = snapshotRevision(session.settings_revision);
+      worksheetRevisionRef.current = snapshotRevision(session.worksheet_revision);
+      return;
+    }
+    settingsRevisionRef.current = maxRevision(
+      settingsRevisionRef.current,
+      session.settings_revision
+    );
+    worksheetRevisionRef.current = maxRevision(
+      worksheetRevisionRef.current,
+      session.worksheet_revision
+    );
+  }, [session?.id, session?.settings_revision, session?.worksheet_revision]);
 
   const openProject = useCallback(
     (sessionId: string) => {
@@ -422,50 +447,86 @@ export default function ProductsVisualizerPage() {
           )
         );
         const done = progress.completed + progress.failed;
-        const jobActive =
-          progress.jobStatus === "running" || progress.jobStatus === "queued";
-        if (jobActive || progress.status === "processing") {
+        const jobStillRunning =
+          progress.jobStatus === "running" ||
+          progress.jobStatus === "queued" ||
+          progress.status === "processing";
+        const localWorksheet = worksheetRef.current;
+        const localBusy = (localWorksheet?.rows ?? []).some(visualizerRowIsBusy);
+        const localRunActive = visualizerRunIsActive(localWorksheet);
+        if (jobStillRunning) {
           setGenerationRun({
             total: progress.total,
             completed: done,
             runId: progress.jobId || "",
           });
           if (progress.cancelRequested) setStopping(true);
-        } else if (!generating) {
+        } else if (!generating && !localBusy && !localRunActive) {
           if (lastCreditsProgressRef.current > 0) invalidateCredits();
           setGenerationRun(null);
           setStopping(false);
         }
-        const revisionChanged =
-          progress.worksheetRevision !== worksheetRevisionRef.current;
         const newlyDone = done > lastCreditsProgressRef.current;
         if (newlyDone) {
           lastCreditsProgressRef.current = done;
           invalidateCredits();
         }
-        if (revisionChanged) {
-          worksheetRevisionRef.current = progress.worksheetRevision;
+        const serverRevision = snapshotRevision(progress.worksheetRevision);
+        const needsWorksheet =
+          serverRevision > worksheetRevisionRef.current ||
+          (!jobStillRunning && (localBusy || localRunActive));
+        if (needsWorksheet) {
           const fresh = await getVisualizerSession(workspace.id, projectId, {
             includeSignedUrls: true,
           });
           if (cancelled || !fresh.worksheet) return;
-          setSession(fresh.session);
-          setWorksheet((current) => {
-            if (!current) return fresh.worksheet!;
-            const merged = mergePolledVisualizerWorksheet({
-              local: current,
-              polled: fresh.worksheet!,
-              clientRunActive: generating,
-            });
+          worksheetRevisionRef.current = maxRevision(
+            worksheetRevisionRef.current,
+            fresh.session.worksheet_revision,
+            fresh.worksheet.revision,
+            progress.worksheetRevision
+          );
+          setSession((current) => {
+            const next = fresh.session;
+            if (!current || current.id !== next.id) return next;
             return {
-              ...current,
-              rows: merged.rows,
-              activeRun: merged.activeRun,
-              revision: merged.revision,
+              ...next,
+              worksheet_revision: maxRevision(
+                current.worksheet_revision,
+                next.worksheet_revision
+              ),
             };
+          });
+          setWorksheet((current) => {
+            const applied = current
+              ? mergePolledVisualizerWorksheet({
+                  local: current,
+                  polled: fresh.worksheet!,
+                  clientRunActive: generating,
+                })
+              : fresh.worksheet!;
+            const next = {
+              ...(current ?? applied),
+              rows: applied.rows,
+              activeRun: applied.activeRun,
+              revision: applied.revision,
+            };
+            worksheetRef.current = next;
+            return next;
           });
           if (fresh.signedUrls) {
             setSignedUrls((current) => ({ ...current, ...fresh.signedUrls }));
+          }
+          if (!jobStillRunning && !generating) {
+            const applied = worksheetRef.current;
+            if (
+              applied &&
+              !applied.rows.some(visualizerRowIsBusy) &&
+              !visualizerRunIsActive(applied)
+            ) {
+              setGenerationRun(null);
+              setStopping(false);
+            }
           }
         }
       } catch {
@@ -1235,18 +1296,45 @@ export default function ProductsVisualizerPage() {
         retryFailed,
       });
 
-      if (result.session) setSession(result.session);
-      if (result.worksheet) setWorksheet(result.worksheet);
-      if (result.signedUrls) setSignedUrls(result.signedUrls);
+      if (result.session) {
+        setSession((current) => {
+          if (!current || current.id !== result.session!.id) return result.session!;
+          return {
+            ...result.session!,
+            worksheet_revision: maxRevision(
+              current.worksheet_revision,
+              result.session!.worksheet_revision
+            ),
+          };
+        });
+        worksheetRevisionRef.current = maxRevision(
+          worksheetRevisionRef.current,
+          result.session.worksheet_revision
+        );
+      }
+      if (result.worksheet) {
+        const incoming = result.worksheet;
+        setWorksheet((current) => {
+          const next = adoptIncomingVisualizerWorksheet(current, incoming);
+          worksheetRef.current = next;
+          return next;
+        });
+      }
+      if (result.signedUrls) {
+        setSignedUrls((current) => ({ ...current, ...result.signedUrls }));
+      }
       setSaveStatus("saved");
 
       if (result.status === "running") {
-        setGenerationRun({
-          total: result.worksheet?.activeRun?.total ?? rowIds.length,
-          completed: result.worksheet?.activeRun?.completed ?? 0,
-          runId: result.runId,
-        });
-        toast.message("Generation continues in the background");
+        if (visualizerRunIsActive(worksheetRef.current)) {
+          const run = worksheetRef.current!.activeRun!;
+          setGenerationRun({
+            total: run.total ?? rowIds.length,
+            completed: run.completed + run.failed,
+            runId: result.runId || run.id,
+          });
+          toast.message("Generation continues in the background");
+        }
       } else if (result.status === "completed") {
         toast.success(
           result.message ||
