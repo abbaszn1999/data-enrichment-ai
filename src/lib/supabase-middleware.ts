@@ -55,33 +55,32 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse;
   }
 
-  // Verify the access-token signature locally (no auth-server round-trip).
+  // Check session
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  const secret = jwtSecretFromEnv();
-  const verified = session?.access_token
-    ? verifySupabaseAccessToken(session.access_token, secret)
-    : null;
 
-  if (!session?.user) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("redirect", pathname);
-    return NextResponse.redirect(url);
+  const secret = jwtSecretFromEnv();
+  let isAuthenticated = false;
+
+  if (session?.access_token && secret) {
+    const verified = verifySupabaseAccessToken(session.access_token, secret);
+    if (verified) {
+      isAuthenticated = true;
+    }
   }
 
-  if (!secret) {
-    if (process.env.NODE_ENV === "production") {
-      console.error(
-        "[middleware] SUPABASE_JWT_SECRET is required to verify session JWTs"
-      );
-      const url = request.nextUrl.clone();
-      url.pathname = "/login";
-      url.searchParams.set("redirect", pathname);
-      return NextResponse.redirect(url);
+  // Fallback to auth server check if secret is not configured or token expired/unverified
+  if (!isAuthenticated) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      isAuthenticated = true;
     }
-  } else if (!verified) {
+  }
+
+  if (!isAuthenticated) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirect", pathname);
