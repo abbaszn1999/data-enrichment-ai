@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
+import { publicOriginFromRequest } from "@/lib/app-origin";
 import { createClient } from "@/lib/supabase-server";
 
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+  const origin = publicOriginFromRequest(request);
   const code = searchParams.get("code");
 
-  // If "next" is in param, use it as the redirect URL
   let next = searchParams.get("next") ?? "/workspaces";
   if (!next.startsWith("/") || next.startsWith("//")) {
     next = "/workspaces";
@@ -15,18 +16,20 @@ export async function GET(request: Request) {
     const supabase = await createClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      const forwardedHost = request.headers.get("x-forwarded-host");
-      const isLocalEnv = process.env.NODE_ENV === "development";
-      if (isLocalEnv) {
-        return NextResponse.redirect(`${origin}${next}`);
-      } else if (forwardedHost) {
-        return NextResponse.redirect(`https://${forwardedHost}${next}`);
-      } else {
-        return NextResponse.redirect(`${origin}${next}`);
-      }
+      return NextResponse.redirect(`${origin}${next}`);
+    }
+    console.error("[auth/callback/google] exchange failed:", error.message);
+  } else {
+    const providerError =
+      searchParams.get("error_description") || searchParams.get("error");
+    if (providerError) {
+      console.error("[auth/callback/google] provider error:", providerError);
     }
   }
 
-  // Return the user to login with error
-  return NextResponse.redirect(`${origin}/login?error=auth_callback_error`);
+  const params = new URLSearchParams({ error: "auth_callback_error" });
+  const errorCode = searchParams.get("error_code") || searchParams.get("error");
+  if (errorCode) params.set("error_code", errorCode);
+  if (next !== "/workspaces") params.set("redirect", next);
+  return NextResponse.redirect(`${origin}/login?${params.toString()}`);
 }
