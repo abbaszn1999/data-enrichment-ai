@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isAdminInternalPath, isAdminPublicPath } from "@/lib/platform-admin/paths";
+import { jwtSecretFromEnv, verifySupabaseAccessToken } from "@/lib/auth/verify-jwt";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -54,14 +55,33 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse;
   }
 
-  // Use getSession() instead of getUser() — reads from cookies locally,
-  // no network round-trip to Supabase auth servers (~400-800ms saved per navigation)
+  // Verify the access-token signature locally (no auth-server round-trip).
   const {
     data: { session },
   } = await supabase.auth.getSession();
+  const secret = jwtSecretFromEnv();
+  const verified = session?.access_token
+    ? verifySupabaseAccessToken(session.access_token, secret)
+    : null;
 
-  // If not logged in, redirect to login
   if (!session?.user) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("redirect", pathname);
+    return NextResponse.redirect(url);
+  }
+
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      console.error(
+        "[middleware] SUPABASE_JWT_SECRET is required to verify session JWTs"
+      );
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      url.searchParams.set("redirect", pathname);
+      return NextResponse.redirect(url);
+    }
+  } else if (!verified) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirect", pathname);

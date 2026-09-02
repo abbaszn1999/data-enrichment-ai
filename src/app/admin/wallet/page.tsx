@@ -11,7 +11,7 @@ import { pageCount } from "@/components/platform-admin/pagination-bar";
 import { useDebouncedValue } from "@/components/platform-admin/use-debounced-value";
 import { adminJson } from "@/lib/platform-admin/client-api";
 import { formatDateTime, formatUsd } from "@/lib/platform-admin/format";
-import { WALLET_KIND_LABELS, walletModuleLabel } from "@/lib/platform-admin/labels";
+import { WALLET_KIND_LABELS, WALLET_MODULE_LABELS, walletModuleLabel } from "@/lib/platform-admin/labels";
 import { DATE_WINDOW_OPTIONS, LEDGER_PAGE_SIZE, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveWalletTxRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
@@ -143,10 +143,7 @@ export default function AdminWalletPage() {
                 },
                 options: [
                   { value: "all", label: "All modules" },
-                  { value: "topup", label: "Top-up" },
-                  { value: "Billing", label: "Billing" },
-                  { value: "Market Research", label: "Market Research" },
-                  { value: "Sync", label: "Sync" },
+                  ...Object.entries(WALLET_MODULE_LABELS).map(([value, label]) => ({ value, label })),
                 ],
               },
               {

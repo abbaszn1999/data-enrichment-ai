@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { loadLiveWorkspaceDetail } from "@/lib/platform-admin/live";
 import { requirePlatformAdmin } from "@/lib/platform-admin/server-auth";
+import { writeSecurityAuditLog } from "@/lib/security/audit-log";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { purgeWorkspace } from "@/lib/workspace-purge";
 
@@ -38,6 +39,20 @@ export async function DELETE(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "Type the workspace slug to confirm deletion." }, { status: 400 });
     }
     const result = await purgeWorkspace(admin, id);
+    await writeSecurityAuditLog(admin, {
+      workspaceId: id,
+      actorId: null,
+      action: "workspace.delete",
+      targetId: id,
+      before: { workspace_id: id, slug: workspace.slug, name: workspace.name },
+      after: {
+        source: "platform_admin",
+        filesDeleted: result.filesDeleted,
+        verifiedEmpty: result.verifiedEmpty,
+        completed_at: new Date().toISOString(),
+      },
+      request: req,
+    });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     return NextResponse.json(

@@ -10,7 +10,7 @@ describe("jobHref", () => {
         workspaceSlug: "acme",
         sessionId: "sess-1",
       })
-    ).toBe("/w/acme/import/sess-1/enrich");
+    ).toBe("/w/acme/catalog-intelligence/sess-1");
     expect(
       jobHref({
         kind: "gallery",

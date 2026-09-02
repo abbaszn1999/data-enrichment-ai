@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   FolderTree,
@@ -30,48 +30,35 @@ import { Badge } from "@/components/ui/badge";
 import { useWorkspaceContext } from "../workspace-context";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useRole } from "@/hooks/use-role";
-import { loadCategoriesJson, saveCategoriesJson, saveCategoriesRawJson, type CategoryJson } from "@/lib/storage-helpers";
+import { loadCategoriesJson, type CategoryJson } from "@/lib/storage-helpers";
 
 import { parseExcelFile } from "@/lib/excel";
+import {
+  UploadLimitError,
+  assertRowCount,
+  assertSpreadsheetFile,
+} from "@/lib/upload-limits";
 import { CMS_CATEGORY_COLUMNS } from "@/types";
 
 // Alias for compatibility with existing tree builder
 type Category = CategoryJson & { parent_id?: string | null; description?: string; sort_order?: number; attributes?: any[] };
 import { FileSpreadsheet, CheckCircle2, ArrowRight, GripVertical } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  buildAncestorSets,
+  buildCountedTree,
+  categoryPathKey,
+  collectExpandableIds,
+  flattenExpanded,
+  isDescendantOf,
+  rollupProductCounts,
+  type CategoryRef,
+} from "@/lib/categories/tree";
 
 interface TreeNode extends Category {
   children: TreeNode[];
   productCount: number;
-}
-
-function buildTree(categories: Category[]): TreeNode[] {
-  const map = new Map<string, TreeNode>();
-  const roots: TreeNode[] = [];
-
-  categories.forEach((c) => {
-    map.set(c.id, { ...c, children: [], productCount: 0 });
-  });
-
-  categories.forEach((c) => {
-    const node = map.get(c.id)!;
-    if (c.parent_id && map.has(c.parent_id)) {
-      map.get(c.parent_id)!.children.push(node);
-    } else {
-      roots.push(node);
-    }
-  });
-
-  return roots;
-}
-
-function getMaxDepth(nodes: TreeNode[], depth = 1): number {
-  let max = depth;
-  for (const n of nodes) {
-    if (n.children.length > 0) {
-      max = Math.max(max, getMaxDepth(n.children, depth + 1));
-    }
-  }
-  return max;
+  directCount: number;
 }
 
 function slugify(name: string): string {
@@ -102,6 +89,9 @@ export default function CategoriesPage() {
   // Dirty / Save state
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [taxonomyRevision, setTaxonomyRevision] = useState(0);
+  const [productCounts, setProductCounts] = useState<Record<string, number>>({});
+  const treeScrollRef = useRef<HTMLDivElement>(null);
 
   // Drag & Drop state
   const [dragId, setDragId] = useState<string | null>(null);
@@ -127,8 +117,18 @@ export default function CategoriesPage() {
 
   useEffect(() => {
     if (!workspace) return;
-    loadCategoriesJson(workspace.id)
-      .then((cats) => setCategories(cats.map(toCategory)))
+    Promise.all([
+      loadCategoriesJson(workspace.id),
+      fetch(`/api/categories?workspaceId=${workspace.id}`).then((r) => r.json()).catch(() => ({})),
+      fetch(`/api/categories/counts?workspaceId=${workspace.id}`).then((r) => r.json()).catch(() => ({})),
+    ])
+      .then(([cats, meta, counts]) => {
+        setCategories(cats.map(toCategory));
+        if (typeof meta?.revision === "number") setTaxonomyRevision(meta.revision);
+        if (counts?.counts && typeof counts.counts === "object") {
+          setProductCounts(counts.counts as Record<string, number>);
+        }
+      })
       .finally(() => setLoading(false));
   }, [workspace]);
 
@@ -168,8 +168,27 @@ export default function CategoriesPage() {
         sortOrder: c.sort_order,
         attributes: c.attributes,
       }));
-      await saveCategoriesJson(workspace.id, jsons);
-      await saveCategoriesRawJson(workspace.id, buildRawRows(toSave));
+      const res = await fetch("/api/categories", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          categories: jsons,
+          rawRows: buildRawRows(toSave),
+          expectedRevision: taxonomyRevision,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        revision?: number;
+        currentRevision?: number;
+      };
+      if (res.status === 409) {
+        alert(payload.error || "Someone else changed this taxonomy. Reload and try again.");
+        return;
+      }
+      if (!res.ok) throw new Error(payload.error || "Failed to save");
+      if (typeof payload.revision === "number") setTaxonomyRevision(payload.revision);
       setHasUnsavedChanges(false);
     } catch (err: any) {
       alert(err?.message || "Failed to save");
@@ -184,8 +203,37 @@ export default function CategoriesPage() {
     await persistToStorage(cats);
   };
 
-  const tree = useMemo(() => buildTree(categories), [categories]);
-  const maxDepth = useMemo(() => getMaxDepth(tree), [tree]);
+  const categoryRefs: CategoryRef[] = useMemo(
+    () =>
+      categories.map((c) => ({
+        id: c.id,
+        name: c.name,
+        parentId: c.parent_id ?? null,
+      })),
+    [categories]
+  );
+  const ancestorSets = useMemo(() => buildAncestorSets(categoryRefs), [categoryRefs]);
+  const counted = useMemo(
+    () => rollupProductCounts(categoryRefs, productCounts),
+    [categoryRefs, productCounts]
+  );
+  const tree = useMemo(
+    () => buildCountedTree(categories.map((c) => ({
+      ...c,
+      parentId: c.parent_id ?? null,
+    })), counted) as TreeNode[],
+    [categories, counted]
+  );
+  const maxDepth = useMemo(() => {
+    const walk = (nodes: TreeNode[], depth: number): number => {
+      let max = depth;
+      for (const node of nodes) {
+        if (node.children.length) max = Math.max(max, walk(node.children, depth + 1));
+      }
+      return max;
+    };
+    return walk(tree, 1);
+  }, [tree]);
   const rootCount = tree.length;
 
   const filteredTree = useMemo(() => {
@@ -278,14 +326,11 @@ export default function CategoriesPage() {
 
   // ── Drag & Drop helpers ──
   // Check if `targetId` is a descendant of `parentId` (prevents circular refs)
-  const isDescendant = useCallback((parentId: string, targetId: string): boolean => {
-    const children = categories.filter((c) => c.parent_id === parentId);
-    for (const child of children) {
-      if (child.id === targetId) return true;
-      if (isDescendant(child.id, targetId)) return true;
-    }
-    return false;
-  }, [categories]);
+  const isDescendant = useCallback(
+    (parentId: string, targetId: string): boolean =>
+      isDescendantOf(parentId, targetId, ancestorSets),
+    [ancestorSets]
+  );
 
   const handleDragStart = useCallback((e: React.DragEvent, nodeId: string) => {
     setDragId(nodeId);
@@ -355,7 +400,7 @@ export default function CategoriesPage() {
   }, [dragId, categories, isDescendant, updateCategories]);
 
   function renderNode(node: TreeNode, depth = 0) {
-    const isExpanded = expanded.has(node.id);
+    const isExpanded = expandSet.has(node.id);
     const isSelected = selected === node.id;
     const hasChildren = node.children.length > 0;
     const highlight = search && node.name.toLowerCase().includes(search.toLowerCase());
@@ -410,22 +455,42 @@ export default function CategoriesPage() {
             </Badge>
           </button>
         </div>
-        {isExpanded && hasChildren && (
-          <div>
-            {node.children.map((child) => renderNode(child, depth + 1))}
-          </div>
-        )}
+        {isExpanded && hasChildren ? (
+          <div>{/* children rendered by the virtual list */}</div>
+        ) : null}
       </div>
     );
   }
 
+  const expandSet = useMemo(() => {
+    if (search) return collectExpandableIds(filteredTree);
+    return expanded;
+  }, [search, filteredTree, expanded]);
+  const flatRows = useMemo(
+    () => flattenExpanded(filteredTree, expandSet),
+    [filteredTree, expandSet]
+  );
+  const rowVirtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => treeScrollRef.current,
+    estimateSize: () => 36,
+    overscan: 16,
+  });
+
   // Upload sheet handlers
   const handleSheetSelect = async (selectedFile: File) => {
+    try {
+      assertSpreadsheetFile(selectedFile, "categories");
+    } catch (err) {
+      alert(err instanceof UploadLimitError ? err.message : "Invalid file");
+      return;
+    }
     setUploadFile(selectedFile);
     try {
       const buffer = await selectedFile.arrayBuffer();
       const parsed = await parseExcelFile(buffer);
       if (parsed && parsed.rows.length > 0) {
+        assertRowCount(parsed.rows.length, "categories");
         const columns = parsed.columns;
         const rows = parsed.rows;
         const preview = rows.slice(0, 5).map((r) => {
@@ -452,7 +517,8 @@ export default function CategoriesPage() {
       }
     } catch (err) {
       console.error("Parse error:", err);
-      alert("Failed to parse file. Please check the format.");
+      alert(err instanceof Error ? err.message : "Failed to parse file. Please check the format.");
+      setUploadFile(null);
     }
   };
 
@@ -468,14 +534,13 @@ export default function CategoriesPage() {
       // Build incoming categories from sheet rows
       const incomingCats: Category[] = [];
       let skipped = 0;
-      const rowIdToNewId = new Map<string, string>(); // originalId → newUUID
-      const seenNames = new Set<string>();
+      const rowIdToNewId = new Map<string, string>();
+      const seenPaths = new Set<string>();
+      const pending: Array<Category & { _rawParent: string }> = [];
 
       for (const row of parsedSheet.rows) {
         const name = (row[nameColumn] || "").trim();
         if (!name) { skipped++; continue; }
-        if (seenNames.has(name.toLowerCase())) { skipped++; continue; }
-        seenNames.add(name.toLowerCase());
 
         const newId = crypto.randomUUID();
         const rawOriginalId = idColumn && row[idColumn] ? row[idColumn].trim() : null;
@@ -483,19 +548,45 @@ export default function CategoriesPage() {
 
         const slug = name.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 48);
         const desc = descColumn ? (row[descColumn] || "").trim() : "";
-        incomingCats.push({ id: newId, name, slug, description: desc || undefined, parentId: null, parent_id: null, originalId: rawOriginalId, _rawParent: parentColumn ? (row[parentColumn] || "").trim() : "" } as any);
+        pending.push({
+          id: newId,
+          name,
+          slug,
+          description: desc || undefined,
+          parentId: null,
+          parent_id: null,
+          originalId: rawOriginalId,
+          _rawParent: parentColumn ? (row[parentColumn] || "").trim() : "",
+        } as Category & { _rawParent: string });
       }
 
-      // Resolve parent_id references within incoming
-      for (const cat of incomingCats) {
-        const rawParent = (cat as any)._rawParent as string;
-        delete (cat as any)._rawParent;
-        if (!rawParent || rawParent === "0" || rawParent === "") continue;
+      for (const cat of pending) {
+        const rawParent = cat._rawParent;
+        delete (cat as { _rawParent?: string })._rawParent;
+        if (!rawParent || rawParent === "0" || rawParent === "") {
+          incomingCats.push(cat);
+          continue;
+        }
         const resolvedId = rowIdToNewId.get(rawParent)
-          ?? incomingCats.find((c) => c.name.toLowerCase() === rawParent.toLowerCase())?.id
+          ?? pending.find((c) => c.name.toLowerCase() === rawParent.toLowerCase())?.id
           ?? null;
-        if (resolvedId) { cat.parent_id = resolvedId; (cat as any).parentId = resolvedId; }
+        if (resolvedId) { cat.parent_id = resolvedId; cat.parentId = resolvedId; }
+        incomingCats.push(cat);
       }
+
+      const incomingById = new Map(incomingCats.map((c) => [c.id, c]));
+      const uniqueIncoming: Category[] = [];
+      for (const cat of incomingCats) {
+        const key = categoryPathKey(
+          { id: cat.id, name: cat.name, parentId: cat.parent_id ?? null },
+          incomingById as Map<string, CategoryRef>
+        );
+        if (seenPaths.has(key)) { skipped++; continue; }
+        seenPaths.add(key);
+        uniqueIncoming.push(cat);
+      }
+      incomingCats.length = 0;
+      incomingCats.push(...uniqueIncoming);
       setUploadProgress(40);
 
       let finalCats: Category[];
@@ -510,25 +601,39 @@ export default function CategoriesPage() {
         // - Existing categories matched by name → keep existing ID, update fields from new sheet
         // - New categories not in existing → add them
         // - Existing categories not in sheet → keep them untouched
-        const existingByName = new Map<string, Category>();
-        for (const c of categories) existingByName.set(c.name.toLowerCase(), c);
+        const existingByPath = new Map<string, Category>();
+        const existingById = new Map(categories.map((c) => [c.id, c]));
+        const categoryPathKey = (cat: Category, byId: Map<string, Category>) => {
+          const names: string[] = [];
+          let current: Category | undefined = cat;
+          const seen = new Set<string>();
+          while (current && !seen.has(current.id)) {
+            seen.add(current.id);
+            names.unshift(current.name);
+            current = current.parent_id ? byId.get(current.parent_id) : undefined;
+          }
+          return names.join("\0").toLowerCase();
+        };
+        for (const c of categories) existingByPath.set(categoryPathKey(c, existingById), c);
+        const incomingById = new Map(incomingCats.map((c) => [c.id, c]));
 
         const merged: Category[] = [];
         const usedExistingIds = new Set<string>();
         let updatedCount = 0;
 
         for (const incoming of incomingCats) {
-          const existing = existingByName.get(incoming.name.toLowerCase());
+          const existing = existingByPath.get(categoryPathKey(incoming, incomingById));
           if (existing) {
             // Match found — keep existing ID, update description & originalId from sheet
             usedExistingIds.add(existing.id);
             // Re-map parent from incoming's new ID → existing parent ID
             let parentId = existing.parent_id;
             if (incoming.parent_id) {
-              // Find the parent in incoming, see if it matched an existing
-              const parentIncoming = incomingCats.find((c) => c.id === incoming.parent_id);
+              const parentIncoming = incomingById.get(incoming.parent_id);
               if (parentIncoming) {
-                const parentExisting = existingByName.get(parentIncoming.name.toLowerCase());
+                const parentExisting = existingByPath.get(
+                  categoryPathKey(parentIncoming, incomingById)
+                );
                 parentId = parentExisting?.id || incoming.parent_id;
               }
             }
@@ -544,9 +649,11 @@ export default function CategoriesPage() {
             // New category — resolve parent against existing
             let parentId = incoming.parent_id;
             if (parentId) {
-              const parentIncoming = incomingCats.find((c) => c.id === parentId);
+              const parentIncoming = incomingById.get(parentId);
               if (parentIncoming) {
-                const parentExisting = existingByName.get(parentIncoming.name.toLowerCase());
+                const parentExisting = existingByPath.get(
+                  categoryPathKey(parentIncoming, incomingById)
+                );
                 if (parentExisting) parentId = parentExisting.id;
               }
             }
@@ -567,8 +674,6 @@ export default function CategoriesPage() {
       }
       setUploadProgress(70);
 
-      // Persist everything
-      await saveCategoriesRawJson(workspace.id, parsedSheet.rows);
       await saveAll(finalCats);
       setUploadProgress(100);
 
@@ -585,8 +690,7 @@ export default function CategoriesPage() {
     if (!workspace || deleteConfirmText !== "delete") return;
     setDeletingAll(true);
     try {
-      await saveCategoriesJson(workspace.id, []);
-      await saveCategoriesRawJson(workspace.id, []);
+      await persistToStorage([]);
       setCategories([]);
       setSelected(null);
       setExpanded(new Set());
@@ -778,7 +882,8 @@ export default function CategoriesPage() {
           <div className="grid grid-cols-1 gap-0 lg:grid-cols-3">
             <div className="border-b p-3 lg:col-span-2 lg:border-b-0 lg:border-r">
               <div
-                className={`min-h-[300px] rounded-xl transition-all ${
+                ref={treeScrollRef}
+                className={`h-[min(70vh,720px)] overflow-auto rounded-xl transition-all ${
                   dragId && dropTargetId === "__root__"
                     ? "ring-2 ring-[#400095]/40 bg-[#400095]/5 dark:ring-[#F76D01]/40 dark:bg-[#F76D01]/5"
                     : ""
@@ -823,7 +928,27 @@ export default function CategoriesPage() {
                   </div>
                 ) : (
                   <>
-                    {filteredTree.map((node) => renderNode(node))}
+                    <div
+                      className="relative w-full"
+                      style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                    >
+                      {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                        const item = flatRows[virtualRow.index];
+                        if (!item) return null;
+                        return (
+                          <div
+                            key={item.node.id}
+                            className="absolute left-0 top-0 w-full"
+                            style={{
+                              height: `${virtualRow.size}px`,
+                              transform: `translateY(${virtualRow.start}px)`,
+                            }}
+                          >
+                            {renderNode(item.node, item.depth)}
+                          </div>
+                        );
+                      })}
+                    </div>
                     {dragId && (
                       <div
                         className={`mt-1 rounded-lg border-2 border-dashed py-2 text-center text-[10px] transition-all ${
@@ -876,7 +1001,9 @@ export default function CategoriesPage() {
                       </div>
                       <div className="flex justify-between gap-3">
                         <span className="text-muted-foreground">Products</span>
-                        <span className="font-bold">0</span>
+                        <span className="font-bold">
+                          {counted.get(selectedCat.id)?.rollup ?? 0}
+                        </span>
                       </div>
                       <div className="flex justify-between gap-3">
                         <span className="text-muted-foreground">Subcategories</span>

@@ -1,5 +1,5 @@
 {
-  "name": "data-sheet",
+  "name": "autommerce-platform",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -13,11 +13,14 @@
     "test:watch": "vitest",
     "workflow": "tsx --tsconfig tsconfig.json workflows/index.ts",
     "stripe:setup-test": "tsx scripts/setup-local-stripe.ts",
-    "stripe:listen": "stripe listen --forward-to localhost:4000/api/webhooks/stripe"
+    "stripe:listen": "stripe listen --forward-to localhost:4000/api/webhooks/stripe",
+    "storage:backup": "node scripts/backup-workspace-storage.mjs --out ./backups/storage",
+    "storage:restore-drill": "node scripts/backup-workspace-storage.mjs --restore-dry-run ./backups/storage"
   },
   "dependencies": {
     "@google/genai": "^2.13.0",
     "@renderinc/sdk": "^1.0.0",
+    "@sentry/nextjs": "^10.73.0",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.99.3",
     "@tailwindcss/typography": "^0.5.19",
@@ -44,7 +47,6 @@
     "stripe": "^22.0.0",
     "tailwind-merge": "^3.5.0",
     "tsx": "^4.23.12",
-    "xlsx": "^0.18.5",
     "zod": "^4.4.3",
     "zustand": "^5.0.11"
   },

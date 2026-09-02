@@ -4,6 +4,13 @@ import {
   type ProjectJson,
   type ProjectRow,
 } from "@/lib/storage-helpers";
+import { recordStorageWriteBytes } from "@/lib/observability/metrics";
+import { catalogRowStoreEnabled } from "@/lib/catalog/flag";
+import {
+  hydrateProjectRows,
+  patchCatalogSessionRows,
+  replaceCatalogSessionRows,
+} from "@/lib/catalog/session-rows";
 
 const BUCKET = "workspace-files";
 
@@ -47,17 +54,22 @@ export async function loadProjectJsonAdmin(
 ): Promise<ProjectJson | null> {
   const path = getProjectStoragePath(workspaceId, sessionId);
   const fresh = await downloadFresh(path);
+  let project: ProjectJson | null = null;
   if (fresh !== null) {
-    return fresh === "" ? null : (JSON.parse(fresh) as ProjectJson);
+    project = fresh === "" ? null : (JSON.parse(fresh) as ProjectJson);
+  } else {
+    const { data, error } = await admin.storage.from(BUCKET).download(path);
+    if (error) {
+      const message = error.message || "";
+      if (/not found|object not found/i.test(message)) return null;
+      throw error;
+    }
+    if (!data) return null;
+    project = JSON.parse(await data.text()) as ProjectJson;
   }
-  const { data, error } = await admin.storage.from(BUCKET).download(path);
-  if (error) {
-    const message = error.message || "";
-    if (/not found|object not found/i.test(message)) return null;
-    throw error;
-  }
-  if (!data) return null;
-  return JSON.parse(await data.text()) as ProjectJson;
+  if (!project) return null;
+  if (!catalogRowStoreEnabled()) return project;
+  return hydrateProjectRows(admin, sessionId, project);
 }
 
 export async function saveProjectJsonAdmin(
@@ -67,13 +79,21 @@ export async function saveProjectJsonAdmin(
   admin: Admin = createAdminClient()
 ): Promise<void> {
   const path = getProjectStoragePath(workspaceId, sessionId);
-  const blob = new Blob([JSON.stringify(project)], {
+  const serialized = JSON.stringify(project);
+  const blob = new Blob([serialized], {
     type: "application/octet-stream",
   });
   const { error } = await admin.storage
     .from(BUCKET)
     .upload(path, blob, { cacheControl: "0", upsert: true });
   if (error) throw error;
+  recordStorageWriteBytes(Buffer.byteLength(serialized, "utf8"), {
+    kind: "catalog",
+    workspaceId,
+  });
+  if (catalogRowStoreEnabled()) {
+    await replaceCatalogSessionRows(admin, sessionId, project.rows);
+  }
 }
 
 export async function patchProjectRowsAdmin(params: {
@@ -89,6 +109,18 @@ export async function patchProjectRowsAdmin(params: {
   admin?: Admin;
 }): Promise<ProjectJson> {
   const admin = params.admin ?? createAdminClient();
+  if (catalogRowStoreEnabled()) {
+    await patchCatalogSessionRows(admin, params.sessionId, params.patches);
+    const project = await loadProjectJsonAdmin(
+      params.workspaceId,
+      params.sessionId,
+      admin
+    );
+    if (!project) {
+      throw new Error("Project data not found in storage");
+    }
+    return project;
+  }
   const project = await loadProjectJsonAdmin(
     params.workspaceId,
     params.sessionId,

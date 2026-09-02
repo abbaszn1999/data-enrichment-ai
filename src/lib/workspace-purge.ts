@@ -18,7 +18,8 @@ export async function listStoragePathsUnderPrefix(
       const { data, error } = await admin.storage
         .from(BUCKET)
         .list(folder, { limit: LIST_PAGE_SIZE, offset });
-      if (error || !data || data.length === 0) break;
+      if (error) throw new Error(error.message);
+      if (!data || data.length === 0) break;
       for (const item of data) {
         const path = `${folder}/${item.name}`;
         if (item.id) files.push(path);
@@ -42,8 +43,7 @@ export async function deleteStoragePrefix(
     const batch = paths.slice(i, i + REMOVE_BATCH_SIZE);
     const { error } = await admin.storage.from(BUCKET).remove(batch);
     if (error) {
-      console.error("[deleteStoragePrefix] batch failed:", error.message);
-      continue;
+      throw new Error(`Storage delete failed: ${error.message}`);
     }
     removed += batch.length;
   }
@@ -53,9 +53,24 @@ export async function deleteStoragePrefix(
 export async function purgeWorkspace(
   admin: SupabaseClient,
   workspaceId: string
-): Promise<{ filesDeleted: number }> {
+): Promise<{ filesDeleted: number; verifiedEmpty: boolean }> {
+  const now = new Date().toISOString();
+  const { error: softError } = await admin
+    .from("workspaces")
+    .update({ deleted_at: now })
+    .eq("id", workspaceId)
+    .is("deleted_at", null);
+  if (softError) throw new Error(softError.message);
+
   const filesDeleted = await deleteStoragePrefix(admin, workspaceId);
+  const remaining = await listStoragePathsUnderPrefix(admin, workspaceId);
+  if (remaining.length > 0) {
+    throw new Error(
+      `Storage purge incomplete: ${remaining.length} object(s) remain under ${workspaceId}/. The workspace row was retained.`
+    );
+  }
+
   const { error } = await admin.from("workspaces").delete().eq("id", workspaceId);
   if (error) throw new Error(error.message);
-  return { filesDeleted };
+  return { filesDeleted, verifiedEmpty: true };
 }

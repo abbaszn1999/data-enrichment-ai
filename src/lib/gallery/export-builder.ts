@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import type { GalleryWorksheetJson } from "@/lib/gallery/types";
+import { mapLimit } from "@/lib/async/map-limit";
 
 export function buildGalleryExportHeaders(worksheet: GalleryWorksheetJson): string[] {
   const originalCols = worksheet.columns;
@@ -57,6 +58,26 @@ export async function buildGalleryExportBuffer(
     sheet.addRow(values);
   }
 
+  const uniquePaths = new Set<string>();
+  for (let r = 2; r <= sheet.rowCount; r++) {
+    const excelRow = sheet.getRow(r);
+    for (let c = 1; c <= headers.length; c++) {
+      const text = String(excelRow.getCell(c).value ?? "");
+      if (!text.includes("__MAIN__:") && !text.includes("__G__:")) continue;
+      for (const part of text.split(/\s+/).filter(Boolean)) {
+        if (part.startsWith("__MAIN__:") || part.startsWith("__G__:")) {
+          const prefix = part.startsWith("__MAIN__:") ? "__MAIN__:" : "__G__:";
+          uniquePaths.add(part.slice(prefix.length));
+        }
+      }
+    }
+  }
+  const signed = new Map<string, string | null>();
+  await mapLimit([...uniquePaths], 20, async (path) => {
+    signed.set(path, await resolveImageUrl(path));
+    return path;
+  });
+
   for (let r = 2; r <= sheet.rowCount; r++) {
     const excelRow = sheet.getRow(r);
     for (let c = 1; c <= headers.length; c++) {
@@ -70,7 +91,7 @@ export async function buildGalleryExportBuffer(
         if (part.startsWith("__MAIN__:") || part.startsWith("__G__:")) {
           const prefix = part.startsWith("__MAIN__:") ? "__MAIN__:" : "__G__:";
           const path = part.slice(prefix.length);
-          const url = await resolveImageUrl(path);
+          const url = signed.get(path) ?? null;
           if (url) urls.push(url);
         } else {
           urls.push(part);

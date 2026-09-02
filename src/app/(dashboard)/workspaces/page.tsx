@@ -164,7 +164,7 @@ export default function WorkspacesPage() {
                 />
               </div>
               <span className="text-[9px] font-black uppercase tracking-[0.24em] text-[#400095] dark:text-[#F76D01]">
-                Autommerce Data Entry
+                Autommerce Platform
               </span>
             </div>
             <h1 className="text-3xl font-black tracking-[-0.035em] sm:text-4xl">

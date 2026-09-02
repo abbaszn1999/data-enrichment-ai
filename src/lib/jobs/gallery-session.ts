@@ -1,4 +1,6 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { galleryRowStoreEnabled } from "@/lib/catalog/flag";
+import { upsertWorksheetRow } from "@/lib/worksheet-rows/store";
 import {
   loadGalleryWorksheetAdmin,
   loadGalleryWorksheetMatchingRevisionAdmin,
@@ -8,6 +10,7 @@ import { applyGenerationRowPatch } from "@/lib/gallery/generation-worksheet-merg
 import type { GalleryWorksheetJson } from "@/lib/gallery/types";
 import { galleryError, galleryLog } from "@/lib/gallery/log";
 import { withGalleryWorksheetLock } from "@/lib/gallery/worksheet-lock";
+import { createCheckpointGate, WORKSHEET_CHECKPOINT } from "./checkpoint";
 import { JOB_BATCH_SIZE } from "./config";
 import {
   executeGalleryRow,
@@ -74,18 +77,39 @@ async function runGallerySessionInner(
   let usedCost = 0;
   let pausedNoCredits = false;
   let stopObserved = false;
+  const gate = createCheckpointGate(WORKSHEET_CHECKPOINT);
 
   const persist = async () => {
     await persistGalleryWorksheet(admin, workspaceId, sessionId, worksheet!);
+    gate.markFlushed();
   };
 
-  // Serialize every worksheet mutation through one queue so concurrent rows
-  // never race on the in-memory object or the storage revision.
+  // In-memory mutations are serialized. Transient "generating" status stays
+  // in RAM (progress UI reads job_runs). The worksheet blob flushes on the
+  // checkpoint budget and on terminal states.
   let writeQueue: Promise<void> = Promise.resolve();
-  const commitWorksheet = (mutate: () => void): Promise<void> => {
+  const commitWorksheet = (
+    mutate: () => void,
+    options?: { persist?: "never" | "maybe"; rowId?: string }
+  ): Promise<void> => {
+    const persistMode = options?.persist ?? "maybe";
     const operation = writeQueue.then(async () => {
+      mutate();
+      if (options?.rowId && galleryRowStoreEnabled()) {
+        const row = worksheet!.rows.find((candidate) => candidate.id === options.rowId);
+        if (row) {
+          await upsertWorksheetRow(
+            admin,
+            "gallery_session_rows",
+            sessionId,
+            row
+          );
+        }
+      }
+      if (persistMode === "never") return;
+      gate.noteCompletedRow();
+      if (!gate.shouldFlush()) return;
       await withGalleryWorksheetLock(workspaceId, sessionId, async () => {
-        mutate();
         await persist();
       });
     });
@@ -128,7 +152,7 @@ async function runGallerySessionInner(
             errorMessage: undefined,
           },
         });
-      });
+      }, { persist: "never", rowId });
 
       const outcome: GalleryRowOutcome = await processRow(rowId);
 
@@ -176,7 +200,7 @@ async function runGallerySessionInner(
           worksheet!.activeRun.failed = failed;
           worksheet!.activeRun.usedCredits = usedCredits;
         }
-      });
+      }, { rowId: outcome.rowId });
 
       // Heartbeat + counts land in job_runs immediately after each row so
       // polling/Realtime clients see progress in near real time, not once

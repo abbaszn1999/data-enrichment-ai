@@ -29,6 +29,9 @@ export function formatMoney(value: number): string {
 
 /** Money out over the last `days`, as a positive number. */
 export function spentSince(state: WalletState, days: number): number {
+  if (state.summaries) {
+    return days <= 7 ? state.summaries.spent7 : state.summaries.spent30;
+  }
   const from = Date.now() - days * DAY;
   return round2(
     state.transactions
@@ -40,6 +43,7 @@ export function spentSince(state: WalletState, days: number): number {
 export function spendByModule(
   state: WalletState
 ): { module: string; amount: number }[] {
+  if (state.summaries) return state.summaries.byModule;
   const totals = new Map<string, number>();
   for (const tx of state.transactions) {
     if (tx.amount >= 0) continue;

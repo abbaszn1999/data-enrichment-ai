@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { motion } from "motion/react";
 import {
@@ -66,17 +66,19 @@ import { cn } from "@/lib/utils";
 type ModuleTab = "mr" | "sync";
 
 const MODULE_TABS: { id: ModuleTab; label: string; module: string }[] = [
-  { id: "mr", label: "Market Research", module: "Market Research" },
-  { id: "sync", label: "Sync", module: "Sync" },
+  { id: "mr", label: "Market Research", module: "market-research" },
+  { id: "sync", label: "Growth Sync", module: "growth-sync" },
 ];
 
 const PAGE_SIZES = [10, 20, 50] as const;
 
 const MODULE_TONE: Record<string, string> = {
+  "market-research":
+    "bg-violet-500/12 text-violet-700 dark:text-violet-300 border-violet-500/25",
   "Market Research":
     "bg-violet-500/12 text-violet-700 dark:text-violet-300 border-violet-500/25",
-  "Market research":
-    "bg-violet-500/12 text-violet-700 dark:text-violet-300 border-violet-500/25",
+  "growth-sync":
+    "bg-sky-500/12 text-sky-700 dark:text-sky-300 border-sky-500/25",
   Sync: "bg-sky-500/12 text-sky-700 dark:text-sky-300 border-sky-500/25",
   Billing:
     "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 border-emerald-500/25",
@@ -101,7 +103,10 @@ function mergeSyncRunTransactions(transactions: WalletTx[]): WalletTx[] {
   const ungrouped: WalletTx[] = [];
 
   for (const tx of transactions) {
-    const runId = tx.module === "Sync" ? tx.details?.runId : undefined;
+    const runId =
+      tx.module === "growth-sync" || tx.module === "Sync"
+        ? tx.details?.runId
+        : undefined;
     if (typeof runId !== "string" || !runId) {
       ungrouped.push(tx);
       continue;
@@ -169,8 +174,47 @@ export default function WalletPage() {
   const [processing, setProcessing] = useState(false);
   const [moduleTab, setModuleTab] = useState<ModuleTab>("mr");
   const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(10);
+  const [txItems, setTxItems] = useState<WalletTx[]>([]);
+  const [txNextCursor, setTxNextCursor] = useState<string | null>(null);
+  const [txCursorStack, setTxCursorStack] = useState<string[]>([]);
+  const [txLoading, setTxLoading] = useState(false);
+
+  const activeModule =
+    MODULE_TABS.find((tab) => tab.id === moduleTab)?.module ?? "market-research";
+
+  useEffect(() => {
+    setTxCursorStack((stack) => (stack.length ? [] : stack));
+  }, [moduleTab, query, pageSize, workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    const controller = new AbortController();
+    const cursor = txCursorStack[txCursorStack.length - 1];
+    const params = new URLSearchParams({
+      workspaceId,
+      module: activeModule,
+      limit: String(pageSize),
+    });
+    if (query.trim()) params.set("q", query.trim());
+    if (cursor) params.set("cursor", cursor);
+    setTxLoading(true);
+    fetch(`/api/wallet/transactions?${params.toString()}`, { signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to load transactions");
+        return res.json() as Promise<{ items: WalletTx[]; nextCursor: string | null }>;
+      })
+      .then((page) => {
+        setTxItems(mergeSyncRunTransactions(page.items));
+        setTxNextCursor(page.nextCursor);
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        toast.error(error instanceof Error ? error.message : "Failed to load transactions");
+      })
+      .finally(() => setTxLoading(false));
+    return () => controller.abort();
+  }, [workspaceId, activeModule, query, pageSize, txCursorStack]);
 
   useEffect(() => {
     const requested = searchParams.get("tab");
@@ -197,40 +241,6 @@ export default function WalletPage() {
       window.history.replaceState(null, "", window.location.pathname);
     }
   }, [searchParams, invalidateWallet]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [moduleTab, query, pageSize]);
-
-  const activeModule =
-    MODULE_TABS.find((tab) => tab.id === moduleTab)?.module ?? "Market Research";
-
-  const mergedTransactions = useMemo(() => {
-    if (!wallet) return [] as WalletTx[];
-    return mergeSyncRunTransactions(wallet.transactions);
-  }, [wallet]);
-
-  const filteredTransactions = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return mergedTransactions.filter((tx) => {
-      if (tx.module.trim().toLowerCase() !== activeModule.toLowerCase()) {
-        return false;
-      }
-      if (!q) return true;
-      return tx.description.toLowerCase().includes(q);
-    });
-  }, [mergedTransactions, activeModule, query]);
-
-  const pageCount = Math.max(1, Math.ceil(filteredTransactions.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const transactions = useMemo(
-    () =>
-      filteredTransactions.slice(
-        (currentPage - 1) * pageSize,
-        currentPage * pageSize
-      ),
-    [filteredTransactions, currentPage, pageSize]
-  );
 
   if (isLoading || !wallet) {
     return <PageLoader />;
@@ -271,19 +281,41 @@ export default function WalletPage() {
     }
   };
 
-  const lastTopup = wallet.transactions.find((tx) => tx.kind === "topup") ?? null;
+  const lastTopup = wallet.summaries?.lastTopup ?? null;
+  const transactions = txItems;
 
-  const exportCsv = () => {
-    const blob = new Blob([transactionsToCsv(wallet.transactions)], {
-      type: "text/csv;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `wallet-${slug}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-    toast.success("Statement exported");
+  const exportCsv = async () => {
+    try {
+      const rows: WalletTx[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 50; page += 1) {
+        const params = new URLSearchParams({
+          workspaceId,
+          module: activeModule,
+          limit: "100",
+        });
+        if (query.trim()) params.set("q", query.trim());
+        if (cursor) params.set("cursor", cursor);
+        const res = await fetch(`/api/wallet/transactions?${params.toString()}`);
+        if (!res.ok) throw new Error("Export failed");
+        const data = (await res.json()) as { items: WalletTx[]; nextCursor: string | null };
+        rows.push(...data.items);
+        if (!data.nextCursor) break;
+        cursor = data.nextCursor;
+      }
+      const blob = new Blob([transactionsToCsv(mergeSyncRunTransactions(rows))], {
+        type: "text/csv;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `wallet-${slug}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success("Statement exported");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Export failed");
+    }
   };
 
   return (
@@ -630,16 +662,15 @@ export default function WalletPage() {
             </div>
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
               <span>
-                Page {currentPage} of {pageCount} ·{" "}
-                {filteredTransactions.length.toLocaleString("en-US")} total
+                {txLoading ? "Loading…" : `${transactions.length.toLocaleString("en-US")} on this page`}
               </span>
               <div className="flex items-center gap-1">
                 <Button
                   variant="outline"
                   size="sm"
                   className="h-7 w-7 p-0"
-                  disabled={currentPage <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={txCursorStack.length === 0 || txLoading}
+                  onClick={() => setTxCursorStack((stack) => stack.slice(0, -1))}
                   aria-label="Previous page"
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
@@ -648,8 +679,11 @@ export default function WalletPage() {
                   variant="outline"
                   size="sm"
                   className="h-7 w-7 p-0"
-                  disabled={currentPage >= pageCount}
-                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                  disabled={!txNextCursor || txLoading}
+                  onClick={() => {
+                    if (!txNextCursor) return;
+                    setTxCursorStack((stack) => [...stack, txNextCursor]);
+                  }}
                   aria-label="Next page"
                 >
                   <ChevronRight className="h-3.5 w-3.5" />

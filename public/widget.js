@@ -15,9 +15,10 @@
   }
   window.__dea_widget_loaded = true;
 
-  var DEFAULT_PROD_API = "https://data-enrichment-ai.onrender.com";
+  var DEFAULT_PROD_API = "https://platform.autommerce.com";
 
-  // Determine the API base URL from the script tag's src
+  // Derive the API origin from this script's own src so a host change
+  // cannot freeze a retired Render URL inside merchant themes.
   function getApiBaseUrl() {
     var scriptEl =
       document.currentScript ||
@@ -25,7 +26,7 @@
         var scripts = document.getElementsByTagName("script");
         for (var i = scripts.length - 1; i >= 0; i--) {
           var s = scripts[i].src || "";
-          if (s.indexOf("widget.js") !== -1 || s.indexOf("data-enrichment-ai") !== -1) {
+          if (s.indexOf("widget.js") !== -1) {
             return scripts[i];
           }
         }
@@ -35,7 +36,7 @@
     if (scriptEl && scriptEl.src) {
       try {
         var u = new URL(scriptEl.src);
-        return u.origin;
+        if (u.origin && u.origin !== "null") return u.origin;
       } catch (e) {}
     }
 

@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase-admin";
 import { calculateCreditBalance, isSubscriptionActive } from "@/lib/stripe";
 import type { IntegrationRecord } from "@/lib/sync/core/types";
+import { decryptAndMaybeReencrypt } from "@/lib/integrations/load";
 
 export type WorkspaceContext = {
   membershipRole: string | null;
@@ -85,7 +86,7 @@ async function fetchViaRpc(workspaceId: string, userId: string) {
     subscription.subscription_plans = plan;
   }
 
-  const integration = row.integration ?? null;
+  const integration = await decryptAndMaybeReencrypt(admin, row.integration);
   const membershipRole = row.membership_role ?? null;
   const ownerId = row.owner_id ?? null;
   const credits = buildCredits(subscription);
@@ -107,9 +108,19 @@ async function fetchViaFallback(workspaceId: string, userId: string) {
   // Owner
   const { data: workspace } = await admin
     .from("workspaces")
-    .select("owner_id")
+    .select("owner_id, deleted_at")
     .eq("id", workspaceId)
     .maybeSingle();
+  if ((workspace as { deleted_at?: string | null } | null)?.deleted_at) {
+    return {
+      membershipRole: null,
+      ownerId: null,
+      subscription: null,
+      plan: null,
+      integration: null,
+      credits: buildCredits(null),
+    };
+  }
   const ownerId = (workspace as any)?.owner_id ?? null;
 
   // Subscription + plan (per-user model)
@@ -130,7 +141,7 @@ async function fetchViaFallback(workspaceId: string, userId: string) {
   // Integration
   const { data: integration } = await admin
     .from("workspace_integrations")
-    .select("provider, integration_name, base_url, config")
+    .select("id, provider, integration_name, base_url, config, credential_fingerprint")
     .eq("workspace_id", workspaceId)
     .maybeSingle();
 
@@ -139,7 +150,7 @@ async function fetchViaFallback(workspaceId: string, userId: string) {
   return {
     subscription,
     plan,
-    integration: integration ? (integration as IntegrationRecord) : null,
+    integration: await decryptAndMaybeReencrypt(admin, integration),
     membershipRole,
     ownerId,
     credits,

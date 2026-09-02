@@ -65,7 +65,7 @@ export default function DemoDashboardPage() {
               <Upload className="h-3.5 w-3.5" /> Upload Products
             </Button>
           </Link>
-          <Link href="/demo/import/new">
+          <Link href="/demo/catalog-intelligence/new">
             <Button size="sm" className="gap-1.5 text-xs">
               <FileSpreadsheet className="h-3.5 w-3.5" /> New catalog intelligence
             </Button>
@@ -115,13 +115,13 @@ export default function DemoDashboardPage() {
         <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold">Recent Catalog Intelligence</h2>
-            <Link href="/demo/import" className="text-xs text-primary hover:underline flex items-center gap-1">
+            <Link href="/demo/catalog-intelligence" className="text-xs text-primary hover:underline flex items-center gap-1">
               View all <ArrowUpRight className="h-3 w-3" />
             </Link>
           </div>
           <div className="space-y-2">
             {mockImportSessions.map((session) => (
-              <Link key={session.id} href="/demo/import/session">
+              <Link key={session.id} href="/demo/catalog-intelligence/session">
                 <Card className="p-4 hover:border-primary/40 hover:shadow-sm transition-all cursor-pointer">
                   <div className="flex items-center justify-between">
                     <div className="flex-1 min-w-0">

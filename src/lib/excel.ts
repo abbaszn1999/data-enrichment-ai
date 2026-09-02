@@ -9,36 +9,34 @@ interface ImageAnchor {
   rId: string;
 }
 
-async function extractImagesFromXlsx(
-  buffer: ArrayBuffer
-): Promise<Map<number, string>> {
-  // Map of rowIndex (0-based, data rows) -> base64 data URL
-  const rowImages = new Map<number, string>();
+export type EmbeddedWorkbookImage = {
+  sheetRow: number;
+  bytes: Uint8Array;
+  mime: string;
+  ext: string;
+};
 
+export async function extractEmbeddedWorkbookImages(
+  buffer: ArrayBuffer
+): Promise<EmbeddedWorkbookImage[]> {
+  const images: EmbeddedWorkbookImage[] = [];
   try {
     const JSZip = (await import("jszip")).default;
     const zip = await JSZip.loadAsync(buffer);
-
-    // 1. Find drawing relationship files to map rId -> image file paths
     const rIdToFile = new Map<string, string>();
-    
-    // Try multiple possible relationship file paths
     const relPaths = [
       "xl/drawings/_rels/drawing1.xml.rels",
       "xl/drawings/_rels/drawing2.xml.rels",
     ];
-    
     for (const relPath of relPaths) {
       const relsFile = zip.file(relPath);
       if (!relsFile) continue;
       const relsXml = await relsFile.async("text");
-      // Parse relationships: <Relationship Id="rId1" ... Target="../media/image1.png"/>
       const relRegex = /Relationship\s+Id="(rId\d+)"[^>]*Target="([^"]+)"/g;
-      let match;
+      let match: RegExpExecArray | null;
       while ((match = relRegex.exec(relsXml)) !== null) {
         const rId = match[1];
         let target = match[2];
-        // Normalize path
         if (target.startsWith("../")) {
           target = "xl/" + target.slice(3);
         } else if (!target.startsWith("xl/")) {
@@ -47,81 +45,155 @@ async function extractImagesFromXlsx(
         rIdToFile.set(rId, target);
       }
     }
+    if (rIdToFile.size === 0) return images;
 
-    if (rIdToFile.size === 0) return rowImages;
-
-    // 2. Parse drawing XML to find which row each image is anchored to
     const anchors: ImageAnchor[] = [];
-    
-    const drawingPaths = [
-      "xl/drawings/drawing1.xml",
-      "xl/drawings/drawing2.xml",
-    ];
-
+    const drawingPaths = ["xl/drawings/drawing1.xml", "xl/drawings/drawing2.xml"];
     for (const drawPath of drawingPaths) {
       const drawFile = zip.file(drawPath);
       if (!drawFile) continue;
       const drawXml = await drawFile.async("text");
-
-      // Match twoCellAnchor or oneCellAnchor blocks
-      // Extract <xdr:from><xdr:row>N</xdr:row><xdr:col>N</xdr:col></xdr:from> and <a:blip r:embed="rIdN"/>
-      const anchorRegex = /<xdr:(?:twoCellAnchor|oneCellAnchor)[^>]*>([\s\S]*?)<\/xdr:(?:twoCellAnchor|oneCellAnchor)>/g;
-      let anchorMatch;
-
+      const anchorRegex =
+        /<xdr:(?:twoCellAnchor|oneCellAnchor)[^>]*>([\s\S]*?)<\/xdr:(?:twoCellAnchor|oneCellAnchor)>/g;
+      let anchorMatch: RegExpExecArray | null;
       while ((anchorMatch = anchorRegex.exec(drawXml)) !== null) {
         const block = anchorMatch[1];
-
-        // Get from row/col
-        const fromRowMatch = block.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>[\s\S]*?<xdr:col>(\d+)<\/xdr:col>/);
+        const fromRowMatch = block.match(
+          /<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>[\s\S]*?<xdr:col>(\d+)<\/xdr:col>/
+        );
         if (!fromRowMatch) continue;
-
-        const fromRow = parseInt(fromRowMatch[1], 10);
-        const fromCol = parseInt(fromRowMatch[2], 10);
-
-        // Get embedded image rId
         const blipMatch = block.match(/<a:blip[^>]*r:embed="(rId\d+)"/);
         if (!blipMatch) continue;
-
-        anchors.push({ fromRow, fromCol, rId: blipMatch[1] });
+        anchors.push({
+          fromRow: parseInt(fromRowMatch[1], 10),
+          fromCol: parseInt(fromRowMatch[2], 10),
+          rId: blipMatch[1],
+        });
       }
     }
 
-    if (anchors.length === 0) return rowImages;
-
-    // 3. Extract image binary data and create data URLs
     for (const anchor of anchors) {
       const filePath = rIdToFile.get(anchor.rId);
       if (!filePath) continue;
-
       const imageFile = zip.file(filePath);
       if (!imageFile) continue;
-
-      const imageData = await imageFile.async("base64");
-      
-      // Detect mime type from extension
+      const bytes = new Uint8Array(await imageFile.async("uint8array"));
       const ext = filePath.split(".").pop()?.toLowerCase() || "png";
       const mimeMap: Record<string, string> = {
         png: "image/png",
         jpg: "image/jpeg",
         jpeg: "image/jpeg",
         gif: "image/gif",
-        bmp: "image/bmp",
         webp: "image/webp",
-        emf: "image/emf",
-        wmf: "image/wmf",
-        svg: "image/svg+xml",
       };
-      const mime = mimeMap[ext] || "image/png";
-      const dataUrl = `data:${mime};base64,${imageData}`;
-
-      // anchor.fromRow is 0-based from the sheet (includes header row)
-      rowImages.set(anchor.fromRow, dataUrl);
+      images.push({
+        sheetRow: anchor.fromRow,
+        bytes,
+        mime: mimeMap[ext] || "image/png",
+        ext: mimeMap[ext] ? ext.replace("jpeg", "jpg") : "png",
+      });
     }
   } catch (e) {
     console.warn("Could not extract images from xlsx:", e);
   }
+  return images;
+}
 
-  return rowImages;
+function cellToString(cell: unknown): string {
+  if (cell == null || cell === "") return "";
+  if (typeof cell === "string" || typeof cell === "number" || typeof cell === "boolean") {
+    return String(cell).trim();
+  }
+  if (typeof cell === "object") {
+    const value = cell as {
+      text?: string;
+      result?: unknown;
+      hyperlink?: string;
+      richText?: Array<{ text?: string }>;
+    };
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((part) => part.text ?? "").join("").trim();
+    }
+    if (value.text) return String(value.text).trim();
+    if (value.result != null) return String(value.result).trim();
+    if (value.hyperlink) return String(value.hyperlink).trim();
+  }
+  return String(cell).trim();
+}
+
+function parseCsvBuffer(buffer: ArrayBuffer): string[][] {
+  const text = new TextDecoder("utf-8").decode(buffer).replace(/^\uFEFF/, "");
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      continue;
+    }
+    if (ch === ",") {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+    if (ch === "\n") {
+      row.push(cell.trim());
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    if (ch !== "\r") cell += ch;
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell.trim());
+    rows.push(row);
+  }
+  return rows.filter((line) => line.some((value) => value !== ""));
+}
+
+function isZipXlsx(buffer: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(buffer);
+  return bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+}
+
+async function sheetToRawRows(buffer: ArrayBuffer): Promise<string[][]> {
+  if (!isZipXlsx(buffer)) {
+    return parseCsvBuffer(buffer);
+  }
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(buffer);
+  if (zip.file("xl/vbaProject.bin")) {
+    throw new Error("Macro-enabled workbooks (.xlsm) are not allowed.");
+  }
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    throw new Error("The Excel file is empty.");
+  }
+  const rawData: string[][] = [];
+  worksheet.eachRow({ includeEmpty: true }, (row) => {
+    const values = Array.isArray(row.values) ? row.values.slice(1) : [];
+    rawData.push(values.map((cell) => cellToString(cell)));
+  });
+  return rawData;
 }
 
 // --- Main parse function ---
@@ -129,15 +201,10 @@ async function extractImagesFromXlsx(
 export async function parseExcelFile(buffer: ArrayBuffer): Promise<{
   columns: string[];
   rows: ProductRow[];
+  headerRowIndex: number;
 }> {
-  const XLSX = await import("xlsx");
-  const workbook = XLSX.read(buffer, { type: "array" });
-  const sheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[sheetName];
+  const rawData = await sheetToRawRows(buffer);
 
-  // Get raw data as array of arrays to find the header row
-  const rawData = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
-  
   if (rawData.length === 0) {
     throw new Error("The Excel file is empty.");
   }
@@ -145,72 +212,56 @@ export async function parseExcelFile(buffer: ArrayBuffer): Promise<{
   // Find the header row (the first row with the most string columns)
   let headerRowIndex = 0;
   let maxCols = 0;
-  
+
   for (let i = 0; i < Math.min(20, rawData.length); i++) {
     const row = rawData[i];
     if (!row) continue;
-    
-    // Count non-empty string cells
-    const validCells = row.filter(cell => typeof cell === "string" && cell.trim() !== "").length;
+
+    const validCells = row.filter((cell) => cell !== "").length;
     if (validCells > maxCols) {
       maxCols = validCells;
       headerRowIndex = i;
     }
   }
 
-  // Parse again, starting from the detected header row
-  const jsonData = XLSX.utils.sheet_to_json<Record<string, string>>(
-    worksheet,
-    { range: headerRowIndex, defval: "", raw: false }
+  const headers = (rawData[headerRowIndex] || []).map((cell, index) =>
+    cell ? cell : `__EMPTY_${index}`
   );
+  const jsonData: Record<string, string>[] = [];
+  for (let i = headerRowIndex + 1; i < rawData.length; i++) {
+    const row = rawData[i] || [];
+    const record: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      record[header] = String(row[index] ?? "").trim();
+    });
+    jsonData.push(record);
+  }
 
   if (jsonData.length === 0) {
     throw new Error("No data rows found after the header.");
   }
 
-  // Extract embedded images
-  const imageMap = await extractImagesFromXlsx(buffer);
-
   // Clean up columns (remove __EMPTY columns that have no data)
   let columns = Object.keys(jsonData[0] || {});
   columns = columns.filter(col => {
     if (!col.includes("__EMPTY")) return true;
-    // Keep it only if at least one row has data in it
     return jsonData.some(row => row[col] && String(row[col]).trim() !== "");
   });
 
-  // Build rows
+  // Embedded pictures are extracted as binary and uploaded to Storage by the
+  // products import path. Inlining them as data: URLs here would bloat the
+  // catalog blob and the browser heap.
   const rows: ProductRow[] = jsonData
     .filter(row => {
       // Skip completely empty rows
       return columns.some(col => row[col] && String(row[col]).trim() !== "");
     })
     .map((row, index) => {
-      // Only keep cleaned columns
       const cleanData: Record<string, string> = {};
       columns.forEach(col => {
-        cleanData[col] = String(row[col] || "").trim();
+        const value = String(row[col] || "").trim();
+        cleanData[col] = value.startsWith("data:image") ? "" : value;
       });
-
-      // Assign image if present for this row
-      // The sheet row = headerRowIndex + 1 + index (header is at headerRowIndex, data starts after)
-      const sheetRow = headerRowIndex + 1 + index;
-      const imageUrl = imageMap.get(sheetRow);
-      if (imageUrl) {
-        // Find the PICTURE column (case-insensitive) or any image-related column
-        const pictureCol = columns.find(
-          (c) => c.toUpperCase() === "PICTURE" || c.toUpperCase() === "IMAGE" || c.toUpperCase() === "PHOTO"
-        );
-        if (pictureCol) {
-          cleanData[pictureCol] = imageUrl;
-        } else {
-          // Add a PICTURE column if images exist but no column for them
-          if (!columns.includes("PICTURE")) {
-            columns.push("PICTURE");
-          }
-          cleanData["PICTURE"] = imageUrl;
-        }
-      }
 
       return {
         id: `row-${index}`,
@@ -222,7 +273,7 @@ export async function parseExcelFile(buffer: ArrayBuffer): Promise<{
       };
     });
 
-  return { columns, rows };
+  return { columns, rows, headerRowIndex };
 }
 
 export async function exportToExcel(

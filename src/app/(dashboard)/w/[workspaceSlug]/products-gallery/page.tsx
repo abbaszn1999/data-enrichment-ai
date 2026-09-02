@@ -76,6 +76,7 @@ import {
   listGallerySessions,
   createGallerySession,
   getGallerySession,
+  getGalleryProgress,
   patchGallerySession,
   saveGallerySettings,
   generateGallery,
@@ -1085,79 +1086,104 @@ export default function ProductsGalleryPage() {
 
     const pollProgress = async () => {
       try {
-        const fresh = await getGallerySession(workspace.id, projectId, {
-          includeSignedUrls: false,
-        });
+        const progress = await getGalleryProgress(workspace.id, projectId);
         if (cancelled) return;
-        if (!fresh.worksheet) return;
-        const freshWorksheet = fresh.worksheet;
-        worksheetRevisionRef.current = Number(
-          fresh.session.worksheet_revision ?? worksheetRevisionRef.current
+        setActiveSession((current) =>
+          current && current.id === progress.sessionId
+            ? {
+                ...current,
+                status: progress.status,
+                ready_rows: progress.readyRows,
+                failed_rows: progress.failedRows,
+                cancel_requested: progress.cancelRequested,
+                worksheet_revision: progress.worksheetRevision,
+              }
+            : current
         );
-        setActiveSession(fresh.session);
         setSessions((current) =>
           current.map((session) =>
-            session.id === fresh.session.id ? fresh.session : session
+            session.id === progress.sessionId
+              ? {
+                  ...session,
+                  status: progress.status,
+                  ready_rows: progress.readyRows,
+                  failed_rows: progress.failedRows,
+                  cancel_requested: progress.cancelRequested,
+                  worksheet_revision: progress.worksheetRevision,
+                }
+              : session
           )
         );
-        const mergedFresh = stripPendingDeletesFromWorksheet(
-          freshWorksheet,
-          pendingImageDeletesRef.current
-        );
-        setWorksheet((current) => {
-          if (!current) return mergedFresh;
-          const merged = mergePolledGenerationWorksheet({
-            local: current,
-            polled: mergedFresh,
-            clientRunActive: isGenerating,
-          });
-          return {
-            ...current,
-            rows: merged.rows,
-            activeRun: merged.activeRun,
-            revision: merged.revision,
-          };
-        });
-        const run = mergedFresh.activeRun;
-        if (run && (run.status === "running" || run.status === "queued")) {
-          const done = run.completed + run.failed;
+        const done = progress.completed + progress.failed;
+        const jobActive =
+          progress.jobStatus === "running" || progress.jobStatus === "queued";
+        if (jobActive || progress.status === "processing") {
           setGenerationRun({
-            total: run.total,
+            total: progress.total,
             completed: done,
-            runId: run.id,
+            runId: progress.jobId || "",
           });
-          if (done > lastCreditsProgressRef.current) {
-            lastCreditsProgressRef.current = done;
-            invalidateCredits();
-            // A row just finished — fetch its signed image URL now instead of
-            // waiting for the next full-page load or the 50-minute refresh.
-            getGallerySession(workspace.id, projectId, { includeSignedUrls: true })
+          if (progress.cancelRequested) setIsStoppingGeneration(true);
+        } else if (!isGenerating) {
+          if (lastCreditsProgressRef.current > 0) invalidateCredits();
+          setGenerationRun(null);
+          setIsStoppingGeneration(false);
+        }
+        const revisionChanged =
+          progress.worksheetRevision !== worksheetRevisionRef.current;
+        const newlyDone = done > lastCreditsProgressRef.current;
+        if (newlyDone) {
+          lastCreditsProgressRef.current = done;
+          invalidateCredits();
+        }
+        if (revisionChanged) {
+          worksheetRevisionRef.current = progress.worksheetRevision;
+          const fresh = await getGallerySession(workspace.id, projectId, {
+            includeSignedUrls: false,
+          });
+          if (cancelled || !fresh.worksheet) return;
+          const freshWorksheet = stripPendingDeletesFromWorksheet(
+            fresh.worksheet,
+            pendingImageDeletesRef.current
+          );
+          const missingSignIds = freshWorksheet.rows
+            .filter((row) => row.status === "ready")
+            .map((row) => row.id);
+          setActiveSession(fresh.session);
+          setWorksheet((current) => {
+            if (!current) return freshWorksheet;
+            const merged = mergePolledGenerationWorksheet({
+              local: current,
+              polled: freshWorksheet,
+              clientRunActive: isGenerating,
+            });
+            return {
+              ...current,
+              rows: merged.rows,
+              activeRun: merged.activeRun,
+              revision: merged.revision,
+            };
+          });
+          if (missingSignIds.length > 0) {
+            getGallerySession(workspace.id, projectId, {
+              includeSignedUrls: false,
+              signRowIds: missingSignIds,
+            })
               .then((withUrls) => {
                 if (!cancelled && withUrls.signedUrls) {
                   setSignedUrls((current) => ({ ...current, ...withUrls.signedUrls }));
                 }
               })
               .catch(() => {
-                // The next completed row or a manual refresh will retry this.
+                // Next revision or a manual refresh retries this.
               });
           }
-          if (fresh.session.cancel_requested) {
-            setIsStoppingGeneration(true);
-          }
-        } else if (!isGenerating) {
-          if (lastCreditsProgressRef.current > 0 || run) {
-            invalidateCredits();
-          }
-          // Do not clear generationRun while the client request is still in flight —
-          // that was causing the Processing banner to disappear mid-run.
-          setGenerationRun(null);
-          setIsStoppingGeneration(false);
         }
       } catch {
         // The next poll or the final generate response will recover.
       } finally {
         if (!cancelled) {
-          timer = setTimeout(pollProgress, 750);
+          timer = setTimeout(pollProgress, 2_000);
         }
       }
     };

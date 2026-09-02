@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { createClient } from "@/lib/supabase-server";
 import { getOwnerSubscription, isSubscriptionActive } from "@/lib/stripe";
 import { findAuthUserIdByEmail } from "@/lib/team/account-setup";
+import { writeSecurityAuditLog } from "@/lib/security/audit-log";
 
 function cryptoRandomToken(): string {
   return randomBytes(32).toString("hex");
@@ -161,6 +162,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    await writeSecurityAuditLog(adminClient, {
+      workspaceId,
+      actorId: user.id,
+      action: "invite.create",
+      targetId: invite.id,
+      before: null,
+      after: { email, role },
+      request,
+    });
+
     return NextResponse.json({
       invite,
       inviteUrl,
@@ -173,5 +184,62 @@ export async function POST(request: NextRequest) {
       { error: err?.message || "Failed to send invite" },
       { status: 500 }
     );
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const { inviteId, workspaceId } = await request.json();
+    if (!inviteId || !workspaceId) {
+      return NextResponse.json({ error: "Missing inviteId or workspaceId" }, { status: 400 });
+    }
+
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const adminClient = createAdminClient();
+    const { data: member } = await adminClient
+      .from("workspace_members")
+      .select("role")
+      .eq("workspace_id", workspaceId)
+      .eq("user_id", user.id)
+      .single();
+    if (!member || !["owner", "admin"].includes(member.role)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const { data: invite } = await adminClient
+      .from("workspace_invites")
+      .select("id, email, role")
+      .eq("id", inviteId)
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+
+    const { error } = await adminClient
+      .from("workspace_invites")
+      .delete()
+      .eq("id", inviteId)
+      .eq("workspace_id", workspaceId);
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    await writeSecurityAuditLog(adminClient, {
+      workspaceId,
+      actorId: user.id,
+      action: "invite.revoke",
+      targetId: inviteId,
+      before: invite ? { email: invite.email, role: invite.role } : null,
+      after: null,
+      request,
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to revoke invite";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

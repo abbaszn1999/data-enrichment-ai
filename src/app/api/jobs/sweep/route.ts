@@ -6,26 +6,19 @@ import { notifyIfMissing } from "@/lib/jobs/notify";
 import { claimStaleJobRuns, mapJobRun } from "@/lib/jobs/repo";
 import { isTerminalJobStatus } from "@/lib/jobs/types";
 
+import { cronSecretFromEnv, cronSecretMatches } from "@/lib/auth/cron-secret";
+
 export const maxDuration = 60;
 
 function authorized(request: NextRequest): boolean {
-  const secret =
-    process.env.JOBS_CRON_SECRET?.trim() ||
-    process.env.GROWTH_SYNC_CRON_SECRET?.trim();
+  const secret = cronSecretFromEnv();
   if (!secret) return false;
-  const presented = request.headers
-    .get("authorization")
-    ?.replace(/^Bearer\s+/i, "")
-    .trim();
-  return presented === secret;
+  return cronSecretMatches(request, secret);
 }
 
 export async function POST(request: NextRequest) {
   if (!authorized(request)) {
-    const secret =
-      process.env.JOBS_CRON_SECRET?.trim() ||
-      process.env.GROWTH_SYNC_CRON_SECRET?.trim();
-    if (!secret) {
+    if (!cronSecretFromEnv()) {
       return NextResponse.json({ error: "Scheduler not configured" }, { status: 503 });
     }
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

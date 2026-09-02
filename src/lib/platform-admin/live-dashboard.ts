@@ -1,7 +1,7 @@
 import { CREDIT_TOPUP_USD_PER_CREDIT } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { adminCreditBalance, unwrapRelation } from "./credit-balance";
-import { creditOperationLabel, CREDIT_OPERATION_LABELS, JOB_KIND_LABELS, JOB_STATUS_LABELS, WALLET_KIND_LABELS, WALLET_MODULE_LABELS, walletModuleLabel } from "./labels";
+import { creditOperationLabel, CREDIT_OPERATION_LABELS, JOB_KIND_LABELS, JOB_STATUS_LABELS, WALLET_KIND_LABELS, WALLET_MODULE_LABELS, walletModuleLabel, ACTIVITY_ENTITY_LABELS } from "./labels";
 import {
   dateWindowSinceIso,
   keysMatchingLabel,
@@ -560,6 +560,7 @@ export async function loadLiveAudit(input: AuditLedgerQuery): Promise<LedgerPage
       postgrestIn("workspace_id", identities.workspaceIds),
       postgrestIlike("action", q),
       postgrestIlike("entity_type", q),
+      postgrestIn("entity_type", keysMatchingLabel(q, ACTIVITY_ENTITY_LABELS)),
       looksLikeUuid(q) ? `user_id.eq.${q}` : null,
       looksLikeUuid(q) ? `entity_id.eq.${q}` : null,
     ]);
@@ -611,10 +612,11 @@ function creditSpendSlices(rows: LiveCreditTxRow[]): AdminSpendSlice[] {
   const totals = new Map<string, number>();
   for (const tx of rows) {
     if (tx.credits <= 0) continue;
-    totals.set(tx.operation, (totals.get(tx.operation) ?? 0) + tx.credits);
+    const label = creditOperationLabel(tx.operation);
+    totals.set(label, (totals.get(label) ?? 0) + tx.credits);
   }
   return [...totals.entries()]
-    .map(([key, value]) => ({ key, label: creditOperationLabel(key), value }))
+    .map(([label, value]) => ({ key: label, label, value }))
     .sort((a, b) => b.value - a.value);
 }
 
@@ -623,10 +625,11 @@ function walletSpendSlices(rows: LiveWalletTxRow[]): AdminSpendSlice[] {
   for (const tx of rows) {
     if (tx.status && tx.status !== "completed") continue;
     if (tx.amountUsd >= 0) continue;
-    totals.set(tx.module, (totals.get(tx.module) ?? 0) + Math.abs(tx.amountUsd));
+    const label = walletModuleLabel(tx.module);
+    totals.set(label, (totals.get(label) ?? 0) + Math.abs(tx.amountUsd));
   }
   return [...totals.entries()]
-    .map(([key, value]) => ({ key, label: walletModuleLabel(key), value }))
+    .map(([label, value]) => ({ key: label, label, value }))
     .sort((a, b) => b.value - a.value);
 }
 

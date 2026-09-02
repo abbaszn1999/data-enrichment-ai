@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { purgeWorkspace } from "@/lib/workspace-purge";
+import { writeSecurityAuditLog } from "@/lib/security/audit-log";
 
 export async function POST(req: NextRequest) {
   try {
@@ -33,6 +34,19 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await purgeWorkspace(admin, workspaceId);
+    await writeSecurityAuditLog(admin, {
+      workspaceId,
+      actorId: user.id,
+      action: "workspace.delete",
+      targetId: workspaceId,
+      before: { workspace_id: workspaceId },
+      after: {
+        filesDeleted: result.filesDeleted,
+        verifiedEmpty: result.verifiedEmpty,
+        completed_at: new Date().toISOString(),
+      },
+      request: req,
+    });
     return NextResponse.json({ success: true, filesDeleted: result.filesDeleted });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

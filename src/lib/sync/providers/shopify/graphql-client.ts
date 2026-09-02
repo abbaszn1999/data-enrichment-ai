@@ -13,6 +13,7 @@ import type {
   ShopifyCostInfo,
   ShopifyGraphQLResult,
 } from "@/lib/sync/core/types";
+import { decryptIntegrationConfig } from "@/lib/integrations/crypto";
 import { SHOPIFY_API_VERSION } from "./schema-catalog";
 
 type BucketState = {
@@ -67,7 +68,7 @@ async function sleep(ms: number): Promise<void> {
 }
 
 function getAdminToken(integration: IntegrationRecord): string {
-  const config = (integration.config ?? {}) as Record<string, unknown>;
+  const config = decryptIntegrationConfig(integration.config).plaintext;
   const token = String(config.admin_api_token ?? "").trim();
   if (!token) throw new Error("Missing Shopify admin_api_token in integration config");
   return token;

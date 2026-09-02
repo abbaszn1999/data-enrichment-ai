@@ -564,7 +564,8 @@ export default function SettingsPage() {
             <div className="space-y-4 p-5">
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Deleting a workspace permanently removes all products,
-                categories, imports, and files.{" "}
+                sessions, store data, and files. A security audit record of
+                the deletion is kept.{" "}
                 <strong className="text-foreground">
                   This action cannot be undone.
                 </strong>

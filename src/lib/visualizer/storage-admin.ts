@@ -14,6 +14,12 @@ import {
   collectVisualizerImagePaths,
   resolveVisualizerHtmlImages,
 } from "@/lib/visualizer/html-embed";
+import { recordStorageWriteBytes } from "@/lib/observability/metrics";
+import { visualizerRowStoreEnabled } from "@/lib/catalog/flag";
+import {
+  hydrateWorksheetRows,
+  replaceWorksheetRows,
+} from "@/lib/worksheet-rows/store";
 
 const BUCKET = "workspace-files";
 const STORAGE_RETRIES = 5;
@@ -95,11 +101,25 @@ async function withStorageRetry<T>(
   throw lastError;
 }
 
+async function hydrateVisualizerIfEnabled(
+  sessionId: string,
+  worksheet: VisualizerWorksheetJson | null
+): Promise<VisualizerWorksheetJson | null> {
+  if (!worksheet || !visualizerRowStoreEnabled()) return worksheet;
+  const admin = createAdminClient();
+  return hydrateWorksheetRows(
+    admin,
+    "visualizer_session_rows",
+    sessionId,
+    worksheet
+  );
+}
+
 export async function loadVisualizerWorksheetAdmin(
   workspaceId: string,
   sessionId: string
 ): Promise<VisualizerWorksheetJson | null> {
-  return withStorageRetry("load worksheet", async () => {
+  const worksheet = await withStorageRetry("load worksheet", async () => {
     const path = getVisualizerWorksheetPath(workspaceId, sessionId);
     const fresh = await downloadFresh(path);
     if (fresh !== null) {
@@ -122,6 +142,7 @@ export async function loadVisualizerWorksheetAdmin(
       JSON.parse(text) as VisualizerWorksheetJson
     );
   });
+  return hydrateVisualizerIfEnabled(sessionId, worksheet);
 }
 
 export async function loadVisualizerWorksheetMatchingRevisionAdmin(
@@ -162,7 +183,8 @@ export async function saveVisualizerWorksheetAdmin(
   }
   return withStorageRetry("save worksheet", async () => {
     const admin = createAdminClient();
-    const blob = new Blob([JSON.stringify(normalized)], {
+    const serialized = JSON.stringify(normalized);
+    const blob = new Blob([serialized], {
       type: "application/octet-stream",
     });
     const { error } = await admin.storage.from(BUCKET).upload(path, blob, {
@@ -171,6 +193,18 @@ export async function saveVisualizerWorksheetAdmin(
       contentType: "application/json",
     });
     if (error) throw error;
+    recordStorageWriteBytes(Buffer.byteLength(serialized, "utf8"), {
+      kind: "visualizer",
+      workspaceId,
+    });
+    if (visualizerRowStoreEnabled()) {
+      await replaceWorksheetRows(
+        admin,
+        "visualizer_session_rows",
+        sessionId,
+        normalized.rows
+      );
+    }
     return path;
   });
 }

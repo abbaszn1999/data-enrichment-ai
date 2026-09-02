@@ -13,6 +13,7 @@ import {
 } from "@/lib/visualizer/html-embed";
 import { mappedProductFields } from "@/lib/visualizer/row-fields";
 import { visualizerLog, visualizerWarn } from "@/lib/visualizer/log";
+import { withAiSlot } from "@/lib/ai/global-concurrency";
 import { shouldChargeVisualizerCredits } from "@/lib/visualizer/pricing";
 import { getVisualizerRowImagePath } from "@/lib/visualizer/storage-paths";
 import {
@@ -36,22 +37,33 @@ function normalizeMime(
   return "image/jpeg";
 }
 
+const brandAssetCache = new Map<
+  string,
+  Promise<VisualizerProductReference | null>
+>();
+
 async function loadStoredReference(
   path: string | null | undefined,
   label: string
 ): Promise<VisualizerProductReference | null> {
   if (!path) return null;
-  try {
-    const stored = await downloadVisualizerBytesAdmin(path);
-    if (!stored) return null;
-    return {
-      label,
-      buffer: stored.buffer,
-      contentType: normalizeMime(stored.contentType),
-    };
-  } catch {
-    return null;
-  }
+  const cached = brandAssetCache.get(path);
+  if (cached) return cached;
+  const pending = (async () => {
+    try {
+      const stored = await downloadVisualizerBytesAdmin(path);
+      if (!stored) return null;
+      return {
+        label,
+        buffer: stored.buffer,
+        contentType: normalizeMime(stored.contentType),
+      };
+    } catch {
+      return null;
+    }
+  })();
+  brandAssetCache.set(path, pending);
+  return pending;
 }
 
 export async function processImagesRow(params: {
@@ -157,7 +169,7 @@ export async function processImagesRow(params: {
   });
 
   try {
-    const IMAGE_PARALLEL = 4;
+    const IMAGE_PARALLEL = 1;
     let cancelledMidRow = false;
     for (let offset = 0; offset < placeholders.length; offset += IMAGE_PARALLEL) {
       // Finish any already-started chunk; do not begin a new batch after Stop.
@@ -168,16 +180,18 @@ export async function processImagesRow(params: {
       const chunk = placeholders.slice(offset, offset + IMAGE_PARALLEL);
       const chunkResults = await Promise.all(
         chunk.map(async (placeholder) => {
-          const result = await generateVisualizerLifestyleImage({
-            ai,
-            images: settings.images,
-            brand: settings.brand,
-            product,
-            visualBrief: placeholder.visualBrief,
-            placeholderIndex: placeholder.index,
-            productReference,
-            supportingReferences,
-          });
+          const result = await withAiSlot(() =>
+            generateVisualizerLifestyleImage({
+              ai,
+              images: settings.images,
+              brand: settings.brand,
+              product,
+              visualBrief: placeholder.visualBrief,
+              placeholderIndex: placeholder.index,
+              productReference,
+              supportingReferences,
+            })
+          );
 
           const storagePath = getVisualizerRowImagePath(
             workspaceId,

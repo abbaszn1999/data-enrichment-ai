@@ -139,6 +139,13 @@ const initialState: SheetState = {
 // Undo/Redo stacks (kept outside store to avoid triggering re-renders)
 const undoStack: UndoAction[] = [];
 const redoStack: UndoAction[] = [];
+const MAX_UNDO = 30;
+
+function recordUndo(action: UndoAction) {
+  undoStack.push(action);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+}
 
 export const useSheetStore = create<SheetStore>((set, get) => ({
   ...initialState,
@@ -341,8 +348,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     if (!row) return;
     const oldValue = row.originalData[column] || "";
     if (oldValue === value) return;
-    undoStack.push({ type: "cell", rowId, column, oldValue, newValue: value });
-    redoStack.length = 0;
+    recordUndo({ type: "cell", rowId, column, oldValue, newValue: value });
     set({
       rows: state.rows.map((r) =>
         r.id === rowId
@@ -538,8 +544,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     );
     const deletedRows = state.rows.filter((r) => toDelete.has(r.id));
     const deletedIds = [...toDelete];
-    undoStack.push({ type: "deleteRows", deletedRows, deletedIds });
-    redoStack.length = 0;
+    recordUndo({ type: "deleteRows", deletedRows, deletedIds });
     const newSelected = new Set(state.selectedRowIds);
     toDelete.forEach((id) => newSelected.delete(id));
     set({
@@ -551,8 +556,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   renameColumn: (oldName, newName) => {
     if (!newName.trim() || oldName === newName) return;
-    undoStack.push({ type: "renameColumn", oldName, newName });
-    redoStack.length = 0;
+    recordUndo({ type: "renameColumn", oldName, newName });
     set((state) => ({
       originalColumns: state.originalColumns.map((c) => (c === oldName ? newName : c)),
       sourceColumns: state.sourceColumns.map((c) => (c === oldName ? newName : c)),
@@ -572,8 +576,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     for (const r of state.rows) {
       values[r.id] = r.originalData[colName] ?? "";
     }
-    undoStack.push({ type: "deleteColumn", colName, colIndex, sourceIncluded, values });
-    redoStack.length = 0;
+    recordUndo({ type: "deleteColumn", colName, colIndex, sourceIncluded, values });
     set({
       originalColumns: state.originalColumns.filter((c) => c !== colName),
       sourceColumns: state.sourceColumns.filter((c) => c !== colName),

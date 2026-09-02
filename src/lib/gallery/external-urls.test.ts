@@ -49,6 +49,23 @@ describe("external gallery URLs", () => {
     ]);
   });
 
+  it("can sign a subset of rows without walking the whole sheet", () => {
+    const sheet = worksheet();
+    sheet.rows.push({
+      id: "other",
+      rowIndex: 1,
+      status: "ready",
+      originalData: { SKU: "456" },
+      mainImagePath: "workspace/other.webp",
+      galleryImagePaths: ["workspace/other-gal.webp"],
+    });
+    expect(collectGalleryImagePaths(sheet, ["row"])).toEqual([
+      "workspace/logo.png",
+      "workspace/main.webp",
+      "workspace/gallery.webp",
+    ]);
+  });
+
   it("exports external URLs unchanged and signs storage paths only", async () => {
     const sign = vi.fn(async (path: string) => `https://signed.example/${path}`);
     const buffer = await buildGalleryExportBuffer(worksheet(), sign);

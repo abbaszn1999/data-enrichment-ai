@@ -1,6 +1,7 @@
 import { parseExcelFile } from "@/lib/excel";
 import { createEmptyWorksheet } from "@/lib/gallery/types";
 import type { GalleryWorksheetJson } from "@/lib/gallery/types";
+import { assertRowCount } from "@/lib/upload-limits";
 
 function newRowId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -17,9 +18,10 @@ export async function parseWorksheetFile(
   if (columns.length === 0 || columns.length > 250) {
     throw new Error("Worksheet must contain between 1 and 250 columns");
   }
-  if (rows.length > 10_000) {
-    throw new Error("Worksheet cannot contain more than 10,000 rows");
+  if (rows.length === 0) {
+    throw new Error("Worksheet has no data rows");
   }
+  assertRowCount(rows.length, "gallery");
 
   const galleryRows = rows.map((row, index) => ({
     id: newRowId(),

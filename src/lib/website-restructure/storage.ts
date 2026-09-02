@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WrDesignBrief, WrTaxonomyTree, WrVersion } from "./types";
 
@@ -50,14 +51,30 @@ export function isWrChatAttachmentPath(
   return rest.length > 0 && !rest.includes("/");
 }
 
+const WR_VISION_MAX_EDGE = 1280;
+
 export async function downloadWrImageAsInline(
   admin: SupabaseClient,
   storagePath: string
 ): Promise<{ mimeType: string; data: string } | null> {
   const { data, error } = await admin.storage.from(WR_STORAGE_BUCKET).download(storagePath);
   if (error || !data) return null;
-  const buf = await data.arrayBuffer();
-  return { mimeType: data.type || "image/jpeg", data: Buffer.from(buf).toString("base64") };
+  const buf = Buffer.from(await data.arrayBuffer());
+  try {
+    const scaled = await sharp(buf, { failOn: "error", limitInputPixels: 40_000_000 })
+      .rotate()
+      .resize({
+        width: WR_VISION_MAX_EDGE,
+        height: WR_VISION_MAX_EDGE,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: 72, mozjpeg: true })
+      .toBuffer();
+    return { mimeType: "image/jpeg", data: scaled.toString("base64") };
+  } catch {
+    return { mimeType: data.type || "image/jpeg", data: buf.toString("base64") };
+  }
 }
 
 export function wrBriefPath(workspaceId: string, projectId: string): string {

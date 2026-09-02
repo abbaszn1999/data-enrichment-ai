@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
@@ -26,7 +26,8 @@ import { Input } from "@/components/ui/input";
 import { useWorkspaceContext } from "../workspace-context";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useRole } from "@/hooks/use-role";
-import { loadProductsJson, saveProductsJson, type MasterProductJson } from "@/lib/storage-helpers";
+import type { MasterProductJson } from "@/lib/storage-helpers";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
 const PAGE_SIZES = [10, 20, 50, 100];
 
@@ -36,39 +37,54 @@ export default function ProductsPage() {
   const { workspace, role } = useWorkspaceContext();
   const permissions = useRole(role);
 
-  const [allProducts, setAllProducts] = useState<MasterProductJson[]>([]);
   const [products, setProducts] = useState<MasterProductJson[]>([]);
+  const [dataColumns, setDataColumns] = useState<string[]>([]);
   const [total, setTotal] = useState(0);
+  const [catalogTotal, setCatalogTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [cursorStack, setCursorStack] = useState<(string | null)[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [pageSize, setPageSize] = useState(10);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [deletingAll, setDeletingAll] = useState(false);
 
-  // Dynamically extract ALL unique column names from products data
-  const dataColumns = useMemo(() => {
-    const colSet = new Set<string>();
-    for (const p of allProducts) {
-      if (p.data) {
-        for (const key of Object.keys(p.data)) {
-          colSet.add(key);
-        }
-      }
-    }
-    return Array.from(colSet);
-  }, [allProducts]);
-
   const totalColSpan = Math.max(1, dataColumns.length + (permissions.canEdit ? 1 : 0));
+  const page = cursorStack.length + 1;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const loadAll = async () => {
+  const loadPage = async (pageCursor: string | null) => {
     if (!workspace) return;
     setLoading(true);
     try {
-      const prods = await loadProductsJson(workspace.id);
-      setAllProducts(prods);
+      const params = new URLSearchParams({
+        workspaceId: workspace.id,
+        limit: String(pageSize),
+      });
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      if (pageCursor) params.set("cursor", pageCursor);
+      const res = await fetch(`/api/products?${params.toString()}`);
+      const data = (await res.json()) as {
+        error?: string;
+        items?: MasterProductJson[];
+        nextCursor?: string | null;
+        hasMore?: boolean;
+        total?: number;
+        catalogTotal?: number;
+        columns?: string[];
+      };
+      if (!res.ok) throw new Error(data.error || "Failed to load products");
+      setProducts(data.items ?? []);
+      setNextCursor(data.nextCursor ?? null);
+      setHasMore(Boolean(data.hasMore));
+      setTotal(data.total ?? 0);
+      setCatalogTotal(data.catalogTotal ?? data.total ?? 0);
+      setDataColumns(data.columns ?? []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -77,31 +93,14 @@ export default function ProductsPage() {
   };
 
   useEffect(() => {
-    loadAll();
-  }, [workspace]);
+    setCursor(null);
+    setCursorStack([]);
+  }, [workspace?.id, debouncedSearch, pageSize]);
 
-  // Client-side filter + paginate
   useEffect(() => {
-    let filtered = [...allProducts];
-    if (search) {
-      const s = search.toLowerCase();
-      filtered = filtered.filter((p) =>
-        p.sku.toLowerCase().includes(s) ||
-        Object.values(p.data || {}).some((v) => String(v).toLowerCase().includes(s))
-      );
-    }
-    setTotal(filtered.length);
-    const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
-    const safePage = Math.min(page, pages);
-    if (safePage !== page) {
-      setPage(safePage);
-      return;
-    }
-    const start = (safePage - 1) * pageSize;
-    setProducts(filtered.slice(start, start + pageSize));
-  }, [allProducts, search, page, pageSize]);
-
-  const totalPages = Math.ceil(total / pageSize);
+    loadPage(cursor);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load when cursor / workspace / search / page size change
+  }, [workspace?.id, debouncedSearch, pageSize, cursor]);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -124,12 +123,19 @@ export default function ProductsPage() {
     if (!workspace || deleteConfirmText !== "delete") return;
     setDeletingAll(true);
     try {
-      await saveProductsJson(workspace.id, []);
-      setAllProducts([]);
+      const res = await fetch("/api/products", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId: workspace.id, all: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete all products");
       setShowDeleteAll(false);
       setDeleteConfirmText("");
       setSelected(new Set());
-      setPage(1);
+      setCursor(null);
+      setCursorStack([]);
+      await loadPage(null);
     } catch (err: any) {
       alert(err?.message || "Failed to delete all products");
     } finally {
@@ -140,10 +146,17 @@ export default function ProductsPage() {
   const handleBulkDelete = async () => {
     if (!workspace || !confirm(`Delete ${selected.size} products? This cannot be undone.`)) return;
     try {
-      const remaining = allProducts.filter((p) => !selected.has(p.sku));
-      await saveProductsJson(workspace.id, remaining);
-      setAllProducts(remaining);
+      const res = await fetch("/api/products", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId: workspace.id, skus: Array.from(selected) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete");
       setSelected(new Set());
+      setCursor(null);
+      setCursorStack([]);
+      await loadPage(null);
     } catch (err: any) {
       alert(err?.message || "Failed to delete");
     }
@@ -184,7 +197,7 @@ export default function ProductsPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {permissions.canAdmin && total > 0 && (
+              {permissions.canAdmin && catalogTotal > 0 && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -211,7 +224,7 @@ export default function ProductsPage() {
           {/* Catalog pulse — real values, no invented health score. */}
           <div className="mt-7 grid max-w-2xl grid-cols-3 overflow-hidden rounded-2xl border border-border/60 bg-background/70 shadow-sm backdrop-blur">
             {[
-              { label: "Products", value: allProducts.length, icon: Database },
+              { label: "Products", value: catalogTotal, icon: Database },
               { label: "Data fields", value: dataColumns.length, icon: Columns3 },
               { label: "Pages", value: Math.max(totalPages, 1), icon: FileSpreadsheet },
             ].map((metric, index) => (
@@ -252,7 +265,6 @@ export default function ProductsPage() {
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
-                setPage(1);
               }}
               className="h-10 rounded-xl border-transparent bg-muted/60 pl-10 pr-10 text-xs shadow-none focus-visible:border-[#6B358D]/35 focus-visible:ring-[#6B358D]/10"
             />
@@ -421,7 +433,6 @@ export default function ProductsPage() {
                   value={pageSize}
                   onChange={(e) => {
                     setPageSize(Number(e.target.value));
-                    setPage(1);
                   }}
                   className="h-7 rounded-lg border border-border/60 bg-background px-2 text-[10px] font-bold outline-none"
                 >
@@ -438,8 +449,12 @@ export default function ProductsPage() {
                   size="sm"
                   variant="outline"
                   className="h-8 w-8 rounded-lg p-0"
-                  disabled={page <= 1}
-                  onClick={() => setPage(page - 1)}
+                  disabled={cursorStack.length === 0}
+                  onClick={() => {
+                    const previous = cursorStack[cursorStack.length - 1] ?? null;
+                    setCursorStack((stack) => stack.slice(0, -1));
+                    setCursor(previous);
+                  }}
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </Button>
@@ -450,8 +465,11 @@ export default function ProductsPage() {
                   size="sm"
                   variant="outline"
                   className="h-8 w-8 rounded-lg p-0"
-                  disabled={page >= totalPages}
-                  onClick={() => setPage(page + 1)}
+                  disabled={!hasMore}
+                  onClick={() => {
+                    setCursorStack((stack) => [...stack, cursor]);
+                    setCursor(nextCursor);
+                  }}
                 >
                   <ChevronRight className="h-3.5 w-3.5" />
                 </Button>
@@ -494,7 +512,7 @@ export default function ProductsPage() {
             <div className="bg-destructive/5 border border-destructive/20 rounded-lg p-3 space-y-1">
               <p className="text-xs text-destructive font-medium">Warning</p>
               <p className="text-xs text-muted-foreground">
-                You are about to permanently delete <strong className="text-foreground">{total} product{total !== 1 && "s"}</strong> from this workspace. All product data, including SKUs, prices, and metadata will be lost forever.
+                You are about to permanently delete <strong className="text-foreground">{catalogTotal} product{catalogTotal !== 1 && "s"}</strong> from this workspace. All product data, including SKUs, prices, and metadata will be lost forever.
               </p>
             </div>
 

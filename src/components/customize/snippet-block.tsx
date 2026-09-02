@@ -4,23 +4,13 @@ import { useState, useSyncExternalStore } from "react";
 import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-
-const PRODUCTION_ORIGIN = "https://data-enrichment-ai.onrender.com";
+import { snippetOrigin } from "@/lib/app-origin";
 
 /** The origin never changes while the page is open. */
 const noopSubscribe = () => () => {};
 
 function clientOrigin(): string {
-  const current = window.location.origin;
-  // A localhost origin is useless in a snippet pasted into a live store.
-  if (
-    !current ||
-    current.includes("localhost") ||
-    current.includes("127.0.0.1")
-  ) {
-    return PRODUCTION_ORIGIN;
-  }
-  return current;
+  return snippetOrigin(window.location.origin);
 }
 
 /**
@@ -32,7 +22,7 @@ export function useAppOrigin(): string {
   return useSyncExternalStore(
     noopSubscribe,
     clientOrigin,
-    () => PRODUCTION_ORIGIN
+    () => snippetOrigin()
   );
 }
 

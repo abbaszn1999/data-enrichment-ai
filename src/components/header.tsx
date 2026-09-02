@@ -63,7 +63,7 @@ export function Header() {
                 priority
               />
             </div>
-            <h1 className="font-bold text-sm tracking-tight text-foreground">Autommerce Data Entry</h1>
+            <h1 className="font-bold text-sm tracking-tight text-foreground">Autommerce Platform</h1>
           </div>
 
           {fileName && (

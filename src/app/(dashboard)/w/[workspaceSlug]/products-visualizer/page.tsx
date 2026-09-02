@@ -60,6 +60,7 @@ import {
   deleteVisualizerAsset,
   exportVisualizer,
   generateVisualizerFull,
+  getVisualizerProgress,
   getVisualizerSession,
   listVisualizerSessions,
   requestVisualizerGenerationStop,
@@ -388,61 +389,89 @@ export default function ProductsVisualizerPage() {
 
     const pollProgress = async () => {
       try {
-        const fresh = await getVisualizerSession(workspace.id, projectId, {
-          includeSignedUrls: false,
-        });
-        if (cancelled || !fresh.worksheet) return;
-        setSession(fresh.session);
-        setWorksheet((current) => {
-          if (!current) return fresh.worksheet!;
-          const merged = mergePolledVisualizerWorksheet({
-            local: current,
-            polled: fresh.worksheet!,
-            clientRunActive: generating,
-          });
-          return {
-            ...current,
-            rows: merged.rows,
-            activeRun: merged.activeRun,
-            revision: merged.revision,
-          };
-        });
-        if (fresh.signedUrls) setSignedUrls(fresh.signedUrls);
-        const run = fresh.worksheet.activeRun;
-        if (run && (run.status === "running" || run.status === "queued")) {
-          const done = run.completed + run.failed;
-          setGenerationRun({
-            total: run.total,
-            completed: done,
-            runId: run.id,
-          });
-          if (done > lastCreditsProgressRef.current) {
-            lastCreditsProgressRef.current = done;
-            invalidateCredits();
-            // A row just finished — fetch its signed image URL now instead of
-            // waiting for the run to finish or a manual page reload.
-            getVisualizerSession(workspace.id, projectId, { includeSignedUrls: true })
-              .then((withUrls) => {
-                if (!cancelled && withUrls.signedUrls) {
-                  setSignedUrls((current) => ({ ...current, ...withUrls.signedUrls }));
+        const progress = await getVisualizerProgress(workspace.id, projectId);
+        if (cancelled) return;
+        setSession((current) =>
+          current && current.id === progress.sessionId
+            ? {
+                ...current,
+                status: progress.status,
+                ready_rows: progress.readyRows,
+                failed_rows: progress.failedRows,
+                cancel_requested: progress.cancelRequested,
+                worksheet_revision: progress.worksheetRevision,
+                active_phase: progress.activePhase,
+                awaiting_user_action: progress.awaitingUserAction,
+              }
+            : current
+        );
+        setSessions((current) =>
+          current.map((item) =>
+            item.id === progress.sessionId
+              ? {
+                  ...item,
+                  status: progress.status,
+                  ready_rows: progress.readyRows,
+                  failed_rows: progress.failedRows,
+                  cancel_requested: progress.cancelRequested,
+                  worksheet_revision: progress.worksheetRevision,
+                  active_phase: progress.activePhase,
+                  awaiting_user_action: progress.awaitingUserAction,
                 }
-              })
-              .catch(() => {
-                // The next completed row or a manual refresh will retry this.
-              });
-          }
-          if (fresh.session.cancel_requested) setStopping(true);
+              : item
+          )
+        );
+        const done = progress.completed + progress.failed;
+        const jobActive =
+          progress.jobStatus === "running" || progress.jobStatus === "queued";
+        if (jobActive || progress.status === "processing") {
+          setGenerationRun({
+            total: progress.total,
+            completed: done,
+            runId: progress.jobId || "",
+          });
+          if (progress.cancelRequested) setStopping(true);
         } else if (!generating) {
-          if (lastCreditsProgressRef.current > 0 || run) {
-            invalidateCredits();
-          }
+          if (lastCreditsProgressRef.current > 0) invalidateCredits();
           setGenerationRun(null);
           setStopping(false);
+        }
+        const revisionChanged =
+          progress.worksheetRevision !== worksheetRevisionRef.current;
+        const newlyDone = done > lastCreditsProgressRef.current;
+        if (newlyDone) {
+          lastCreditsProgressRef.current = done;
+          invalidateCredits();
+        }
+        if (revisionChanged) {
+          worksheetRevisionRef.current = progress.worksheetRevision;
+          const fresh = await getVisualizerSession(workspace.id, projectId, {
+            includeSignedUrls: true,
+          });
+          if (cancelled || !fresh.worksheet) return;
+          setSession(fresh.session);
+          setWorksheet((current) => {
+            if (!current) return fresh.worksheet!;
+            const merged = mergePolledVisualizerWorksheet({
+              local: current,
+              polled: fresh.worksheet!,
+              clientRunActive: generating,
+            });
+            return {
+              ...current,
+              rows: merged.rows,
+              activeRun: merged.activeRun,
+              revision: merged.revision,
+            };
+          });
+          if (fresh.signedUrls) {
+            setSignedUrls((current) => ({ ...current, ...fresh.signedUrls }));
+          }
         }
       } catch {
         // Next poll or final generate response recovers.
       } finally {
-        if (!cancelled) timer = setTimeout(pollProgress, 750);
+        if (!cancelled) timer = setTimeout(pollProgress, 2_000);
       }
     };
 

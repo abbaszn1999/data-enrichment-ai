@@ -23,7 +23,7 @@ describe("catalogPendingRowIds", () => {
 describe("catalogCreditIdempotencyKey", () => {
   it("scopes charges to the job run so a later column pass can bill again", () => {
     expect(catalogCreditIdempotencyKey("run-1", "row-1")).toBe(
-      "ai_enrichment:run-1:row-1"
+      "catalog_intelligence:run-1:row-1"
     );
     expect(catalogCreditIdempotencyKey("run-2", "row-1")).not.toBe(
       catalogCreditIdempotencyKey("run-1", "row-1")

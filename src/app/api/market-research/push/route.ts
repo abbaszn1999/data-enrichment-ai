@@ -127,7 +127,11 @@ export async function POST(request: NextRequest) {
     const integration = integrationRow as IntegrationRecord;
     const provider = String(integration.provider).toLowerCase();
 
-    for (const colId of ids) {
+    for (let i = 0; i < ids.length; i += 1) {
+      const colId = ids[i]!;
+      if (i > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
       const col = collections.find((c) => c.id === colId);
       const colName = col?.name || colId;
       const storeTitle = `${prefix} - ${colName}`;

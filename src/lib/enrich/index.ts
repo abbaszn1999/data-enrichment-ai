@@ -1,6 +1,6 @@
 /**
  * Import AI enrichment — OpenAI Responses agent (Terra / Sol).
- * Public surface for `/api/enrich` and related callers.
+ * Public surface for `/api/catalog-intelligence` and related callers.
  */
 
 export type {

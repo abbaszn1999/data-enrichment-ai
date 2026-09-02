@@ -3,8 +3,11 @@
  * Uses supabase-server (cookies-based) instead of supabase-browser.
  */
 import { createClient } from "@/lib/supabase-server";
+import { createAdminClient } from "@/lib/supabase-admin";
 import type { ProjectJson, MasterProductJson, CategoryJson, ImageClassificationJson } from "@/lib/storage-helpers";
 import { getCategoriesStoragePath, getCategoriesRawStoragePath, getImageClassificationResultPath } from "@/lib/storage-helpers";
+import { productsRowStoreEnabled } from "@/lib/catalog/flag";
+import { countWorkspaceProducts, replaceWorkspaceProducts } from "@/lib/catalog/row-store";
 
 const BUCKET = "workspace-files";
 
@@ -39,11 +42,13 @@ export function getProductsStoragePath(workspaceId: string): string {
 }
 
 export async function loadProjectJsonServer(workspaceId: string, sessionId: string): Promise<ProjectJson | null> {
-  return loadJsonFromStorageServer<ProjectJson>(getProjectStoragePath(workspaceId, sessionId));
+  const { loadProjectJsonAdmin } = await import("@/lib/jobs/project-json");
+  return loadProjectJsonAdmin(workspaceId, sessionId);
 }
 
 export async function saveProjectJsonServer(workspaceId: string, sessionId: string, data: ProjectJson): Promise<void> {
-  await saveJsonToStorageServer(getProjectStoragePath(workspaceId, sessionId), data);
+  const { saveProjectJsonAdmin } = await import("@/lib/jobs/project-json");
+  await saveProjectJsonAdmin(workspaceId, sessionId, data);
 }
 
 // ─── Server-side Caching of Counts (prevents downloading massive JSONs repeatedly) ───
@@ -94,6 +99,15 @@ export async function getCachedProductsCountServer(workspaceId: string): Promise
   if (cached && Date.now() - cached.ts < COUNTS_TTL_MS) {
     return cached.count;
   }
+  if (productsRowStoreEnabled()) {
+    try {
+      const count = await countWorkspaceProducts(createAdminClient(), workspaceId);
+      countsCache.set(key, { count, ts: Date.now() });
+      return count;
+    } catch {
+      // Fall through to sidecar / blob if the table is not migrated yet.
+    }
+  }
   // Cheap path: read the tiny sidecar instead of the full products.json.
   const sidecar = await readCountSidecar(getProductsCountSidecarPath(workspaceId));
   if (sidecar !== null) {
@@ -138,6 +152,9 @@ export async function saveProductsJsonServer(workspaceId: string, products: Mast
   // the full products.json just to count it.
   await writeCountSidecar(getProductsCountSidecarPath(workspaceId), products.length);
   countsCache.set(`products:${workspaceId}`, { count: products.length, ts: Date.now() });
+  if (productsRowStoreEnabled()) {
+    await replaceWorkspaceProducts(createAdminClient(), workspaceId, products);
+  }
 }
 
 export async function loadCategoriesJsonServer(workspaceId: string): Promise<CategoryJson[]> {

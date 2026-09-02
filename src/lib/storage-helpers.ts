@@ -108,14 +108,30 @@ export function getProjectStoragePath(workspaceId: string, sessionId: string): s
 }
 
 export async function saveProjectJson(workspaceId: string, sessionId: string, data: ProjectJson): Promise<string> {
-  const path = getProjectStoragePath(workspaceId, sessionId);
-  await saveJsonToStorage(path, data);
-  return path;
+  const res = await fetch("/api/catalog-intelligence/project", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, sessionId, project: data }),
+  });
+  const payload = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) {
+    throw new Error(payload.error || "Failed to save catalog session");
+  }
+  return getProjectStoragePath(workspaceId, sessionId);
 }
 
 export async function loadProjectJson(workspaceId: string, sessionId: string): Promise<ProjectJson | null> {
-  const path = getProjectStoragePath(workspaceId, sessionId);
-  return loadJsonFromStorage<ProjectJson>(path);
+  const params = new URLSearchParams({ workspaceId, sessionId });
+  const res = await fetch(`/api/catalog-intelligence/project?${params.toString()}`);
+  if (res.status === 404) return null;
+  const payload = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    project?: ProjectJson | null;
+  };
+  if (!res.ok) {
+    throw new Error(payload.error || "Failed to load catalog session");
+  }
+  return payload.project ?? null;
 }
 
 // ─── Image Classification ────────────────────────────────
@@ -238,14 +254,19 @@ export function getProductsStoragePath(workspaceId: string): string {
 }
 
 export async function saveProductsJson(workspaceId: string, products: MasterProductJson[]): Promise<string> {
-  const path = getProductsStoragePath(workspaceId);
-  await saveJsonToStorage(path, products);
-  // Keep the count sidecar (read by the dashboard) accurate after a client-side
-  // write so it never falls back to downloading the full products.json.
-  try {
-    await saveJsonToStorage(`${workspaceId}/master/products.count.json`, { count: products.length, ts: Date.now() });
-  } catch { /* non-fatal */ }
-  return path;
+  const res = await fetch("/api/products/catalog", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, products }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    code?: string;
+  };
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to save catalog");
+  }
+  return getProductsStoragePath(workspaceId);
 }
 
 export async function loadProductsJson(workspaceId: string): Promise<MasterProductJson[]> {

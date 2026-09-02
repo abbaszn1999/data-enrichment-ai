@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
     return jsonError("Upload at least one header screenshot before building", 400);
   }
 
-  const leased = await tryLeaseWrProjectBuild(auth.admin, workspaceId, projectId);
+  const leased = await tryLeaseWrProjectBuild(auth.admin, workspaceId, projectId, auth.user.id);
   if (!leased) return jsonError("A build is already running for this project", 409);
 
   const stream = createNdjsonStream(async (push) => {

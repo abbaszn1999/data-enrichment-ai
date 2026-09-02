@@ -93,29 +93,16 @@ export default function ImageClassifyDetailPage() {
   const [progress, setProgress] = useState(0);
   const wasProcessingRef = useRef(false);
 
-  // Smooth real-time progress bar simulation
+  // Honest progress: unknown duration uses an indeterminate hold, not a fake climb.
   useEffect(() => {
-    if (session?.status !== "processing" && session?.status !== "pending") {
-      if (session?.status === "completed") {
-        setProgress(100);
-      }
+    if (session?.status === "completed") {
+      setProgress(100);
       return;
     }
-
-    // Reset progress if it was completed or not started
-    setProgress((prev) => (prev >= 100 ? 5 : prev || 5));
-
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 95) return prev; // Hold at 95% until complete
-        if (prev < 30) return prev + Math.random() * 8 + 4; // Fast start (0% - 30%)
-        if (prev < 65) return prev + Math.random() * 4 + 2; // Medium pace (30% - 65%)
-        if (prev < 85) return prev + Math.random() * 1.5 + 0.5; // Slow down (65% - 85%)
-        return prev + Math.random() * 0.4 + 0.1; // Extremely slow close to the end (85% - 95%)
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
+    if (session?.status !== "processing" && session?.status !== "pending") {
+      return;
+    }
+    setProgress(15);
   }, [session?.status]);
 
   const progressMessage = useMemo(

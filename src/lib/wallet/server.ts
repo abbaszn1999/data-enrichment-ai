@@ -139,7 +139,7 @@ export async function readWorkspaceWallet(
   admin: SupabaseClient,
   workspaceId: string
 ): Promise<WalletState> {
-  const [{ data: wallet }, { data: txs }] = await Promise.all([
+  const [{ data: wallet }, { data: topupRows }, { data: summary }] = await Promise.all([
     admin
       .from("workspace_wallets")
       .select(
@@ -153,8 +153,10 @@ export async function readWorkspaceWallet(
         "id, kind, amount_usd, description, module, method, status, created_at, details"
       )
       .eq("workspace_id", workspaceId)
+      .eq("kind", "topup")
       .order("created_at", { ascending: false })
-      .limit(200),
+      .limit(1),
+    admin.rpc("wallet_spend_summaries", { p_workspace_id: workspaceId }),
   ]);
 
   const autoReload: WalletAutoReload = {
@@ -163,13 +165,68 @@ export async function readWorkspaceWallet(
     amount: Number(wallet?.auto_reload_amount ?? 100),
   };
 
+  const parsed =
+    summary && typeof summary === "object" ? (summary as Record<string, unknown>) : {};
+  const byModuleRaw = Array.isArray(parsed.by_module) ? parsed.by_module : [];
+  const lastTopupRow = (topupRows ?? [])[0];
+  const lastTopup = lastTopupRow ? mapTx(lastTopupRow) : null;
+
   return {
     balance: round4(Number(wallet?.balance_usd ?? 0)),
     currency: "USD",
-    transactions: (txs ?? []).map(mapTx),
+    transactions: lastTopup ? [lastTopup] : [],
     autoReload,
     allowDevTopup: walletDevTopupEnabled(),
+    summaries: {
+      spent7: round2(Number(parsed.spent7 ?? 0)),
+      spent30: round2(Number(parsed.spent30 ?? 0)),
+      byModule: byModuleRaw.map((row) => {
+        const item = row as { module?: string; amount?: number };
+        return { module: item.module ?? "", amount: round2(Number(item.amount ?? 0)) };
+      }),
+      lastTopup,
+    },
   };
+}
+
+export async function listWalletTransactions(
+  admin: SupabaseClient,
+  input: {
+    workspaceId: string;
+    module?: string | null;
+    query?: string | null;
+    cursor?: string | null;
+    limit: number;
+  }
+): Promise<{ items: WalletTx[]; nextCursor: string | null }> {
+  const limit = Math.min(Math.max(input.limit, 1), 100);
+  let query = admin
+    .from("wallet_transactions")
+    .select(
+      "id, kind, amount_usd, description, module, method, status, created_at, details"
+    )
+    .eq("workspace_id", input.workspaceId)
+    .order("created_at", { ascending: false })
+    .limit(limit + 1);
+  if (input.module?.trim()) {
+    query = query.eq("module", input.module.trim());
+  }
+  if (input.query?.trim()) {
+    query = query.ilike("description", `%${input.query.trim()}%`);
+  }
+  if (input.cursor?.trim()) {
+    query = query.lt("created_at", input.cursor.trim());
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []).map(mapTx);
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor =
+    hasMore && items.length > 0
+      ? new Date(items[items.length - 1]!.createdAt).toISOString()
+      : null;
+  return { items, nextCursor };
 }
 
 export async function updateWalletAutoReload(

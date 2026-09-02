@@ -31,12 +31,12 @@ import { formatCredits } from "@/lib/format-credits";
 import { PageLoader } from "@/components/brand/page-loader";
 
 const OP_LABELS: Record<string, { label: string; icon: any; color: string }> = {
-  ai_enrichment: { label: "AI Enrichment", icon: Sparkles, color: "text-[#6B358D] dark:text-[#F76D01]" },
+  catalog_intelligence: { label: "Catalog Intelligence", icon: Sparkles, color: "text-[#6B358D] dark:text-[#F76D01]" },
   ai_image_search: { label: "AI Image Search", icon: ImageIcon, color: "text-blue-600" },
   ai_column_mapping: { label: "AI Column Mapping", icon: Columns3, color: "text-amber-600" },
   ai_category_suggest: { label: "AI Category Suggest", icon: FolderTree, color: "text-green-600" },
   ai_function: { label: "AI Function", icon: Zap, color: "text-indigo-600" },
-  sync_agent: { label: "Sync Agent", icon: RefreshCw, color: "text-cyan-600" },
+  store_assistant: { label: "Store Assistant", icon: RefreshCw, color: "text-cyan-600" },
   credit_topup: { label: "Credit Top-up", icon: Zap, color: "text-emerald-600" },
   monthly_reset: { label: "Monthly Reset", icon: Clock, color: "text-gray-600" },
 };
@@ -45,10 +45,15 @@ export default function UsagePage() {
   const { workspace } = useWorkspaceContext();
   const params = useParams();
   const slug = params.workspaceSlug as string;
-
-  const { data, isLoading: usageLoading } = useUsage(workspace?.id ?? null);
   const [filterUser, setFilterUser] = useState<string>("all");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const { data, isLoading: usageLoading } = useUsage(workspace?.id ?? null, {
+    from: fromDate ? new Date(`${fromDate}T00:00:00.000Z`).toISOString() : undefined,
+    to: toDate ? new Date(`${toDate}T23:59:59.999Z`).toISOString() : undefined,
+  });
 
   const transactions = data?.transactions ?? [];
   const members = data?.members ?? [];
@@ -63,10 +68,7 @@ export default function UsagePage() {
     return transactions.filter((tx: any) => tx.user_id === filterUser);
   }, [transactions, filterUser]);
 
-  const allTimeUsed = useMemo(
-    () => transactions.reduce((sum: number, t: any) => sum + (t.credits_used > 0 ? t.credits_used : 0), 0),
-    [transactions]
-  );
+  const allTimeUsed = Number(data?.totalAllTime ?? 0);
 
   if (loading) {
     return <PageLoader />;
@@ -404,6 +406,46 @@ export default function UsagePage() {
                   {filterUser !== "all" ? "filtered" : "total"} operations
                 </p>
               </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="h-8 rounded-lg border bg-background px-2 text-[11px]"
+              />
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="h-8 rounded-lg border bg-background px-2 text-[11px]"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 rounded-lg text-[11px]"
+                onClick={async () => {
+                  if (!workspace) return;
+                  const params = new URLSearchParams({
+                    workspaceId: workspace.id,
+                    limit: "5000",
+                    format: "csv",
+                  });
+                  if (fromDate) params.set("from", new Date(`${fromDate}T00:00:00.000Z`).toISOString());
+                  if (toDate) params.set("to", new Date(`${toDate}T23:59:59.999Z`).toISOString());
+                  const res = await fetch(`/api/credits?${params.toString()}`);
+                  if (!res.ok) return;
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "usage.csv";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                Export CSV
+              </Button>
             </div>
 
             {members.length > 1 && (

@@ -1,4 +1,5 @@
 import { runGeminiMarketResearch } from "./gemini-runner";
+import { mapLimit } from "@/lib/async/map-limit";
 
 export type ClassifiedSheetType = "category" | "informational" | "excluded";
 
@@ -138,9 +139,7 @@ export async function runStage4IntentClassification(input: {
     batches.push(input.keywords.slice(i, i + BATCH_SIZE));
   }
 
-  const allClassified: ClassifiedKeywordItem[] = [];
-
-  for (const batch of batches) {
+  const batchResults = await mapLimit(batches, 4, async (batch) => {
     try {
       const userPrompt = JSON.stringify({
         storeContext: {
@@ -193,10 +192,11 @@ Output strictly valid JSON with this exact schema:
         }
       }
 
+      const classified: ClassifiedKeywordItem[] = [];
       for (const kw of batch) {
         const item = responseMap.get(kw.id);
         if (item) {
-          allClassified.push({
+          classified.push({
             id: kw.id,
             keyword: kw.keyword,
             sheet: normalizeSheet(item.sheet || "category"),
@@ -205,19 +205,21 @@ Output strictly valid JSON with this exact schema:
             plpConcept: item.plpConcept || undefined,
           });
         } else {
-          // Fallback for missing items
           const heuristic = runHeuristicStage4Classification({ keywords: [kw] });
           if (heuristic.classified[0]) {
-            allClassified.push(heuristic.classified[0]);
+            classified.push(heuristic.classified[0]);
           }
         }
       }
+      return classified;
     } catch (err) {
       console.error("[runStage4IntentClassification] Batch failed, falling back to heuristics:", err);
       const heuristic = runHeuristicStage4Classification({ keywords: batch });
-      allClassified.push(...heuristic.classified);
+      return heuristic.classified;
     }
-  }
+  });
+
+  const allClassified = batchResults.flat();
 
   const categoryCount = allClassified.filter((c) => c.sheet === "category").length;
   const informationalCount = allClassified.filter((c) => c.sheet === "informational").length;

@@ -90,7 +90,7 @@ export default function AdminJobsPage() {
     <>
       <PageHeader
         title={<PageTitle label="Jobs" badge={<LiveBadge>{total} live</LiveBadge>} />}
-        description="Queued and completed catalog, gallery, and visualizer job runs."
+        description="Queued and completed Catalog Intelligence, Gallery, and Visualizer job runs."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       <AdminListLayout>
@@ -106,7 +106,7 @@ export default function AdminJobsPage() {
         emptyTitle={!hasFilters && total === 0 ? "No jobs yet" : "No matching jobs"}
         emptyDescription={
           !hasFilters && total === 0
-            ? "Catalog, gallery, and visualizer runs will appear here."
+            ? "Catalog Intelligence, Gallery, and Visualizer runs will appear here."
             : "Try a different search or clear the active filters."
         }
         onClearFilters={hasFilters ? clearFilters : undefined}
@@ -151,9 +151,7 @@ export default function AdminJobsPage() {
                 },
                 options: [
                   { value: "all", label: "All kinds" },
-                  { value: "catalog", label: "Catalog" },
-                  { value: "gallery", label: "Gallery" },
-                  { value: "visualizer", label: "Visualizer" },
+                  ...Object.entries(JOB_KIND_LABELS).map(([value, label]) => ({ value, label })),
                 ],
               },
               {

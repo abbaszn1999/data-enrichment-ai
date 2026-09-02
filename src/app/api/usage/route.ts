@@ -17,22 +17,13 @@ export async function GET(request: Request) {
     const plan = ownerSub?.plan;
 
     const supabase = await createClient();
-
-    // Get credit transactions summary
-    const { data: transactions } = await supabase
-      .from("credit_transactions")
-      .select("operation, credits_used")
-      .eq("workspace_id", workspaceId);
-
-    // Breakdown by operation
-    const breakdown: Record<string, number> = {};
-    let totalUsed = 0;
-    for (const tx of transactions || []) {
-      if (tx.credits_used > 0) {
-        breakdown[tx.operation] = (breakdown[tx.operation] || 0) + tx.credits_used;
-        totalUsed += tx.credits_used;
-      }
-    }
+    const { data: totals } = await supabase.rpc("credit_usage_totals", {
+      p_workspace_id: workspaceId,
+    });
+    const parsed =
+      totals && typeof totals === "object"
+        ? (totals as { total_used?: number; total_count?: number })
+        : {};
 
     return NextResponse.json({
       plan: {
@@ -53,9 +44,9 @@ export async function GET(request: Request) {
         cancelAtPeriodEnd: ownerSub.subscription.cancel_at_period_end,
         currentPeriodEnd: ownerSub.subscription.current_period_end,
       } : null,
-      breakdown,
-      totalAllTime: totalUsed,
-      totalTransactions: (transactions || []).length,
+      breakdown: {},
+      totalAllTime: Number(parsed.total_used ?? 0),
+      totalTransactions: Number(parsed.total_count ?? 0),
     });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || "Internal server error" }, { status: 500 });

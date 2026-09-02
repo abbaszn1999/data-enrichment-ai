@@ -1,7 +1,10 @@
 import type { GalleryWorksheetJson } from "@/lib/gallery/types";
 import { createSignedUrlsAdmin } from "@/lib/gallery/storage-admin";
 
-export function collectGalleryImagePaths(worksheet: GalleryWorksheetJson): string[] {
+export function collectGalleryImagePaths(
+  worksheet: GalleryWorksheetJson,
+  rowIds?: string[]
+): string[] {
   const paths = new Set<string>();
   const addStoragePath = (path: string | null | undefined) => {
     if (path && !/^https?:\/\//i.test(path)) paths.add(path);
@@ -10,7 +13,9 @@ export function collectGalleryImagePaths(worksheet: GalleryWorksheetJson): strin
   addStoragePath(ai.logoPath);
   addStoragePath(ai.brandGuidePath);
   addStoragePath(ai.sceneReferencePath);
+  const allow = rowIds ? new Set(rowIds) : null;
   for (const row of worksheet.rows) {
+    if (allow && !allow.has(row.id)) continue;
     const mainPaths = row.mainImagePaths?.length
       ? row.mainImagePaths
       : row.mainImagePath
@@ -24,7 +29,11 @@ export function collectGalleryImagePaths(worksheet: GalleryWorksheetJson): strin
 
 export async function signGalleryWorksheetImages(
   worksheet: GalleryWorksheetJson,
-  expiresInSec = 3600
+  expiresInSec = 3600,
+  rowIds?: string[]
 ): Promise<Record<string, string>> {
-  return createSignedUrlsAdmin(collectGalleryImagePaths(worksheet), expiresInSec);
+  return createSignedUrlsAdmin(
+    collectGalleryImagePaths(worksheet, rowIds),
+    expiresInSec
+  );
 }

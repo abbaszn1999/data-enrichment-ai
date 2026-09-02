@@ -4,6 +4,7 @@ import type {
   NicheReading,
 } from "@/components/market-research/mock-data";
 import type { StoreCollectionItem } from "./store-catalog";
+import { compressCollectionsForStage1 } from "./stage1-catalog";
 import { runGeminiMarketResearch } from "./gemini-runner";
 
 export type Stage1DiscoveryResult = {
@@ -40,12 +41,8 @@ export async function runStage1NicheDiscovery(input: {
     return runHeuristicStage1Discovery(input);
   }
 
-  const catalogSummary = input.collections.map((c) => ({
-    id: c.id,
-    name: c.name,
-    productCount: c.productCount,
-    description: c.description || undefined,
-  }));
+  const compressed = compressCollectionsForStage1(input.collections);
+  const catalogSummary = compressed.kept;
 
   const systemInstruction = `You are the Market Research Store Discovery Agent powered by Gemini 3.7 Flash.
 Your job is Stage 1 of the Collection Builder:
@@ -69,11 +66,17 @@ Output strictly valid JSON with this exact schema:
   "agentConclusion": "Conversational conclusion summary written in professional plain English."
 }`;
 
-  const userPrompt = `Store Name: ${input.storeName}
-Existing Collections (${input.collections.length} total):
-${JSON.stringify(catalogSummary, null, 2)}
+  const overflowLine =
+    compressed.overflowCount > 0
+      ? `\nPlus ${compressed.overflowCount} smaller collections (${compressed.overflowProducts} products) omitted from this list — map only the collections given; leftover live collections are assigned in code by name.`
+      : "";
 
-Identify the broad parent niches and group all existing collections under them.`;
+  const userPrompt = `Store Name: ${input.storeName}
+Existing Collections (${input.collections.length} total, showing the ${catalogSummary.length} largest by product count):
+${JSON.stringify(catalogSummary, null, 2)}
+${overflowLine}
+
+Identify the broad parent niches and group the provided collections under them.`;
 
   try {
     const result = await runGeminiMarketResearch<GeminiNichesResponse>({

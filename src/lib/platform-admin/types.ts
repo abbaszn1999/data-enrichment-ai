@@ -15,12 +15,12 @@ export type AdminMemberRole = "owner" | "admin" | "editor" | "viewer";
 export type AdminUserStatus = "active" | "invited" | "disabled";
 
 export type AdminCreditOperation =
-  | "ai_enrichment"
+  | "catalog_intelligence"
   | "ai_image_search"
   | "ai_column_mapping"
   | "ai_category_suggest"
   | "ai_function"
-  | "sync_agent"
+  | "store_assistant"
   | "image_classification"
   | "gallery_google"
   | "gallery_ai"
@@ -33,11 +33,9 @@ export type AdminWalletTxKind = "topup" | "charge" | "refund";
 
 export type AdminWalletModule =
   | "market-research"
-  | "Market Research"
   | "growth-sync"
   | "website-restructure"
   | "topup"
-  | "Sync"
   | "Billing";
 
 export type AdminJobKind = "catalog" | "gallery" | "visualizer";

@@ -5,6 +5,7 @@ import { Upload, FileSpreadsheet, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { parseExcelFile } from "@/lib/excel";
+import { spreadsheetKind } from "@/lib/upload-limits";
 import { useSheetStore } from "@/store/sheet-store";
 
 export function FileUpload() {
@@ -19,12 +20,10 @@ export function FileUpload() {
       setIsLoading(true);
 
       try {
-        if (
-          !file.name.endsWith(".xlsx") &&
-          !file.name.endsWith(".xls") &&
-          !file.name.endsWith(".csv")
-        ) {
-          throw new Error("Please upload an Excel file (.xlsx, .xls) or CSV file.");
+        if (spreadsheetKind(file.name) === "invalid") {
+          throw new Error(
+            "Please upload an Excel file (.xlsx, .xls) or CSV file. Macro-enabled workbooks are not allowed."
+          );
         }
 
         const buffer = await file.arrayBuffer();

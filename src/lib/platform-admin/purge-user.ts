@@ -3,7 +3,7 @@ import { stripe } from "@/lib/stripe";
 import { purgeWorkspace } from "@/lib/workspace-purge";
 
 const REASSIGN_COLUMNS: Array<{ table: string; column: string }> = [
-  { table: "import_sessions", column: "created_by" },
+  { table: "catalog_sessions", column: "created_by" },
   { table: "image_classification_sessions", column: "created_by" },
   { table: "gallery_sessions", column: "created_by" },
   { table: "visualizer_sessions", column: "created_by" },
@@ -28,16 +28,18 @@ export async function purgeUser(
   // any invite addressed *to* this person's email now, while we can still
   // resolve it — otherwise a stale accepted/pending row lingers forever and
   // blocks re-inviting the same email later (unique workspace_id+email).
-  const { data: userRecord } = await admin.auth.admin.getUserById(userId);
+  const { data: userRecord, error: lookupError } = await admin.auth.admin.getUserById(userId);
+  if (lookupError) throw new Error(lookupError.message);
   const email = userRecord?.user?.email;
   if (email) {
-    await admin.from("workspace_invites").delete().ilike("email", email);
+    await deleteMatching(admin, "workspace_invites", "email", email);
   }
 
-  const { data: owned } = await admin
+  const { data: owned, error: ownedError } = await admin
     .from("workspaces")
     .select("id")
     .eq("owner_id", userId);
+  if (ownedError) throw new Error(ownedError.message);
 
   const ownedIds = (owned ?? []).map((row) => row.id as string);
   let filesDeleted = 0;
@@ -48,7 +50,10 @@ export async function purgeUser(
 
   await cancelStripeSubscription(admin, userId);
 
-  const { data: remainingWorkspaces } = await admin.from("workspaces").select("id, owner_id");
+  const { data: remainingWorkspaces, error: remainingError } = await admin
+    .from("workspaces")
+    .select("id, owner_id");
+  if (remainingError) throw new Error(remainingError.message);
   const ownerByWorkspace = new Map(
     (remainingWorkspaces ?? []).map((row) => [row.id as string, row.owner_id as string])
   );
@@ -57,17 +62,30 @@ export async function purgeUser(
     await reassignOrDelete(admin, table, column, userId, ownerByWorkspace);
   }
 
-  await admin.from("workspace_members").delete().eq("user_id", userId);
-  await admin.from("notifications").delete().eq("user_id", userId);
-  await admin.from("credit_purchases").delete().eq("user_id", userId);
-  await admin.from("user_subscriptions").delete().eq("user_id", userId);
-  await admin.from("wallet_stripe_customers").delete().eq("user_id", userId);
-  await admin.from("profiles").delete().eq("id", userId);
+  await deleteMatching(admin, "workspace_members", "user_id", userId);
+  await deleteMatching(admin, "notifications", "user_id", userId);
+  await deleteMatching(admin, "credit_purchases", "user_id", userId);
+  await deleteMatching(admin, "user_subscriptions", "user_id", userId);
+  await deleteMatching(admin, "wallet_stripe_customers", "user_id", userId);
+  await deleteMatching(admin, "profiles", "id", userId);
 
   const { error } = await admin.auth.admin.deleteUser(userId);
   if (error) throw new Error(error.message);
 
   return { workspacesDeleted: ownedIds.length, filesDeleted };
+}
+
+async function deleteMatching(
+  admin: SupabaseClient,
+  table: string,
+  column: string,
+  value: string
+) {
+  const { error } =
+    column === "email"
+      ? await admin.from(table).delete().ilike(column, value)
+      : await admin.from(table).delete().eq(column, value);
+  if (error) throw new Error(`${table}: ${error.message}`);
 }
 
 async function reassignOrDelete(
@@ -78,29 +96,36 @@ async function reassignOrDelete(
   ownerByWorkspace: Map<string, string>
 ) {
   const { data, error } = await admin.from(table).select("id, workspace_id").eq(column, userId);
-  if (error || !data?.length) return;
+  if (error) throw new Error(`${table}: ${error.message}`);
+  if (!data?.length) return;
 
   for (const row of data) {
     const ownerId = ownerByWorkspace.get(row.workspace_id as string);
     if (ownerId && ownerId !== userId) {
-      await admin.from(table).update({ [column]: ownerId }).eq("id", row.id);
+      const { error: updateError } = await admin
+        .from(table)
+        .update({ [column]: ownerId })
+        .eq("id", row.id);
+      if (updateError) throw new Error(`${table} reassign: ${updateError.message}`);
     } else {
-      await admin.from(table).delete().eq("id", row.id);
+      const { error: deleteError } = await admin.from(table).delete().eq("id", row.id);
+      if (deleteError) throw new Error(`${table} delete: ${deleteError.message}`);
     }
   }
 }
 
 async function cancelStripeSubscription(admin: SupabaseClient, userId: string) {
-  const { data } = await admin
+  const { data, error } = await admin
     .from("user_subscriptions")
     .select("stripe_subscription_id")
     .eq("user_id", userId)
     .maybeSingle();
+  if (error) throw new Error(`user_subscriptions: ${error.message}`);
   const stripeId = data?.stripe_subscription_id as string | null | undefined;
   if (!stripeId) return;
   try {
     await stripe.subscriptions.cancel(stripeId);
-  } catch (error) {
-    console.error("[purgeUser] Stripe cancel failed:", error);
+  } catch (cancelError) {
+    console.error("[purgeUser] Stripe cancel failed:", cancelError);
   }
 }

@@ -8,6 +8,12 @@ import {
   type GalleryWorksheetJson,
 } from "@/lib/gallery/types";
 import { galleryError, galleryWarn } from "@/lib/gallery/log";
+import { recordStorageWriteBytes } from "@/lib/observability/metrics";
+import { galleryRowStoreEnabled } from "@/lib/catalog/flag";
+import {
+  hydrateWorksheetRows,
+  replaceWorksheetRows,
+} from "@/lib/worksheet-rows/store";
 
 const BUCKET = "workspace-files";
 const STORAGE_RETRIES = 3;
@@ -78,11 +84,20 @@ async function withStorageRetry<T>(
   throw lastError;
 }
 
+async function hydrateGalleryIfEnabled(
+  sessionId: string,
+  worksheet: GalleryWorksheetJson | null
+): Promise<GalleryWorksheetJson | null> {
+  if (!worksheet || !galleryRowStoreEnabled()) return worksheet;
+  const admin = createAdminClient();
+  return hydrateWorksheetRows(admin, "gallery_session_rows", sessionId, worksheet);
+}
+
 export async function loadGalleryWorksheetAdmin(
   workspaceId: string,
   sessionId: string
 ): Promise<GalleryWorksheetJson | null> {
-  return withStorageRetry("load worksheet", async () => {
+  const worksheet = await withStorageRetry("load worksheet", async () => {
     const path = getGalleryWorksheetPath(workspaceId, sessionId);
     const fresh = await downloadFresh(path);
     if (fresh !== null) {
@@ -103,6 +118,7 @@ export async function loadGalleryWorksheetAdmin(
       JSON.parse(text) as GalleryWorksheetJson
     );
   });
+  return hydrateGalleryIfEnabled(sessionId, worksheet);
 }
 
 export async function loadGalleryWorksheetConsistentAdmin(
@@ -175,9 +191,10 @@ export async function saveGalleryWorksheetAdmin(
   // operational worksheet rows/results so settings saves cannot overwrite images.
   const { settings: _settings, ...persistedWorksheet } = normalized;
   void _settings;
+  const serialized = JSON.stringify(persistedWorksheet);
   return withStorageRetry("save worksheet", async () => {
     const admin = createAdminClient();
-    const blob = new Blob([JSON.stringify(persistedWorksheet)], {
+    const blob = new Blob([serialized], {
       type: "application/octet-stream",
     });
     const { error } = await admin.storage.from(BUCKET).upload(path, blob, {
@@ -186,6 +203,18 @@ export async function saveGalleryWorksheetAdmin(
       contentType: "application/json",
     });
     if (error) throw error;
+    recordStorageWriteBytes(Buffer.byteLength(serialized, "utf8"), {
+      kind: "gallery",
+      workspaceId,
+    });
+    if (galleryRowStoreEnabled()) {
+      await replaceWorksheetRows(
+        admin,
+        "gallery_session_rows",
+        sessionId,
+        normalized.rows
+      );
+    }
     return path;
   });
 }

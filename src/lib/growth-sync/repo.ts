@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Decision, SyncRuleRecord, WatchedTaxonomy } from "./types";
+import { decryptedIntegrationConfig } from "@/lib/integrations/load";
 
 /**
  * Every Supabase read and write the engine performs. Keeping them here means
@@ -251,6 +252,6 @@ export async function loadIntegration(
     provider: String(data.provider),
     integration_name: String(data.integration_name ?? ""),
     base_url: (data.base_url as string | null) ?? null,
-    config: (data.config as Record<string, unknown> | null) ?? null,
+    config: decryptedIntegrationConfig(data.config),
   };
 }

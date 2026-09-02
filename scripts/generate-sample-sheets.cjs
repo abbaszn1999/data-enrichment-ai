@@ -7,7 +7,7 @@
  * Output: public/samples/sample-products.xlsx, public/samples/sample-categories.xlsx
  */
 const path = require("path");
-const XLSX = require("xlsx");
+const ExcelJS = require("exceljs");
 
 // Real, well-known consumer products with accurate brand/category pairing
 // and realistic current retail prices (USD).
@@ -91,20 +91,37 @@ const CATEGORIES = [
 
 const CATEGORY_HEADERS = ["Name", "Slug", "Parent Category", "Description"];
 
-function writeSheet(headers, rows, sheetName, outPath) {
-  const worksheetData = [headers, ...rows];
-  const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
-  worksheet["!cols"] = headers.map((h) => ({ wch: Math.max(h.length + 2, 18) }));
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, outPath);
+async function writeSheet(headers, rows, sheetName, outPath) {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet(sheetName);
+  worksheet.columns = headers.map((h) => ({
+    header: h,
+    width: Math.max(h.length + 2, 18),
+  }));
+  for (const row of rows) worksheet.addRow(row);
+  await workbook.xlsx.writeFile(outPath);
   console.log(`Wrote ${rows.length} rows -> ${outPath}`);
 }
 
-const outDir = path.join(__dirname, "..", "public", "samples");
-writeSheet(PRODUCT_HEADERS, PRODUCTS, "Products", path.join(outDir, "sample-products.xlsx"));
-writeSheet(CATEGORY_HEADERS, CATEGORIES, "Categories", path.join(outDir, "sample-categories.xlsx"));
+(async () => {
+  const outDir = path.join(__dirname, "..", "public", "samples");
+  await writeSheet(
+    PRODUCT_HEADERS,
+    PRODUCTS,
+    "Products",
+    path.join(outDir, "sample-products.xlsx")
+  );
+  await writeSheet(
+    CATEGORY_HEADERS,
+    CATEGORIES,
+    "Categories",
+    path.join(outDir, "sample-categories.xlsx")
+  );
 
-if (PRODUCTS.length !== 30) throw new Error(`Expected 30 products, got ${PRODUCTS.length}`);
-if (CATEGORIES.length !== 30) throw new Error(`Expected 30 categories, got ${CATEGORIES.length}`);
-console.log("OK: both sheets have exactly 30 rows.");
+  if (PRODUCTS.length !== 30) throw new Error(`Expected 30 products, got ${PRODUCTS.length}`);
+  if (CATEGORIES.length !== 30) throw new Error(`Expected 30 categories, got ${CATEGORIES.length}`);
+  console.log("OK: both sheets have exactly 30 rows.");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

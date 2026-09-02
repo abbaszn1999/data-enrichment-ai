@@ -53,6 +53,27 @@ export async function createVisualizerSession(params: {
   }>(res);
 }
 
+export async function getVisualizerProgress(workspaceId: string, sessionId: string) {
+  const res = await fetch(
+    `/api/visualizer/sessions/${sessionId}/progress?workspaceId=${encodeURIComponent(workspaceId)}`
+  );
+  return parseJson<{
+    sessionId: string;
+    status: VisualizerSession["status"];
+    total: number;
+    readyRows: number;
+    failedRows: number;
+    worksheetRevision: number;
+    cancelRequested: boolean;
+    activePhase: VisualizerSession["active_phase"];
+    awaitingUserAction: boolean;
+    completed: number;
+    failed: number;
+    jobId: string | null;
+    jobStatus: string | null;
+  }>(res);
+}
+
 export async function getVisualizerSession(
   workspaceId: string,
   sessionId: string,

@@ -1,3 +1,5 @@
+import { snippetOrigin } from "@/lib/app-origin";
+
 export type WidgetKind = "links" | "faq";
 export type FontChoice = "default" | "sans" | "serif" | "rounded";
 export type SizeChoice = "default" | "sm" | "md" | "lg";
@@ -225,13 +227,11 @@ export function fontStack(font: FontChoice): string {
 }
 
 export function linksSnippet(handle = "{{ collection.handle }}", appUrl?: string): string {
-  const base =
-    (appUrl || "").replace(/\/+$/, "") || "https://data-enrichment-ai.onrender.com";
+  const base = snippetOrigin(appUrl);
   return `<div data-dea="links" data-collection="${handle}"></div>\n<script async src="${base}/widget.js"></script>`;
 }
 
 export function faqSnippet(handle = "{{ collection.handle }}", appUrl?: string): string {
-  const base =
-    (appUrl || "").replace(/\/+$/, "") || "https://data-enrichment-ai.onrender.com";
+  const base = snippetOrigin(appUrl);
   return `<div data-dea="faq" data-collection="${handle}"></div>\n<script async src="${base}/widget.js"></script>`;
 }

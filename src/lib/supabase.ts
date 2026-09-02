@@ -105,6 +105,7 @@ export interface WorkspaceIntegration {
   integration_name: string;
   base_url: string;
   config: Record<string, any>;
+  credential_fingerprint?: string | null;
   status: "connected";
   created_at: string;
   updated_at: string;
@@ -164,6 +165,7 @@ export async function getWorkspaceBySlug(slug: string): Promise<Workspace | null
     .from("workspaces")
     .select("*")
     .eq("slug", slug)
+    .is("deleted_at", null)
     .single();
   if (error) {
     if (error.code === "PGRST116") return null;
@@ -415,10 +417,14 @@ export async function createInvite(workspaceId: string, email: string, role: Rol
   return data;
 }
 
-export async function cancelInvite(inviteId: string) {
-  const supabase = getClient();
-  const { error } = await supabase.from("workspace_invites").delete().eq("id", inviteId);
-  if (error) throw error;
+export async function cancelInvite(inviteId: string, workspaceId: string) {
+  const res = await fetch("/api/team/invite", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ inviteId, workspaceId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Failed to cancel invite");
 }
 
 export async function acceptInvite(inviteId: string) {
@@ -584,7 +590,7 @@ export async function deleteImageClassificationSession(id: string) {
 export async function getImportSessions(workspaceId: string, opts?: { status?: string; search?: string }) {
   const supabase = getClient();
   let query = supabase
-    .from("import_sessions")
+    .from("catalog_sessions")
     .select("*")
     .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
@@ -600,7 +606,7 @@ export async function getImportSessions(workspaceId: string, opts?: { status?: s
 export async function getImportSession(id: string): Promise<ImportSession | null> {
   const supabase = getClient();
   const { data, error } = await supabase
-    .from("import_sessions")
+    .from("catalog_sessions")
     .select("*")
     .eq("id", id)
     .single();
@@ -617,23 +623,24 @@ export async function createImportSession(workspaceId: string, importSession: {
   total_rows: number;
   kind?: SessionKind;
 }) {
-  const supabase = getClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  const user = session?.user;
-  if (!user) throw new Error("Not authenticated");
-
-  const { data, error } = await supabase
-    .from("import_sessions")
-    .insert({ workspace_id: workspaceId, created_by: user.id, ...importSession })
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
+  const res = await fetch("/api/catalog-intelligence/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, ...importSession }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    session?: ImportSession;
+    error?: string;
+  };
+  if (!res.ok || !data.session) {
+    throw new Error(data.error || "Failed to create Catalog Intelligence project");
+  }
+  return data.session;
 }
 
 export async function updateImportSession(id: string, updates: Partial<ImportSession>) {
   const supabase = getClient();
-  const { error } = await supabase.from("import_sessions").update(updates).eq("id", id);
+  const { error } = await supabase.from("catalog_sessions").update(updates).eq("id", id);
   if (error) throw error;
 }
 
@@ -642,7 +649,7 @@ export async function deleteImportSession(id: string) {
 
   // 1. Get session to find workspace_id for Storage cleanup
   const { data: session } = await supabase
-    .from("import_sessions")
+    .from("catalog_sessions")
     .select("workspace_id")
     .eq("id", id)
     .single();
@@ -654,7 +661,7 @@ export async function deleteImportSession(id: string) {
   }
 
   // 2. Delete session from DB
-  const { error } = await supabase.from("import_sessions").delete().eq("id", id);
+  const { error } = await supabase.from("catalog_sessions").delete().eq("id", id);
   if (error) throw error;
 }
 

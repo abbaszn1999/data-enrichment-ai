@@ -1,20 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { loadProjectSliceAdmin } from "@/lib/market-research/storage-admin";
+import { normalizeStoreDomain } from "@/lib/embed/store-domain";
+import { lookupWorkspaceIdByStoreDomain } from "@/lib/embed/workspace-domains";
+import {
+  recordEmbedLatencyMs,
+  recordResponseBytes,
+  jsonByteLength,
+} from "@/lib/observability/metrics";
 import type {
   CollectionContent,
   ProposedCollection,
 } from "@/components/market-research/workspace-data";
-
-function normalizeDomain(raw: string | null | undefined): string {
-  if (!raw) return "";
-  return raw
-    .toLowerCase()
-    .trim()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "")
-    .replace(/:\d+$/, "");
-}
 
 function slugify(text: string): string {
   return (text || "")
@@ -27,6 +24,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
 };
 
 export async function OPTIONS() {
@@ -37,6 +35,13 @@ export async function OPTIONS() {
 }
 
 export async function GET(request: NextRequest) {
+  const started = Date.now();
+  const finish = (body: unknown, init: { status?: number } = {}) => {
+    recordEmbedLatencyMs(Date.now() - started);
+    recordResponseBytes("embed.content", jsonByteLength(body));
+    return NextResponse.json(body, { status: init.status, headers: CORS_HEADERS });
+  };
+
   try {
     const { searchParams } = new URL(request.url);
     const rawDomain =
@@ -44,13 +49,13 @@ export async function GET(request: NextRequest) {
     const rawCollection = searchParams.get("collection") || searchParams.get("handle");
 
     if (!rawDomain) {
-      return NextResponse.json(
+      return finish(
         { error: "Missing required query parameter: domain" },
-        { status: 400, headers: CORS_HEADERS }
+        { status: 400 }
       );
     }
 
-    const cleanDomain = normalizeDomain(rawDomain);
+    const cleanDomain = normalizeStoreDomain(rawDomain);
 
     let rawHandle = (rawCollection || "").toLowerCase().trim();
     // Strip URL prefix and common shopify/woo paths if passed
@@ -64,60 +69,34 @@ export async function GET(request: NextRequest) {
 
     const admin = createAdminClient();
 
-    // 1. Find connected integration matching this store domain
-    const { data: integrations, error: integErr } = await admin
-      .from("workspace_integrations")
-      .select("workspace_id, provider, base_url, config");
-
-    if (integErr) {
-      console.error("[embed/content] Database error fetching integrations:", integErr);
-    }
-
-    let matchedWorkspaceId: string | null = null;
-
-    if (integrations && integrations.length > 0) {
-      // Pass 1: Exact domain match (highest priority)
-      for (const integ of integrations) {
-        const baseDomain = normalizeDomain(integ.base_url);
-        const cfg = (integ.config && typeof integ.config === "object" ? integ.config : {}) as Record<string, unknown>;
-        const cfgStoreDomain = normalizeDomain(
-          String(cfg.store_domain || cfg.shop || cfg.store_url || cfg.url || "")
-        );
-
-        const candidates = [baseDomain, cfgStoreDomain].filter(Boolean);
-        if (candidates.some((c) => c === cleanDomain)) {
-          matchedWorkspaceId = integ.workspace_id;
-          break;
-        }
-      }
-
-      // Pass 2: Hostname / subdomain match (only for non-trivial strings)
-      if (!matchedWorkspaceId) {
-        for (const integ of integrations) {
-          const baseDomain = normalizeDomain(integ.base_url);
-          const cfg = (integ.config && typeof integ.config === "object" ? integ.config : {}) as Record<string, unknown>;
-          const cfgStoreDomain = normalizeDomain(
-            String(cfg.store_domain || cfg.shop || cfg.store_url || cfg.url || "")
-          );
-
-          const candidates = [baseDomain, cfgStoreDomain].filter((c) => c && c.length >= 4);
-          if (
-            cleanDomain.length >= 4 &&
-            candidates.some((c) => c.includes(cleanDomain) || cleanDomain.includes(c))
-          ) {
-            matchedWorkspaceId = integ.workspace_id;
-            break;
-          }
-        }
-      }
-    }
+    // Exact indexed lookup only. Never scan workspace_integrations and never
+    // select `config` (live store credentials) on this public endpoint.
+    const matchedWorkspaceId = await lookupWorkspaceIdByStoreDomain(
+      admin,
+      cleanDomain
+    );
 
     if (!matchedWorkspaceId) {
       console.warn("[embed/content] No matching workspace found for domain:", cleanDomain);
-      return NextResponse.json(
+      return finish(
         { error: "No matching workspace found for store domain", domain: cleanDomain, faqs: [], links: [] },
-        { status: 404, headers: CORS_HEADERS }
+        { status: 404 }
       );
+    }
+
+    if (!cleanHandle || cleanHandle === "current") {
+      return finish({ faqs: [], links: [] });
+    }
+
+    const { data: cached } = await admin
+      .from("embed_page_cache")
+      .select("payload")
+      .eq("workspace_id", matchedWorkspaceId)
+      .eq("domain", cleanDomain)
+      .eq("handle", cleanHandle)
+      .maybeSingle();
+    if (cached?.payload && typeof cached.payload === "object") {
+      return finish(cached.payload);
     }
 
     // 2. Fetch workspace collection prefix & custom widget settings if any
@@ -139,19 +118,10 @@ export async function GET(request: NextRequest) {
       .limit(20);
 
     if (!projects || projects.length === 0) {
-      return NextResponse.json(
-        { faqs: [], links: [] },
-        { headers: CORS_HEADERS }
-      );
+      return finish({ faqs: [], links: [] });
     }
 
     let matchedContent: CollectionContent | null = null;
-
-    // A handle is required. Without it we cannot know which collection page the
-    // widget is running on, and guessing would leak content onto unrelated pages.
-    if (!cleanHandle || cleanHandle === "current") {
-      return NextResponse.json({ faqs: [], links: [] }, { headers: CORS_HEADERS });
-    }
 
     for (const proj of projects) {
       try {
@@ -199,29 +169,31 @@ export async function GET(request: NextRequest) {
     }
 
     if (!matchedContent) {
-      return NextResponse.json(
-        { faqs: [], links: [] },
-        { headers: CORS_HEADERS }
-      );
+      return finish({ faqs: [], links: [] });
     }
 
-    return NextResponse.json(
-      {
-        collectionId: matchedContent.collectionId,
-        seoTitle: matchedContent.seoTitle,
-        seoDescription: matchedContent.seoDescription,
-        collectionDescription: matchedContent.collectionDescription,
-        faqs: Array.isArray(matchedContent.faqs) ? matchedContent.faqs : [],
-        links: Array.isArray(matchedContent.links) ? matchedContent.links : [],
-        widgetSettings: widgetSettings || null,
-      },
-      { headers: CORS_HEADERS }
-    );
+    const payload = {
+      collectionId: matchedContent.collectionId,
+      seoTitle: matchedContent.seoTitle,
+      seoDescription: matchedContent.seoDescription,
+      collectionDescription: matchedContent.collectionDescription,
+      faqs: Array.isArray(matchedContent.faqs) ? matchedContent.faqs : [],
+      links: Array.isArray(matchedContent.links) ? matchedContent.links : [],
+      widgetSettings: widgetSettings || null,
+    };
+    await admin.from("embed_page_cache").upsert({
+      workspace_id: matchedWorkspaceId,
+      domain: cleanDomain,
+      handle: cleanHandle,
+      payload,
+      updated_at: new Date().toISOString(),
+    });
+    return finish(payload);
   } catch (error) {
     console.error("[embed/content] Unexpected error:", error);
-    return NextResponse.json(
+    return finish(
       { error: "Internal server error", faqs: [], links: [] },
-      { status: 500, headers: CORS_HEADERS }
+      { status: 500 }
     );
   }
 }

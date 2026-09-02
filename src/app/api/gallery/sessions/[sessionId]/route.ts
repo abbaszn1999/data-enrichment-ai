@@ -26,6 +26,10 @@ import {
   parseGalleryProjectSettings,
   parseScrapingSettings,
 } from "@/lib/gallery/settings-schema";
+import {
+  jsonByteLength,
+  recordResponseBytes,
+} from "@/lib/observability/metrics";
 
 type Ctx = { params: Promise<{ sessionId: string }> };
 
@@ -207,14 +211,19 @@ export async function GET(request: NextRequest, context: Ctx) {
   }
   const includeSignedUrls =
     request.nextUrl.searchParams.get("includeSignedUrls") !== "0";
+  const signRowIdsParam = request.nextUrl.searchParams.get("signRowIds");
+  const signRowIds = signRowIdsParam
+    ? signRowIdsParam.split(",").map((id) => id.trim()).filter(Boolean)
+    : null;
   const signedUrls =
-    hydratedWorksheet && includeSignedUrls
-      ? await signGalleryWorksheetImages(hydratedWorksheet)
-      : {};
-  return NextResponse.json(
-    { session, worksheet: hydratedWorksheet, signedUrls },
-    { headers: auth.headers }
-  );
+    hydratedWorksheet && signRowIds && signRowIds.length > 0
+      ? await signGalleryWorksheetImages(hydratedWorksheet, 3600, signRowIds)
+      : hydratedWorksheet && includeSignedUrls
+        ? await signGalleryWorksheetImages(hydratedWorksheet)
+        : {};
+  const body = { session, worksheet: hydratedWorksheet, signedUrls };
+  recordResponseBytes("gallery.session", jsonByteLength(body));
+  return NextResponse.json(body, { headers: auth.headers });
 }
 
 /** PATCH /api/gallery/sessions/[sessionId] — update name / worksheet settings / rows */

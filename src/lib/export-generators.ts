@@ -101,11 +101,18 @@ export function generateCSV(data: Record<string, string>[], delimiter = ","): st
 }
 
 export async function generateXLSX(data: Record<string, string>[]): Promise<ArrayBuffer> {
-  const XLSX = await import("xlsx");
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(data);
-  XLSX.utils.book_append_sheet(wb, ws, "Products");
-  return XLSX.write(wb, { type: "array", bookType: "xlsx" });
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Products");
+  const headers = data.length > 0 ? Object.keys(data[0]) : [];
+  if (headers.length > 0) {
+    worksheet.addRow(headers);
+    for (const row of data) {
+      worksheet.addRow(headers.map((header) => row[header] ?? ""));
+    }
+  }
+  const buffer = await workbook.xlsx.writeBuffer();
+  return buffer instanceof ArrayBuffer ? buffer : new Uint8Array(buffer).buffer;
 }
 
 export function downloadBlob(content: string | ArrayBuffer, fileName: string, mimeType: string) {

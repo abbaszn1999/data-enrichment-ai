@@ -2,6 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { getProvider, isProviderSupported } from "@/lib/sync";
+import {
+  deleteWorkspaceDomains,
+  replaceWorkspaceDomains,
+} from "@/lib/embed/workspace-domains";
+import {
+  encryptIntegrationConfig,
+  encryptionConfigured,
+  primaryCredentialFingerprint,
+} from "@/lib/integrations/crypto";
+import { toClientIntegration } from "@/lib/integrations/load";
+import { writeSecurityAuditLog } from "@/lib/security/audit-log";
 
 async function requireAdminWorkspaceMember(workspaceId: string, userId: string) {
   const admin = createAdminClient();
@@ -48,7 +59,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: integrationResult.error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ integration: integrationResult.data ?? null });
+    return NextResponse.json({
+      integration: toClientIntegration(integrationResult.data),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal error";
     return NextResponse.json({ error: message }, { status: message === "Forbidden" ? 403 : 500 });
@@ -106,6 +119,21 @@ export async function POST(request: NextRequest) {
     }
 
     const { baseUrl, config: savedConfig } = providerImpl.buildSavePayload({ config, testResult });
+    if (!encryptionConfigured()) {
+      return NextResponse.json(
+        { error: "INTEGRATION_ENCRYPTION_KEY is not configured" },
+        { status: 500 }
+      );
+    }
+    const envelope = encryptIntegrationConfig(savedConfig);
+    const storedConfig = envelope;
+    const fingerprint = primaryCredentialFingerprint(envelope.hints) || "";
+
+    const { data: previous } = await admin
+      .from("workspace_integrations")
+      .select("id, provider, integration_name")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
 
     const { data: integration, error } = await admin
       .from("workspace_integrations")
@@ -115,7 +143,8 @@ export async function POST(request: NextRequest) {
           provider,
           integration_name: integrationName.trim(),
           base_url: baseUrl,
-          config: savedConfig,
+          config: storedConfig,
+          credential_fingerprint: fingerprint || null,
           status: "connected",
           updated_at: new Date().toISOString(),
         },
@@ -128,7 +157,45 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ integration });
+    try {
+      await replaceWorkspaceDomains(admin, workspaceId, [
+        baseUrl,
+        typeof savedConfig.store_domain === "string" ? savedConfig.store_domain : null,
+        typeof savedConfig.store_url === "string" ? savedConfig.store_url : null,
+        typeof savedConfig.shop === "string" ? savedConfig.shop : null,
+        typeof savedConfig.url === "string" ? savedConfig.url : null,
+        typeof testResult.metadata?.storeDomain === "string"
+          ? testResult.metadata.storeDomain
+          : null,
+        typeof testResult.metadata?.customDomain === "string"
+          ? testResult.metadata.customDomain
+          : null,
+      ]);
+    } catch (domainError) {
+      const message =
+        domainError instanceof Error
+          ? domainError.message
+          : "Failed to index store domain";
+      return NextResponse.json({ error: message }, { status: 409 });
+    }
+
+    await writeSecurityAuditLog(admin, {
+      workspaceId,
+      actorId: user.id,
+      action: "integration.credentials_save",
+      targetId: integration.id,
+      before: previous
+        ? { provider: previous.provider, integration_name: previous.integration_name }
+        : null,
+      after: {
+        provider,
+        integration_name: integrationName.trim(),
+        credential_fingerprint: fingerprint || null,
+      },
+      request,
+    });
+
+    return NextResponse.json({ integration: toClientIntegration(integration) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal error";
     const status = message === "Forbidden" ? 403 : 400;
@@ -150,6 +217,11 @@ export async function DELETE(request: NextRequest) {
     }
 
     const admin = await requireAdminWorkspaceMember(workspaceId, user.id);
+    const { data: existing } = await admin
+      .from("workspace_integrations")
+      .select("id, provider, integration_name")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
     const { error } = await admin
       .from("workspace_integrations")
       .delete()
@@ -158,6 +230,18 @@ export async function DELETE(request: NextRequest) {
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+    await deleteWorkspaceDomains(admin, workspaceId);
+    await writeSecurityAuditLog(admin, {
+      workspaceId,
+      actorId: user.id,
+      action: "integration.disconnect",
+      targetId: existing?.id ?? workspaceId,
+      before: existing
+        ? { provider: existing.provider, integration_name: existing.integration_name }
+        : null,
+      after: null,
+      request,
+    });
     return NextResponse.json({ success: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal error";

@@ -1,4 +1,5 @@
 import type { JobKind } from "./types";
+import { catalogIntelligencePath } from "@/lib/product-modules";
 
 const KIND_LABEL: Record<JobKind, string> = {
   catalog: "Catalog Intelligence",
@@ -17,7 +18,7 @@ export function jobHref(params: {
 }): string {
   const slug = params.workspaceSlug.replace(/^\/+|\/+$/g, "");
   if (params.kind === "catalog") {
-    return `/w/${slug}/import/${params.sessionId}/enrich`;
+    return catalogIntelligencePath(slug, params.sessionId);
   }
   if (params.kind === "gallery") {
     return `/w/${slug}/products-gallery?project=${encodeURIComponent(params.sessionId)}`;

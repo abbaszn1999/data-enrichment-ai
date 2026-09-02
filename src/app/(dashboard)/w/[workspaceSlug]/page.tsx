@@ -62,8 +62,8 @@ function AgentConstellation({ basePath }: { basePath: string }) {
   const agents = [
     { name: "Research", icon: Search, path: "/market-research", x: "4%", y: "12%", delay: 0 },
     { name: "Visuals", icon: Images, path: "/products-gallery", x: "73%", y: "7%", delay: 0.2 },
-    { name: "Store", icon: Bot, path: "/sync", x: "77%", y: "70%", delay: 0.4 },
-    { name: "Catalog", icon: WandSparkles, path: "/import", x: "2%", y: "72%", delay: 0.6 },
+    { name: "Store", icon: Bot, path: "/store-assistant", x: "77%", y: "70%", delay: 0.4 },
+    { name: "Catalog", icon: WandSparkles, path: "/catalog-intelligence", x: "2%", y: "72%", delay: 0.6 },
   ];
   const paths = [
     "M 235 165 C 192 130, 170 100, 120 78",
@@ -390,12 +390,12 @@ export default function WorkspaceDashboardPage() {
       title: "Turn messy data into a living catalog",
       description: "Import, understand and organize every product before your agents act on it.",
       icon: WandSparkles,
-      href: "/import",
+      href: "/catalog-intelligence",
       action: "Start an intelligent import",
       className: "lg:col-span-7",
       surface: "from-[#400095]/15 via-card to-card",
       tools: [
-        { name: "Catalog Intelligence", path: "/import", icon: Upload, note: "Map and enrich spreadsheets with web research" },
+        { name: "Catalog Intelligence", path: "/catalog-intelligence", icon: Upload, note: "Map and enrich spreadsheets with web research" },
         { name: "Products", path: "/products", icon: Package, note: `${stats?.totalProducts ?? 0} products in the master catalog` },
         { name: "Categories", path: "/categories", icon: FolderTree, note: `${stats?.totalCategories ?? 0} categories in your taxonomy` },
       ],
@@ -437,12 +437,12 @@ export default function WorkspaceDashboardPage() {
       title: "Put the store on autopilot",
       description: "Talk to your store, rebuild its navigation and classify new products every day.",
       icon: Bot,
-      href: "/sync",
+      href: "/store-assistant",
       action: "Talk to store assistant",
       className: "lg:col-span-7",
       surface: "from-[#C40000]/15 via-card to-card",
       tools: [
-        { name: "Store Assistant", path: "/sync", icon: Bot, note: "A conversational store operator", locked },
+        { name: "Store Assistant", path: "/store-assistant", icon: Bot, note: "A conversational store operator", locked },
         { name: "Website Restructure", path: "/website-restructure", icon: LayoutTemplate, note: "Rebuild headers through chat", locked },
         { name: "24h Sync", path: "/growth-sync", icon: RefreshCw, note: "Classify every new product automatically", locked },
       ],

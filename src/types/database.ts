@@ -38,6 +38,8 @@ export interface Database {
           cms_type: string;
           collection_prefix: string;
           owner_id: string;
+          catalog_revision: number;
+          deleted_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -56,6 +58,8 @@ export interface Database {
           logo_url?: string | null;
           cms_type?: string;
           collection_prefix?: string;
+          catalog_revision?: number;
+          deleted_at?: string | null;
           updated_at?: string;
         };
       };
@@ -105,6 +109,7 @@ export interface Database {
           integration_name: string;
           base_url: string;
           config: Json;
+          credential_fingerprint: string | null;
           status: "connected";
           created_at: string;
           updated_at: string;
@@ -115,6 +120,7 @@ export interface Database {
           integration_name: string;
           base_url: string;
           config?: Json;
+          credential_fingerprint?: string | null;
           status?: "connected";
         };
         Update: {
@@ -122,13 +128,73 @@ export interface Database {
           integration_name?: string;
           base_url?: string;
           config?: Json;
+          credential_fingerprint?: string | null;
           status?: "connected";
           updated_at?: string;
         };
       };
-      // NOTE: categories, master_products stored in Storage JSON (workspace-files bucket)
-      // See: storage-helpers.ts → CategoryJson, MasterProductJson
-      import_sessions: {
+      workspace_domains: {
+        Row: {
+          workspace_id: string;
+          normalized_domain: string;
+          source: string;
+          created_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          normalized_domain: string;
+          source?: string;
+          created_at?: string;
+        };
+        Update: {
+          workspace_id?: string;
+          normalized_domain?: string;
+          source?: string;
+        };
+      };
+      // NOTE: categories remain Storage JSON. Master catalog rows dual-write
+      // to workspace_products (Week 5) and products.json until other readers migrate.
+      workspace_products: {
+        Row: {
+          workspace_id: string;
+          sku: string;
+          data: Json;
+          meta: Json;
+          search_text: string;
+          updated_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          sku: string;
+          data?: Json;
+          meta?: Json;
+          search_text?: string;
+          updated_at?: string;
+        };
+        Update: {
+          data?: Json;
+          meta?: Json;
+          search_text?: string;
+          updated_at?: string;
+        };
+      };
+      workspace_product_columns: {
+        Row: {
+          workspace_id: string;
+          columns: string[];
+          updated_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          columns?: string[];
+          updated_at?: string;
+        };
+        Update: {
+          columns?: string[];
+          updated_at?: string;
+        };
+      };
+      catalog_sessions: {
         Row: {
           id: string;
           workspace_id: string;
@@ -173,7 +239,40 @@ export interface Database {
           updated_at?: string;
         };
       };
-      // NOTE: import_rows stored in Storage JSON (projects/{sessionId}.json)
+      // Dual-write with projects/{sessionId}.json until other readers migrate.
+      catalog_session_rows: {
+        Row: {
+          session_id: string;
+          row_id: string;
+          row_index: number;
+          status: string;
+          error_message: string | null;
+          original_data: Json;
+          enriched_data: Json;
+          match_type: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          session_id: string;
+          row_id: string;
+          row_index?: number;
+          status?: string;
+          error_message?: string | null;
+          original_data?: Json;
+          enriched_data?: Json;
+          match_type?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          row_index?: number;
+          status?: string;
+          error_message?: string | null;
+          original_data?: Json;
+          enriched_data?: Json;
+          match_type?: string | null;
+          updated_at?: string;
+        };
+      };
       gallery_sessions: {
         Row: {
           id: string;
@@ -232,6 +331,74 @@ export interface Database {
           worksheet_revision?: number;
           settings?: Json;
           settings_revision?: number;
+          updated_at?: string;
+        };
+      };
+      gallery_session_rows: {
+        Row: {
+          session_id: string;
+          row_id: string;
+          row_index: number;
+          status: string;
+          data: Json;
+          updated_at: string;
+        };
+        Insert: {
+          session_id: string;
+          row_id: string;
+          row_index?: number;
+          status?: string;
+          data?: Json;
+          updated_at?: string;
+        };
+        Update: {
+          row_index?: number;
+          status?: string;
+          data?: Json;
+          updated_at?: string;
+        };
+      };
+      visualizer_session_rows: {
+        Row: {
+          session_id: string;
+          row_id: string;
+          row_index: number;
+          status: string;
+          data: Json;
+          updated_at: string;
+        };
+        Insert: {
+          session_id: string;
+          row_id: string;
+          row_index?: number;
+          status?: string;
+          data?: Json;
+          updated_at?: string;
+        };
+        Update: {
+          row_index?: number;
+          status?: string;
+          data?: Json;
+          updated_at?: string;
+        };
+      };
+      embed_page_cache: {
+        Row: {
+          workspace_id: string;
+          domain: string;
+          handle: string;
+          payload: Json;
+          updated_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          domain: string;
+          handle: string;
+          payload?: Json;
+          updated_at?: string;
+        };
+        Update: {
+          payload?: Json;
           updated_at?: string;
         };
       };
@@ -387,7 +554,7 @@ export interface Database {
           id: string;
           workspace_id: string;
           user_id: string;
-          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "sync_agent" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
+          operation: "catalog_intelligence" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "store_assistant" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
           credits_used: number;
           entity_type: string | null;
           entity_id: string | null;
@@ -397,7 +564,7 @@ export interface Database {
         Insert: {
           workspace_id: string;
           user_id: string;
-          operation: "ai_enrichment" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "sync_agent" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
+          operation: "catalog_intelligence" | "ai_image_search" | "ai_column_mapping" | "ai_category_suggest" | "ai_function" | "store_assistant" | "image_classification" | "gallery_google" | "gallery_ai" | "credit_topup" | "monthly_reset";
           credits_used?: number;
           entity_type?: string | null;
           entity_id?: string | null;

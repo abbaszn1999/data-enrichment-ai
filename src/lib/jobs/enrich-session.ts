@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { createCheckpointGate, ENRICH_CHECKPOINT } from "./checkpoint";
 import { JOB_BATCH_SIZE } from "./config";
 import {
   catalogPendingRowIds,
@@ -19,6 +20,8 @@ import {
   loadProjectJsonAdmin,
   saveProjectJsonAdmin,
 } from "./project-json";
+import { catalogRowStoreEnabled } from "@/lib/catalog/flag";
+import { patchCatalogSessionRows } from "@/lib/catalog/session-rows";
 import type { CatalogJobSettings } from "./types";
 
 function splitEnriched(data: Record<string, unknown>): {
@@ -80,32 +83,61 @@ async function runEnrichSessionInner(
   );
   const pending = catalogPendingRowIds(run.target_ids, project.rows, [...processed]);
 
-  let completed = run.completed_count;
-  let failed = run.failed_count;
+  // Durable progress is the last checkpointed blob + processedRowIds, not
+  // whatever heartbeat counts happened to land before a crash.
+  let completed = 0;
+  let failed = 0;
+  for (const rowId of processed) {
+    const row = byId.get(rowId);
+    if (!row) continue;
+    if (row.status === "done") completed += 1;
+    else if (row.status === "error") failed += 1;
+  }
   let pausedNoCredits = false;
   let stopObserved = false;
+  const gate = createCheckpointGate(ENRICH_CHECKPOINT);
 
-  // Serialize every write to the single project.json blob + import_sessions
-  // row so concurrent rows never clobber each other's progress.
+  const persistCold = async () => {
+    settings.processedRowIds = [...processed];
+    const enrichedCount = project.rows.filter((row) => row.status === "done").length;
+    await saveProjectJsonAdmin(run.workspace_id, run.session_id, project, admin);
+    await admin
+      .from("catalog_sessions")
+      .update({
+        enriched_count: enrichedCount,
+        status: "enriching",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", run.session_id)
+      .eq("workspace_id", run.workspace_id);
+    await touchJobHeartbeat(admin, run.id, { completed, failed, settings });
+    gate.markFlushed();
+  };
+
+  // Serialize mutations. Hot state is the session row + heartbeat; the full
+  // project.json blob flushes on the checkpoint budget and on terminal states.
   let writeQueue: Promise<void> = Promise.resolve();
-  const commit = (mutate: () => void): Promise<void> => {
+  const commit = (mutate: () => void, patchedRowId?: string): Promise<void> => {
     const operation = writeQueue.then(async () => {
       mutate();
-      settings.processedRowIds = [...processed];
-      const enrichedCount = project.rows.filter((row) => row.status === "done").length;
-      await saveProjectJsonAdmin(run.workspace_id, run.session_id, project, admin);
-      await admin
-        .from("import_sessions")
-        .update({
-          enriched_count: enrichedCount,
-          status: "enriching",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", run.session_id)
-        .eq("workspace_id", run.workspace_id);
-      // Progress lands in job_runs right after each row so polling/Realtime
-      // clients see it in near real time, not once per JOB_BATCH_SIZE batch.
-      await touchJobHeartbeat(admin, run.id, { completed, failed, settings });
+      if (patchedRowId && catalogRowStoreEnabled()) {
+        const row = byId.get(patchedRowId);
+        if (row) {
+          await patchCatalogSessionRows(admin, run.session_id, [
+            {
+              id: row.id,
+              status: row.status,
+              errorMessage: row.errorMessage,
+              originalData: row.originalData,
+              enrichedData: row.enrichedData,
+              matchType: row.matchType,
+            },
+          ]);
+        }
+      }
+      gate.noteCompletedRow();
+      await touchJobHeartbeat(admin, run.id, { completed, failed });
+      if (gate.shouldFlush()) await persistCold();
     });
     writeQueue = operation.catch(() => undefined);
     return operation;
@@ -196,7 +228,7 @@ async function runEnrichSessionInner(
         row.status = "done";
         row.errorMessage = undefined;
         completed += 1;
-      });
+      }, outcome.rowId);
 
       if (pausedNoCredits) return;
     }
@@ -207,6 +239,7 @@ async function runEnrichSessionInner(
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
   }
   await writeQueue.catch(() => undefined);
+  if (gate.shouldFlush(true)) await persistCold();
 
   if (pausedNoCredits) {
     const paused = await finishJobRun(admin, run.id, {
@@ -230,7 +263,7 @@ async function runEnrichSessionInner(
 
   const enrichedCount = project.rows.filter((row) => row.status === "done").length;
   await admin
-    .from("import_sessions")
+    .from("catalog_sessions")
     .update({
       enriched_count: enrichedCount,
       status: "completed",

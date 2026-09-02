@@ -12,10 +12,19 @@ import {
   getGalleryProjectSettingsFromWorksheet,
   type GallerySession,
 } from "@/lib/gallery/types";
+import {
+  PlanLimitError,
+  assertJobRowQuota,
+  planLimitResponse,
+  upgradeUrlFor,
+} from "@/lib/plan-limits";
+import {
+  UploadLimitError,
+  assertRowCount,
+  assertSpreadsheetFile,
+} from "@/lib/upload-limits";
 
 export const maxDuration = 60;
-const MAX_WORKSHEET_BYTES = 20 * 1024 * 1024;
-const ALLOWED_EXTENSIONS = /\.(xlsx|xls|csv)$/i;
 
 /** GET /api/gallery/sessions?workspaceId= */
 export async function GET(request: NextRequest) {
@@ -59,15 +68,12 @@ export async function POST(request: NextRequest) {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "file is required" }, { status: 400 });
   }
-  if (
-    file.size <= 0 ||
-    file.size > MAX_WORKSHEET_BYTES ||
-    !ALLOWED_EXTENSIONS.test(file.name)
-  ) {
-    return NextResponse.json(
-      { error: "Upload a non-empty XLSX, XLS, or CSV file up to 20 MB" },
-      { status: 400 }
-    );
+  try {
+    assertSpreadsheetFile({ name: file.name, size: file.size }, "gallery");
+  } catch (error) {
+    const message =
+      error instanceof UploadLimitError ? error.message : "Invalid file";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
   if (name.length > 120) {
     return NextResponse.json(
@@ -110,6 +116,32 @@ export async function POST(request: NextRequest) {
       { error: "Worksheet has no data rows" },
       { status: 400, headers: auth.headers }
     );
+  }
+
+  try {
+    assertRowCount(worksheet.rows.length, "gallery");
+    await assertJobRowQuota({
+      workspaceId,
+      rowCount: worksheet.rows.length,
+    });
+  } catch (error) {
+    if (error instanceof UploadLimitError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: 400, headers: auth.headers }
+      );
+    }
+    if (error instanceof PlanLimitError) {
+      const limited = planLimitResponse(
+        error,
+        await upgradeUrlFor(auth.admin, workspaceId)
+      );
+      for (const [key, value] of Object.entries(auth.headers)) {
+        limited.headers.set(key, value);
+      }
+      return limited;
+    }
+    throw error;
   }
 
   const sourcePath = getGallerySourcePath(workspaceId, sessionId, file.name);

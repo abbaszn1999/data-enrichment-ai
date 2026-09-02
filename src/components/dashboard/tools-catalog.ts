@@ -106,7 +106,7 @@ export const BILLING_LABEL: Record<ToolBilling, string> = {
 export const TOOLS: ToolDefinition[] = [
   // ── AI agents (the headline features) ──
   {
-    path: "/sync",
+    path: "/store-assistant",
     name: "Store assistant",
     blurb:
       "Chat with an agent that can read and rewrite products and categories straight in your store.",
@@ -143,7 +143,7 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     path: "/growth-sync",
-    name: "Sync",
+    name: "Growth Sync",
     blurb:
       "Set a rule once and new store products get classified into the right categories automatically, every 24 hours.",
     icon: RefreshCw,
@@ -191,7 +191,7 @@ export const TOOLS: ToolDefinition[] = [
 
   // ── Catalog / data ──
   {
-    path: "/import",
+    path: "/catalog-intelligence",
     name: "Catalog Intelligence",
     blurb:
       "Upload a messy spreadsheet and let a web-searching agent map the columns and fill the gaps.",

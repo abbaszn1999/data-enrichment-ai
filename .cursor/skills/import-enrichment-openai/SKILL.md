@@ -1,18 +1,18 @@
 ---
-name: import-enrichment-openai
+name: catalog-intelligence-openai
 description: >-
-  Import AI-tab product enrichment via OpenAI Responses (Terra/Sol + web_search).
-  Use when changing Import enrich, /api/enrich, src/lib/enrich, enrichment models,
-  or replacing Gemini/Serper in the Import AI path.
+  Catalog Intelligence AI-tab product enrichment via OpenAI Responses (Terra/Sol + web_search).
+  Use when changing Catalog Intelligence enrich, /api/catalog-intelligence, src/lib/enrich,
+  enrichment models, or replacing Gemini/Serper in the Catalog Intelligence AI path.
 ---
 
-# Import Enrichment (OpenAI)
+# Catalog Intelligence (OpenAI)
 
 ## Scope
 
-- **In scope:** Import → Enrich sidebar **AI tab** only (`/api/enrich`, `src/lib/enrich/*`).
-- **Out of scope:** Functions tab, Sync agent, Gallery/Visualizer/Classify.
-- **Do not** use Gemini or Serper in the Import enrich path.
+- **In scope:** Catalog Intelligence → workspace sidebar **AI tab** only (`/api/catalog-intelligence`, `src/lib/enrich/*`).
+- **Out of scope:** Functions tab, Store Assistant, Gallery/Visualizer/Classify.
+- **Do not** use Gemini or Serper in the Catalog Intelligence enrich path.
 
 ## Contract
 
@@ -38,24 +38,3 @@ description: >-
 - **Images:** `imageUrls` must be exact `image_result.image_url` values from the tool. Never accept `source_website_url` / HTML pages. Reject non-image URLs via `looksLikeDirectImageUrl`. Pad up to `imageCount` from the tool pool.
 - **Sources:** Keep only URLs present in tool sources/citations.
 - **Categories:** When a store allowlist is provided, `sanitizeCategoriesOutput` keeps only exact name/fullPath matches; inventing taxonomies → empty string. Prompt + schema require allowlist-only or `""`.
-- Do not invent product specs absent from row data or search results.
-
-## Layout
-
-```
-src/lib/enrich/
-  index.ts       public API
-  types.ts       settings + OpenAI response shapes
-  models.ts      tier → model / effort / context
-  policy.ts      tool_choice + content types
-  schema.ts      dynamic JSON schema
-  prompt.ts      agent instructions (allowlist + image_url rules)
-  categories.ts  store category allowlist sanitize
-  parse.ts       merge structured output + tool results
-  openai.ts      Responses client
-  agent.ts       enrichProductRow orchestrator
-```
-
-## Credits
-
-Price with `calculateOpenAiWebSearchCost`. Deduct via existing `/api/enrich` RPC (`ai_enrichment` / `import_row`).

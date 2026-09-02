@@ -51,10 +51,19 @@ export function JobInbox({ workspaceId }: { workspaceId: string }) {
 
   useEffect(() => {
     void loadInbox();
-    const timer = window.setInterval(() => {
+    const tick = () => {
+      if (document.visibilityState === "hidden") return;
       void loadInbox();
-    }, 15_000);
-    return () => window.clearInterval(timer);
+    };
+    const timer = window.setInterval(tick, 15_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void loadInbox();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [loadInbox]);
 
   const markRead = async (ids?: string[]) => {

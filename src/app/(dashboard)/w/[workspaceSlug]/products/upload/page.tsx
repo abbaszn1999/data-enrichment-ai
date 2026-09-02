@@ -15,8 +15,14 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { useWorkspaceContext } from "../../workspace-context";
-import { loadProductsJson, saveProductsJson, type MasterProductJson } from "@/lib/storage-helpers";
-import { parseExcelFile } from "@/lib/excel";
+import type { MasterProductJson } from "@/lib/storage-helpers";
+import { parseExcelFile, extractEmbeddedWorkbookImages } from "@/lib/excel";
+import { uploadImageToStorage } from "@/lib/storage-helpers";
+import {
+  UploadLimitError,
+  assertRowCount,
+  assertSpreadsheetFile,
+} from "@/lib/upload-limits";
 
 function detectSkuColumn(columns: string[]): string | null {
   for (const col of columns) {
@@ -35,7 +41,11 @@ export default function ProductUploadPage() {
   const [step, setStep] = useState(1);
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [parsedData, setParsedData] = useState<{ columns: string[]; rows: any[] } | null>(null);
+  const [parsedData, setParsedData] = useState<{
+    columns: string[];
+    rows: Record<string, string>[];
+    headerRowIndex: number;
+  } | null>(null);
   const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([]);
   const [skuColumn, setSkuColumn] = useState<string>("");
   const [dupMode, setDupMode] = useState<"skip" | "update" | "new">("skip");
@@ -45,11 +55,18 @@ export default function ProductUploadPage() {
   const [quality, setQuality] = useState({ emptyRows: 0, emptyCells: 0, duplicateSkus: 0 });
 
   const handleFileSelect = async (selectedFile: File) => {
+    try {
+      assertSpreadsheetFile(selectedFile, "products");
+    } catch (err) {
+      alert(err instanceof UploadLimitError ? err.message : "Invalid file");
+      return;
+    }
     setFile(selectedFile);
     try {
       const buffer = await selectedFile.arrayBuffer();
       const parsed = await parseExcelFile(buffer);
       if (parsed && parsed.rows.length > 0) {
+        assertRowCount(parsed.rows.length, "products");
         const columns = parsed.columns;
         const rows = parsed.rows;
 
@@ -72,14 +89,19 @@ export default function ProductUploadPage() {
         const skus = detectedSku ? rows.map((r) => r.originalData[detectedSku]).filter(Boolean) : [];
         const duplicateSkus = skus.length - new Set(skus).size;
 
-        setParsedData({ columns, rows: rows.map((r) => r.originalData) });
+        setParsedData({
+          columns,
+          rows: rows.map((r) => r.originalData),
+          headerRowIndex: parsed.headerRowIndex,
+        });
         setPreviewRows(preview);
         setQuality({ emptyRows, emptyCells, duplicateSkus });
         setStep(2);
       }
     } catch (err) {
       console.error("Parse error:", err);
-      alert("Failed to parse file. Please check the format.");
+      alert(err instanceof Error ? err.message : "Failed to parse file. Please check the format.");
+      setFile(null);
     }
   };
 
@@ -90,15 +112,38 @@ export default function ProductUploadPage() {
 
     try {
       // 1. Build products from parsed rows
+      const rows = parsedData.rows.map((row) => ({ ...row }));
+      let columns = [...parsedData.columns];
+      const buffer = await file.arrayBuffer();
+      const embedded = await extractEmbeddedWorkbookImages(buffer);
+      if (embedded.length > 0) {
+        const pictureCol =
+          columns.find((c) => {
+            const upper = c.toUpperCase();
+            return upper === "PICTURE" || upper === "IMAGE" || upper === "PHOTO";
+          }) ?? "PICTURE";
+        if (!columns.includes(pictureCol)) columns = [...columns, pictureCol];
+        for (const image of embedded) {
+          const dataIndex = image.sheetRow - parsedData.headerRowIndex - 1;
+          if (dataIndex < 0 || dataIndex >= rows.length) continue;
+          const path = `${workspace.id}/catalog/images/${crypto.randomUUID()}.${image.ext}`;
+          await uploadImageToStorage(
+            path,
+            new Blob([image.bytes as BlobPart], { type: image.mime })
+          );
+          rows[dataIndex][pictureCol] = `vz-storage:${path}`;
+        }
+      }
+
       const newProducts: MasterProductJson[] = [];
       let emptySkuCount = 0;
 
-      for (const row of parsedData.rows) {
+      for (const row of rows) {
         const sku = row[skuColumn];
         if (!sku) { emptySkuCount++; continue; }
 
         const data: Record<string, any> = {};
-        for (const col of parsedData.columns) {
+        for (const col of columns) {
           data[col] = row[col] ?? "";
         }
 
@@ -106,64 +151,26 @@ export default function ProductUploadPage() {
       }
       setProgress(30);
 
-      // 2. Load existing products from Storage
-      const existing = await loadProductsJson(workspace.id);
-      const existingMap = new Map(existing.map((p) => [p.sku, p]));
-      setProgress(50);
-
-      // 3. Apply duplicate handling mode
-      let imported = 0;
-      let skippedCount = 0;
-      let updatedCount = 0;
-      const finalProducts = [...existing]; // Start with existing products
-
-      if (dupMode === "skip") {
-        // Skip Duplicates: only add products with NEW SKUs
-        for (const p of newProducts) {
-          if (existingMap.has(p.sku)) {
-            skippedCount++;
-          } else {
-            finalProducts.push(p);
-            imported++;
-          }
-        }
-      } else if (dupMode === "update") {
-        // Update Existing: overwrite data if SKU exists, add if new
-        // Build a map from finalProducts for in-place updates
-        const finalMap = new Map(finalProducts.map((p, i) => [p.sku, i]));
-        for (const p of newProducts) {
-          if (finalMap.has(p.sku)) {
-            const idx = finalMap.get(p.sku)!;
-            // Merge: new data overwrites old, keep enrichedData
-            finalProducts[idx] = {
-              ...finalProducts[idx],
-              data: { ...finalProducts[idx].data, ...p.data },
-            };
-            updatedCount++;
-          } else {
-            finalProducts.push(p);
-            imported++;
-          }
-        }
-      } else if (dupMode === "new") {
-        // Import as New: add all rows regardless of duplicates
-        for (const p of newProducts) {
-          if (existingMap.has(p.sku)) {
-            // Add with a unique suffix to avoid overwriting
-            finalProducts.push({ ...p, sku: `${p.sku}_dup_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` });
-          } else {
-            finalProducts.push(p);
-          }
-          imported++;
-        }
-      }
-      setProgress(80);
-
-      // 4. Save to Storage
-      await saveProductsJson(workspace.id, finalProducts);
+      const res = await fetch("/api/products/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          products: newProducts,
+          dupMode,
+          emptySkuCount,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Import failed");
       setProgress(100);
 
-      setImportResult({ imported, skipped: emptySkuCount + skippedCount, errors: 0, updated: updatedCount });
+      setImportResult({
+        imported: result.imported ?? 0,
+        skipped: result.skipped ?? emptySkuCount,
+        errors: 0,
+        updated: result.updated ?? 0,
+      });
       setStep(4);
     } catch (err: any) {
       alert(err?.message || "Import failed");

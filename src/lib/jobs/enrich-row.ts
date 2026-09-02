@@ -35,7 +35,7 @@ export type EnrichRowOutcome =
     };
 
 export function catalogCreditIdempotencyKey(runId: string, rowId: string): string {
-  return `ai_enrichment:${runId}:${rowId}`;
+  return `catalog_intelligence:${runId}:${rowId}`;
 }
 
 /** Rows the user targeted, minus ones this same run already finished. `done` from an earlier run is not skipped. */
@@ -165,8 +165,8 @@ export async function chargeCatalogRow(params: {
     workspaceId: params.workspaceId,
     actorUserId: params.settings.actorUserId,
     amount: params.credits,
-    operation: "ai_enrichment",
-    entityType: params.settings.kind === "plp" ? "import_plp_row" : "import_row",
+    operation: "catalog_intelligence",
+    entityType: params.settings.kind === "plp" ? "catalog_plp_row" : "catalog_row",
     entityId: params.rowId,
     idempotencyKey: catalogCreditIdempotencyKey(params.runId, params.rowId),
     details: {

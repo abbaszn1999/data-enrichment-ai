@@ -129,19 +129,42 @@ export function buildUnifiedProductText(prod: MarketResearchProduct): string {
  * Evaluates semantic cosine angle between the collection keyword and each unified product document.
  * Returns candidate products strictly meeting the similarity threshold (no artificial fallbacks or fake matches).
  */
-export function computeCollectionProductMatches(
+type ProductTermVector = {
+  id: string;
+  frequencies: Map<string, number>;
+  mag: number;
+};
+
+export function buildProductTermIndex(
+  products: MarketResearchProduct[]
+): ProductTermVector[] {
+  const index: ProductTermVector[] = [];
+  for (const prod of products) {
+    const docTokens = tokenize(buildUnifiedProductText(prod));
+    if (docTokens.length === 0) continue;
+    const frequencies = new Map<string, number>();
+    for (const token of docTokens) {
+      frequencies.set(token, (frequencies.get(token) ?? 0) + 1);
+    }
+    let magSq = 0;
+    for (const freq of frequencies.values()) magSq += freq * freq;
+    const mag = Math.sqrt(magSq);
+    if (mag === 0) continue;
+    index.push({ id: prod.id, frequencies, mag });
+  }
+  return index;
+}
+
+export function scoreCollectionAgainstIndex(
   collectionName: string,
   targetKeyword: string,
-  products: MarketResearchProduct[],
+  index: ProductTermVector[],
   minCosineThreshold = 0.01
 ): CollectionProductMatch[] {
-  if (!products || products.length === 0) return [];
-
   const queryText = `${collectionName} ${targetKeyword}`;
   const queryTokens = tokenize(queryText);
   if (queryTokens.length === 0) return [];
 
-  // Term frequencies for query
   const queryFrequencies = new Map<string, number>();
   for (const t of queryTokens) {
     queryFrequencies.set(t, (queryFrequencies.get(t) ?? 0) + 1);
@@ -155,35 +178,13 @@ export function computeCollectionProductMatches(
   if (queryMag === 0) return [];
 
   const candidates: CollectionProductMatch[] = [];
-
-  for (const prod of products) {
-    const prodDoc = buildUnifiedProductText(prod);
-    const docTokens = tokenize(prodDoc);
-    if (docTokens.length === 0) continue;
-
-    const docFrequencies = new Map<string, number>();
-    for (const t of docTokens) {
-      docFrequencies.set(t, (docFrequencies.get(t) ?? 0) + 1);
-    }
-
-    let docMagSq = 0;
-    for (const freq of docFrequencies.values()) {
-      docMagSq += freq * freq;
-    }
-    const docMag = Math.sqrt(docMagSq);
-    if (docMag === 0) continue;
-
-    // Standard unweighted dot product
+  for (const prod of index) {
     let dot = 0;
     for (const [token, qFreq] of queryFrequencies) {
-      const dFreq = docFrequencies.get(token);
-      if (dFreq) {
-        dot += qFreq * dFreq;
-      }
+      const dFreq = prod.frequencies.get(token);
+      if (dFreq) dot += qFreq * dFreq;
     }
-
-    const cosineRaw = dot / (queryMag * docMag);
-
+    const cosineRaw = dot / (queryMag * prod.mag);
     if (cosineRaw >= minCosineThreshold) {
       const normalizedScore = Math.min(
         0.98,
@@ -195,9 +196,23 @@ export function computeCollectionProductMatches(
       });
     }
   }
-
   candidates.sort((a, b) => b.score - a.score);
   return candidates;
+}
+
+export function computeCollectionProductMatches(
+  collectionName: string,
+  targetKeyword: string,
+  products: MarketResearchProduct[],
+  minCosineThreshold = 0.01
+): CollectionProductMatch[] {
+  if (!products || products.length === 0) return [];
+  return scoreCollectionAgainstIndex(
+    collectionName,
+    targetKeyword,
+    buildProductTermIndex(products),
+    minCosineThreshold
+  );
 }
 
 const BATCH_SIZE = 10;
@@ -259,6 +274,8 @@ export async function runStage5CollectionClustering(
     }
   >();
 
+  const productIndex = buildProductTermIndex(products);
+
   for (const kw of input.keywords) {
     const rawKeyword = kw.keyword.trim();
     const title = toTitleCase(rawKeyword);
@@ -273,7 +290,7 @@ export async function runStage5CollectionClustering(
         defaultNiche;
     }
 
-    const candidates = computeCollectionProductMatches(title, rawKeyword, products);
+    const candidates = scoreCollectionAgainstIndex(title, rawKeyword, productIndex);
 
     keywordCandidateMap.set(kw.id, {
       title,

@@ -35,8 +35,8 @@ export default function DemoLoginPage() {
           <div className="p-2.5 rounded-xl bg-primary mb-3">
             <FileSpreadsheet className="h-7 w-7 text-primary-foreground" />
           </div>
-          <h1 className="text-xl font-bold tracking-tight">DataSheet AI</h1>
-          <p className="text-xs text-muted-foreground mt-1">Product Data Enrichment Platform</p>
+          <h1 className="text-xl font-bold tracking-tight">Autommerce Platform</h1>
+          <p className="text-xs text-muted-foreground mt-1">AI Commerce Operations</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">

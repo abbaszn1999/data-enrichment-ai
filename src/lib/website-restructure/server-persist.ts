@@ -239,18 +239,25 @@ const BUILD_LEASE_MS = 3 * 60 * 1000;
 export async function tryLeaseWrProjectBuild(
   admin: Admin,
   workspaceId: string,
-  projectId: string
+  projectId: string,
+  userId?: string
 ): Promise<boolean> {
   const nowIso = new Date().toISOString();
   const leaseUntil = new Date(Date.now() + BUILD_LEASE_MS).toISOString();
-  const { data, error } = await admin
+  let query = admin
     .from("wr_projects")
-    .update({ phase: "building", build_lease_until: leaseUntil, last_error: null })
+    .update({
+      phase: "building",
+      build_lease_until: leaseUntil,
+      last_error: null,
+      ...(userId ? { build_lease_by: userId } : {}),
+    })
     .eq("workspace_id", workspaceId)
-    .eq("id", projectId)
-    .or(`build_lease_until.is.null,build_lease_until.lt.${nowIso}`)
-    .select("id")
-    .maybeSingle();
+    .eq("id", projectId);
+  const leaseFilter = userId
+    ? `build_lease_until.is.null,build_lease_until.lt.${nowIso},build_lease_by.eq.${userId}`
+    : `build_lease_until.is.null,build_lease_until.lt.${nowIso}`;
+  const { data, error } = await query.or(leaseFilter).select("id").maybeSingle();
   if (error) throw error;
   return Boolean(data);
 }
@@ -267,6 +274,7 @@ export async function releaseWrProjectBuild(
     const update: Record<string, unknown> = {
       phase: result.nextPhase,
       build_lease_until: null,
+      build_lease_by: null,
       last_error: null,
     };
     if (typeof result.activeVersion === "number") update.active_version = result.activeVersion;
@@ -290,7 +298,12 @@ export async function releaseWrProjectBuild(
   }
   const { error } = await admin
     .from("wr_projects")
-    .update({ phase: result.nextPhase, build_lease_until: null, last_error: result.error.slice(0, 2000) })
+    .update({
+      phase: result.nextPhase,
+      build_lease_until: null,
+      build_lease_by: null,
+      last_error: result.error.slice(0, 2000),
+    })
     .eq("workspace_id", workspaceId)
     .eq("id", projectId);
   if (error) throw error;

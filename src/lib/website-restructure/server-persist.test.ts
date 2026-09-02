@@ -88,7 +88,7 @@ describe("tryLeaseWrProjectBuild", () => {
 
   it("throws when the update itself errors", async () => {
     const { admin } = mockAdmin([chain({ data: null, error: { message: "connection reset" } })]);
-    await expect(tryLeaseWrProjectBuild(admin, "ws-1", "p1")).rejects.toThrow("connection reset");
+    await expect(tryLeaseWrProjectBuild(admin, "ws-1", "p1", "user-1")).rejects.toThrow("connection reset");
   });
 });
 

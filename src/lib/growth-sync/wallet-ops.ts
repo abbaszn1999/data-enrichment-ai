@@ -11,7 +11,7 @@ import type { WalletRpcResult } from "@/lib/wallet/types";
  * enough (well under a cent for a 100-product batch) that the hold is tiny.
  */
 
-export const GROWTH_SYNC_WALLET_MODULE = "Sync";
+export const GROWTH_SYNC_WALLET_MODULE = "growth-sync";
 
 /** Round to the wallet's stored precision (matches `wallet_transactions.amount_usd`). */
 export function roundUsd(value: number): number {

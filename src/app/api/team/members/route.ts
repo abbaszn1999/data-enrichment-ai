@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { writeSecurityAuditLog } from "@/lib/security/audit-log";
 
 // ─── In-memory caches ────────────────────────────────────
 // Cache auth user emails so we don't call listUsers() on every request
@@ -154,6 +155,16 @@ export async function PATCH(request: NextRequest) {
     // Bust team cache so next GET reflects the change
     invalidateTeamCache(target.workspace_id);
 
+    await writeSecurityAuditLog(admin, {
+      workspaceId: target.workspace_id,
+      actorId: user.id,
+      action: "member.role_change",
+      targetId: memberId,
+      before: { role: target.role, user_id: target.user_id },
+      after: { role, user_id: target.user_id },
+      request,
+    });
+
     return NextResponse.json({ success: true });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || "Internal error" }, { status: 500 });
@@ -212,6 +223,16 @@ export async function DELETE(request: NextRequest) {
 
     // Bust team cache so next GET reflects the change
     invalidateTeamCache(target.workspace_id);
+
+    await writeSecurityAuditLog(admin, {
+      workspaceId: target.workspace_id,
+      actorId: user.id,
+      action: "member.remove",
+      targetId: memberId,
+      before: { role: target.role, user_id: target.user_id },
+      after: null,
+      request,
+    });
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

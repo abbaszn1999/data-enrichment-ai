@@ -268,7 +268,7 @@ export function Sidebar() {
     }
     if (workspaceId) {
       try {
-        await fetch("/api/enrich/cancel", {
+        await fetch("/api/catalog-intelligence/cancel", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -349,7 +349,7 @@ export function Sidebar() {
       sessionId: projectId,
     });
     if (enrichRunIdRef.current) params.set("runId", enrichRunIdRef.current);
-    const res = await fetch(`/api/enrich/status?${params.toString()}`, {
+    const res = await fetch(`/api/catalog-intelligence/status?${params.toString()}`, {
       cache: "no-store",
     });
     if (!res.ok) return false;
@@ -476,7 +476,7 @@ export function Sidebar() {
       : [];
 
     try {
-      const response = await fetch("/api/enrich/start", {
+      const response = await fetch("/api/catalog-intelligence/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
