@@ -3,6 +3,7 @@
 import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  AlertCircle,
   AlertTriangle,
   Check,
   ChevronRight,
@@ -20,6 +21,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InsufficientFundsDialog } from "./insufficient-funds-dialog";
 import {
   Dialog,
   DialogContent,
@@ -167,15 +169,46 @@ export function StageSeedsPanel({
 
   const allVisibleSelected =
     visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.id));
-  const unprobedSelected = selectedRows.filter(
-    (row) => !probes[row.id] && !probing.has(row.id)
+
+  const [insufficientFundsOpen, setInsufficientFundsOpen] = useState(false);
+  const [insufficientFundsAction, setInsufficientFundsAction] = useState("");
+  const [insufficientFundsAmount, setInsufficientFundsAmount] = useState(0);
+
+  const targetSeedsToProbe = useMemo(
+    () =>
+      selectedRows.filter(
+        (row) => (!probes[row.id] || probes[row.id].failed) && !probing.has(row.id)
+      ),
+    [selectedRows, probes, probing]
   );
-  const probeCost = estimateProbeCostUsd(unprobedSelected.length);
+  const failedSelected = useMemo(
+    () => selectedRows.filter((row) => probes[row.id]?.failed && !probing.has(row.id)),
+    [selectedRows, probes, probing]
+  );
+  const unprobedSelected = useMemo(
+    () => selectedRows.filter((row) => !probes[row.id] && !probing.has(row.id)),
+    [selectedRows, probes, probing]
+  );
+  const probeCost = estimateProbeCostUsd(targetSeedsToProbe.length);
   const canAffordExtract =
     walletBalance == null || walletBalance >= estimate.usd;
   const staleSelected = selectedRows.filter(
-    (row) => probes[row.id] && isProbeStale(probes[row.id], market)
+    (row) => probes[row.id] && !probes[row.id].failed && isProbeStale(probes[row.id], market)
   );
+
+  const handleCheckDemand = (rowIds: string[]) => {
+    if (readOnly || rowIds.length === 0) return;
+    const cost = estimateProbeCostUsd(rowIds.length);
+    if (walletBalance != null && walletBalance < cost) {
+      setInsufficientFundsAction(
+        `Demand check for ${rowIds.length} seed${rowIds.length === 1 ? "" : "s"}`
+      );
+      setInsufficientFundsAmount(cost);
+      setInsufficientFundsOpen(true);
+      return;
+    }
+    onProbe(rowIds);
+  };
 
   if (preparing) {
     return (
@@ -307,35 +340,52 @@ export function StageSeedsPanel({
             <p className="ml-auto text-[11px] text-muted-foreground">
               View only — demand checks are closed.
             </p>
-          ) : staleSelected.length > 0 ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-8 gap-1.5 text-xs"
-              onClick={() => onProbe(staleSelected.map((r) => r.id))}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              Re-check {staleSelected.length} stale
-            </Button>
-          ) : null}
-          {readOnly ? null : (
-          <Button
-            type="button"
-            size="sm"
-            className="ml-auto h-8 gap-1.5 text-xs"
-            disabled={unprobedSelected.length === 0 || probing.size > 0}
-            onClick={() => onProbe(unprobedSelected.map((r) => r.id))}
-          >
-            {probing.size > 0 ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Search className="h-3.5 w-3.5" />
-            )}
-            Check demand
-            {unprobedSelected.length > 0 ? ` (${unprobedSelected.length})` : ""}
-            {probeCost > 0 ? ` · ${formatUsd(probeCost)}` : ""}
-          </Button>
+          ) : (
+            <div className="ml-auto flex items-center gap-2">
+              {staleSelected.length > 0 ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 gap-1.5 text-xs text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                  onClick={() => handleCheckDemand(staleSelected.map((r) => r.id))}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Re-check {staleSelected.length} stale
+                </Button>
+              ) : null}
+
+              {failedSelected.length > 0 && unprobedSelected.length === 0 ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs border-destructive/40 text-destructive hover:bg-destructive/10"
+                  disabled={probing.size > 0}
+                  onClick={() => handleCheckDemand(failedSelected.map((r) => r.id))}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Retry {failedSelected.length} failed
+                </Button>
+              ) : null}
+
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 gap-1.5 text-xs bg-[#400095] hover:bg-[#6B358D] text-white dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                disabled={targetSeedsToProbe.length === 0 || probing.size > 0}
+                onClick={() => handleCheckDemand(targetSeedsToProbe.map((r) => r.id))}
+              >
+                {probing.size > 0 ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Search className="h-3.5 w-3.5" />
+                )}
+                Check demand
+                {targetSeedsToProbe.length > 0 ? ` (${targetSeedsToProbe.length})` : ""}
+                {probeCost > 0 ? ` · ${formatUsd(probeCost)}` : ""}
+              </Button>
+            </div>
           )}
         </div>
 
@@ -441,12 +491,12 @@ export function StageSeedsPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/70 bg-card">
+      <div className="min-h-0 flex-1 overflow-auto custom-scrollbar rounded-xl border border-border/70 bg-card">
         {view === "rows" ? (
-          <Table>
-            <TableHeader className="sticky top-0 z-10 bg-card">
+          <Table className="w-full min-w-[880px]">
+            <TableHeader className="sticky top-0 z-10 bg-card shadow-xs">
               <TableRow className="hover:bg-transparent">
-                <TableHead className="w-9">
+                <TableHead className="w-10 shrink-0">
                   <SelectBox
                     state={
                       allVisibleSelected
@@ -459,28 +509,28 @@ export function StageSeedsPanel({
                     label="Select all visible seeds"
                   />
                 </TableHead>
-                <TableHead className="text-xs whitespace-nowrap">
+                <TableHead className="min-w-[160px] text-xs font-semibold whitespace-nowrap">
                   Broad seed
                 </TableHead>
-                <TableHead className="text-xs whitespace-nowrap">
+                <TableHead className="min-w-[130px] text-xs font-semibold whitespace-nowrap">
                   Canonical
                 </TableHead>
-                <TableHead className="text-xs whitespace-nowrap">
+                <TableHead className="min-w-[160px] text-xs font-semibold whitespace-nowrap">
                   Collection
                 </TableHead>
-                <TableHead className="text-xs whitespace-nowrap">
+                <TableHead className="min-w-[80px] text-xs font-semibold whitespace-nowrap">
                   Scope
                 </TableHead>
-                <TableHead className="text-xs whitespace-nowrap text-right">
+                <TableHead className="min-w-[100px] text-xs font-semibold whitespace-nowrap text-right">
                   Raw keywords
                 </TableHead>
-                <TableHead className="text-xs whitespace-nowrap text-right">
+                <TableHead className="min-w-[80px] text-xs font-semibold whitespace-nowrap text-right">
                   Volume
                 </TableHead>
-                <TableHead className="text-xs whitespace-nowrap text-right">
+                <TableHead className="min-w-[70px] text-xs font-semibold whitespace-nowrap text-right">
                   Price
                 </TableHead>
-                <TableHead className="text-xs whitespace-nowrap text-right">
+                <TableHead className="min-w-[80px] text-xs font-semibold whitespace-nowrap text-right">
                   Cost share
                 </TableHead>
               </TableRow>
@@ -521,7 +571,7 @@ export function StageSeedsPanel({
                           on && "bg-primary/5"
                         )}
                       >
-                        <TableCell className="w-9">
+                        <TableCell className="w-10 shrink-0">
                           <SelectBox
                             state={on ? "all" : "none"}
                             onClick={
@@ -530,7 +580,7 @@ export function StageSeedsPanel({
                             label={`Select ${row.broadSeedVariation}`}
                           />
                         </TableCell>
-                        <TableCell className="text-sm font-medium whitespace-nowrap">
+                        <TableCell className="min-w-[160px] text-sm font-medium whitespace-nowrap">
                           <span className="inline-flex items-center gap-1.5">
                             <ChevronRight
                               className={cn(
@@ -546,13 +596,13 @@ export function StageSeedsPanel({
                             ) : null}
                           </span>
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                        <TableCell className="min-w-[130px] text-xs text-muted-foreground whitespace-nowrap">
                           {row.canonicalNicheSeed}
                         </TableCell>
-                        <TableCell className="text-xs whitespace-nowrap">
+                        <TableCell className="min-w-[160px] text-xs whitespace-nowrap">
                           {row.selectedCollection}
                         </TableCell>
-                        <TableCell className="whitespace-nowrap">
+                        <TableCell className="min-w-[80px] whitespace-nowrap">
                           <Badge
                             variant="outline"
                             className={`text-[10px] font-medium ${scopeMatchClass(row.scopeMatch)}`}
@@ -560,7 +610,7 @@ export function StageSeedsPanel({
                             {row.scopeMatch}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-xs tabular-nums text-right whitespace-nowrap">
+                        <TableCell className="min-w-[100px] text-xs tabular-nums text-right whitespace-nowrap">
                           <ProbeCell
                             probe={probe}
                             probing={isProbing}
@@ -568,7 +618,7 @@ export function StageSeedsPanel({
                             value={probe?.rawKeywords}
                           />
                         </TableCell>
-                        <TableCell className="text-xs tabular-nums text-right whitespace-nowrap">
+                        <TableCell className="min-w-[80px] text-xs tabular-nums text-right whitespace-nowrap">
                           <ProbeCell
                             probe={probe}
                             probing={isProbing}
@@ -576,10 +626,10 @@ export function StageSeedsPanel({
                             value={probe?.searchVolume}
                           />
                         </TableCell>
-                        <TableCell className="text-xs tabular-nums text-right whitespace-nowrap">
+                        <TableCell className="min-w-[70px] text-xs tabular-nums text-right whitespace-nowrap">
                           {probe && !probe.failed ? formatUsd(price) : "—"}
                         </TableCell>
-                        <TableCell className="text-xs tabular-nums text-right whitespace-nowrap">
+                        <TableCell className="min-w-[80px] text-xs tabular-nums text-right whitespace-nowrap">
                           {share === null ? (
                             "—"
                           ) : (
@@ -601,7 +651,7 @@ export function StageSeedsPanel({
                               row={row}
                               probe={probe}
                               probing={isProbing}
-                              onProbe={() => onProbe([row.id])}
+                              onProbe={() => handleCheckDemand([row.id])}
                               readOnly={readOnly}
                             />
                           </TableCell>
@@ -881,8 +931,20 @@ export function StageSeedsPanel({
               <Button
                 type="button"
                 size="sm"
-                className="ml-auto h-8 text-xs"
-                onClick={() => setConfirmOpen(true)}
+                className="ml-auto h-8 text-xs bg-[#400095] hover:bg-[#6B358D] text-white dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                onClick={() => {
+                  if (walletBalance != null && !canAffordExtract) {
+                    setInsufficientFundsAction(
+                      `Keyword extraction for ${
+                        selectedRows.filter((r) => probes[r.id] && !probes[r.id].failed).length
+                      } seeds`
+                    );
+                    setInsufficientFundsAmount(estimate.usd);
+                    setInsufficientFundsOpen(true);
+                    return;
+                  }
+                  setConfirmOpen(true);
+                }}
                 disabled={estimate.rows === 0 || committed}
               >
                 {committed
@@ -898,10 +960,21 @@ export function StageSeedsPanel({
               is {formatUsd(5)} each.
             </p>
             {walletBalance != null && !canAffordExtract ? (
-              <p className="text-[11px] text-destructive">
-                Wallet balance {formatUsd(walletBalance)} is below the estimate.
-                Add funds or trim the selection.
-              </p>
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
+                <span>
+                  Wallet balance {formatUsd(walletBalance)} is below the estimate ({formatUsd(estimate.usd)}).
+                </span>
+                <Link href={walletHref || "/wallet"} target="_blank">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-[11px] gap-1 border-destructive/40 text-destructive hover:bg-destructive/15 shrink-0"
+                  >
+                    <Wallet className="h-3 w-3" />
+                    Top up
+                  </Button>
+                </Link>
+              </div>
             ) : null}
             </>
             )}
@@ -956,6 +1029,26 @@ export function StageSeedsPanel({
               Estimate {formatUsd(estimate.usd)}
             </span>
           </div>
+
+          {!canAffordExtract ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>Wallet balance is below the estimate</span>
+              </div>
+              <Link href={walletHref || "/wallet"} target="_blank">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1 border-destructive/40 text-destructive hover:bg-destructive/15 shrink-0"
+                >
+                  <Wallet className="h-3 w-3" />
+                  Top up
+                </Button>
+              </Link>
+            </div>
+          ) : null}
+
           <DialogFooter>
             <Button
               type="button"
@@ -971,12 +1064,22 @@ export function StageSeedsPanel({
                 setConfirmOpen(false);
                 onConfirmSpend();
               }}
+              className="bg-[#400095] hover:bg-[#6B358D] text-white dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
             >
               Start extract
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <InsufficientFundsDialog
+        open={insufficientFundsOpen}
+        onOpenChange={setInsufficientFundsOpen}
+        requiredAmount={insufficientFundsAmount}
+        currentBalance={walletBalance ?? 0}
+        actionName={insufficientFundsAction}
+        walletHref={walletHref}
+      />
     </div>
   );
 }
@@ -1102,10 +1205,24 @@ function SeedDetail({
           </p>
         </div>
       ) : probe?.failed ? (
-        <p className="text-[11px] text-destructive">
-          The demand check failed for this seed. Nothing was charged — try again
-          or drop the term.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-2.5">
+          <p className="text-[11px] text-destructive leading-relaxed">
+            The demand check failed for this seed. Nothing was charged — try again
+            or drop the term.
+          </p>
+          {!readOnly && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1.5 text-[11px] border-destructive/40 text-destructive hover:bg-destructive/10 shrink-0"
+              onClick={onProbe}
+            >
+              <RefreshCw className="h-3 w-3" />
+              Retry check
+            </Button>
+          )}
+        </div>
       ) : readOnly ? (
         <p className="text-[11px] text-muted-foreground">No demand check on this seed.</p>
       ) : (

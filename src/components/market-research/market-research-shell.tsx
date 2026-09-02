@@ -46,6 +46,7 @@ import {
 import {
   actualExtractCostUsd,
   collectionPushCostUsd,
+  estimateProbeCostUsd,
 } from "@/lib/market-research/cost";
 import { assignUuidProjectIds } from "@/lib/market-research/project-state";
 import {
@@ -78,6 +79,7 @@ import { ProjectsSidebar } from "./projects-sidebar";
 import { StageScopePanel } from "./stage-scope-panel";
 import { StageSelectPanel } from "./stage-select-panel";
 import { StageSeedsPanel } from "./stage-seeds-panel";
+import { InsufficientFundsDialog } from "./insufficient-funds-dialog";
 import { DeepWorkspace } from "./deep-workspace";
 import { WorkspaceStepper } from "./workspace-stepper";
 import {
@@ -238,6 +240,17 @@ export function MarketResearchShell() {
   const persistReady = useRef(false);
   const persistRemote = useRef(false);
   const skipPersistSave = useRef(true);
+
+  const [insufficientFundsDialog, setInsufficientFundsDialog] = useState<{
+    open: boolean;
+    requiredAmount: number;
+    currentBalance: number | null;
+    actionName?: string;
+  }>({
+    open: false,
+    requiredAmount: 0,
+    currentBalance: 0,
+  });
 
   const [hydrated, setHydrated] = useState(false);
   const [projects, setProjects] = useState<MarketResearchProject[]>(() =>
@@ -1687,6 +1700,18 @@ export function MarketResearchShell() {
     const targets = stage3Rows.filter((row) => rowIds.includes(row.id));
     if (targets.length === 0) return;
 
+    const totalEstCost = estimateProbeCostUsd(targets.length);
+    const balance = await previewBalance(workspaceId);
+    if (balance < totalEstCost) {
+      setInsufficientFundsDialog({
+        open: true,
+        requiredAmount: totalEstCost,
+        currentBalance: balance,
+        actionName: `Demand check for ${targets.length} seed${targets.length === 1 ? "" : "s"}`,
+      });
+      return;
+    }
+
     const gen = ++probeGen.current;
     setProbingIds(targets.map((row) => row.id));
     appendAgent(projectId, PROBE_BEATS[0].text);
@@ -1758,7 +1783,20 @@ export function MarketResearchShell() {
       } catch (error) {
         if (probeGen.current !== gen) return;
         failedChunks++;
-        lastErrorMessage = error instanceof Error ? error.message : "Could not retrieve seed metrics.";
+        const msg = error instanceof Error ? error.message : "Could not retrieve seed metrics.";
+        lastErrorMessage = msg;
+        if (
+          msg.toLowerCase().includes("balance") ||
+          msg.toLowerCase().includes("funds") ||
+          msg.includes("402")
+        ) {
+          setInsufficientFundsDialog({
+            open: true,
+            requiredAmount: totalEstCost,
+            currentBalance: wallet?.balance ?? 0,
+            actionName: `Demand check for ${targets.length} seed${targets.length === 1 ? "" : "s"}`,
+          });
+        }
         const failedResult: Record<string, SeedProbe> = {};
         for (const row of chunk) {
           failedResult[row.id] = {
@@ -1843,8 +1881,11 @@ export function MarketResearchShell() {
     const projectId = activeProject.id;
     const balance = await previewBalance(workspaceId);
     if (balance < selectionEstimate.usd) {
-      toast.error("Not enough wallet balance", {
-        description: `This extract is estimated at ${formatUsd(selectionEstimate.usd)}. Add funds, or trim the selection.`,
+      setInsufficientFundsDialog({
+        open: true,
+        requiredAmount: selectionEstimate.usd,
+        currentBalance: balance,
+        actionName: `Keyword extraction for ${selectedSeedRows.length} seed${selectedSeedRows.length === 1 ? "" : "s"}`,
       });
       return;
     }
@@ -2222,8 +2263,19 @@ export function MarketResearchShell() {
         : clusterSelectionByProject[projectId] ?? [];
     if (targetIds.length === 0) return;
 
-    setPushingCollectionsByProject((prev) => ({ ...prev, [projectId]: true }));
     const usd = collectionPushCostUsd(targetIds.length);
+    const balance = await previewBalance(workspaceId);
+    if (balance < usd) {
+      setInsufficientFundsDialog({
+        open: true,
+        requiredAmount: usd,
+        currentBalance: balance,
+        actionName: `Publishing ${targetIds.length} collection${targetIds.length === 1 ? "" : "s"} to store`,
+      });
+      return;
+    }
+
+    setPushingCollectionsByProject((prev) => ({ ...prev, [projectId]: true }));
 
     try {
       await pushCollectionsApi(workspaceId, projectId, targetIds);
@@ -2252,12 +2304,21 @@ export function MarketResearchShell() {
         ...prev,
         [projectId]: false,
       }));
-      toast.error("Not enough wallet balance", {
-        description:
-          error instanceof Error
-            ? error.message
-            : `Publishing costs ${formatUsd(usd)}. Add funds or select fewer collections.`,
-      });
+      const msg = error instanceof Error ? error.message : `Publishing costs ${formatUsd(usd)}. Add funds or select fewer collections.`;
+      if (
+        msg.toLowerCase().includes("balance") ||
+        msg.toLowerCase().includes("funds") ||
+        msg.includes("402")
+      ) {
+        setInsufficientFundsDialog({
+          open: true,
+          requiredAmount: usd,
+          currentBalance: wallet?.balance ?? 0,
+          actionName: `Publishing ${targetIds.length} collection${targetIds.length === 1 ? "" : "s"} to store`,
+        });
+      } else {
+        toast.error("Publish failed", { description: msg });
+      }
     }
   };
 
@@ -3687,6 +3748,17 @@ export function MarketResearchShell() {
           canAdmin={canAdmin}
         />
       ) : null}
+
+      <InsufficientFundsDialog
+        open={insufficientFundsDialog.open}
+        onOpenChange={(open) =>
+          setInsufficientFundsDialog((prev) => ({ ...prev, open }))
+        }
+        requiredAmount={insufficientFundsDialog.requiredAmount}
+        currentBalance={insufficientFundsDialog.currentBalance}
+        actionName={insufficientFundsDialog.actionName}
+        walletHref={`/w/${slug}/wallet`}
+      />
     </div>
   );
 }

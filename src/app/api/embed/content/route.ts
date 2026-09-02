@@ -24,7 +24,10 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+  // Widget style is edited in Customize and merchants expect it live on the
+  // next page load, so keep any shared/CDN cache short. widget.js also keeps
+  // its own in-memory cache per page load, which this header does not affect.
+  "Cache-Control": "public, max-age=30, s-maxage=60, stale-while-revalidate=300",
 };
 
 export async function OPTIONS() {
@@ -95,19 +98,24 @@ export async function GET(request: NextRequest) {
       .eq("domain", cleanDomain)
       .eq("handle", cleanHandle)
       .maybeSingle();
-    if (cached?.payload && typeof cached.payload === "object") {
-      return finish(cached.payload);
-    }
 
-    // 2. Fetch workspace collection prefix & custom widget settings if any
+    // Widget style (FAQ/links shape, colors, fonts) is edited far more often
+    // than the FAQ/link content itself, and merchants expect a Customize save
+    // to show up on the very next page load. So even on a cache hit we still
+    // pull the workspace's current widget_settings and stamp it over whatever
+    // was frozen into the cached payload, instead of trusting the stale copy.
     const { data: wsRow } = await admin
       .from("workspaces")
       .select("collection_prefix, widget_settings")
       .eq("id", matchedWorkspaceId)
       .maybeSingle();
+    const widgetSettings = wsRow?.widget_settings ?? null;
+
+    if (cached?.payload && typeof cached.payload === "object") {
+      return finish({ ...cached.payload, widgetSettings });
+    }
 
     const prefix = (wsRow?.collection_prefix ?? "AI").trim() || "AI";
-    const widgetSettings = wsRow?.widget_settings;
 
     // 3. Find recent active projects in this workspace
     const { data: projects } = await admin
