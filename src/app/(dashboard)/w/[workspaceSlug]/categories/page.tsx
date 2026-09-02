@@ -30,7 +30,7 @@ import { Badge } from "@/components/ui/badge";
 import { useWorkspaceContext } from "../workspace-context";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useRole } from "@/hooks/use-role";
-import { loadCategoriesJson, type CategoryJson } from "@/lib/storage-helpers";
+import { type CategoryJson } from "@/lib/storage-helpers";
 
 import { parseExcelFile } from "@/lib/excel";
 import {
@@ -118,13 +118,25 @@ export default function CategoriesPage() {
   useEffect(() => {
     if (!workspace) return;
     Promise.all([
-      loadCategoriesJson(workspace.id),
       fetch(`/api/categories?workspaceId=${workspace.id}`).then((r) => r.json()).catch(() => ({})),
       fetch(`/api/categories/counts?workspaceId=${workspace.id}`).then((r) => r.json()).catch(() => ({})),
     ])
-      .then(([cats, meta, counts]) => {
-        setCategories(cats.map(toCategory));
-        if (typeof meta?.revision === "number") setTaxonomyRevision(meta.revision);
+      .then(([catsRes, counts]) => {
+        const rawList = Array.isArray(catsRes?.categories) ? catsRes.categories : [];
+        setCategories(
+          rawList.map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            slug: c.slug,
+            parentId: c.parentId ?? null,
+            parent_id: c.parentId ?? null,
+            originalId: c.originalId ?? null,
+            description: c.description,
+            sort_order: c.sortOrder ?? c.sort_order,
+            attributes: c.attributes,
+          }))
+        );
+        if (typeof catsRes?.revision === "number") setTaxonomyRevision(catsRes.revision);
         if (counts?.counts && typeof counts.counts === "object") {
           setProductCounts(counts.counts as Record<string, number>);
         }

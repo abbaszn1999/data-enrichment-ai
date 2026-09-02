@@ -773,6 +773,13 @@ export default function SettingsPage() {
                       </p>
                     </div>
                   )}
+
+                  {integrationError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <span>{integrationError}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

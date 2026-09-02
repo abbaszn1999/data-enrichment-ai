@@ -28,7 +28,7 @@ export const UPLOAD_LIMITS = {
   visualizer: {
     maxBytesXlsx: 20 * MB,
     maxBytesCsv: 20 * MB,
-    maxRows: 1_000,
+    maxRows: 5_000,
     depth: null as number | null,
   },
 } as const;

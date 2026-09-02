@@ -9,6 +9,7 @@ import {
   loadCategoriesRawJsonServer,
   saveJsonToStorageServer,
   loadJsonFromStorageServer,
+  invalidateCachedCounts,
 } from "@/lib/storage-helpers-server";
 import {
   getCategoriesRawStoragePath,
@@ -77,6 +78,9 @@ export async function GET(request: NextRequest) {
       originalId: cat.originalId ?? null,
       parentName: cat.parentId ? idMap.get(cat.parentId)?.name : undefined,
       fullPath: buildFullPath(cat),
+      description: cat.description,
+      sortOrder: cat.sortOrder,
+      attributes: cat.attributes,
     }));
 
     // Build a tree structure for UI
@@ -187,6 +191,7 @@ export async function PUT(request: NextRequest) {
     count: categories.length,
     ts: Date.now(),
   });
+  invalidateCachedCounts(workspaceId);
 
   return NextResponse.json({ ok: true, revision: nextRevision, count: categories.length });
 }

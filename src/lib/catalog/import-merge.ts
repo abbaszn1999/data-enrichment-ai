@@ -12,7 +12,9 @@ export function mergeImportedProducts(params: {
   skipped: number;
   updated: number;
 } {
-  const existingMap = new Map(params.existing.map((p) => [p.sku, p]));
+  const existingMap = new Map<string, MasterProductJson>(
+    params.existing.map((p) => [p.sku, p])
+  );
   const products = [...params.existing];
   let imported = 0;
   let skipped = 0;
@@ -20,10 +22,13 @@ export function mergeImportedProducts(params: {
 
   if (params.dupMode === "skip") {
     for (const p of params.incoming) {
-      if (existingMap.has(p.sku)) {
+      const sku = p.sku?.trim();
+      if (!sku || existingMap.has(sku)) {
         skipped++;
       } else {
-        products.push(p);
+        const item = sku === p.sku ? p : { ...p, sku };
+        products.push(item);
+        existingMap.set(sku, item);
         imported++;
       }
     }
@@ -31,9 +36,16 @@ export function mergeImportedProducts(params: {
   }
 
   if (params.dupMode === "update") {
-    const indexBySku = new Map(products.map((p, i) => [p.sku, i]));
+    const indexBySku = new Map<string, number>(
+      products.map((p, i) => [p.sku, i])
+    );
     for (const p of params.incoming) {
-      const idx = indexBySku.get(p.sku);
+      const sku = p.sku?.trim();
+      if (!sku) {
+        skipped++;
+        continue;
+      }
+      const idx = indexBySku.get(sku);
       if (idx !== undefined) {
         products[idx] = {
           ...products[idx],
@@ -41,23 +53,39 @@ export function mergeImportedProducts(params: {
         };
         updated++;
       } else {
-        products.push(p);
-        indexBySku.set(p.sku, products.length - 1);
+        const item = sku === p.sku ? p : { ...p, sku };
+        products.push(item);
+        indexBySku.set(sku, products.length - 1);
         imported++;
       }
     }
     return { products, imported, skipped, updated };
   }
 
+  // dupMode === "new"
+  const existingSkus = new Set<string>(params.existing.map((p) => p.sku));
   for (const p of params.incoming) {
-    if (existingMap.has(p.sku)) {
+    const sku = p.sku?.trim();
+    if (!sku) {
+      skipped++;
+      continue;
+    }
+    if (existingSkus.has(sku)) {
+      let counter = 1;
+      let newSku = `${sku}_dup_${counter}`;
+      while (existingSkus.has(newSku)) {
+        counter++;
+        newSku = `${sku}_dup_${counter}`;
+      }
+      existingSkus.add(newSku);
       products.push({
         ...p,
-        sku: `${p.sku}_dup_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        sku: newSku,
       });
     } else {
-      products.push(p);
-      existingMap.set(p.sku, p);
+      existingSkus.add(sku);
+      const item = sku === p.sku ? p : { ...p, sku };
+      products.push(item);
     }
     imported++;
   }
@@ -69,11 +97,17 @@ export function incomingQuotaDelta(
   incoming: MasterProductJson[],
   dupMode: ProductDupMode
 ): number {
-  if (dupMode === "update") {
-    return incoming.filter((p) => !existingSkus.has(p.sku)).length;
+  if (dupMode === "update" || dupMode === "skip") {
+    const seen = new Set<string>();
+    let count = 0;
+    for (const p of incoming) {
+      const sku = p.sku?.trim();
+      if (sku && !existingSkus.has(sku) && !seen.has(sku)) {
+        seen.add(sku);
+        count++;
+      }
+    }
+    return count;
   }
-  if (dupMode === "skip") {
-    return incoming.filter((p) => !existingSkus.has(p.sku)).length;
-  }
-  return incoming.length;
+  return incoming.filter((p) => Boolean(p.sku?.trim())).length;
 }

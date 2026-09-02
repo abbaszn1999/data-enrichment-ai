@@ -161,13 +161,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  try {
-    await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet, 0);
-  } catch (error) {
-    await auth.admin.storage.from("workspace-files").remove([sourcePath]);
-    throw error;
-  }
-
+  // Insert session in database first so child table foreign keys (gallery_session_rows) succeed.
   const { data: session, error: insertErr } = await auth.admin
     .from("gallery_sessions")
     .insert({
@@ -191,9 +185,27 @@ export async function POST(request: NextRequest) {
   if (insertErr) {
     await auth.admin.storage
       .from("workspace-files")
-      .remove([sourcePath, storagePath]);
+      .remove([sourcePath]);
     return NextResponse.json(
       { error: insertErr.message },
+      { status: 500, headers: auth.headers }
+    );
+  }
+
+  try {
+    await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet, 0);
+  } catch (error) {
+    await auth.admin.from("gallery_sessions").delete().eq("id", sessionId);
+    await auth.admin.storage
+      .from("workspace-files")
+      .remove([sourcePath, storagePath]);
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to save gallery worksheet",
+      },
       { status: 500, headers: auth.headers }
     );
   }

@@ -27,8 +27,8 @@ describe("upload limits", () => {
   it("caps rows per flow", () => {
     expect(() => assertRowCount(50_001, "products")).toThrow(/50,000/);
     expect(() => assertRowCount(5_001, "gallery")).toThrow(/5,000/);
-    expect(() => assertRowCount(1_001, "visualizer")).toThrow(/1,000/);
-    expect(() => assertRowCount(1_000, "visualizer")).not.toThrow();
+    expect(() => assertRowCount(5_001, "visualizer")).toThrow(/5,000/);
+    expect(() => assertRowCount(5_000, "visualizer")).not.toThrow();
   });
 
   it("uses the CSV ceiling when the name ends in .csv", () => {

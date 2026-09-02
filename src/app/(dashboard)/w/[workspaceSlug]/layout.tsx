@@ -99,9 +99,12 @@ export default function WorkspaceLayout({
 
   const basePath = `/w/${slug}`;
 
-  // Hide workspace nav sidebar on enrichment tool (it has its own left panel).
+  // Hide workspace nav sidebar on enrichment workbench tool (it has its own left panel).
   // Keep the top app header visible so credits / workspace / user stay accessible.
-  const isEnrichPage = /^\/w\/[^/]+\/catalog-intelligence\/[^/]+$/.test(pathname);
+  // Exclude /new so the intake form can scroll normally with the sidebar intact.
+  const isEnrichPage =
+    /^\/w\/[^/]+\/catalog-intelligence\/[^/]+$/.test(pathname) &&
+    !pathname.endsWith("/new");
   const isSyncPage =
     pathname === `${basePath}/store-assistant` || pathname.startsWith(`${basePath}/store-assistant/`);
   const isMarketResearchPage = pathname.includes("/market-research");

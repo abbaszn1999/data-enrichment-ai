@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { productsRowStoreEnabled } from "./flag";
 import {
+  dedupeProductsBySku,
   extractProductColumns,
   productSearchText,
   productToRow,
@@ -83,5 +84,58 @@ describe("products row store helpers", () => {
 
     expect(incomingQuotaDelta(new Set(["A"]), incoming, "skip")).toBe(1);
     expect(incomingQuotaDelta(new Set(["A"]), incoming, "new")).toBe(2);
+  });
+
+  it("handles duplicate SKUs within the incoming file itself without producing duplicate keys", () => {
+    const existing = [{ sku: "A", data: { Title: "Old A" } }];
+    const incomingWithDups = [
+      { sku: "B", data: { Title: "First B" } },
+      { sku: "B", data: { Title: "Second B" } },
+      { sku: "C", data: { Title: "First C" } },
+      { sku: "A", data: { Title: "Incoming A" } },
+    ];
+
+    // Skip mode: ignores subsequent duplicates in incoming
+    const skipped = mergeImportedProducts({
+      existing,
+      incoming: incomingWithDups,
+      dupMode: "skip",
+    });
+    expect(skipped.imported).toBe(2); // First B, First C
+    expect(skipped.skipped).toBe(2); // Second B (duplicate of First B), Incoming A (already in existing)
+    expect(skipped.products.map((p) => p.sku)).toEqual(["A", "B", "C"]);
+    expect(new Set(skipped.products.map((p) => p.sku)).size).toBe(3);
+
+    // Update mode: updates previously inserted/existing
+    const updated = mergeImportedProducts({
+      existing,
+      incoming: incomingWithDups,
+      dupMode: "update",
+    });
+    expect(updated.products.map((p) => p.sku)).toEqual(["A", "B", "C"]);
+    expect(updated.products.find((p) => p.sku === "B")?.data.Title).toBe("Second B");
+    expect(new Set(updated.products.map((p) => p.sku)).size).toBe(3);
+
+    // New mode: generates unique non-conflicting SKUs
+    const newMode = mergeImportedProducts({
+      existing,
+      incoming: incomingWithDups,
+      dupMode: "new",
+    });
+    expect(newMode.imported).toBe(4);
+    const newSkus = newMode.products.map((p) => p.sku);
+    expect(new Set(newSkus).size).toBe(newSkus.length); // All SKUs are unique
+  });
+
+  it("dedupeProductsBySku ensures all items have unique SKUs", () => {
+    const dups = [
+      { sku: "SKU-1", data: { Title: "First" } },
+      { sku: "SKU-1", data: { Title: "Second" } },
+      { sku: "SKU-2", data: { Title: "Other" } },
+    ];
+    const unique = dedupeProductsBySku(dups);
+    expect(unique).toHaveLength(2);
+    expect(unique.map((p) => p.sku)).toEqual(["SKU-1", "SKU-2"]);
+    expect(unique[0].data.Title).toBe("Second");
   });
 });

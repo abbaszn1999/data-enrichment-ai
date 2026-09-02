@@ -2,7 +2,6 @@
  * Server-side storage helpers for API routes.
  * Uses supabase-server (cookies-based) instead of supabase-browser.
  */
-import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import type { ProjectJson, MasterProductJson, CategoryJson, ImageClassificationJson } from "@/lib/storage-helpers";
 import { getCategoriesStoragePath, getCategoriesRawStoragePath, getImageClassificationResultPath } from "@/lib/storage-helpers";
@@ -12,8 +11,8 @@ import { countWorkspaceProducts, replaceWorkspaceProducts } from "@/lib/catalog/
 const BUCKET = "workspace-files";
 
 export async function loadJsonFromStorageServer<T = unknown>(storagePath: string): Promise<T | null> {
-  const supabase = await createClient();
-  const { data, error } = await supabase.storage
+  const admin = createAdminClient();
+  const { data, error } = await admin.storage
     .from(BUCKET)
     .download(storagePath);
   if (error) {
@@ -25,9 +24,9 @@ export async function loadJsonFromStorageServer<T = unknown>(storagePath: string
 }
 
 export async function saveJsonToStorageServer(storagePath: string, data: unknown): Promise<void> {
-  const supabase = await createClient();
+  const admin = createAdminClient();
   const blob = new Blob([JSON.stringify(data)], { type: "application/octet-stream" });
-  const { error } = await supabase.storage
+  const { error } = await admin.storage
     .from(BUCKET)
     .upload(storagePath, blob, { cacheControl: "0", upsert: true });
   if (error) throw error;

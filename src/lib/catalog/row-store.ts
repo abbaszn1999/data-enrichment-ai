@@ -95,14 +95,30 @@ export async function loadProductColumns(
   return Array.isArray(columns) ? columns : [];
 }
 
+export function dedupeProductsBySku(
+  products: MasterProductJson[]
+): MasterProductJson[] {
+  const map = new Map<string, MasterProductJson>();
+  for (const p of products) {
+    const sku = p.sku?.trim();
+    if (sku) {
+      map.set(sku, sku === p.sku ? p : { ...p, sku });
+    }
+  }
+  return Array.from(map.values());
+}
+
 export async function replaceWorkspaceProducts(
   admin: SupabaseClient,
   workspaceId: string,
   products: MasterProductJson[]
 ): Promise<void> {
-  const keepSkus = products.map((p) => p.sku).filter(Boolean);
-  for (let i = 0; i < products.length; i += UPSERT_CHUNK) {
-    const chunk = products.slice(i, i + UPSERT_CHUNK).map((p) => productToRow(workspaceId, p));
+  const uniqueProducts = dedupeProductsBySku(products);
+  const keepSkus = uniqueProducts.map((p) => p.sku);
+  for (let i = 0; i < uniqueProducts.length; i += UPSERT_CHUNK) {
+    const chunk = uniqueProducts
+      .slice(i, i + UPSERT_CHUNK)
+      .map((p) => productToRow(workspaceId, p));
     const { error } = await admin.from("workspace_products").upsert(chunk, {
       onConflict: "workspace_id,sku",
     });
@@ -114,7 +130,7 @@ export async function replaceWorkspaceProducts(
   });
   if (pruneError) throw new Error(pruneError.message);
 
-  const columns = extractProductColumns(products);
+  const columns = extractProductColumns(uniqueProducts);
   const { error: colError } = await admin.from("workspace_product_columns").upsert(
     {
       workspace_id: workspaceId,
@@ -205,8 +221,11 @@ export async function upsertWorkspaceProducts(
   workspaceId: string,
   products: MasterProductJson[]
 ): Promise<void> {
-  for (let i = 0; i < products.length; i += UPSERT_CHUNK) {
-    const chunk = products.slice(i, i + UPSERT_CHUNK).map((p) => productToRow(workspaceId, p));
+  const uniqueProducts = dedupeProductsBySku(products);
+  for (let i = 0; i < uniqueProducts.length; i += UPSERT_CHUNK) {
+    const chunk = uniqueProducts
+      .slice(i, i + UPSERT_CHUNK)
+      .map((p) => productToRow(workspaceId, p));
     const { error } = await admin.from("workspace_products").upsert(chunk, {
       onConflict: "workspace_id,sku",
     });
