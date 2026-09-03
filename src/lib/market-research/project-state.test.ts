@@ -24,6 +24,7 @@ describe("market-research project state", () => {
     persisted.stage1DoneIds = [id];
     persisted.openedMaxByProject[id] = 3;
     persisted.extractRowsByProject[id] = 40;
+    persisted.extractIdByProject[id] = "44444444-4444-4444-8444-444444444444";
     persisted.keywordsByProject[id] = [
       {
         id: "k1",
@@ -64,6 +65,9 @@ describe("market-research project state", () => {
     expect(back.stage1DoneIds).toContain(id);
     expect(back.keywordsByProject[id]?.[0]?.keyword).toBe("buy sunglasses");
     expect(back.extractRowsByProject[id]).toBe(40);
+    expect(back.extractIdByProject[id]).toBe(
+      "44444444-4444-4444-8444-444444444444"
+    );
   });
 
   it("assigns uuids to legacy local project ids", () => {

@@ -64,6 +64,8 @@ export type MarketResearchPersisted = {
   extractChargeByProject: Record<string, number>;
   extractRowsByProject: Record<string, number>;
   keywordsByProject: Record<string, ExtractedKeyword[]>;
+  /** Last keyword extract id per project, so cancel/resume survive a reload. */
+  extractIdByProject: Record<string, string>;
   /** Stage 7 article plan rows. */
   strategyByProject: Record<string, StrategyArticle[]>;
   /** Stage 7 generated article bodies keyed by article id. */
@@ -111,6 +113,7 @@ export function emptyMarketResearchState(): MarketResearchPersisted {
     extractChargeByProject: {},
     extractRowsByProject: {},
     keywordsByProject: {},
+    extractIdByProject: {},
     strategyByProject: {},
     articlesByProject: {},
   };
@@ -192,6 +195,7 @@ export function loadMarketResearchState(
         extractChargeByProject: {},
         extractRowsByProject: {},
         keywordsByProject: {},
+        extractIdByProject: {},
         strategyByProject: {},
         articlesByProject: {},
       };
@@ -257,6 +261,7 @@ export function loadMarketResearchState(
       extractChargeByProject: isNumberMap(parsed.extractChargeByProject),
       extractRowsByProject: isNumberMap(parsed.extractRowsByProject),
       keywordsByProject: isKeywordMap(parsed.keywordsByProject),
+      extractIdByProject: isStringMap(parsed.extractIdByProject),
       strategyByProject: isArrayMap<StrategyArticle>(parsed.strategyByProject),
       articlesByProject: isObjectMap<GeneratedArticle>(parsed.articlesByProject),
     };
@@ -300,6 +305,15 @@ function isNumberMap(raw: unknown): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof value === "number" && Number.isFinite(value)) out[id] = value;
+  }
+  return out;
+}
+
+function isStringMap(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string" && value.trim()) out[id] = value;
   }
   return out;
 }

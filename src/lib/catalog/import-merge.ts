@@ -2,10 +2,36 @@ import type { MasterProductJson } from "@/lib/storage-helpers";
 
 export type ProductDupMode = "skip" | "update" | "new";
 
+export function isBlankImportValue(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  return false;
+}
+
+export function mergeImportedProductData(
+  existing: Record<string, unknown> | undefined,
+  incoming: Record<string, unknown> | undefined,
+  clearEmptyFields: boolean
+): Record<string, unknown> {
+  const current = existing ?? {};
+  const next = incoming ?? {};
+  if (clearEmptyFields) {
+    return { ...current, ...next };
+  }
+  const merged: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(next)) {
+    if (isBlankImportValue(value)) continue;
+    merged[key] = value;
+  }
+  return merged;
+}
+
 export function mergeImportedProducts(params: {
   existing: MasterProductJson[];
   incoming: MasterProductJson[];
   dupMode: ProductDupMode;
+  /** When updating an existing SKU, blank incoming cells erase catalog values. Default: keep existing. */
+  clearEmptyFields?: boolean;
 }): {
   products: MasterProductJson[];
   imported: number;
@@ -19,6 +45,7 @@ export function mergeImportedProducts(params: {
   let imported = 0;
   let skipped = 0;
   let updated = 0;
+  const clearEmptyFields = params.clearEmptyFields === true;
 
   if (params.dupMode === "skip") {
     for (const p of params.incoming) {
@@ -49,7 +76,7 @@ export function mergeImportedProducts(params: {
       if (idx !== undefined) {
         products[idx] = {
           ...products[idx],
-          data: { ...products[idx].data, ...p.data },
+          data: mergeImportedProductData(products[idx].data, p.data, clearEmptyFields),
         };
         updated++;
       } else {

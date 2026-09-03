@@ -19,6 +19,7 @@ import { executeGalleryRow, type GalleryRowTaskInput } from "../src/lib/jobs/gal
 import { runGallerySession } from "../src/lib/jobs/gallery-session";
 import { executeVisualizerRow, type VisualizerRowTaskInput } from "../src/lib/jobs/visualizer-row";
 import { runVisualizerSession } from "../src/lib/jobs/visualizer-session";
+import { runMrExtractSession } from "../src/lib/jobs/mr-extract-session";
 import {
   ENRICH_ROW_TIMEOUT_SECONDS,
   SESSION_TIMEOUT_SECONDS,
@@ -114,6 +115,19 @@ export const visualizerSession = task(
     await runVisualizerSession(runId, {
       processRow: (rowId) => ctx.run(visualizerRow, { runId, rowId }),
     });
+    return { ok: true, runId };
+  }
+);
+
+export const mrExtractSession = task(
+  {
+    name: "mrExtractSession",
+    timeoutSeconds: SESSION_TIMEOUT_SECONDS,
+    plan: JOB_TASK_PLAN,
+    retry: sessionRetry,
+  },
+  async (_ctx: TaskContext, runId: string) => {
+    await runMrExtractSession(runId);
     return { ok: true, runId };
   }
 );

@@ -4,8 +4,16 @@ import {
   jsonError,
   requireMrWrite,
 } from "@/lib/market-research/api-schema";
-import { getKeywordProvider } from "@/lib/market-research/providers";
-import { settleExtractBilling } from "@/lib/market-research/wallet-ops";
+import {
+  abortActiveMrExtractRuns,
+  loadMrExtractHeader,
+  settleHeldExtract,
+} from "@/lib/market-research/extract-advance";
+import {
+  finishJobRun,
+  loadActiveJobForSession,
+  requestJobCancel,
+} from "@/lib/jobs/repo";
 
 export const maxDuration = 30;
 
@@ -25,56 +33,54 @@ export async function POST(request: NextRequest) {
   const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
-  const { data: extract } = await auth.admin
-    .from("mr_extracts")
-    .select(
-      "id, workspace_id, project_id, held_usd, actual_usd, rows_returned, billing_status, status"
-    )
-    .eq("id", parsed.data.extractId)
-    .eq("workspace_id", parsed.data.workspaceId)
-    .eq("project_id", parsed.data.projectId)
-    .maybeSingle();
+  const extract = await loadMrExtractHeader(auth.admin, {
+    workspaceId: parsed.data.workspaceId,
+    projectId: parsed.data.projectId,
+    extractId: parsed.data.extractId,
+  });
   if (!extract) return jsonError("Extract not found", 404);
 
-  const { data: runs } = await auth.admin
-    .from("mr_runs")
-    .select("id, apify_run_id, status, rows_returned")
-    .eq("extract_id", extract.id);
+  const active = await loadActiveJobForSession(auth.admin, {
+    kind: "mr_extract",
+    sessionId: extract.id,
+    workspaceId: parsed.data.workspaceId,
+  });
+  const cancelId = active?.id || extract.job_run_id;
+  if (cancelId) {
+    await requestJobCancel(auth.admin, cancelId, parsed.data.workspaceId).catch(
+      () => undefined
+    );
+  }
 
-  const provider = getKeywordProvider();
-  await Promise.all(
-    (runs ?? []).map(async (run) => {
-      if (!run.apify_run_id) return;
-      if (run.status === "succeeded" || run.status === "failed" || run.status === "aborted") {
-        return;
-      }
-      await provider.abortKeywordIdeas(run.apify_run_id).catch(() => undefined);
-      await auth.admin
-        .from("mr_runs")
-        .update({ status: "aborted" })
-        .eq("id", run.id);
-    })
-  );
-
-  const rowsReturned = (runs ?? []).reduce(
+  const runs = await abortActiveMrExtractRuns(auth.admin, extract.id);
+  const rowsReturned = runs.reduce(
     (sum, run) => sum + (Number(run.rows_returned) || 0),
     0
   );
-  let settledUsd = Number(extract.actual_usd) || 0;
-  let billingPending = false;
-  if (extract.billing_status === "held") {
-    const settled = await settleExtractBilling(auth.admin, {
-      extract,
-      userId: auth.user.id,
-      rowsReturned,
-      status: "aborted",
-    });
-    if (settled.pending) billingPending = true;
-    else settledUsd = settled.actualUsd;
+  const settled = await settleHeldExtract(auth.admin, {
+    extract,
+    userId: auth.user.id,
+    rowsReturned,
+    status: "aborted",
+    runs,
+  });
+
+  if (cancelId) {
+    await finishJobRun(auth.admin, cancelId, {
+      status: "cancelled",
+      completedCount: rowsReturned,
+      failedCount: 0,
+      lastError: null,
+    }).catch(() => undefined);
   }
 
   return NextResponse.json(
-    { ok: true, rowsReturned, settledUsd, billingPending },
+    {
+      ok: true,
+      rowsReturned,
+      settledUsd: settled.settledUsd ?? (Number(extract.actual_usd) || 0),
+      billingPending: settled.billingPending,
+    },
     { headers: auth.headers }
   );
 }

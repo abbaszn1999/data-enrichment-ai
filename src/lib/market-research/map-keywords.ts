@@ -47,7 +47,7 @@ export function toExtractedKeyword(
   };
 }
 
-const SAMPLE_CAP = 1_500;
+export const SAMPLE_CAP = 1_500;
 
 export function mergeKeywordSample(
   existing: DisplayKeyword[],

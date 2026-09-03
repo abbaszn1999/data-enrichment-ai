@@ -5,6 +5,7 @@ import { dispatchJob } from "@/lib/jobs/dispatch";
 import { notifyIfMissing } from "@/lib/jobs/notify";
 import { claimStaleJobRuns, mapJobRun } from "@/lib/jobs/repo";
 import { isTerminalJobStatus } from "@/lib/jobs/types";
+import { expireStaleHeldExtracts } from "@/lib/market-research/extract-advance";
 
 import { cronSecretFromEnv, cronSecretMatches } from "@/lib/auth/cron-secret";
 
@@ -52,10 +53,21 @@ export async function POST(request: NextRequest) {
     notified += 1;
   }
 
+  let expiredExtracts = 0;
+  try {
+    expiredExtracts = await expireStaleHeldExtracts(admin);
+  } catch (error) {
+    console.error(
+      "[jobs/sweep] expire held extracts failed",
+      error instanceof Error ? error.message : error
+    );
+  }
+
   return NextResponse.json({
     ok: true,
     dispatched: dispatched.length,
     ids: dispatched,
     notified,
+    expiredExtracts,
   });
 }

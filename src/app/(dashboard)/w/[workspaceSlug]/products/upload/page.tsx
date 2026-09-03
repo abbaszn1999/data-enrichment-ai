@@ -49,6 +49,7 @@ export default function ProductUploadPage() {
   const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([]);
   const [skuColumn, setSkuColumn] = useState<string>("");
   const [dupMode, setDupMode] = useState<"skip" | "update" | "new">("skip");
+  const [clearEmptyFields, setClearEmptyFields] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: number; updated: number } | null>(null);
   const [progress, setProgress] = useState(0);
@@ -159,6 +160,7 @@ export default function ProductUploadPage() {
           products: newProducts,
           dupMode,
           emptySkuCount,
+          clearEmptyFields: dupMode === "update" && clearEmptyFields,
         }),
       });
       const result = await res.json();
@@ -322,12 +324,16 @@ export default function ProductUploadPage() {
               <div className="grid grid-cols-3 gap-2">
                 {[
                   { value: "skip", label: "Skip Duplicates", desc: "Don't import if SKU exists" },
-                  { value: "update", label: "Update Existing", desc: "Overwrite if SKU exists" },
+                  { value: "update", label: "Update Existing", desc: "Update matching SKUs; empty cells keep current values" },
                   { value: "new", label: "Import as New", desc: "Create duplicates" },
                 ].map((opt) => (
                   <button
                     key={opt.value}
-                    onClick={() => setDupMode(opt.value as any)}
+                    type="button"
+                    onClick={() => {
+                      setDupMode(opt.value as "skip" | "update" | "new");
+                      if (opt.value !== "update") setClearEmptyFields(false);
+                    }}
                     className={`p-3 rounded-lg border text-left transition-all ${
                       dupMode === opt.value ? "border-primary bg-primary/5" : "hover:bg-muted/50"
                     }`}
@@ -337,6 +343,22 @@ export default function ProductUploadPage() {
                   </button>
                 ))}
               </div>
+              {dupMode === "update" && (
+                <label className="flex items-start gap-2 rounded-lg border bg-muted/20 p-3 text-[11px] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={clearEmptyFields}
+                    onChange={(e) => setClearEmptyFields(e.target.checked)}
+                    className="mt-0.5 rounded accent-[#400095] dark:accent-[#F76D01]"
+                  />
+                  <span>
+                    <span className="font-medium">Clear existing values when the file cell is empty</span>
+                    <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                      Off by default. Leave this unchecked unless you intend to erase catalog fields.
+                    </span>
+                  </span>
+                </label>
+              )}
             </div>
 
             <div className="p-3 rounded-lg bg-muted/30 border text-xs space-y-1">

@@ -116,7 +116,8 @@ export function StageExtractPanel({
           </h2>
           <p className="text-xs text-muted-foreground">
             Up to {EXTRACT_CAP_PER_SEED.toLocaleString("en-US")} keywords per
-            seed · intent and catalog matching run after this pull.
+            seed · you can leave this page; the pull continues on the server
+            and the unused wallet hold is settled when it finishes.
           </p>
         </div>
         <Progress value={Math.round(progress * 100)} className="h-1.5" />

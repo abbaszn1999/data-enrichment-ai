@@ -45,6 +45,7 @@ export const JOB_KIND_LABELS: Record<AdminJobKind, string> = {
   catalog: CATALOG_INTELLIGENCE.label,
   gallery: "Gallery",
   visualizer: "Visualizer",
+  mr_extract: "Market Research",
 };
 
 export const JOB_STATUS_LABELS: Record<AdminJobStatus, string> = {

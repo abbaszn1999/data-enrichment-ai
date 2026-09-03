@@ -576,7 +576,7 @@ export interface Database {
         Row: {
           id: string;
           workspace_id: string;
-          kind: "catalog" | "gallery" | "visualizer";
+          kind: "catalog" | "gallery" | "visualizer" | "mr_extract";
           session_id: string;
           created_by: string;
           status:
@@ -599,7 +599,7 @@ export interface Database {
         };
         Insert: {
           workspace_id: string;
-          kind: "catalog" | "gallery" | "visualizer";
+          kind: "catalog" | "gallery" | "visualizer" | "mr_extract";
           session_id: string;
           created_by: string;
           status?:

@@ -34,6 +34,7 @@ import {
   generateSeedsApi,
   loadMrStateApi,
   pollExtractApi,
+  extractStatusApi,
   probeSeedsApi,
   pushCollectionsApi,
   saveMrStateApi,
@@ -365,7 +366,12 @@ export function MarketResearchShell() {
   const [keywordsByProject, setKeywordsByProject] = useState<
     Record<string, ExtractedKeyword[]>
   >({});
-  const [extracting, setExtracting] = useState(false);
+  const [extractIdByProject, setExtractIdByProject] = useState<
+    Record<string, string>
+  >({});
+  const [extractingProjectId, setExtractingProjectId] = useState<string | null>(
+    null
+  );
   const [extractProgress, setExtractProgress] = useState(0);
   const [seedProgress, setSeedProgress] = useState<SeedExtractProgress[]>([]);
   const [analyzeLoading, setAnalyzeLoading] = useState(false);
@@ -403,6 +409,7 @@ export function MarketResearchShell() {
   const extractGen = useRef(0);
   const extractRunIds = useRef<string[]>([]);
   const extractIdRef = useRef("");
+  const resumedExtract = useRef(new Set<string>());
   const analyzeGen = useRef(0);
   const clusterGen = useRef(0);
   const contentGen = useRef(0);
@@ -456,6 +463,7 @@ export function MarketResearchShell() {
     setExtractChargeByProject(saved.extractChargeByProject ?? {});
     setExtractRowsByProject(saved.extractRowsByProject ?? {});
     setKeywordsByProject(saved.keywordsByProject ?? {});
+    setExtractIdByProject(saved.extractIdByProject ?? {});
     const opened = clampOpenedStage(saved.openedMaxByProject?.[last.id], 1);
     const preferred = clampOpenedStage(saved.stageByProject?.[last.id], 1);
     setStage(Math.min(preferred, opened) as MarketResearchStage);
@@ -577,6 +585,7 @@ export function MarketResearchShell() {
       extractChargeByProject,
       extractRowsByProject,
       keywordsByProject,
+      extractIdByProject,
     }),
     [
       projects,
@@ -613,6 +622,7 @@ export function MarketResearchShell() {
       extractChargeByProject,
       extractRowsByProject,
       keywordsByProject,
+      extractIdByProject,
     ]
   );
 
@@ -638,6 +648,9 @@ export function MarketResearchShell() {
   const activeProject = useMemo(
     () => projects.find((p) => p.id === activeProjectId) ?? projects[0],
     [projects, activeProjectId]
+  );
+  const extracting = Boolean(
+    activeProject && extractingProjectId === activeProject.id
   );
 
   const stage1DoneForActive = Boolean(
@@ -1872,6 +1885,128 @@ export function MarketResearchShell() {
     invalidateWallet();
   };
 
+  const rememberExtractId = (projectId: string, extractId: string) => {
+    extractIdRef.current = extractId;
+    setExtractIdByProject((prev) => ({ ...prev, [projectId]: extractId }));
+    resumedExtract.current.add(projectId);
+  };
+
+  const runExtractPollLoop = async (input: {
+    gen: number;
+    workspaceId: string;
+    projectId: string;
+    extractId: string;
+    seedCaps: Array<{ id: string; term: string; cap: number }>;
+    initialSample?: ExtractedKeyword[];
+  }) => {
+    const pollState = input.seedCaps.map((seed) => ({
+      id: seed.id,
+      term: seed.term,
+      cap: seed.cap,
+      cursor: undefined as string | undefined,
+      status: "running" as "running" | "succeeded" | "failed" | "aborted",
+      pulled: 0,
+    }));
+    const pulledBySeed: Record<string, number> = {};
+    let sample: ExtractedKeyword[] = input.initialSample ?? [];
+
+    const tick = async () => {
+      if (extractGen.current !== input.gen) return;
+      try {
+        const poll = await pollExtractApi(
+          input.workspaceId,
+          input.projectId,
+          input.extractId,
+          pollState.map((seed) => ({
+            seedId: seed.id,
+            cursor: seed.cursor,
+            status: seed.status,
+          }))
+        );
+        if (extractGen.current !== input.gen) return;
+
+        for (const row of poll.seeds) {
+          const local = pollState.find((seed) => seed.id === row.seedId);
+          if (!local) continue;
+          local.status =
+            row.status === "succeeded" && row.nextCursor ? "running" : row.status;
+          local.cursor = row.nextCursor;
+          const returned =
+            typeof row.rowsReturned === "number" ? row.rowsReturned : local.pulled;
+          if (row.rows.length > 0) {
+            const mapped = row.rows.map((keyword, index) =>
+              toExtractedKeyword(keyword, row.seedId, local.pulled + index)
+            );
+            sample = mergeKeywordSample(sample, mapped);
+            local.pulled = Math.max(local.pulled + row.rows.length, returned);
+          } else {
+            local.pulled = Math.max(local.pulled, returned);
+          }
+          pulledBySeed[row.seedId] = local.pulled;
+        }
+
+        const caps = pollState.reduce((sum, seed) => sum + seed.cap, 0);
+        const pulled = pollState.reduce((sum, seed) => sum + seed.pulled, 0);
+        setExtractProgress(caps ? Math.min(1, pulled / caps) : 0);
+        setSeedProgress(
+          pollState.map((seed) => ({
+            seedId: seed.id,
+            seed: seed.term,
+            cap: seed.cap,
+            pulled: seed.pulled,
+          }))
+        );
+        if (sample.length > 0) {
+          setKeywordsByProject((prev) => ({
+            ...prev,
+            [input.projectId]: applySampleWeights(sample, pulledBySeed),
+          }));
+        }
+
+        if (poll.allDone) {
+          if (poll.billingPending) {
+            window.setTimeout(() => {
+              void tick();
+            }, 2000);
+            return;
+          }
+          let finalSample = poll.sample ?? sample;
+          if (finalSample.length === 0) {
+            const status = await extractStatusApi(
+              input.workspaceId,
+              input.projectId,
+              input.extractId
+            ).catch(() => null);
+            if (status?.sample?.length) finalSample = status.sample;
+          }
+          if (finalSample.length > 0) {
+            setKeywordsByProject((prev) => ({
+              ...prev,
+              [input.projectId]: applySampleWeights(finalSample, pulledBySeed),
+            }));
+          }
+          setExtractingProjectId((id) =>
+            id === input.projectId ? null : id
+          );
+          settleExtractCharge(
+            input.projectId,
+            poll.rowsReturned,
+            poll.settledUsd ?? actualExtractCostUsd(poll.rowsReturned)
+          );
+          return;
+        }
+      } catch {
+        if (extractGen.current !== input.gen) return;
+      }
+
+      window.setTimeout(() => {
+        void tick();
+      }, 800);
+    };
+
+    await tick();
+  };
+
   const handleExtract = async () => {
     if (!canEdit || !activeProject) return;
     if (!workspaceId) {
@@ -1917,17 +2052,22 @@ export function MarketResearchShell() {
       return next;
     });
     setKeywordsByProject((prev) => ({ ...prev, [projectId]: [] }));
-    setExtracting(true);
+    setExtractingProjectId(projectId);
     setExtractProgress(0);
 
     const seeds = selectedSeedRows.filter(
       (row) => activeProbes[row.id] && !activeProbes[row.id].failed
     );
+    const seedCaps = seeds.map((seed) => ({
+      id: seed.id,
+      term: seed.broadSeedVariation,
+      cap: pulledCountForSeed(seed, activeProbes),
+    }));
     setSeedProgress(
-      seeds.map((seed) => ({
+      seedCaps.map((seed) => ({
         seedId: seed.id,
-        seed: seed.broadSeedVariation,
-        cap: pulledCountForSeed(seed, activeProbes),
+        seed: seed.term,
+        cap: seed.cap,
         pulled: 0,
       }))
     );
@@ -1943,102 +2083,34 @@ export function MarketResearchShell() {
           rawKeywordEstimate: activeProbes[seed.id]?.rawKeywords ?? 0,
         }))
       );
-      if (extractGen.current !== gen) return;
-      extractRunIds.current = started.seeds.map((seed) => seed.runId);
-      extractIdRef.current = started.extractId;
-
-      const pollState = started.seeds.map((seed) => ({
-        id: seed.seedId,
-        term: seed.term,
-        runId: seed.runId,
-        datasetId: seed.datasetId,
-        pages: seed.pages,
-        cursor: undefined as string | undefined,
-        status: "running" as "running" | "succeeded" | "failed" | "aborted",
-        pulled: 0,
-      }));
-      const pulledBySeed: Record<string, number> = {};
-      let sample: ExtractedKeyword[] = [];
-      let rowsReturned = 0;
-
-      const tick = async () => {
-        if (extractGen.current !== gen) return;
-        const poll = await pollExtractApi(
+      if (extractGen.current !== gen) {
+        setExtractingProjectId((id) => (id === projectId ? null : id));
+        await cancelExtractApi(
           workspaceId,
           projectId,
-          started.extractId,
-          pollState.map((seed) => ({
-            seedId: seed.id,
-            cursor: seed.cursor,
-            status: seed.status,
-          }))
-        );
-        if (extractGen.current !== gen) return;
-
-        for (const row of poll.seeds) {
-          const local = pollState.find((seed) => seed.id === row.seedId);
-          if (!local) continue;
-          local.status =
-            row.status === "succeeded" && row.nextCursor
-              ? "running"
-              : row.status;
-          local.cursor = row.nextCursor;
-          local.datasetId = row.datasetId ?? local.datasetId;
-          if (row.rows.length > 0) {
-            const mapped = row.rows.map((keyword, index) =>
-              toExtractedKeyword(keyword, row.seedId, local.pulled + index)
-            );
-            local.pulled += row.rows.length;
-            pulledBySeed[row.seedId] = local.pulled;
-            rowsReturned += row.rows.length;
-            sample = mergeKeywordSample(sample, mapped);
-          }
-        }
-
-        const caps = pollState.reduce((sum, seed) => {
-          const match = seeds.find((row) => row.id === seed.id);
-          return sum + (match ? pulledCountForSeed(match, activeProbes) : seed.pages * 100);
-        }, 0);
-        const pulled = pollState.reduce((sum, seed) => sum + seed.pulled, 0);
-        setExtractProgress(caps ? Math.min(1, pulled / caps) : 0);
-        setSeedProgress(
-          pollState.map((seed) => {
-            const match = seeds.find((row) => row.id === seed.id);
-            return {
-              seedId: seed.id,
-              seed: seed.term,
-              cap: match ? pulledCountForSeed(match, activeProbes) : seed.pages * 100,
-              pulled: seed.pulled,
-            };
-          })
-        );
-        setKeywordsByProject((prev) => ({
-          ...prev,
-          [projectId]: applySampleWeights(sample, pulledBySeed),
-        }));
-
-        if (poll.allDone) {
-          if (poll.billingPending) {
-            window.setTimeout(() => {
-              void tick();
-            }, 2000);
-            return;
-          }
-          setExtracting(false);
-          const billed = poll.settledUsd ?? actualExtractCostUsd(poll.rowsReturned);
-          settleExtractCharge(projectId, poll.rowsReturned, billed);
-          return;
-        }
-
-        window.setTimeout(() => {
-          void tick();
-        }, 800);
-      };
-
-      await tick();
+          started.extractId
+        ).catch(() => undefined);
+        return;
+      }
+      extractRunIds.current = started.seeds.map((seed) => seed.runId);
+      rememberExtractId(projectId, started.extractId);
+      await runExtractPollLoop({
+        gen,
+        workspaceId,
+        projectId,
+        extractId: started.extractId,
+        seedCaps: started.seeds.map((seed) => {
+          const match = seedCaps.find((row) => row.id === seed.seedId);
+          return {
+            id: seed.seedId,
+            term: seed.term,
+            cap: match?.cap ?? seed.pages * 100,
+          };
+        }),
+      });
     } catch (error) {
       if (extractGen.current !== gen) return;
-      setExtracting(false);
+      setExtractingProjectId((id) => (id === projectId ? null : id));
       toast.error("Extract failed", {
         description:
           error instanceof Error ? error.message : "Could not start Apify.",
@@ -2048,26 +2120,127 @@ export function MarketResearchShell() {
 
   const handleCancelExtract = async () => {
     extractGen.current += 1;
-    setExtracting(false);
-    const extractId = extractIdRef.current;
-    const projectId = activeProject?.id;
-    if (workspaceId && projectId && extractId) {
-      try {
-        const cancelled = await cancelExtractApi(
-          workspaceId,
-          projectId,
-          extractId
-        );
-        settleExtractCharge(
-          projectId,
-          cancelled.rowsReturned,
-          cancelled.settledUsd
-        );
-      } catch {
-        // Polling already stopped via extractGen.
-      }
+    const projectId = extractingProjectId ?? activeProject?.id;
+    setExtractingProjectId((id) => (id === projectId ? null : id));
+    if (!workspaceId || !projectId) return;
+    let extractId =
+      extractIdRef.current || extractIdByProject[projectId] || "";
+    if (!extractId) {
+      const status = await extractStatusApi(workspaceId, projectId).catch(
+        () => null
+      );
+      extractId = status?.extract?.id ?? "";
+    }
+    if (!extractId) return;
+    try {
+      const cancelled = await cancelExtractApi(
+        workspaceId,
+        projectId,
+        extractId
+      );
+      settleExtractCharge(
+        projectId,
+        cancelled.rowsReturned,
+        cancelled.settledUsd
+      );
+    } catch {
+      // Polling already stopped via extractGen.
     }
   };
+
+  useEffect(() => {
+    if (!hydrated || !workspaceId || !canEdit || !activeProject) return;
+    const projectId = activeProject.id;
+    if (extractingProjectId) return;
+    if (resumedExtract.current.has(projectId)) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await extractStatusApi(
+          workspaceId,
+          projectId
+        );
+        if (cancelled) return;
+        if (!status.extract) {
+          resumedExtract.current.add(projectId);
+          return;
+        }
+        rememberExtractId(projectId, status.extract.id);
+        const active =
+          status.extract.status === "running" ||
+          status.extract.billingStatus === "held";
+        if (!active) {
+          if (
+            status.sample?.length &&
+            !(keywordsByProject[projectId]?.length)
+          ) {
+            setKeywordsByProject((prev) => ({
+              ...prev,
+              [projectId]: status.sample ?? [],
+            }));
+          }
+          if (status.extract.rowsReturned > 0) {
+            settleExtractCharge(
+              projectId,
+              status.extract.rowsReturned,
+              status.extract.actualUsd ||
+                actualExtractCostUsd(status.extract.rowsReturned)
+            );
+          }
+          return;
+        }
+
+        const gen = ++extractGen.current;
+        setCommittedProjectIds((prev) => {
+          const next = new Set(prev);
+          next.add(projectId);
+          return next;
+        });
+        setExtractingProjectId(projectId);
+        const seedCaps = status.seeds.map((seed) => {
+          const match = selectedSeedRows.find((row) => row.id === seed.seedId);
+          return {
+            id: seed.seedId,
+            term: seed.term,
+            cap: match
+              ? pulledCountForSeed(match, activeProbes)
+              : Math.max(seed.pages * 100, seed.rowsReturned, 1),
+          };
+        });
+        setSeedProgress(
+          seedCaps.map((seed) => ({
+            seedId: seed.id,
+            seed: seed.term,
+            cap: seed.cap,
+            pulled:
+              status.seeds.find((row) => row.seedId === seed.id)?.rowsReturned ??
+              0,
+          }))
+        );
+        await runExtractPollLoop({
+          gen,
+          workspaceId,
+          projectId,
+          extractId: status.extract.id,
+          seedCaps,
+          initialSample: keywordsByProject[projectId],
+        });
+      } catch {
+        resumedExtract.current.delete(projectId);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    hydrated,
+    workspaceId,
+    canEdit,
+    activeProject?.id,
+    extractingProjectId,
+  ]);
 
   const unlockWorkspaceTab = (projectId: string, tab: WorkspaceTab) => {
     setOpenedWorkspaceByProject((prev) => ({
@@ -3187,13 +3360,11 @@ export function MarketResearchShell() {
     stage2Gen.current += 1;
     stage3Gen.current += 1;
     probeGen.current += 1;
-    extractGen.current += 1;
     analyzeGen.current += 1;
     clusterGen.current += 1;
     contentGen.current += 1;
     strategyGen.current += 1;
     setProbingIds([]);
-    setExtracting(false);
     setAnalyzeLoading(false);
     setClustering(false);
     setGenerating(false);

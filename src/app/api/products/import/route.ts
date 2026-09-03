@@ -36,6 +36,7 @@ export async function POST(request: NextRequest) {
     products?: MasterProductJson[];
     dupMode?: ProductDupMode;
     emptySkuCount?: number;
+    clearEmptyFields?: boolean;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -87,6 +88,7 @@ export async function POST(request: NextRequest) {
       existing,
       incoming,
       dupMode,
+      clearEmptyFields: dupMode === "update" && body.clearEmptyFields === true,
     });
     const revision = await saveCatalogWithCas({
       admin,
