@@ -23,9 +23,11 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { AutommerceLogo } from "@/components/brand/autommerce-logo";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
@@ -277,6 +279,7 @@ export default function ProductsVisualizerPage() {
   const [tableViewportWidth, setTableViewportWidth] = useState(0);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const stickyScrollRef = useRef<HTMLDivElement>(null);
+  const createFileInputRef = useRef<HTMLInputElement>(null);
   const settingsRevisionRef = useRef(0);
   const worksheetRevisionRef = useRef(0);
   const fencedSessionIdRef = useRef<string | null>(null);
@@ -2821,63 +2824,86 @@ export default function ProductsVisualizerPage() {
           }
         }}
       >
-        <DialogContent className="overflow-hidden rounded-[24px] border-border/60 p-0 sm:max-w-lg">
+        <DialogContent className="overflow-hidden rounded-[24px] border-border/60 p-0 sm:max-w-xl">
           <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <div className="border-b bg-gradient-to-br from-[#400095]/10 via-[#F76D01]/5 to-transparent px-6 py-5">
             <DialogHeader>
-              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-[#400095] text-white dark:bg-[#F76D01]">
-                <Sparkles className="h-4 w-4" />
-              </div>
-              <DialogTitle>New visualizer project</DialogTitle>
-              <DialogDescription>Upload a product worksheet to generate coordinated descriptions and lifestyle imagery.</DialogDescription>
+              <AutommerceLogo size={40} className="mb-2" />
+              <DialogTitle>Create visualizer project</DialogTitle>
+              <DialogDescription>
+                Upload a product worksheet to generate coordinated descriptions
+                and lifestyle imagery.
+              </DialogDescription>
             </DialogHeader>
           </div>
-          <div className="space-y-4 px-6 py-5">
+          <div className="space-y-5 px-6 py-5">
             <div className="space-y-1.5">
               <Label htmlFor="visualizer-project-name">Project name</Label>
               <Input
                 id="visualizer-project-name"
+                autoFocus
                 value={projectName}
                 onChange={(event) => setProjectName(event.target.value)}
-                placeholder="Summer collection descriptions"
+                placeholder="e.g. Summer collection"
                 maxLength={120}
-                className="h-10 rounded-xl bg-muted/35"
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="visualizer-file">Product worksheet</Label>
-              <Input
-                id="visualizer-file"
+              <Label>Product worksheet</Label>
+              <button
+                type="button"
+                onClick={() => createFileInputRef.current?.click()}
+                className={`flex min-h-32 w-full flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-4 text-center transition-colors ${
+                  uploadFile
+                    ? "border-[#400095]/40 bg-[#400095]/5 dark:border-[#F76D01]/40"
+                    : "hover:border-[#6B358D]/40 hover:bg-muted/30"
+                }`}
+              >
+                <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                  {uploadFile ? (
+                    <FileSpreadsheet className="h-4 w-4 text-[#6B358D] dark:text-[#F76D01]" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                </div>
+                <span className="max-w-full truncate text-xs font-medium">
+                  {uploadFile?.name || "Choose an Excel or CSV file"}
+                </span>
+                <span className="mt-1 text-[10px] text-muted-foreground">
+                  {uploadFile
+                    ? `${(uploadFile.size / 1024 / 1024).toFixed(2)} MB · Click to replace`
+                    : "XLSX, XLS, or CSV · Maximum 20 MB"}
+                </span>
+              </button>
+              <input
+                ref={createFileInputRef}
                 type="file"
-                accept=".xlsx,.xls,.csv"
-                className="h-10 rounded-xl"
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
                 onChange={(event) =>
-                  setUploadFile(event.target.files?.[0] ?? null)
+                  setUploadFile(event.target.files?.[0] || null)
                 }
               />
             </div>
           </div>
           <DialogFooter className="border-t bg-muted/20 px-6 py-4">
             <Button
-              type="button"
               variant="outline"
-              className="rounded-xl"
               disabled={creating}
               onClick={() => setShowCreate(false)}
             >
               Cancel
             </Button>
             <Button
-              type="button"
-              className="rounded-xl bg-[#400095] px-5 text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
-              disabled={
-                creating || !projectName.trim() || !uploadFile || !canEdit
-              }
+              className="gap-1.5 rounded-xl bg-[#400095] px-5 text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
+              disabled={!projectName.trim() || !uploadFile || creating || !canEdit}
               onClick={() => void createProject()}
             >
               {creating ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : null}
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}
               Create project
             </Button>
           </DialogFooter>
