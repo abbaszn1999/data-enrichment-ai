@@ -20,6 +20,8 @@ import {
   Users,
   ChevronDown,
   RefreshCw,
+  LayoutGrid,
+  Boxes,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,11 +34,16 @@ import { PageLoader } from "@/components/brand/page-loader";
 
 const OP_LABELS: Record<string, { label: string; icon: any; color: string }> = {
   catalog_intelligence: { label: "Catalog Intelligence", icon: Sparkles, color: "text-[#6B358D] dark:text-[#F76D01]" },
-  ai_image_search: { label: "AI Image Search", icon: ImageIcon, color: "text-blue-600" },
-  ai_column_mapping: { label: "AI Column Mapping", icon: Columns3, color: "text-amber-600" },
-  ai_category_suggest: { label: "AI Category Suggest", icon: FolderTree, color: "text-green-600" },
-  ai_function: { label: "AI Function", icon: Zap, color: "text-indigo-600" },
+  image_classification: { label: "Image Classification", icon: ImageIcon, color: "text-blue-600" },
+  gallery_google: { label: "Products Gallery", icon: LayoutGrid, color: "text-sky-600" },
+  gallery_ai: { label: "Products Gallery", icon: LayoutGrid, color: "text-sky-600" },
+  ai_image_search: { label: "Products Gallery", icon: LayoutGrid, color: "text-sky-600" },
+  visualizer_description: { label: "Products Visualizer", icon: Boxes, color: "text-amber-600" },
+  visualizer_images: { label: "Products Visualizer", icon: Boxes, color: "text-amber-600" },
   store_assistant: { label: "Store Assistant", icon: RefreshCw, color: "text-cyan-600" },
+  ai_column_mapping: { label: "Column Mapping", icon: Columns3, color: "text-amber-600" },
+  ai_category_suggest: { label: "Category Suggest", icon: FolderTree, color: "text-green-600" },
+  ai_function: { label: "AI Function", icon: Zap, color: "text-indigo-600" },
   credit_topup: { label: "Credit Top-up", icon: Zap, color: "text-emerald-600" },
   monthly_reset: { label: "Monthly Reset", icon: Clock, color: "text-gray-600" },
 };
@@ -345,34 +352,34 @@ export default function UsagePage() {
           <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-3 lg:grid-cols-5">
             {[
               {
-                label: "AI Enrichment",
+                label: "Catalog Intelligence",
                 desc: "Per row enriched",
                 icon: Sparkles,
                 style: "bg-violet-500/10 text-violet-600",
               },
               {
-                label: "Sync Agent",
-                desc: "Per Sync chat run",
-                icon: RefreshCw,
-                style: "bg-cyan-500/10 text-cyan-600",
-              },
-              {
-                label: "AI Image Search",
-                desc: "Per query",
+                label: "Image Classification",
+                desc: "Per classification run",
                 icon: ImageIcon,
                 style: "bg-blue-500/10 text-blue-600",
               },
               {
-                label: "AI Column Mapping",
-                desc: "Per project",
-                icon: Columns3,
+                label: "Products Gallery",
+                desc: "Per product generated",
+                icon: LayoutGrid,
+                style: "bg-sky-500/10 text-sky-600",
+              },
+              {
+                label: "Products Visualizer",
+                desc: "Per product generated",
+                icon: Boxes,
                 style: "bg-amber-500/10 text-amber-600",
               },
               {
-                label: "AI Categorization",
-                desc: "Per product",
-                icon: FolderTree,
-                style: "bg-emerald-500/10 text-emerald-600",
+                label: "Store Assistant",
+                desc: "Per chat run",
+                icon: RefreshCw,
+                style: "bg-cyan-500/10 text-cyan-600",
               },
             ].map((item) => (
               <div

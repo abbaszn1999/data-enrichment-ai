@@ -13,16 +13,16 @@ import type {
 
 export const CREDIT_OPERATION_LABELS: Record<AdminCreditOperation, string> = {
   catalog_intelligence: CATALOG_INTELLIGENCE.label,
-  ai_image_search: "AI Image Search",
+  ai_image_search: "Products Gallery",
   ai_column_mapping: "Column Mapping",
   ai_category_suggest: "Category Suggest",
   ai_function: "AI Function",
   store_assistant: STORE_ASSISTANT.label,
-  image_classification: "Image Classify",
-  gallery_google: "Gallery · Google",
-  gallery_ai: "Gallery · AI",
-  visualizer_description: "Visualizer · Description",
-  visualizer_images: "Visualizer · Images",
+  image_classification: "Image Classification",
+  gallery_google: "Products Gallery",
+  gallery_ai: "Products Gallery",
+  visualizer_description: "Products Visualizer",
+  visualizer_images: "Products Visualizer",
   credit_topup: "Credit Top-up",
   monthly_reset: "Monthly Reset",
 };
@@ -43,8 +43,8 @@ export const WALLET_KIND_LABELS: Record<AdminWalletTxKind, string> = {
 
 export const JOB_KIND_LABELS: Record<AdminJobKind, string> = {
   catalog: CATALOG_INTELLIGENCE.label,
-  gallery: "Gallery",
-  visualizer: "Visualizer",
+  gallery: "Products Gallery",
+  visualizer: "Products Visualizer",
   mr_extract: "Market Research",
 };
 
@@ -94,9 +94,9 @@ export const RANGE_LABELS = {
 export const ACTIVITY_ENTITY_LABELS: Record<string, string> = {
   catalog_intelligence: CATALOG_INTELLIGENCE.label,
   store_assistant: STORE_ASSISTANT.label,
-  gallery_session: "Gallery",
-  visualizer_session: "Visualizer",
-  image_classification_session: "Image Classify",
+  gallery_session: "Products Gallery",
+  visualizer_session: "Products Visualizer",
+  image_classification_session: "Image Classification",
 };
 
 export function creditOperationLabel(operation: string): string {

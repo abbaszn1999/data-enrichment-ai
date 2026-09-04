@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ProjectJson, ProjectRow } from "@/lib/storage-helpers";
 import type { SessionKind } from "@/types";
+import { loadAllOrderedRows } from "@/lib/catalog/row-store-page";
 
 const UPSERT_CHUNK = 250;
 
@@ -72,15 +73,21 @@ export async function loadCatalogSessionRows(
   admin: SupabaseClient,
   sessionId: string
 ): Promise<ProjectRow[]> {
-  const { data, error } = await admin
-    .from("catalog_session_rows")
-    .select(
-      "session_id, row_id, row_index, status, error_message, original_data, enriched_data, match_type, updated_at"
-    )
-    .eq("session_id", sessionId)
-    .order("row_index", { ascending: true });
-  if (error) throw new Error(error.message);
-  return ((data ?? []) as SessionRowRecord[]).map(recordToProjectRow);
+  const records = await loadAllOrderedRows<SessionRowRecord>({
+    fetchPage: async (from, to) => {
+      const { data, error } = await admin
+        .from("catalog_session_rows")
+        .select(
+          "session_id, row_id, row_index, status, error_message, original_data, enriched_data, match_type, updated_at"
+        )
+        .eq("session_id", sessionId)
+        .order("row_index", { ascending: true })
+        .range(from, to);
+      if (error) throw new Error(error.message);
+      return (data ?? []) as SessionRowRecord[];
+    },
+  });
+  return records.map(recordToProjectRow);
 }
 
 export async function replaceCatalogSessionRows(
@@ -167,5 +174,11 @@ export async function hydrateProjectRows(
     return project;
   }
   const rows = await loadCatalogSessionRows(admin, sessionId);
+  // If the blob still has more rows than a truncated PostgREST read, restore
+  // from the blob instead of silently dropping the rest of the worksheet.
+  if (project.rows.length > rows.length) {
+    await replaceCatalogSessionRows(admin, sessionId, project.rows);
+    return project;
+  }
   return { ...project, rows };
 }

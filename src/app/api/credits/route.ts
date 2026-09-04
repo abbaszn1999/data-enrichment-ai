@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { createClient } from "@/lib/supabase-server";
 import { getWorkspaceContext, isContextSubscriptionActive } from "@/lib/workspace-context";
+import { creditOperationLabel } from "@/lib/platform-admin/labels";
 
 export async function GET(request: Request) {
   try {
@@ -99,7 +100,7 @@ export async function GET(request: Request) {
         ...mapped.map((tx: any) =>
           [
             tx.created_at ?? "",
-            tx.operation ?? "",
+            creditOperationLabel(String(tx.operation ?? "")),
             tx.credits_used ?? "",
             JSON.stringify(tx.user_name ?? ""),
             tx.status ?? "",

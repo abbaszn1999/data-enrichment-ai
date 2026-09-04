@@ -27,7 +27,6 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { AutommerceLogo } from "@/components/brand/autommerce-logo";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
@@ -2828,7 +2827,9 @@ export default function ProductsVisualizerPage() {
           <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <div className="border-b bg-gradient-to-br from-[#400095]/10 via-[#F76D01]/5 to-transparent px-6 py-5">
             <DialogHeader>
-              <AutommerceLogo size={40} className="mb-2" />
+              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]">
+                <Plus className="h-4 w-4" />
+              </div>
               <DialogTitle>Create visualizer project</DialogTitle>
               <DialogDescription>
                 Upload a product worksheet to generate coordinated descriptions

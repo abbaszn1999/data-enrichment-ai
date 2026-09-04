@@ -19,6 +19,13 @@ export const metadata: Metadata = {
   title: "Autommerce Platform — AI Commerce Operations",
   description:
     "AI commerce operations for catalog intelligence, store assistance, visual generation, and SEO research.",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", type: "image/x-icon", sizes: "any" },
+      { url: "/autommerce-natural.png", type: "image/png" },
+    ],
+    apple: [{ url: "/autommerce-natural.png", type: "image/png" }],
+  },
 };
 
 export default function RootLayout({

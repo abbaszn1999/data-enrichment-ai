@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { loadAllOrderedRows } from "@/lib/catalog/row-store-page";
 
 const UPSERT_CHUNK = 250;
 
@@ -56,13 +57,19 @@ export async function loadWorksheetRows<T extends WorksheetRowLike>(
   table: WorksheetRowTable,
   sessionId: string
 ): Promise<T[]> {
-  const { data, error } = await admin
-    .from(table)
-    .select("row_id, row_index, status, data")
-    .eq("session_id", sessionId)
-    .order("row_index", { ascending: true });
-  if (error) throw new Error(error.message);
-  return ((data ?? []) as StoredRecord[]).map((row) => {
+  const records = await loadAllOrderedRows<StoredRecord>({
+    fetchPage: async (from, to) => {
+      const { data, error } = await admin
+        .from(table)
+        .select("row_id, row_index, status, data")
+        .eq("session_id", sessionId)
+        .order("row_index", { ascending: true })
+        .range(from, to);
+      if (error) throw new Error(error.message);
+      return (data ?? []) as StoredRecord[];
+    },
+  });
+  return records.map((row) => {
     const payload = (row.data ?? {}) as T;
     return {
       ...payload,
@@ -120,5 +127,9 @@ export async function hydrateWorksheetRows<T extends { rows: WorksheetRowLike[] 
     return worksheet;
   }
   const rows = await loadWorksheetRows<T["rows"][number]>(admin, table, sessionId);
+  if (worksheet.rows.length > rows.length) {
+    await replaceWorksheetRows(admin, table, sessionId, worksheet.rows);
+    return worksheet;
+  }
   return { ...worksheet, rows };
 }
