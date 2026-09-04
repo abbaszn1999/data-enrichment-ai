@@ -22,6 +22,7 @@ import {
   TrendingUp,
   ChevronDown,
   ArrowLeft,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageLoader } from "@/components/brand/page-loader";
@@ -33,7 +34,7 @@ import {
   updateImportSession,
   type ImportSession,
 } from "@/lib/supabase";
-import { loadCategoriesJson, loadProductsJson, loadProjectJson, saveProjectJson, type CategoryJson, type MasterProductJson } from "@/lib/storage-helpers";
+import { loadCategoriesJson, loadProductsJson, loadProjectJson, saveProjectJson, type CategoryJson, type MasterProductJson, type ProjectRow } from "@/lib/storage-helpers";
 import { useWorkspaceContext } from "../../../workspace-context";
 import {
   DEFAULT_MATCHING_RULES,
@@ -44,6 +45,10 @@ import {
 import { applyMatchTypes } from "@/lib/import-matching";
 import { ImportStepper } from "@/components/catalog-intelligence/import-stepper";
 import type { SessionKind } from "@/types";
+import {
+  countGroupedMatchTypes,
+  resolveProductGroupColumn,
+} from "@/lib/catalog/product-groups";
 
 const rulePresets = [
   { id: "samsung", name: "Samsung Format", description: "Prefix 00 + case insensitive", rules: ["trim_whitespace", "case_insensitive", "ignore_prefix"] },
@@ -77,6 +82,9 @@ export default function MatchingRulesPage() {
   const [supplierColumns, setSupplierColumns] = useState<string[]>([]);
   const [masterProducts, setMasterProducts] = useState<MasterProductJson[]>([]);
   const [kind, setKind] = useState<SessionKind>("product");
+  const [projectRows, setProjectRows] = useState<ProjectRow[]>([]);
+  const [groupVariants, setGroupVariants] = useState(false);
+  const [productGroupColumn, setProductGroupColumn] = useState("");
 
   useEffect(() => {
     if (!workspace || !sessionId) return;
@@ -95,6 +103,7 @@ export default function MatchingRulesPage() {
       if (sessionKind === "plp") {
         if (s && workspace && project) {
           project.matchingSkipped = true;
+          project.productGroupColumn = null;
           for (const row of project.rows) row.matchType = row.matchType ?? "new";
           await saveProjectJson(workspace.id, s.id, project);
           await updateImportSession(s.id, { status: "review" } as any).catch(() => {});
@@ -122,6 +131,25 @@ export default function MatchingRulesPage() {
       if (project?.columns) {
         setSupplierColumns(project.columns);
         setSupplierMatchColumn(s?.supplier_match_column || (project.columns[0] ?? ""));
+      }
+      if (project?.rows) setProjectRows(project.rows);
+
+      const resolvedGroup = resolveProductGroupColumn({
+        saved: project?.productGroupColumn,
+        columns: project?.columns ?? [],
+        rows: project?.rows ?? [],
+        kind: sessionKind,
+      });
+      if (resolvedGroup) {
+        setGroupVariants(true);
+        setProductGroupColumn(resolvedGroup);
+      } else {
+        setGroupVariants(false);
+        setProductGroupColumn(
+          project?.columns?.find((col) => col.trim().toLowerCase() === "handle") ||
+            project?.columns?.[0] ||
+            ""
+        );
       }
 
       setSession(s);
@@ -187,17 +215,29 @@ export default function MatchingRulesPage() {
       if (!project) { setPreviewLoading(false); return; }
 
       // Same helper the later steps use, so the preview cannot disagree with them.
-      const { existingCount, newCount } = await applyMatchTypes({
+      const previewRows = project.rows.map((r) => ({
+        ...r,
+        originalData: r.originalData,
+      }));
+      await applyMatchTypes({
         kind: "product",
         workspaceId: workspace.id,
-        rows: project.rows.map((r) => ({ originalData: r.originalData })),
+        rows: previewRows,
         sourceColumn: supplierMatchColumn,
         masterColumn: masterMatchColumn,
         rules,
         targetCategoryNames,
       });
 
-      setPreviewResult({ existing: existingCount, new: newCount, ambiguous: 0 });
+      const grouped = countGroupedMatchTypes(
+        previewRows,
+        groupVariants && productGroupColumn ? productGroupColumn : null
+      );
+      setPreviewResult({
+        existing: grouped.existing,
+        new: grouped.new,
+        ambiguous: 0,
+      });
       setShowPreview(true);
     } catch (err) {
       console.error("Preview error:", err);
@@ -230,7 +270,7 @@ export default function MatchingRulesPage() {
       }
 
       // 3. Match with the shared helper, then diff the rows it matched.
-      const { existingCount, newCount } = await applyMatchTypes({
+      await applyMatchTypes({
         kind: "product",
         workspaceId: workspace.id,
         rows: project.rows,
@@ -258,16 +298,21 @@ export default function MatchingRulesPage() {
         }
       }
 
+      const groupColumn =
+        groupVariants && productGroupColumn ? productGroupColumn : null;
+      const grouped = countGroupedMatchTypes(project.rows, groupColumn);
+
       project.matchingSkipped = false;
-      console.log("[Match] existing:", existingCount, "| new:", newCount, "| total:", project.rows.length);
+      project.productGroupColumn = groupColumn;
+      console.log("[Match] existing:", grouped.existing, "| new:", grouped.new, "| products:", grouped.products, "| rows:", grouped.rows);
 
       // 5. Save updated project back to Storage
       await saveProjectJson(workspace.id, session.id, project);
 
       // 6. Update session counts and status in DB
       await updateImportSession(session.id, {
-        existing_count: existingCount,
-        new_count: newCount,
+        existing_count: grouped.existing,
+        new_count: grouped.new,
         status: "review",
       } as any);
 
@@ -396,6 +441,65 @@ export default function MatchingRulesPage() {
               </div>
             </div>
           </Card>
+
+          {kind !== "plp" && (
+            <Card className="rounded-2xl border-border/60 p-5 shadow-sm">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <Layers className="h-4 w-4" /> Group product variants
+              </h3>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <button
+                  type="button"
+                  onClick={() => setGroupVariants((on) => !on)}
+                  className={`mt-0.5 h-5 w-5 rounded flex items-center justify-center shrink-0 border-2 transition-colors ${
+                    groupVariants
+                      ? "border-[#400095] bg-[#400095] text-white dark:border-[#F76D01] dark:bg-[#F76D01]"
+                      : "border-muted-foreground/30"
+                  }`}
+                  aria-pressed={groupVariants}
+                >
+                  {groupVariants && <Check className="h-3 w-3" />}
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium">
+                    One enrichment row per product
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
+                    Shopify-style files repeat Handle for each color, size, or image.
+                    Enrichment will run once per product and copy the result onto the other rows so export stays complete.
+                  </p>
+                </div>
+              </label>
+              {groupVariants && (
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                      Product key column
+                    </label>
+                    <select
+                      value={productGroupColumn}
+                      onChange={(e) => setProductGroupColumn(e.target.value)}
+                      className="w-full h-8 px-2.5 text-xs rounded border bg-background mt-1"
+                    >
+                      {supplierColumns.map((col) => (
+                        <option key={col} value={col}>{col}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {projectRows.length > 0 && productGroupColumn && (
+                    <div className="flex items-end">
+                      <p className="text-[10px] text-muted-foreground leading-relaxed">
+                        {(() => {
+                          const stats = countGroupedMatchTypes(projectRows, productGroupColumn);
+                          return `${stats.products.toLocaleString()} products from ${stats.rows.toLocaleString()} rows`;
+                        })()}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
 
           {/* Rule Presets */}
           <Card className="rounded-2xl border-border/60 p-5 shadow-sm">

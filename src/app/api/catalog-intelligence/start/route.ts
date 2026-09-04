@@ -8,6 +8,7 @@ import {
 import { dispatchJob } from "@/lib/jobs/dispatch";
 import { insertJobRun, loadActiveJobForSession } from "@/lib/jobs/repo";
 import { loadProjectJsonAdmin } from "@/lib/jobs/project-json";
+import { collapseToPrimaryRowIds, resolveProductGroupColumn } from "@/lib/catalog/product-groups";
 import type { CatalogJobSettings } from "@/lib/jobs/types";
 import type { SessionKind } from "@/types";
 
@@ -111,16 +112,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Project data not found" }, { status: 404, headers });
   }
 
+  const kind: SessionKind = body.kind === "plp" ? "plp" : "product";
+  const groupColumn = resolveProductGroupColumn({
+    saved: project.productGroupColumn,
+    columns: project.columns,
+    rows: project.rows,
+    kind,
+  });
   const requested = body.rowIds?.length
     ? [...new Set(body.rowIds)]
     : project.rows.filter((row) => row.status !== "done").map((row) => row.id);
-  const known = new Set(project.rows.map((row) => row.id));
-  const targetIds = requested.filter((id) => known.has(id));
+  const targetIds = collapseToPrimaryRowIds(requested, project.rows, groupColumn);
   if (targetIds.length === 0) {
     return NextResponse.json({ error: "No rows to enrich" }, { status: 400, headers });
   }
-
-  const kind: SessionKind = body.kind === "plp" ? "plp" : "product";
   const settings: CatalogJobSettings = {
     workspaceSlug: workspace?.slug,
     sessionName: session.name,

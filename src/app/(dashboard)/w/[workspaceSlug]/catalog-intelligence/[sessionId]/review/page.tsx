@@ -27,6 +27,11 @@ import { normalizeValue, generateDiff, type MatchingRule } from "@/lib/matching"
 import { applyMatchTypes, resolveTargetCategoryNames } from "@/lib/import-matching";
 import { ImportStepper } from "@/components/catalog-intelligence/import-stepper";
 import type { SessionKind } from "@/types";
+import {
+  buildProductGroupIndex,
+  resolveProductGroupColumn,
+  visibleCatalogRows,
+} from "@/lib/catalog/product-groups";
 
 // Alias ProjectRow for compatibility with existing template code
 type ImportRow = ProjectRow & { id: string; match_type?: string | null; supplier_data?: Record<string, string>; diff_data?: Record<string, any>; mapped_data?: Record<string, any> };
@@ -46,6 +51,7 @@ export default function ReviewPage() {
   const [activeTab, setActiveTab] = useState<"existing" | "new">("existing");
   const [searchTerm, setSearchTerm] = useState("");
   const [kind, setKind] = useState<SessionKind>("product");
+  const [productGroupColumn, setProductGroupColumn] = useState<string | null>(null);
 
   const isPlp = kind === "plp";
 
@@ -124,15 +130,42 @@ export default function ReviewPage() {
         mapped_data: r.originalData,
       }));
       setRows(importRows);
-      // Auto-select tab with data
-      const hasExisting = importRows.some((r) => r.match_type === "existing");
-      if (!hasExisting) setActiveTab("new");
+      const groupColumn = resolveProductGroupColumn({
+        saved: project?.productGroupColumn,
+        columns: project?.columns ?? [],
+        rows: importRows,
+        kind: sessionKind,
+      });
+      setProductGroupColumn(groupColumn);
+      const visibleExisting = visibleCatalogRows(importRows, {
+        groupColumn,
+        activeSheet: "existing",
+      });
+      if (visibleExisting.length === 0) setActiveTab("new");
       setLoading(false);
     });
   }, [sessionId, workspace]);
 
-  const existingRows = useMemo(() => rows.filter((r) => r.match_type === "existing"), [rows]);
-  const newRows = useMemo(() => rows.filter((r) => r.match_type === "new"), [rows]);
+  const existingRows = useMemo(
+    () =>
+      visibleCatalogRows(rows, {
+        groupColumn: productGroupColumn,
+        activeSheet: "existing",
+      }),
+    [rows, productGroupColumn]
+  );
+  const newRows = useMemo(
+    () =>
+      visibleCatalogRows(rows, {
+        groupColumn: productGroupColumn,
+        activeSheet: "new",
+      }),
+    [rows, productGroupColumn]
+  );
+  const groupIndex = useMemo(
+    () => buildProductGroupIndex(rows, productGroupColumn),
+    [rows, productGroupColumn]
+  );
 
   const handleContinue = async () => {
     if (!session || !workspace) return;
@@ -156,11 +189,14 @@ export default function ReviewPage() {
             }
           }
         }
+        project.productGroupColumn = productGroupColumn;
         await saveProjectJson(workspace.id, session.id, project);
       }
 
       await updateImportSession(session.id, {
         status: "enriching",
+        existing_count: existingRows.length,
+        new_count: newRows.length,
       } as any);
 
       router.push(`/w/${slug}/catalog-intelligence/${session.id}`);
@@ -278,6 +314,9 @@ export default function ReviewPage() {
             <table className="w-max min-w-full">
               <thead className="sticky top-0 z-20">
                 <tr className="border-b bg-card/95 backdrop-blur-xl">
+                  {groupIndex.enabled && (
+                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase whitespace-nowrap min-w-[90px]">Variants</th>
+                  )}
                   {supplierColumns.map((col) => (
                     <th key={col} className="text-left px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase whitespace-nowrap min-w-[120px]">{col}</th>
                   ))}
@@ -289,7 +328,7 @@ export default function ReviewPage() {
               </thead>
               <tbody>
                 {filteredExisting.length === 0 ? (
-                  <tr><td colSpan={supplierColumns.length + (isPlp ? 0 : 1)} className="text-center py-8 text-xs text-muted-foreground">No matching rows</td></tr>
+                  <tr><td colSpan={supplierColumns.length + (isPlp ? 0 : 1) + (groupIndex.enabled ? 1 : 0)} className="text-center py-8 text-xs text-muted-foreground">No matching rows</td></tr>
                 ) : (
                   filteredExisting.map((row) => {
                     const d = row.mapped_data || {};
@@ -297,6 +336,17 @@ export default function ReviewPage() {
                     const diffFields = Object.keys(diff);
                     return (
                       <tr key={row.id} className="border-b last:border-0 hover:bg-muted/20">
+                        {groupIndex.enabled && (
+                          <td className="px-3 py-2.5 text-xs whitespace-nowrap">
+                            {(groupIndex.sizeByPrimary.get(row.id) ?? 1) > 1 ? (
+                              <Badge variant="secondary" className="text-[8px]">
+                                {groupIndex.sizeByPrimary.get(row.id)} rows
+                              </Badge>
+                            ) : (
+                              <span className="text-[9px] text-muted-foreground">1</span>
+                            )}
+                          </td>
+                        )}
                         {supplierColumns.map((col) => {
                           const hasDiff = diff[col];
                           return (
@@ -337,6 +387,9 @@ export default function ReviewPage() {
             <table className="w-max min-w-full">
               <thead className="sticky top-0 z-20">
                 <tr className="border-b bg-card/95 backdrop-blur-xl">
+                  {groupIndex.enabled && (
+                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase whitespace-nowrap min-w-[90px]">Variants</th>
+                  )}
                   {supplierColumns.map((col) => (
                     <th key={col} className="text-left px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase whitespace-nowrap min-w-[120px]">{col}</th>
                   ))}
@@ -344,12 +397,23 @@ export default function ReviewPage() {
               </thead>
               <tbody>
                 {filteredNew.length === 0 ? (
-                  <tr><td colSpan={supplierColumns.length} className="text-center py-8 text-xs text-muted-foreground">{isPlp ? "No pages" : "No new products"}</td></tr>
+                  <tr><td colSpan={supplierColumns.length + (groupIndex.enabled ? 1 : 0)} className="text-center py-8 text-xs text-muted-foreground">{isPlp ? "No pages" : "No new products"}</td></tr>
                 ) : (
                   filteredNew.map((row) => {
                     const d = row.mapped_data || {};
                     return (
                       <tr key={row.id} className="border-b last:border-0 hover:bg-muted/20">
+                        {groupIndex.enabled && (
+                          <td className="px-3 py-2.5 text-xs whitespace-nowrap">
+                            {(groupIndex.sizeByPrimary.get(row.id) ?? 1) > 1 ? (
+                              <Badge variant="secondary" className="text-[8px]">
+                                {groupIndex.sizeByPrimary.get(row.id)} rows
+                              </Badge>
+                            ) : (
+                              <span className="text-[9px] text-muted-foreground">1</span>
+                            )}
+                          </td>
+                        )}
                         {supplierColumns.map((col) => (
                           <td key={col} className="px-3 py-2.5 text-xs whitespace-nowrap max-w-[250px] truncate">{d[col] ?? "—"}</td>
                         ))}
@@ -368,7 +432,9 @@ export default function ReviewPage() {
         <div className="text-xs text-muted-foreground">
           {isPlp
             ? `${rows.length} total`
-            : `${existingRows.length} existing, ${newRows.length} new — ${rows.length} total`}
+            : groupIndex.enabled
+              ? `${existingRows.length} existing, ${newRows.length} new — ${existingRows.length + newRows.length} products (${rows.length} rows)`
+              : `${existingRows.length} existing, ${newRows.length} new — ${rows.length} total`}
         </div>
         <div className="flex items-center gap-3">
           <Button variant="outline" size="sm" className="text-xs" onClick={() => router.back()}>Back</Button>

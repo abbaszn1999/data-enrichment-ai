@@ -22,6 +22,11 @@ import {
 } from "./project-json";
 import { catalogRowStoreEnabled } from "@/lib/catalog/flag";
 import { patchCatalogSessionRows } from "@/lib/catalog/session-rows";
+import {
+  applyPrimaryEnrichmentToGroup,
+  collapseToPrimaryRowIds,
+  resolveProductGroupColumn,
+} from "@/lib/catalog/product-groups";
 import type { CatalogJobSettings } from "./types";
 
 function splitEnriched(data: Record<string, unknown>): {
@@ -77,11 +82,21 @@ async function runEnrichSessionInner(
     return;
   }
 
+  const groupColumn = resolveProductGroupColumn({
+    saved: project.productGroupColumn,
+    columns: project.columns,
+    rows: project.rows,
+    kind: settings.kind,
+  });
   const byId = new Map(project.rows.map((row) => [row.id, row]));
   const processed = new Set(
     (Array.isArray(settings.processedRowIds) ? settings.processedRowIds : []).map(String)
   );
-  const pending = catalogPendingRowIds(run.target_ids, project.rows, [...processed]);
+  const pending = catalogPendingRowIds(
+    collapseToPrimaryRowIds(run.target_ids, project.rows, groupColumn),
+    project.rows,
+    [...processed]
+  );
 
   // Durable progress is the last checkpointed blob + processedRowIds, not
   // whatever heartbeat counts happened to land before a crash.
@@ -117,22 +132,23 @@ async function runEnrichSessionInner(
   // Serialize mutations. Hot state is the session row + heartbeat; the full
   // project.json blob flushes on the checkpoint budget and on terminal states.
   let writeQueue: Promise<void> = Promise.resolve();
-  const commit = (mutate: () => void, patchedRowId?: string): Promise<void> => {
+  const commit = (mutate: () => string[]): Promise<void> => {
     const operation = writeQueue.then(async () => {
-      mutate();
-      if (patchedRowId && catalogRowStoreEnabled()) {
-        const row = byId.get(patchedRowId);
-        if (row) {
-          await patchCatalogSessionRows(admin, run.session_id, [
-            {
-              id: row.id,
-              status: row.status,
-              errorMessage: row.errorMessage,
-              originalData: row.originalData,
-              enrichedData: row.enrichedData,
-              matchType: row.matchType,
-            },
-          ]);
+      const patchedRowIds = mutate();
+      if (patchedRowIds.length > 0 && catalogRowStoreEnabled()) {
+        const patches = patchedRowIds
+          .map((id) => byId.get(id))
+          .filter((row): row is NonNullable<typeof row> => Boolean(row))
+          .map((row) => ({
+            id: row.id,
+            status: row.status,
+            errorMessage: row.errorMessage,
+            originalData: row.originalData,
+            enrichedData: row.enrichedData,
+            matchType: row.matchType,
+          }));
+        if (patches.length > 0) {
+          await patchCatalogSessionRows(admin, run.session_id, patches);
         }
       }
       gate.noteCompletedRow();
@@ -194,14 +210,14 @@ async function runEnrichSessionInner(
         const row = byId.get(outcome.rowId);
         if (!row) {
           processed.add(outcome.rowId);
-          return;
+          return [outcome.rowId];
         }
         if (!outcome.ok) {
           row.status = "error";
           row.errorMessage = outcome.error;
           failed += 1;
           processed.add(outcome.rowId);
-          return;
+          return [outcome.rowId];
         }
         if (charged && !charged.ok) {
           row.status = "error";
@@ -215,7 +231,7 @@ async function runEnrichSessionInner(
             failed += 1;
             processed.add(outcome.rowId);
           }
-          return;
+          return [outcome.rowId];
         }
         processed.add(outcome.rowId);
         const split = splitEnriched(outcome.data);
@@ -228,7 +244,13 @@ async function runEnrichSessionInner(
         row.status = "done";
         row.errorMessage = undefined;
         completed += 1;
-      }, outcome.rowId);
+        const siblings = applyPrimaryEnrichmentToGroup(
+          project.rows,
+          outcome.rowId,
+          groupColumn
+        );
+        return [outcome.rowId, ...siblings];
+      });
 
       if (pausedNoCredits) return;
     }

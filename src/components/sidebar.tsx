@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   Sparkles,
@@ -20,7 +19,6 @@ import {
   PanelLeft,
   Plus,
   X,
-  ArrowLeft,
   Lock,
   Search,
   FileEdit,
@@ -71,6 +69,7 @@ import type { EnrichSettings } from "@/lib/enrich";
 import type { ProjectJson } from "@/lib/storage-helpers";
 import { getEnrichmentPresets, saveEnrichmentPreset } from "@/lib/supabase";
 import type { ProductRow } from "@/types";
+import { visibleCatalogRows } from "@/lib/catalog/product-groups";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -97,7 +96,6 @@ function projectJsonToProductRows(project: ProjectJson): ProductRow[] {
 }
 
 export function Sidebar() {
-  const router = useRouter();
   const { workspace, invalidateCredits, role } = useWorkspaceStore();
   const isViewer = role === "viewer";
   const {
@@ -110,6 +108,7 @@ export function Sidebar() {
     selectedRowIds,
     activeSheet,
     sessionKind,
+    productGroupColumn,
     workspaceId: sheetWorkspaceId,
     projectId,
     applyProjectRows,
@@ -231,9 +230,10 @@ export function Sidebar() {
     .map((col) => col.id);
 
   // Scope selection to active sheet
-  const sheetRows = rows.filter((r) =>
-    activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-  );
+  const sheetRows = visibleCatalogRows(rows, {
+    groupColumn: productGroupColumn,
+    activeSheet,
+  });
   const selectedRows = sheetRows.filter((r) => selectedRowIds.has(r.id));
   const enrichableRows = selectedRows.filter(
     (r) => r.status === "pending" || r.status === "error" || r.status === "done"
@@ -243,13 +243,10 @@ export function Sidebar() {
   // selected product(s). Empty on the selected row(s) → do not list the column.
   const enrichedColumnsWithData = useMemo(() => {
     if (selectedRowIds.size === 0) return [];
-    const selected = rows.filter(
-      (r) =>
-        selectedRowIds.has(r.id) &&
-        (activeSheet === "existing"
-          ? r.matchType === "existing"
-          : r.matchType !== "existing")
-    );
+    const selected = visibleCatalogRows(rows, {
+      groupColumn: productGroupColumn,
+      activeSheet,
+    }).filter((r) => selectedRowIds.has(r.id));
     if (selected.length === 0) return [];
     return enrichmentColumns.filter((col) =>
       selected.some((r) => {
@@ -258,7 +255,7 @@ export function Sidebar() {
         return val !== undefined && val !== null && val !== "";
       })
     );
-  }, [activeSheet, enrichmentColumns, rows, selectedRowIds]);
+  }, [activeSheet, enrichmentColumns, productGroupColumn, rows, selectedRowIds]);
 
   const handleStopEnrich = useCallback(async () => {
     const workspaceId = workspace?.id || sheetWorkspaceId;
@@ -709,15 +706,6 @@ export function Sidebar() {
       {/* Header with Tab Toggle */}
       <div className="border-b bg-muted/30 shrink-0">
         <div className="p-3 flex items-center justify-between">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 mr-1"
-            onClick={() => router.back()}
-            title="Back"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
           {isViewer ? (
             <div className="flex items-center gap-1.5 flex-1 mr-2 px-2 py-1.5 rounded-lg bg-muted/60 border border-border/50">
               <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -793,7 +781,8 @@ export function Sidebar() {
             <div className="flex items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
               <span className="text-xs font-medium text-muted-foreground">
-                {selectedRows.length} of {sheetRows.length} rows selected
+                {selectedRows.length} of {sheetRows.length}{" "}
+                {productGroupColumn ? "products" : "rows"} selected
               </span>
             </div>
             <Badge

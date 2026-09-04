@@ -539,6 +539,11 @@ export interface SheetState {
   sessionKind: SessionKind;
   /** Step 2 was skipped, so autosave must not drop that decision. */
   matchingSkipped: boolean;
+  /**
+   * When set, the enrich sheet shows one row per product and hides variant
+   * siblings. `null` means grouping is off.
+   */
+  productGroupColumn: string | null;
   fileName: string | null;
   rows: ProductRow[];
   originalColumns: string[];

@@ -91,6 +91,12 @@ export interface ProjectJson {
    * Later steps must not re-derive matchType, which would undo that choice.
    */
   matchingSkipped?: boolean;
+  /**
+   * Column used to collapse variant/attribute rows into one product
+   * (typically Shopify `Handle`). `null` means grouping is explicitly off.
+   * Absent means later steps may auto-detect.
+   */
+  productGroupColumn?: string | null;
 }
 
 export interface ProjectRow {

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageLoader } from "@/components/brand/page-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -13,6 +13,7 @@ import { useSheetStore } from "@/store/sheet-store";
 import type { MatchingRule } from "@/lib/matching";
 import { applyMatchTypes, resolveTargetCategoryNames } from "@/lib/import-matching";
 import { shouldRecomputeMatchTypes } from "@/lib/catalog/session-rows";
+import { countGroupedMatchTypes, resolveProductGroupColumn } from "@/lib/catalog/product-groups";
 import { Sidebar } from "@/components/sidebar";
 import { DataTable } from "@/components/data-table";
 import {
@@ -26,13 +27,14 @@ export default function EnrichPage() {
   const router = useRouter();
   const params = useParams();
   const sessionId = params.sessionId as string;
+  const slug = params.workspaceSlug as string;
   const { workspace } = useWorkspaceContext();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const loadedRef = useRef(false);
 
-  const { loadProject, rows, fileName } = useSheetStore();
+  const { loadProject, rows, fileName, productGroupColumn } = useSheetStore();
 
   useEffect(() => {
     if (!sessionId || !workspace || loadedRef.current) return;
@@ -99,6 +101,13 @@ export default function EnrichPage() {
           ? project.enrichmentSettings
           : DEFAULT_ENRICHMENT_SETTINGS;
 
+        const groupColumn = resolveProductGroupColumn({
+          saved: project.productGroupColumn,
+          columns: project.columns,
+          rows: productRows,
+          kind,
+        });
+
         // 5. Load into the sheet store
         loadProject(
           workspace!.id,
@@ -112,6 +121,7 @@ export default function EnrichPage() {
           project.columnVisibility || {},
           kind,
           project.matchingSkipped ?? false,
+          groupColumn,
         );
 
         setLoading(false);
@@ -133,7 +143,13 @@ export default function EnrichPage() {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-2">
         <p className="text-sm text-muted-foreground">{error}</p>
-        <Button variant="outline" size="sm" onClick={() => router.back()}>Go back</Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => router.push(`/w/${slug}/catalog-intelligence`)}
+        >
+          Back to projects
+        </Button>
       </div>
     );
   }
@@ -144,15 +160,6 @@ export default function EnrichPage() {
       <div className="autommerce-dashboard flex h-full min-h-0 flex-col overflow-hidden bg-background [font-family:var(--brand-font)]">
         <div className="h-1 shrink-0 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border/60 bg-background/95 px-3 backdrop-blur-xl">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 rounded-lg p-0"
-            onClick={() => router.back()}
-            aria-label="Back to review"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#400095] text-white dark:bg-[#F76D01]">
             <Sparkles className="h-3.5 w-3.5" />
           </span>
@@ -163,7 +170,20 @@ export default function EnrichPage() {
             </div>
           </div>
           <div className="ml-auto rounded-lg border border-border/60 bg-muted/35 px-2 py-1 text-[9px] text-muted-foreground">
-            <strong className="text-foreground">{rows.length}</strong> rows loaded
+            {(() => {
+              const stats = countGroupedMatchTypes(rows, productGroupColumn);
+              return productGroupColumn && stats.products !== stats.rows ? (
+                <>
+                  <strong className="text-foreground">{stats.products}</strong> products
+                  <span className="mx-1 text-muted-foreground/50">·</span>
+                  {stats.rows} rows
+                </>
+              ) : (
+                <>
+                  <strong className="text-foreground">{rows.length}</strong> rows loaded
+                </>
+              );
+            })()}
           </div>
         </header>
         <div className="flex min-h-0 flex-1 overflow-hidden">

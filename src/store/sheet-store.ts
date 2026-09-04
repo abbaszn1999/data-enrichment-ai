@@ -11,6 +11,7 @@ import type {
 } from "@/types";
 import { DEFAULT_ENRICHMENT_COLUMNS, DEFAULT_ENRICHMENT_SETTINGS, resolveEnrichmentModel } from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
+import { expandToGroupMemberIds, visibleCatalogRows } from "@/lib/catalog/product-groups";
 
 function normalizeEnrichmentSettings(
   settings: EnrichmentSettings | Partial<EnrichmentSettings> | null | undefined
@@ -23,6 +24,13 @@ function normalizeEnrichmentSettings(
     ...merged,
     enrichmentModel: resolveEnrichmentModel(merged.enrichmentModel),
   };
+}
+
+function sheetRowsForState(state: Pick<SheetState, "rows" | "activeSheet" | "productGroupColumn">) {
+  return visibleCatalogRows(state.rows, {
+    groupColumn: state.productGroupColumn,
+    activeSheet: state.activeSheet,
+  });
 }
 
 type UndoAction =
@@ -86,7 +94,7 @@ interface SheetActions {
   // Persistence
   restoreSession: () => Promise<boolean>;
   // Supabase project
-  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean) => void;
+  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean, productGroupColumn?: string | null) => void;
   applyProjectRows: (rows: ProductRow[], progress?: { completed: number; total: number; errors: number }) => void;
   /** Replace the whole AI configuration, e.g. when applying a saved setting. */
   applyEnrichmentPreset: (settings: { sourceColumns?: string[]; enrichmentColumns?: EnrichmentColumn[]; enrichmentSettings?: EnrichmentSettings }) => void;
@@ -111,6 +119,7 @@ const initialState: SheetState = {
   projectId: null,
   sessionKind: "product",
   matchingSkipped: false,
+  productGroupColumn: null,
   fileName: null,
   rows: [],
   originalColumns: [],
@@ -246,13 +255,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       // Match the sidebar: only AI columns that have data on the current selection.
       const scopeRows =
         state.selectedRowIds.size > 0
-          ? state.rows.filter(
-              (row) =>
-                state.selectedRowIds.has(row.id) &&
-                (state.activeSheet === "existing"
-                  ? row.matchType === "existing"
-                  : row.matchType !== "existing")
-            )
+          ? sheetRowsForState(state).filter((row) => state.selectedRowIds.has(row.id))
           : [];
 
       const enrichedWithData = state.enrichmentColumns
@@ -281,10 +284,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   selectAllRows: () =>
     set((state) => {
-      // Only select rows in the active sheet
-      const sheetRows = state.rows.filter((r) =>
-        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-      );
+      const sheetRows = sheetRowsForState(state);
       const sheetIds = new Set(sheetRows.map((r) => r.id));
       const newSelected = new Set(state.selectedRowIds);
       sheetIds.forEach((id) => newSelected.add(id));
@@ -299,10 +299,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   deselectAllRows: () =>
     set((state) => {
-      // Only deselect rows in the active sheet
-      const sheetRows = state.rows.filter((r) =>
-        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-      );
+      const sheetRows = sheetRowsForState(state);
       const sheetIds = new Set(sheetRows.map((r) => r.id));
       const newSelected = new Set(state.selectedRowIds);
       sheetIds.forEach((id) => newSelected.delete(id));
@@ -534,13 +531,10 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   deleteSelectedRows: () => {
     const state = get();
     // Only delete rows that are in the active sheet AND selected
-    const sheetIds = new Set(
-      state.rows
-        .filter((r) => state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing")
-        .map((r) => r.id)
-    );
+    const sheetIds = new Set(sheetRowsForState(state).map((r) => r.id));
+    const selectedOnSheet = [...state.selectedRowIds].filter((id) => sheetIds.has(id));
     const toDelete = new Set(
-      [...state.selectedRowIds].filter((id) => sheetIds.has(id))
+      expandToGroupMemberIds(selectedOnSheet, state.rows, state.productGroupColumn)
     );
     const deletedRows = state.rows.filter((r) => toDelete.has(r.id));
     const deletedIds = [...toDelete];
@@ -591,9 +585,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   selectByStatus: (status) =>
     set((state) => {
       // Only select rows in active sheet with the given status
-      const sheetRows = state.rows.filter((r) =>
-        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-      );
+      const sheetRows = sheetRowsForState(state);
       const matching = new Set(sheetRows.filter((r) => r.status === status).map((r) => r.id));
       // Keep selections from other sheet
       const otherSheetSelected = [...state.selectedRowIds].filter((id) => !sheetRows.some((r) => r.id === id));
@@ -607,9 +599,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   invertSelection: () =>
     set((state) => {
       // Only invert selection within active sheet
-      const sheetRows = state.rows.filter((r) =>
-        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-      );
+      const sheetRows = sheetRowsForState(state);
       const sheetIds = new Set(sheetRows.map((r) => r.id));
       const otherSheetSelected = [...state.selectedRowIds].filter((id) => !sheetIds.has(id));
       const invertedSheet = sheetRows.filter((r) => !state.selectedRowIds.has(r.id)).map((r) => r.id);
@@ -704,12 +694,18 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   },
 
   // Supabase project
-  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped) => {
+  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped, productGroupColumn) => {
+    const groupColumn = productGroupColumn ?? null;
+    const visible = visibleCatalogRows(rows, {
+      groupColumn,
+      activeSheet: "all",
+    });
     set({
       workspaceId,
       projectId,
       sessionKind: sessionKind ?? "product",
       matchingSkipped: matchingSkipped ?? false,
+      productGroupColumn: groupColumn,
       fileName,
       originalColumns: columns,
       rows,
@@ -717,7 +713,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       enrichmentColumns,
       enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
       columnVisibility,
-      selectedRowIds: new Set(rows.map((r) => r.id)),
+      selectedRowIds: new Set(visible.map((r) => r.id)),
       isEnriching: false,
       isPaused: false,
       enrichProgress: 0,
@@ -843,6 +839,7 @@ function configHash(state: SheetState): string {
     es: state.enrichmentSettings,
     cv: state.columnVisibility,
     cols: state.originalColumns,
+    pg: state.productGroupColumn,
   });
 }
 
@@ -874,6 +871,7 @@ async function persistProject() {
     const projectJson = {
       kind: s.sessionKind,
       matchingSkipped: s.matchingSkipped,
+      productGroupColumn: s.productGroupColumn,
       columns: s.originalColumns,
       rows: s.rows.map((r) => ({
         id: r.id,

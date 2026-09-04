@@ -21,6 +21,7 @@ import { useSheetStore } from "@/store/sheet-store";
 import { exportToExcelTwoSheets } from "@/lib/excel";
 import { enrichedValueToJson, enrichedValueToText } from "@/lib/export-values";
 import type { ProductRow } from "@/types";
+import { partitionRowsForExport } from "@/lib/catalog/product-groups";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -100,6 +101,7 @@ export function ExportDialog() {
     sessionKind,
     workspaceId,
     projectId,
+    productGroupColumn,
   } = useSheetStore();
 
   const [open, setOpen] = useState(false);
@@ -107,8 +109,10 @@ export function ExportDialog() {
   const [confirmWriteBack, setConfirmWriteBack] = useState(false);
   const [writingBack, setWritingBack] = useState(false);
 
-  const existingRows = rows.filter((r) => r.matchType === "existing");
-  const newRows = rows.filter((r) => r.matchType !== "existing");
+  const { existing: existingRows, new: newRows } = partitionRowsForExport(
+    rows,
+    productGroupColumn
+  );
   const totalRows = rows.length;
 
   const baseName = (fileName || "export").replace(/\.[^/.]+$/, "");
