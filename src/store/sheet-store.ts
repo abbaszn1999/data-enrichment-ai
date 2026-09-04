@@ -696,10 +696,6 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   // Supabase project
   loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped, productGroupColumn) => {
     const groupColumn = productGroupColumn ?? null;
-    const visible = visibleCatalogRows(rows, {
-      groupColumn,
-      activeSheet: "all",
-    });
     set({
       workspaceId,
       projectId,
@@ -708,12 +704,12 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       productGroupColumn: groupColumn,
       fileName,
       originalColumns: columns,
-      rows,
+      rows: rows.map((r) => ({ ...r, selected: false })),
       sourceColumns,
       enrichmentColumns,
       enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
       columnVisibility,
-      selectedRowIds: new Set(visible.map((r) => r.id)),
+      selectedRowIds: new Set<string>(),
       isEnriching: false,
       isPaused: false,
       enrichProgress: 0,

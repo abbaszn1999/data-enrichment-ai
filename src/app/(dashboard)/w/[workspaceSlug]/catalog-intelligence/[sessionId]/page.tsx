@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { Sparkles } from "lucide-react";
+import { ArrowLeft, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageLoader } from "@/components/brand/page-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -85,7 +85,7 @@ export default function EnrichPage() {
         const productRows: ProductRow[] = project.rows.map((r, idx) => ({
           id: r.id,
           rowIndex: r.rowIndex ?? idx,
-          selected: true,
+          selected: false,
           status: r.status as ProductRow["status"],
           errorMessage: r.errorMessage,
           originalData: r.originalData || {},
@@ -160,6 +160,15 @@ export default function EnrichPage() {
       <div className="autommerce-dashboard flex h-full min-h-0 flex-col overflow-hidden bg-background [font-family:var(--brand-font)]">
         <div className="h-1 shrink-0 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border/60 bg-background/95 px-3 backdrop-blur-xl">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 rounded-lg p-0"
+            onClick={() => router.push(`/w/${slug}/catalog-intelligence`)}
+            aria-label="Back to Catalog Intelligence"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#400095] text-white dark:bg-[#F76D01]">
             <Sparkles className="h-3.5 w-3.5" />
           </span>
