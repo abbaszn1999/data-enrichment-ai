@@ -34,6 +34,7 @@ import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
 import { getImportSessions, deleteImportSession, type ImportSession } from "@/lib/supabase";
+import { catalogSessionProgress } from "@/lib/catalog/session-progress";
 import type { SessionKind } from "@/types";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -76,20 +77,6 @@ function sessionHref(slug: string, session: ImportSession): string {
   }
   if (session.status === "review") return `${base}/review`;
   return `${base}/rules`;
-}
-
-function sessionProgress(session: ImportSession): number {
-  if (session.status === "completed") return 100;
-  if (session.status === "cancelled") return 0;
-  const totalRows = session.total_rows || 0;
-  if (totalRows <= 0) {
-    if (session.status === "enriching") return 40;
-    if (session.status === "review") return 25;
-    if (session.status === "rules" || session.status === "matching") return 10;
-    return 0;
-  }
-  const enriched = session.enriched_count || 0;
-  return Math.min(99, Math.round((enriched / totalRows) * 100));
 }
 
 export default function ImportPage() {
@@ -377,7 +364,7 @@ export default function ImportPage() {
                   const statusLabel =
                     STATUS_LABEL[session.status] ?? session.status;
                   const isReady = session.status === "completed";
-                  const progress = sessionProgress(session);
+                  const progress = catalogSessionProgress(session);
                   const kind = sessionKindOf(session);
                   const isPlp = kind === "plp";
 

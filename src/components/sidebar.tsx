@@ -70,6 +70,12 @@ import type { ProjectJson } from "@/lib/storage-helpers";
 import { getEnrichmentPresets, saveEnrichmentPreset } from "@/lib/supabase";
 import type { ProductRow } from "@/types";
 import { visibleCatalogRows } from "@/lib/catalog/product-groups";
+import {
+  catalogEnrichingContextFromRun,
+  catalogPollShouldApplySnapshot,
+  overlayCatalogRowsForActiveRun,
+  type CatalogPollRun,
+} from "@/lib/catalog/enrich-poll-merge";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -149,6 +155,14 @@ export function Sidebar() {
   const enrichRunIdRef = useRef<string | null>(null);
   const enrichPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enrichPollSawActiveRef = useRef(false);
+  const enrichEpochRef = useRef(0);
+
+  const beginEnrichEpoch = useCallback(() => {
+    enrichEpochRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = new AbortController();
+    return enrichEpochRef.current;
+  }, []);
   const isPlp = sessionKind === "plp";
 
   const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
@@ -258,6 +272,9 @@ export function Sidebar() {
   }, [activeSheet, enrichmentColumns, productGroupColumn, rows, selectedRowIds]);
 
   const handleStopEnrich = useCallback(async () => {
+    enrichEpochRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (enrichPollRef.current) {
       clearTimeout(enrichPollRef.current);
@@ -277,10 +294,6 @@ export function Sidebar() {
       } catch {
         // Cancellation is best-effort; the orchestrator also watches the flag.
       }
-    }
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
     }
     setIsEnriching(false);
     setPaused(false);
@@ -303,35 +316,23 @@ export function Sidebar() {
 
   const applyStatusPayload = useCallback(
     (payload: {
-      run?: {
-        id: string;
-        status: string;
-        completed_count: number;
-        failed_count: number;
-        target_ids: string[];
-      } | null;
+      run?: CatalogPollRun | null;
       project?: ProjectJson | null;
     }) => {
       if (payload.project) {
-        const run = payload.run;
-        const runActive =
-          run?.status === "queued" || run?.status === "running";
-        const productRows = projectJsonToProductRows(payload.project);
-        if (runActive && run) {
-          // Storage only ever holds pending/done/error. Rows still waiting for
-          // an active run are shown as processing so their cells keep spinning.
-          const targets = new Set(run.target_ids);
-          for (const row of productRows) {
-            if (targets.has(row.id) && row.status === "pending") {
-              row.status = "processing";
-            }
-          }
-        }
-        const total = payload.run?.target_ids.length || productRows.length;
+        const productRows = overlayCatalogRowsForActiveRun(
+          projectJsonToProductRows(payload.project),
+          payload.run
+        );
+        const total = payload.run?.target_ids?.length || productRows.length;
         applyProjectRows(productRows, {
-          completed: payload.run?.completed_count ?? productRows.filter((r) => r.status === "done").length,
+          completed:
+            payload.run?.completed_count ??
+            productRows.filter((r) => r.status === "done").length,
           total,
-          errors: payload.run?.failed_count ?? productRows.filter((r) => r.status === "error").length,
+          errors:
+            payload.run?.failed_count ??
+            productRows.filter((r) => r.status === "error").length,
         });
       }
     },
@@ -341,29 +342,53 @@ export function Sidebar() {
   const pollEnrichRun = useCallback(async () => {
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (!workspaceId || !projectId) return false;
+    const epoch = enrichEpochRef.current;
     const params = new URLSearchParams({
       workspaceId,
       sessionId: projectId,
     });
     if (enrichRunIdRef.current) params.set("runId", enrichRunIdRef.current);
-    const res = await fetch(`/api/catalog-intelligence/status?${params.toString()}`, {
-      cache: "no-store",
-    });
+    let res: Response;
+    try {
+      res = await fetch(
+        `/api/catalog-intelligence/status?${params.toString()}`,
+        {
+          cache: "no-store",
+          signal: abortControllerRef.current?.signal,
+        }
+      );
+    } catch (error) {
+      if (
+        (typeof DOMException !== "undefined" &&
+          error instanceof DOMException &&
+          error.name === "AbortError") ||
+        (error instanceof Error && error.name === "AbortError")
+      ) {
+        return false;
+      }
+      throw error;
+    }
+    if (epoch !== enrichEpochRef.current) return false;
     if (!res.ok) return false;
     const data = (await res.json()) as {
-      run?: {
-        id: string;
-        status: string;
-        completed_count: number;
-        failed_count: number;
-        target_ids: string[];
-      } | null;
+      run?: CatalogPollRun | null;
       project?: ProjectJson | null;
     };
+    const decision = catalogPollShouldApplySnapshot({
+      epoch,
+      currentEpoch: enrichEpochRef.current,
+      localRunId: enrichRunIdRef.current,
+      locallyEnriching: useSheetStore.getState().isEnriching,
+      run: data.run,
+    });
+    if (decision === "ignore") {
+      return true;
+    }
     if (data.run?.id) enrichRunIdRef.current = data.run.id;
     applyStatusPayload(data);
     const active =
-      data.run && (data.run.status === "queued" || data.run.status === "running");
+      data.run &&
+      (data.run.status === "queued" || data.run.status === "running");
     if (!active) {
       const shouldToast = enrichPollSawActiveRef.current && Boolean(data.run);
       enrichPollSawActiveRef.current = false;
@@ -385,9 +410,11 @@ export function Sidebar() {
     const run = data.run;
     if (!run) return false;
     setIsEnriching(true);
+    const enrichingContext = catalogEnrichingContextFromRun(run);
+    setEnrichingContext(enrichingContext.tab, enrichingContext.existingColumns);
     setEnrichProgress(
-      run.completed_count + run.failed_count,
-      run.target_ids.length
+      (run.completed_count ?? 0) + (run.failed_count ?? 0),
+      run.target_ids?.length ?? 0
     );
     invalidateCredits();
     return true;
@@ -411,6 +438,7 @@ export function Sidebar() {
       return;
     }
 
+    beginEnrichEpoch();
     setIsEnriching(true);
     setPaused(false);
     setEnrichProgress(0, enrichableRows.length);
@@ -564,6 +592,7 @@ export function Sidebar() {
     setEnrichProgress,
     setEnrichingContext,
     setRowStatus,
+    beginEnrichEpoch,
   ]);
 
   useEffect(() => {
