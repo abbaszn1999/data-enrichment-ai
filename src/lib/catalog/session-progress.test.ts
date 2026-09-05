@@ -1,5 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { catalogSessionProgress } from "./session-progress";
+import {
+  catalogSessionIsActivelyProcessing,
+  catalogSessionIsUnfinished,
+  catalogSessionProgress,
+} from "./session-progress";
+
+describe("catalogSessionIsActivelyProcessing", () => {
+  it("is true only while enriching or an active job exists", () => {
+    expect(
+      catalogSessionIsActivelyProcessing({ id: "a", status: "enriching" })
+    ).toBe(true);
+    expect(
+      catalogSessionIsActivelyProcessing({ id: "a", status: "review" })
+    ).toBe(false);
+    expect(
+      catalogSessionIsActivelyProcessing({ id: "a", status: "matching" })
+    ).toBe(false);
+    expect(
+      catalogSessionIsActivelyProcessing({ id: "a", status: "completed" })
+    ).toBe(false);
+    expect(
+      catalogSessionIsActivelyProcessing(
+        { id: "a", status: "review" },
+        new Set(["a"])
+      )
+    ).toBe(true);
+  });
+});
+
+describe("catalogSessionIsUnfinished", () => {
+  it("keeps idle Rules/Review drafts out of Ready", () => {
+    expect(catalogSessionIsUnfinished({ status: "review" })).toBe(true);
+    expect(catalogSessionIsUnfinished({ status: "matching" })).toBe(true);
+    expect(catalogSessionIsUnfinished({ status: "enriching" })).toBe(true);
+    expect(catalogSessionIsUnfinished({ status: "completed" })).toBe(false);
+    expect(catalogSessionIsUnfinished({ status: "cancelled" })).toBe(false);
+  });
+});
 
 describe("catalogSessionProgress", () => {
   it("is 100 only when every row is enriched", () => {

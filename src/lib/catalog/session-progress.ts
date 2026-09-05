@@ -1,4 +1,24 @@
 /**
+ * True while Catalog Intelligence is actually working in the background.
+ * Matching / Rules / Review drafts are unfinished, not processing.
+ */
+export function catalogSessionIsActivelyProcessing(
+  session: { id?: string | null; status?: string | null },
+  activeJobSessionIds?: Set<string>
+): boolean {
+  if (session.status === "enriching") return true;
+  const id = session.id;
+  return Boolean(id && activeJobSessionIds?.has(id));
+}
+
+/** Uploaded but not Ready — includes idle Rules/Review drafts. */
+export function catalogSessionIsUnfinished(session: {
+  status?: string | null;
+}): boolean {
+  return session.status !== "completed" && session.status !== "cancelled";
+}
+
+/**
  * Catalog Intelligence list cards: progress is how much of the sheet is
  * actually enriched, not whether the last enrich job finished.
  */

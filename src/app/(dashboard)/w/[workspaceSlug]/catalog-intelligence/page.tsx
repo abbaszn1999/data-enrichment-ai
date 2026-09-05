@@ -33,8 +33,12 @@ import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
-import { getImportSessions, deleteImportSession, type ImportSession } from "@/lib/supabase";
-import { catalogSessionProgress } from "@/lib/catalog/session-progress";
+import { getImportSessions, deleteImportSession, getActiveCatalogJobSessionIds, type ImportSession } from "@/lib/supabase";
+import {
+  catalogSessionIsActivelyProcessing,
+  catalogSessionIsUnfinished,
+  catalogSessionProgress,
+} from "@/lib/catalog/session-progress";
 import type { SessionKind } from "@/types";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -89,6 +93,9 @@ export default function ImportPage() {
   const canAdmin = permissions.canAdmin;
 
   const [sessions, setSessions] = useState<ImportSession[]>([]);
+  const [activeJobSessionIds, setActiveJobSessionIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [loading, setLoading] = useState(true);
   const [projectSearch, setProjectSearch] = useState("");
   const [projectStatusFilter, setProjectStatusFilter] = useState("all");
@@ -103,26 +110,62 @@ export default function ImportPage() {
 
   useEffect(() => {
     if (!workspace) return;
-    getImportSessions(workspace.id)
-      .then((data) => setSessions((data ?? []) as ImportSession[]))
-      .catch((err) => console.error("Failed to load import sessions:", err))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+
+    const load = async (isInitial = false) => {
+      try {
+        const [data, jobIds] = await Promise.all([
+          getImportSessions(workspace.id),
+          getActiveCatalogJobSessionIds(workspace.id).catch(() => [] as string[]),
+        ]);
+        if (cancelled) return;
+        setSessions((data ?? []) as ImportSession[]);
+        setActiveJobSessionIds(new Set(jobIds));
+      } catch (err) {
+        console.error("Failed to load import sessions:", err);
+      } finally {
+        if (!cancelled && isInitial) setLoading(false);
+      }
+    };
+
+    void load(true);
+    return () => {
+      cancelled = true;
+    };
   }, [workspace]);
 
   const projectStats = useMemo(
     () => ({
       total: sessions.length,
       ready: sessions.filter((s) => s.status === "completed").length,
-      processing: sessions.filter(
-        (s) => s.status !== "completed" && s.status !== "cancelled"
+      processing: sessions.filter((s) =>
+        catalogSessionIsActivelyProcessing(s, activeJobSessionIds)
       ).length,
       products: sessions.reduce((sum, s) => sum + (s.total_rows || 0), 0),
       // A workspace mixing both kinds cannot call this total "Products".
       hasPlp: sessions.some((s) => sessionKindOf(s) === "plp"),
       hasProduct: sessions.some((s) => sessionKindOf(s) === "product"),
     }),
-    [sessions]
+    [activeJobSessionIds, sessions]
   );
+
+  useEffect(() => {
+    if (!workspace || projectStats.processing === 0) return;
+    const timer = window.setInterval(() => {
+      void Promise.all([
+        getImportSessions(workspace.id),
+        getActiveCatalogJobSessionIds(workspace.id).catch(() => [] as string[]),
+      ])
+        .then(([data, jobIds]) => {
+          setSessions((data ?? []) as ImportSession[]);
+          setActiveJobSessionIds(new Set(jobIds));
+        })
+        .catch((err) =>
+          console.error("Failed to refresh import sessions:", err)
+        );
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [projectStats.processing, workspace]);
 
   const rowsMetricLabel =
     projectStats.hasPlp && projectStats.hasProduct
@@ -147,10 +190,7 @@ export default function ImportPage() {
       if (projectStatusFilter === "ready") {
         if (session.status !== "completed") return false;
       } else if (projectStatusFilter === "processing") {
-        if (
-          session.status === "completed" ||
-          session.status === "cancelled"
-        ) {
+        if (!catalogSessionIsUnfinished(session)) {
           return false;
         }
       } else if (projectStatusFilter !== "all") {

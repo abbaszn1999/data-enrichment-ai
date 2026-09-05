@@ -603,6 +603,22 @@ export async function getImportSessions(workspaceId: string, opts?: { status?: s
   return data ?? [];
 }
 
+export async function getActiveCatalogJobSessionIds(
+  workspaceId: string
+): Promise<string[]> {
+  const supabase = getClient();
+  const { data, error } = await supabase
+    .from("job_runs")
+    .select("session_id")
+    .eq("workspace_id", workspaceId)
+    .eq("kind", "catalog")
+    .in("status", ["queued", "running"]);
+  if (error) throw error;
+  return [
+    ...new Set((data ?? []).map((row) => String(row.session_id))),
+  ];
+}
+
 export async function getImportSession(id: string): Promise<ImportSession | null> {
   const supabase = getClient();
   const { data, error } = await supabase
