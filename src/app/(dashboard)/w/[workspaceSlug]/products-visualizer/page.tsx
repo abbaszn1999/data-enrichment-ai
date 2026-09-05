@@ -77,7 +77,10 @@ import {
 } from "@/lib/visualizer/generation-worksheet-merge";
 import { maxRevision, snapshotRevision } from "@/lib/jobs/snapshot-clock";
 import { resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
-import { productDisplayName } from "@/lib/visualizer/row-fields";
+import {
+  productDisplayName,
+  visualizerImageColumnOptions,
+} from "@/lib/visualizer/row-fields";
 import {
   DescriptionLayoutDialog,
   LayoutSettingsButton,
@@ -713,6 +716,28 @@ export default function ProductsVisualizerPage() {
     );
   }, [settings.productImageColumn, worksheet]);
 
+  const imageColumnCandidates = useMemo(() => {
+    if (!worksheet) return [];
+    return visualizerImageColumnOptions({
+      columns: worksheet.columns,
+      rows: worksheet.rows,
+      selected: settings.productImageColumn,
+    });
+  }, [settings.productImageColumn, worksheet]);
+
+  const detectedImageColumns = useMemo(() => {
+    if (!worksheet) return [];
+    return visualizerImageColumnOptions({
+      columns: worksheet.columns,
+      rows: worksheet.rows,
+    });
+  }, [worksheet]);
+
+  const imageColumnIsValid = Boolean(
+    settings.productImageColumn &&
+      detectedImageColumns.includes(settings.productImageColumn)
+  );
+
   const toggleColumn = (column: string) => {
     if (settings.productImageColumn && column === settings.productImageColumn) {
       return;
@@ -986,7 +1011,7 @@ export default function ProductsVisualizerPage() {
   };
 
   const settingsReady =
-    settings.selectedColumns.length > 0 && !!settings.productImageColumn;
+    settings.selectedColumns.length > 0 && imageColumnIsValid;
 
   const rows = useMemo(() => worksheet?.rows ?? [], [worksheet?.rows]);
 
@@ -1228,7 +1253,11 @@ export default function ProductsVisualizerPage() {
   const runGenerate = async (retryFailed = false) => {
     if (!workspace || !session || !worksheet || !canEdit || generating) return;
     if (!settingsReady) {
-      toast.error("Select worksheet columns and a Product image column first");
+      toast.error(
+        imageColumnIsValid
+          ? "Select worksheet columns first"
+          : "Choose a Product image column that contains image URLs"
+      );
       return;
     }
     const rowIds = retryFailed
@@ -1545,12 +1574,28 @@ export default function ProductsVisualizerPage() {
                 }}
                 options={[
                   { value: "none", label: "Not selected" },
-                  ...worksheet.columns.map((column) => ({
+                  ...imageColumnCandidates.map((column) => ({
                     value: column,
                     label: column,
                   })),
                 ]}
               />
+              {detectedImageColumns.length === 0 ? (
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  No worksheet column contains image URLs. Add a column of
+                  http(s) image links — the header name can be anything.
+                </p>
+              ) : settings.productImageColumn && !imageColumnIsValid ? (
+                <p className="text-[11px] leading-snug text-amber-600 dark:text-amber-400">
+                  This column is not image URLs. Pick a column whose cells are
+                  http(s) links.
+                </p>
+              ) : (
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  Only columns whose values are image URLs are listed. Generate
+                  stays disabled until one is selected.
+                </p>
+              )}
               <div className="overflow-hidden rounded-md border">
                 <div className="grid grid-cols-[auto_1fr] gap-x-2 border-b bg-muted/50 px-2.5 py-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                   <input

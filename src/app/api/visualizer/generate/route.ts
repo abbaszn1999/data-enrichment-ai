@@ -207,7 +207,8 @@ async function generateSynchronously(request: NextRequest) {
 
   const mappingError = validateVisualizerSettings(
     runtimeSettings,
-    worksheet.columns
+    worksheet.columns,
+    worksheet.rows
   );
   if (mappingError) {
     return NextResponse.json(
