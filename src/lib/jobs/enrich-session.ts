@@ -261,7 +261,9 @@ async function runEnrichSessionInner(
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
   }
   await writeQueue.catch(() => undefined);
-  if (gate.shouldFlush(true)) await persistCold();
+  // Always flush drained in-flight rows before finishing — Stop must not
+  // discard AI replies that were already charged.
+  await persistCold();
 
   if (pausedNoCredits) {
     const paused = await finishJobRun(admin, run.id, {
@@ -275,6 +277,16 @@ async function runEnrichSessionInner(
   }
 
   if (await isJobCancelRequested(admin, run.id)) {
+    const enrichedCount = project.rows.filter((row) => row.status === "done").length;
+    await admin
+      .from("catalog_sessions")
+      .update({
+        enriched_count: enrichedCount,
+        status: "completed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", run.session_id)
+      .eq("workspace_id", run.workspace_id);
     await finishJobRun(admin, run.id, {
       status: "cancelled",
       completedCount: completed,

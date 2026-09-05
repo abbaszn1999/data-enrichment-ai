@@ -84,6 +84,7 @@ interface SheetActions {
   ) => void;
   setRowEnrichedData: (rowId: string, data: EnrichedData) => void;
   setIsEnriching: (value: boolean) => void;
+  setStoppingEnrich: (value: boolean) => void;
   setEnrichProgress: (completed: number, total: number) => void;
   incrementError: () => void;
   resetEnrichState: () => void;
@@ -130,6 +131,7 @@ const initialState: SheetState = {
   selectedRowIds: new Set<string>(),
   isEnriching: false,
   isPaused: false,
+  isStoppingEnrich: false,
   enrichProgress: 0,
   totalToEnrich: 0,
   completedEnrich: 0,
@@ -501,7 +503,14 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       ),
     })),
 
-  setIsEnriching: (value) => set({ isEnriching: value }),
+  setIsEnriching: (value) =>
+    set(
+      value
+        ? { isEnriching: true }
+        : { isEnriching: false, isStoppingEnrich: false }
+    ),
+
+  setStoppingEnrich: (value) => set({ isStoppingEnrich: value }),
 
   setEnrichProgress: (completed, total) =>
     set({
@@ -516,6 +525,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   resetEnrichState: () =>
     set((state) => ({
       isEnriching: false,
+      isStoppingEnrich: false,
       enrichProgress: 0,
       totalToEnrich: 0,
       completedEnrich: 0,
@@ -686,6 +696,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         selectedRowIds: new Set(session.rows.map((r) => r.id)),
         isEnriching: false,
         isPaused: false,
+        isStoppingEnrich: false,
       });
       return true;
     } catch {
@@ -712,6 +723,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       selectedRowIds: new Set<string>(),
       isEnriching: false,
       isPaused: false,
+      isStoppingEnrich: false,
       enrichProgress: 0,
       totalToEnrich: 0,
       completedEnrich: 0,
@@ -856,7 +868,7 @@ async function persistProject() {
   // armed before enrichment started (e.g. right after opening the page) must
   // not fire mid-run or right after it finishes and blindly overwrite the
   // background job's freshly saved results with this stale row snapshot.
-  if (s.isEnriching) return;
+  if (s.isEnriching || s.isStoppingEnrich) return;
 
   useSheetStore.setState({ saveStatus: "saving" });
 
@@ -930,7 +942,7 @@ useSheetStore.subscribe((state, prevState) => {
 
   const hasChanges = versionChanged || configChanged || rowCountChanged || enrichDataChanged;
   if (!hasChanges) return;
-  if (state.isEnriching) return;
+  if (state.isEnriching || state.isStoppingEnrich) return;
 
   // Mark as unsaved
   if (state.saveStatus === "saved") {

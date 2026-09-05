@@ -288,6 +288,8 @@ export default function ProductsVisualizerPage() {
   const settingsRef = useRef(settings);
   const sessionRef = useRef(session);
   const worksheetRef = useRef(worksheet);
+  const stopRequestedRef = useRef(false);
+  const stopSavedToastRef = useRef(false);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -405,6 +407,12 @@ export default function ProductsVisualizerPage() {
     }
   }, [reviewRowId, worksheet]);
 
+  const toastStopSavedIfNeeded = useCallback(() => {
+    if (!stopRequestedRef.current || stopSavedToastRef.current) return;
+    stopSavedToastRef.current = true;
+    toast.success("Stopped. Products already sent to the AI were saved.");
+  }, []);
+
   const shouldPollGeneration = generating || generationRun !== null;
   const lastCreditsProgressRef = useRef(0);
   useEffect(() => {
@@ -465,9 +473,14 @@ export default function ProductsVisualizerPage() {
             completed: done,
             runId: progress.jobId || "",
           });
-          if (progress.cancelRequested) setStopping(true);
+          if (progress.cancelRequested) {
+            stopRequestedRef.current = true;
+            setStopping(true);
+          }
         } else if (!generating && !localBusy && !localRunActive) {
           if (lastCreditsProgressRef.current > 0) invalidateCredits();
+          toastStopSavedIfNeeded();
+          stopRequestedRef.current = false;
           setGenerationRun(null);
           setStopping(false);
         }
@@ -529,6 +542,8 @@ export default function ProductsVisualizerPage() {
               !applied.rows.some(visualizerRowIsBusy) &&
               !visualizerRunIsActive(applied)
             ) {
+              toastStopSavedIfNeeded();
+              stopRequestedRef.current = false;
               setGenerationRun(null);
               setStopping(false);
             }
@@ -551,6 +566,7 @@ export default function ProductsVisualizerPage() {
     invalidateCredits,
     projectId,
     shouldPollGeneration,
+    toastStopSavedIfNeeded,
     workspace?.id,
   ]);
 
@@ -901,6 +917,12 @@ export default function ProductsVisualizerPage() {
 
   const persistSettings = async (options?: { silent?: boolean }) => {
     if (!workspace || !sessionRef.current || !worksheetRef.current || !canEdit) {
+      return null;
+    }
+    if (generating || generationRun) {
+      if (!options?.silent) {
+        toast.message("Wait until generation finishes before saving.");
+      }
       return null;
     }
     setSaveStatus("saving");
@@ -1282,6 +1304,9 @@ export default function ProductsVisualizerPage() {
     if (!prepared) return;
     const { activeSession, activeWorksheet, activeSettings } = prepared;
 
+    stopRequestedRef.current = false;
+    stopSavedToastRef.current = false;
+    setStopping(false);
     setGenerating(true);
     setGenerationRun({ total: rowIds.length, completed: 0 });
     setWorksheet((current) =>
@@ -1376,24 +1401,35 @@ export default function ProductsVisualizerPage() {
       } else if (result.status === "failed") {
         toast.error("Generation failed");
       } else {
-        toast.success(
-          result.message ||
-            `Stopped after ${result.completed ?? 0} product${
-              (result.completed ?? 0) === 1 ? "" : "s"
-            }`
-        );
+        toastStopSavedIfNeeded();
+        if (!stopSavedToastRef.current) {
+          toast.success(
+            result.message ||
+              `Stopped after ${result.completed ?? 0} product${
+                (result.completed ?? 0) === 1 ? "" : "s"
+              }`
+          );
+        }
       }
     } catch (error) {
       await handleGenerateError(error, "Generation failed");
     } finally {
       setGenerating(false);
-      setStopping(false);
+      if (
+        !stopRequestedRef.current ||
+        !visualizerRunIsActive(worksheetRef.current)
+      ) {
+        toastStopSavedIfNeeded();
+        stopRequestedRef.current = false;
+        setStopping(false);
+      }
       invalidateCredits();
     }
   };
 
   const stopGeneration = async () => {
     if (!workspace || !session || stopping) return;
+    stopRequestedRef.current = true;
     setStopping(true);
     try {
       await requestVisualizerGenerationStop({
@@ -1401,9 +1437,10 @@ export default function ProductsVisualizerPage() {
         sessionId: session.id,
       });
       toast.message(
-        "Stop requested. The current product will finish, then generation will stop."
+        "Stop requested. Products already sent to the AI will finish and be saved."
       );
     } catch (error) {
+      stopRequestedRef.current = false;
       setStopping(false);
       toast.error(
         error instanceof VisualizerApiError
@@ -1507,7 +1544,7 @@ export default function ProductsVisualizerPage() {
                 size="sm"
                 variant="outline"
                 className="gap-1.5 text-xs"
-                disabled={isExporting || generating}
+                disabled={isExporting || generating || stopping || !!generationRun}
                 onClick={() => void handleExport()}
               >
                 {isExporting ? (
@@ -1525,6 +1562,8 @@ export default function ProductsVisualizerPage() {
               disabled={
                 !canEdit ||
                 generating ||
+                stopping ||
+                !!generationRun ||
                 saveStatus === "saving" ||
                 saveStatus === "saved"
               }
@@ -1952,7 +1991,7 @@ export default function ProductsVisualizerPage() {
                   </p>
                   <p className="text-[10px] text-muted-foreground">
                     {stopping
-                      ? "Finishing the current product before stopping"
+                      ? "Finishing products already sent to the AI, then saving."
                       : bannerCompleted > 0
                         ? `${bannerCompleted} of ${bannerTotal} done · Keep this page open`
                         : "Keep this page open until generation finishes"}

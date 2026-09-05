@@ -554,6 +554,8 @@ export interface SheetState {
   selectedRowIds: Set<string>;
   isEnriching: boolean;
   isPaused: boolean;
+  /** Stop was requested; in-flight AI rows are draining and must not be autosaved over. */
+  isStoppingEnrich: boolean;
   enrichProgress: number;
   totalToEnrich: number;
   completedEnrich: number;

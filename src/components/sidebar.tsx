@@ -134,7 +134,9 @@ export function Sidebar() {
     updateCellValue,
     isEnriching,
     isPaused,
+    isStoppingEnrich,
     setIsEnriching,
+    setStoppingEnrich,
     setPaused,
     enrichProgress,
     totalToEnrich,
@@ -271,49 +273,6 @@ export function Sidebar() {
     );
   }, [activeSheet, enrichmentColumns, productGroupColumn, rows, selectedRowIds]);
 
-  const handleStopEnrich = useCallback(async () => {
-    enrichEpochRef.current += 1;
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    const workspaceId = workspace?.id || sheetWorkspaceId;
-    if (enrichPollRef.current) {
-      clearTimeout(enrichPollRef.current);
-      enrichPollRef.current = null;
-    }
-    if (workspaceId) {
-      try {
-        await fetch("/api/catalog-intelligence/cancel", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            workspaceId,
-            sessionId: projectId,
-            runId: enrichRunIdRef.current,
-          }),
-        });
-      } catch {
-        // Cancellation is best-effort; the orchestrator also watches the flag.
-      }
-    }
-    setIsEnriching(false);
-    setPaused(false);
-    setEnrichingContext(null, []);
-    for (const row of rows) {
-      if (row.status === "processing") {
-        setRowStatus(row.id, "pending");
-      }
-    }
-  }, [
-    workspace?.id,
-    sheetWorkspaceId,
-    projectId,
-    rows,
-    setIsEnriching,
-    setPaused,
-    setRowStatus,
-    setEnrichingContext,
-  ]);
-
   const applyStatusPayload = useCallback(
     (payload: {
       run?: CatalogPollRun | null;
@@ -390,6 +349,7 @@ export function Sidebar() {
       data.run &&
       (data.run.status === "queued" || data.run.status === "running");
     if (!active) {
+      const wasStopping = useSheetStore.getState().isStoppingEnrich;
       const shouldToast = enrichPollSawActiveRef.current && Boolean(data.run);
       enrichPollSawActiveRef.current = false;
       enrichRunIdRef.current = null;
@@ -403,6 +363,11 @@ export function Sidebar() {
         });
       } else if (shouldToast && data.run?.status === "failed") {
         toast.error("Enrichment failed");
+      } else if (
+        wasStopping ||
+        (shouldToast && data.run?.status === "cancelled")
+      ) {
+        toast.success("Stopped. Rows already sent to the AI were saved.");
       }
       return false;
     }
@@ -429,8 +394,60 @@ export function Sidebar() {
     invalidateCredits,
   ]);
 
+  const handleStopEnrich = useCallback(async () => {
+    if (useSheetStore.getState().isStoppingEnrich) return;
+    setStoppingEnrich(true);
+    const workspaceId = workspace?.id || sheetWorkspaceId;
+    if (!workspaceId || !projectId) {
+      setStoppingEnrich(false);
+      return;
+    }
+    try {
+      const response = await fetch("/api/catalog-intelligence/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId,
+          sessionId: projectId,
+          runId: enrichRunIdRef.current,
+        }),
+      });
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`Stop failed (${response.status})`);
+      }
+      toast.message(
+        "Stop requested. Rows already sent to the AI will finish and be saved."
+      );
+    } catch {
+      setStoppingEnrich(false);
+      toast.error("Could not request stop");
+      return;
+    }
+    if (!enrichPollRef.current) {
+      const tick = async () => {
+        try {
+          const keep = await pollEnrichRun();
+          if (keep) {
+            enrichPollRef.current = setTimeout(tick, 2500);
+          }
+        } catch (error) {
+          console.error("Enrichment poll failed:", error);
+          enrichPollRef.current = setTimeout(tick, 4000);
+        }
+      };
+      void tick();
+    }
+  }, [
+    workspace?.id,
+    sheetWorkspaceId,
+    projectId,
+    pollEnrichRun,
+    setStoppingEnrich,
+  ]);
+
   const handleEnrich = useCallback(async () => {
     const isNewTab = enrichOutputTab === "new";
+    if (useSheetStore.getState().isStoppingEnrich) return;
     if ((isNewTab ? enabledColumns.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (!workspaceId || !projectId) {
@@ -1720,7 +1737,9 @@ export function Sidebar() {
               <div className="flex items-center justify-between text-sm">
                 <span className="text-foreground flex items-center gap-2">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                  <span className="font-medium text-xs">Enriching...</span>
+                  <span className="font-medium text-xs">
+                    {isStoppingEnrich ? "Stopping..." : "Enriching..."}
+                  </span>
                 </span>
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[10px] text-muted-foreground bg-background px-2 py-0.5 rounded">
@@ -1731,15 +1750,18 @@ export function Sidebar() {
                     size="sm"
                     className="h-6 px-2 text-[10px] text-destructive hover:bg-destructive/10 hover:text-destructive"
                     onClick={handleStopEnrich}
+                    disabled={isStoppingEnrich}
                   >
                     <X className="h-3 w-3 mr-1" />
-                    Stop
+                    {isStoppingEnrich ? "Stopping" : "Stop"}
                   </Button>
                 </div>
               </div>
               <Progress value={enrichProgress} className="h-1.5" />
               <p className="text-[9px] text-muted-foreground/60">
-                {Math.round(enrichProgress)}% complete · {totalToEnrich - completedEnrich} remaining
+                {isStoppingEnrich
+                  ? "Finishing rows already sent to the AI, then saving."
+                  : `${Math.round(enrichProgress)}% complete · ${totalToEnrich - completedEnrich} remaining`}
               </p>
             </div>
           )}

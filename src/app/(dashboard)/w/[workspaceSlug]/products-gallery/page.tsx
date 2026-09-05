@@ -388,6 +388,8 @@ export default function ProductsGalleryPage() {
   const worksheetRevisionRef = useRef(0);
   const settingsRevisionRef = useRef(0);
   const worksheetRef = useRef<GalleryWorksheetJson | null>(null);
+  const stopRequestedRef = useRef(false);
+  const stopSavedToastRef = useRef(false);
   const lastSavedRowSignatureRef = useRef("");
   const aiAssetPathsRef = useRef<{
     logoPath: string | null;
@@ -692,6 +694,9 @@ export default function ProductsGalleryPage() {
   ) => {
     const worksheetToSave = worksheetOverride ?? worksheet;
     if (!workspace || !projectId || !canEdit || !worksheetToSave) return null;
+    if (generationRun || isGenerating || isStoppingGeneration) {
+      return worksheetToSave;
+    }
     const settings = buildSettingsPatch();
     const signature = JSON.stringify(settings);
     if (signature === lastSavedSettingsSignatureRef.current) {
@@ -749,6 +754,9 @@ export default function ProductsGalleryPage() {
     buildSettingsPatch,
     canEdit,
     enqueueMutation,
+    generationRun,
+    isGenerating,
+    isStoppingGeneration,
     projectId,
     workspace,
     worksheet,
@@ -1087,6 +1095,12 @@ export default function ProductsGalleryPage() {
     worksheetRef.current = worksheet;
   }, [worksheet]);
 
+  const toastStopSavedIfNeeded = useCallback(() => {
+    if (!stopRequestedRef.current || stopSavedToastRef.current) return;
+    stopSavedToastRef.current = true;
+    toast.success("Stopped. Products already sent to the AI were saved.");
+  }, []);
+
   const shouldPollGeneration = isGenerating || generationRun !== null;
   const lastCreditsProgressRef = useRef(0);
   useEffect(() => {
@@ -1143,9 +1157,14 @@ export default function ProductsGalleryPage() {
             completed: done,
             runId: progress.jobId || "",
           });
-          if (progress.cancelRequested) setIsStoppingGeneration(true);
+          if (progress.cancelRequested) {
+            stopRequestedRef.current = true;
+            setIsStoppingGeneration(true);
+          }
         } else if (!isGenerating && !localBusy && !localRunActive) {
           if (lastCreditsProgressRef.current > 0) invalidateCredits();
+          toastStopSavedIfNeeded();
+          stopRequestedRef.current = false;
           setGenerationRun(null);
           setIsStoppingGeneration(false);
         }
@@ -1211,6 +1230,8 @@ export default function ProductsGalleryPage() {
               !applied.rows.some(galleryRowIsBusy) &&
               !galleryRunIsActive(applied)
             ) {
+              toastStopSavedIfNeeded();
+              stopRequestedRef.current = false;
               setGenerationRun(null);
               setIsStoppingGeneration(false);
             }
@@ -1252,6 +1273,7 @@ export default function ProductsGalleryPage() {
     isGenerating,
     projectId,
     shouldPollGeneration,
+    toastStopSavedIfNeeded,
     workspace?.id,
   ]);
 
@@ -1514,6 +1536,7 @@ export default function ProductsGalleryPage() {
     ) {
       return;
     }
+    stopRequestedRef.current = true;
     setIsStoppingGeneration(true);
     try {
       await requestGalleryGenerationStop({
@@ -1521,9 +1544,10 @@ export default function ProductsGalleryPage() {
         sessionId: projectId,
       });
       toast.message(
-        "Stop requested. The current product will finish, then generation will stop."
+        "Stop requested. Products already sent to the AI will finish and be saved."
       );
     } catch (error) {
+      stopRequestedRef.current = false;
       setIsStoppingGeneration(false);
       toast.error(
         error instanceof Error ? error.message : "Could not request stop"
@@ -1605,6 +1629,8 @@ export default function ProductsGalleryPage() {
       }
     }
 
+    stopRequestedRef.current = false;
+    stopSavedToastRef.current = false;
     setIsStoppingGeneration(false);
     setIsGenerating(true);
     const worksheetBeforeGeneration = worksheet;
@@ -1725,7 +1751,10 @@ export default function ProductsGalleryPage() {
         });
       }
       if (result.status === "cancelled") {
-        toast.message("Generation cancelled");
+        toastStopSavedIfNeeded();
+        if (!stopSavedToastRef.current) {
+          toast.message("Generation cancelled");
+        }
       } else if (result.status === "running") {
         toast.message("Generation is running in the background", {
           description: "You can leave this page. We'll notify you when it finishes.",
@@ -1747,7 +1776,14 @@ export default function ProductsGalleryPage() {
       }
     } finally {
       setIsGenerating(false);
-      setIsStoppingGeneration(false);
+      if (
+        !stopRequestedRef.current ||
+        !galleryRunIsActive(worksheetRef.current)
+      ) {
+        toastStopSavedIfNeeded();
+        stopRequestedRef.current = false;
+        setIsStoppingGeneration(false);
+      }
       invalidateCredits();
       if (receivedResult) {
         return;
@@ -1774,6 +1810,8 @@ export default function ProductsGalleryPage() {
 
   const retryRow = async (rowId: string) => {
     if (!workspace || !projectId || !canEdit) return;
+    stopRequestedRef.current = false;
+    stopSavedToastRef.current = false;
     setIsStoppingGeneration(false);
     setIsGenerating(true);
     setGenerationRun({ total: 1, completed: 0 });
@@ -1891,7 +1929,14 @@ export default function ProductsGalleryPage() {
       toast.error((err as Error)?.message || "Retry failed");
     } finally {
       setIsGenerating(false);
-      setIsStoppingGeneration(false);
+      if (
+        !stopRequestedRef.current ||
+        !galleryRunIsActive(worksheetRef.current)
+      ) {
+        toastStopSavedIfNeeded();
+        stopRequestedRef.current = false;
+        setIsStoppingGeneration(false);
+      }
       invalidateCredits();
     }
   };
@@ -1911,7 +1956,8 @@ export default function ProductsGalleryPage() {
       !canEdit ||
       savingRowId ||
       generationRun ||
-      isGenerating
+      isGenerating ||
+      isStoppingGeneration
     ) return null;
     const signature = JSON.stringify(draft.originalData);
     if (signature === lastSavedRowSignatureRef.current) return worksheet;
@@ -1958,6 +2004,7 @@ export default function ProductsGalleryPage() {
     enqueueMutation,
     generationRun,
     isGenerating,
+    isStoppingGeneration,
     projectId,
     savingRowId,
     workspace,
@@ -2001,6 +2048,10 @@ export default function ProductsGalleryPage() {
   };
 
   const saveAndLeave = async () => {
+    if (generationRun || isGenerating || isStoppingGeneration) {
+      toast.message("Wait until generation finishes before saving.");
+      return;
+    }
     try {
       let latestWorksheet = worksheet;
       if (rowDraft) {
@@ -2475,6 +2526,7 @@ export default function ProductsGalleryPage() {
                 saveStatus === "saved" ||
                 !!generationRun ||
                 isGenerating ||
+                isStoppingGeneration ||
                 !!editingRowId
               }
               onClick={() => {
@@ -2508,7 +2560,7 @@ export default function ProductsGalleryPage() {
               variant="outline"
               size="sm"
               className="h-8 gap-1.5 rounded-lg border-border/60 text-[10px]"
-              disabled={isExporting || !worksheet || !!generationRun || isGenerating}
+              disabled={isExporting || !worksheet || !!generationRun || isGenerating || isStoppingGeneration}
               onClick={handleExport}
             >
               {isExporting ? (
@@ -3380,7 +3432,7 @@ export default function ProductsGalleryPage() {
                     </p>
                     <p className="text-[10px] text-muted-foreground">
                       {isStoppingGeneration
-                        ? "Finishing the current product before stopping"
+                        ? "Finishing products already sent to the AI, then saving."
                         : bannerCompleted > 0
                           ? `${bannerCompleted} of ${bannerTotal} done · Keep this page open`
                           : "Keep this page open until generation finishes"}
