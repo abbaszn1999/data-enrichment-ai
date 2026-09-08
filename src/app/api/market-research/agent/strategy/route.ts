@@ -9,9 +9,14 @@ import {
   type StoreCollectionItem,
 } from "@/lib/market-research/agent/store-catalog";
 import { runStage7ContentPlan } from "@/lib/market-research/agent/stage7-content-planner";
-import { saveProjectSliceAdmin } from "@/lib/market-research/storage-admin";
+import {
+  loadProjectProducts,
+  loadProjectSliceAdmin,
+  saveProjectSliceAdmin,
+} from "@/lib/market-research/storage-admin";
 import type {
   ExtractedKeyword,
+  MarketResearchProduct,
   ProposedCollection,
 } from "@/components/market-research/workspace-data";
 
@@ -52,13 +57,44 @@ export async function POST(request: NextRequest) {
     const collectionPrefix =
       (workspaceRow?.collection_prefix ?? "AI").trim() || "AI";
 
+    // The body's `collections` only carry the fields proposedCollectionSchema
+    // validates (id, name, volume, storeHandle, ...) — no `productMatches`.
+    // The canonical list with the Stage 5 product matches lives in storage,
+    // same as the internal-links route already relies on.
+    let proposedCollections: ProposedCollection[] =
+      (parsed.data.collections as ProposedCollection[] | undefined) ?? [];
+    let productsById: Map<string, MarketResearchProduct> | undefined;
+
+    if (parsed.data.projectId) {
+      const [storedCollections, products] = await Promise.all([
+        loadProjectSliceAdmin<ProposedCollection[]>(
+          auth.admin,
+          parsed.data.workspaceId,
+          parsed.data.projectId,
+          "collections"
+        ).catch(() => null),
+        loadProjectProducts(
+          auth.admin,
+          parsed.data.workspaceId,
+          parsed.data.projectId
+        ).catch(() => [] as MarketResearchProduct[]),
+      ]);
+
+      if (Array.isArray(storedCollections) && storedCollections.length > 0) {
+        proposedCollections = storedCollections;
+      }
+      if (products.length > 0) {
+        productsById = new Map(products.map((product) => [product.id, product]));
+      }
+    }
+
     const result = await runStage7ContentPlan({
       keywords: parsed.data.keywords as ExtractedKeyword[],
       storeName,
       parentNiches: parsed.data.parentNiches,
       storeCollections,
-      proposedCollections:
-        (parsed.data.collections as ProposedCollection[] | undefined) ?? [],
+      proposedCollections,
+      products: productsById,
       collectionPrefix,
     });
 

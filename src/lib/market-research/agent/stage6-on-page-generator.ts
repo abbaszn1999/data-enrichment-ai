@@ -13,6 +13,32 @@ import {
   stripCollectionPrefix,
   type InternalLinkGraph,
 } from "./internal-links";
+import { runWithConcurrency } from "@/lib/sync/core/batch-executor";
+
+const CHUNK_CONCURRENCY = 5;
+
+/**
+ * The SEO agent has to write `<a href="...">` inline, unlike the internal
+ * linking engine which only ever emits an index (see internal-links.ts:24-27).
+ * Prompt-only trust is not enough, so every anchor Gemini writes is checked
+ * against that collection's verified link hrefs here — anything else
+ * collapses to its plain anchor text rather than shipping a hallucinated or
+ * stale href.
+ */
+function sanitizeAnchors(html: string, verifiedHrefs: Set<string>): string {
+  if (!html) return html;
+  return html.replace(
+    /<a\s+href="([^"<>]*)"[^>]*>([\s\S]*?)<\/a>/gi,
+    (_match, href: string, label: string) =>
+      verifiedHrefs.has(href) ? `<a href="${href}">${label}</a>` : label
+  );
+}
+
+/** SEO title/description are pushed as plain store meta fields — strip any HTML. */
+function stripHtml(value: string): string {
+  if (!value) return value;
+  return value.replace(/<[^>]*>/g, "");
+}
 
 export interface Stage6OnPageInput {
   storeName?: string;
@@ -161,6 +187,12 @@ async function generateBatchStage6(
       keywordCount: c.keywordCount,
       status: c.status,
       existingName: c.existingName,
+      // Verified internal link targets for this page, precomputed by the
+      // internal linking engine. Only these hrefs may be used as anchors.
+      linkedCollections: (input.internalLinks?.[c.id] ?? []).map((link) => ({
+        label: link.label,
+        href: link.href,
+      })),
     })),
   });
 
@@ -177,6 +209,16 @@ Generate compelling, high-converting, and SEO-optimized collection page copy for
    ${instructions.collectionDescription.trim() ? `CRITICAL USER INSTRUCTION FOR COLLECTION DESCRIPTION: "${instructions.collectionDescription.trim()}". Follow this strictly.` : "Write 1-2 engaging, natural paragraphs (80-140 words) describing the collection, its benefits, and shopper use cases."}
 4. "faqs":
    ${instructions.faq.trim() ? `CRITICAL USER INSTRUCTION FOR FAQS: "${instructions.faq.trim()}". Follow this strictly.` : "Write 3-4 structured, informative FAQ questions and helpful answers that shoppers genuinely ask before buying."}
+
+### Contextual Internal Links
+Each collection may include a "linkedCollections" array of verified navigation targets: [{ "label": "...", "href": "/collections/..." }].
+- If "linkedCollections" is non-empty, naturally weave 1-2 of them into "collectionDescription" as inline HTML anchors: <a href="EXACT_HREF">anchor text</a>. Pick anchor text that reads naturally in the sentence — it does not need to match "label" verbatim, just describe the same page.
+- You MAY also weave in exactly one such anchor inside a single FAQ answer, only where it fits naturally (e.g. "see our <a href=\"/collections/...\">wireless chargers</a> for..."). Do not force it if none fits.
+- You MUST use "href" values exactly as given, byte for byte. NEVER invent, guess, modify, or shorten a URL, and never link to a page not listed in "linkedCollections" for that collection.
+- NEVER use the same href twice on the same page.
+- If "linkedCollections" is empty for a collection, write "collectionDescription" and "faqs" as plain text with no anchors.
+- Links must feel editorial, not stuffed — most collections should only need 1 anchor total.
+- "seoTitle" and "seoDescription" MUST be plain text with absolutely no HTML tags — they are pushed directly as store meta fields.
 
 Output strictly valid JSON with this exact schema:
 {
@@ -209,12 +251,23 @@ Output strictly valid JSON with this exact schema:
     for (const item of parsed.contents) {
       if (!item.collectionId) continue;
 
+      const verifiedHrefs = new Set(
+        (input.internalLinks?.[item.collectionId] ?? []).map((link) => link.href)
+      );
+      const faqs = Array.isArray(item.faqs) ? item.faqs : [];
+
       batchContent[item.collectionId] = {
         collectionId: item.collectionId,
-        seoTitle: item.seoTitle || `${item.collectionId} | Shop Now`,
-        seoDescription: item.seoDescription || "",
-        collectionDescription: item.collectionDescription || "",
-        faqs: Array.isArray(item.faqs) ? item.faqs : [],
+        seoTitle: stripHtml(item.seoTitle) || `${item.collectionId} | Shop Now`,
+        seoDescription: stripHtml(item.seoDescription) || "",
+        collectionDescription: sanitizeAnchors(
+          item.collectionDescription || "",
+          verifiedHrefs
+        ),
+        faqs: faqs.map((faq) => ({
+          q: stripHtml(faq.q) || "",
+          a: sanitizeAnchors(faq.a || "", verifiedHrefs),
+        })),
         links: input.internalLinks?.[item.collectionId] ?? fallbackLinks,
       };
     }
@@ -280,19 +333,27 @@ export async function runStage6OnPageGeneration(
   const finalContentById: Record<string, CollectionContent> = {};
   let anyAiGenerated = false;
 
-  for (const chunk of chunks) {
-    try {
-      const batchResult = await generateBatchStage6(enrichedInput, chunk);
-      Object.assign(finalContentById, batchResult);
-      anyAiGenerated = true;
-    } catch (err) {
-      console.error("[runStage6OnPageGeneration] Batch error, falling back to heuristic for chunk:", err);
-      const fallback = runHeuristicStage6OnPage({
-        ...enrichedInput,
-        collections: chunk,
-      });
-      Object.assign(finalContentById, fallback.contentById);
-    }
+  const chunkResults = await runWithConcurrency(
+    chunks,
+    async (chunk) => {
+      try {
+        const batchResult = await generateBatchStage6(enrichedInput, chunk);
+        return { contentById: batchResult, aiGenerated: true };
+      } catch (err) {
+        console.error("[runStage6OnPageGeneration] Batch error, falling back to heuristic for chunk:", err);
+        const fallback = runHeuristicStage6OnPage({
+          ...enrichedInput,
+          collections: chunk,
+        });
+        return { contentById: fallback.contentById, aiGenerated: false };
+      }
+    },
+    { concurrency: CHUNK_CONCURRENCY }
+  );
+
+  for (const result of chunkResults.successes) {
+    Object.assign(finalContentById, result.contentById);
+    if (result.aiGenerated) anyAiGenerated = true;
   }
 
   return {

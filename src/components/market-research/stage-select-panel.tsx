@@ -5,6 +5,8 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  ChevronRight,
+  Lightbulb,
   Loader2,
   Lock,
   Minus,
@@ -12,6 +14,13 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -30,23 +39,25 @@ import { cn } from "@/lib/utils";
 /** Minimum SKUs recommended to dominate a niche or PLP in catalog scope. */
 const MIN_SCOPE_SKUS = 500;
 
-function belowSkuFloor(count: number) {
-  return count < MIN_SCOPE_SKUS;
+function belowSkuFloor(count: number, floor: number) {
+  return count < floor;
 }
 
 function SkuFloorTooltip({
   count,
+  floor,
   children,
 }: {
   count: number;
+  floor: number;
   children: ReactNode;
 }) {
-  if (!belowSkuFloor(count)) return children;
+  if (!belowSkuFloor(count, floor)) return children;
   return (
     <Tooltip>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent side="right" className="max-w-[240px] text-balance">
-        Does not have enough SKUs — fewer than {MIN_SCOPE_SKUS} products.
+        Does not have enough SKUs — fewer than {floor} products.
       </TooltipContent>
     </Tooltip>
   );
@@ -81,6 +92,10 @@ export function StageSelectPanel({
 }: StageSelectPanelProps) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [hintOpen, setHintOpen] = useState(false);
+  // TEMP_TEST_SKU_FLOOR — testing-only override for the 500 SKU floor below.
+  // Remove this state + the "TEST" control in the header once QA is done.
+  const [skuFloor, setSkuFloor] = useState(MIN_SCOPE_SKUS);
   const activeNiches = useMemo(
     () => (Array.isArray(niches) ? niches : MOCK_NICHES),
     [niches]
@@ -102,6 +117,23 @@ export function StageSelectPanel({
       }))
       .filter((niche) => niche.collections.length > 0);
   }, [query, activeNiches]);
+
+  /**
+   * Accurate niche total = sum of every belonging PLP page's product count,
+   * computed from the full (unfiltered) collection list — not the search-
+   * narrowed list, and not a possibly stale `niche.productCount` value.
+   */
+  const nicheProductTotals = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const niche of activeNiches) {
+      const total = niche.collections.reduce(
+        (sum, c) => sum + c.productCount,
+        0
+      );
+      map.set(niche.id, total);
+    }
+    return map;
+  }, [activeNiches]);
 
   const selectedLabels = useMemo(
     () =>
@@ -142,11 +174,20 @@ export function StageSelectPanel({
     );
   }
 
-  const toggleCollection = (id: string) => {
-    if (readOnly) return;
+  /** Selecting a thin PLP (< skuFloor) is blocked entirely — not clickable. */
+  const toggleCollection = (id: string, productCount: number) => {
+    if (readOnly || belowSkuFloor(productCount, skuFloor)) return;
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
+    onChangeSelection(Array.from(next));
+  };
+
+  /** Chip "×" / "Clear all" always works, even for a legacy thin selection. */
+  const removeCollection = (id: string) => {
+    if (readOnly) return;
+    const next = new Set(selected);
+    next.delete(id);
     onChangeSelection(Array.from(next));
   };
 
@@ -158,8 +199,9 @@ export function StageSelectPanel({
     return "some" as const;
   };
 
-  const toggleNiche = (niche: MockNiche) => {
-    if (readOnly) return;
+  /** Selecting a thin niche (< skuFloor across all its PLPs) is blocked entirely. */
+  const toggleNiche = (niche: MockNiche, totalProductCount: number) => {
+    if (readOnly || belowSkuFloor(totalProductCount, skuFloor)) return;
     const ids = niche.collections.map((c) => c.id);
     const next = new Set(selected);
     const allOn = ids.every((id) => next.has(id));
@@ -182,6 +224,54 @@ export function StageSelectPanel({
                 ? `Locked: ${lockedNicheCount} parent niche${lockedNicheCount === 1 ? "" : "s"}`
                 : "From Stage 1 niches"}
             </span>
+
+            <button
+              type="button"
+              onClick={() => setHintOpen(true)}
+              className="relative inline-flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold text-amber-700 transition-colors hover:bg-amber-500/15 dark:text-amber-400"
+              aria-label="Read the recommendation on how to pick what to dominate before selecting"
+            >
+              <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500/60" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-500" />
+              </span>
+              <Lightbulb className="h-3 w-3" />
+              Check this before you select
+            </button>
+
+            {/* TEMP_TEST_SKU_FLOOR — testing-only control. Delete this whole
+                block (and the `skuFloor` state + belowSkuFloor(..., skuFloor)
+                calls above) once QA on the SKU floor is finished. */}
+            {readOnly ? null : (
+              <div className="ml-auto flex items-center gap-1.5 rounded-full border border-dashed border-amber-500/60 bg-amber-500/10 px-2 py-1">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                  Test
+                </span>
+                <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  SKU floor
+                  <input
+                    type="number"
+                    min={0}
+                    step={50}
+                    value={skuFloor}
+                    onChange={(e) =>
+                      setSkuFloor(Math.max(0, Number(e.target.value) || 0))
+                    }
+                    className="h-5 w-16 rounded border border-border/60 bg-background px-1.5 text-[10px] tabular-nums outline-none focus:border-primary"
+                    aria-label="Temporary testing SKU floor override"
+                  />
+                </label>
+                {skuFloor !== MIN_SCOPE_SKUS ? (
+                  <button
+                    type="button"
+                    onClick={() => setSkuFloor(MIN_SCOPE_SKUS)}
+                    className="text-[10px] font-medium text-amber-700 underline dark:text-amber-400"
+                  >
+                    reset
+                  </button>
+                ) : null}
+              </div>
+            )}
           </div>
           <p className="text-xs text-muted-foreground max-w-2xl leading-relaxed">
             {readOnly
@@ -208,7 +298,8 @@ export function StageSelectPanel({
             visibleNiches.map((niche) => {
               const state = nicheState(niche);
               const isCollapsed = Boolean(collapsed[niche.id]) && !query;
-              const nicheThin = belowSkuFloor(niche.productCount);
+              const nicheTotal = nicheProductTotals.get(niche.id) ?? niche.productCount;
+              const nicheThin = belowSkuFloor(nicheTotal, skuFloor);
               return (
                 <div
                   key={niche.id}
@@ -227,17 +318,19 @@ export function StageSelectPanel({
                   >
                     <button
                       type="button"
-                      onClick={() => toggleNiche(niche)}
-                      disabled={readOnly}
-                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:cursor-default"
+                      onClick={() => toggleNiche(niche, nicheTotal)}
+                      disabled={readOnly || nicheThin}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:cursor-not-allowed disabled:opacity-70"
                       aria-label={
                         readOnly
                           ? `${niche.name} collections`
-                          : `Select all collections in ${niche.name}`
+                          : nicheThin
+                            ? `${niche.name} does not have enough SKUs to select`
+                            : `Select all collections in ${niche.name}`
                       }
                       aria-pressed={state === "all"}
                     >
-                      <SkuFloorTooltip count={niche.productCount}>
+                      <SkuFloorTooltip count={nicheTotal} floor={skuFloor}>
                         <span
                           tabIndex={0}
                           className={cn(
@@ -273,7 +366,7 @@ export function StageSelectPanel({
                           : "text-muted-foreground"
                       )}
                     >
-                      {formatProductCount(niche.productCount)} products
+                      {formatProductCount(nicheTotal)} products
                     </span>
                     <button
                       type="button"
@@ -303,25 +396,32 @@ export function StageSelectPanel({
                     <ul className="divide-y divide-border/50">
                       {niche.collections.map((collection) => {
                         const isOn = selected.has(collection.id);
-                        const plpThin = belowSkuFloor(collection.productCount);
+                        const plpThin = belowSkuFloor(collection.productCount, skuFloor);
                         return (
                           <li key={collection.id}>
                             <button
                               type="button"
-                              onClick={() => toggleCollection(collection.id)}
-                              disabled={readOnly}
+                              onClick={() =>
+                                toggleCollection(collection.id, collection.productCount)
+                              }
+                              disabled={readOnly || plpThin}
                               aria-pressed={isOn}
+                              aria-label={
+                                plpThin
+                                  ? `${collection.name} does not have enough SKUs to select`
+                                  : undefined
+                              }
                               className={cn(
                                 "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
-                                readOnly
-                                  ? "cursor-default"
+                                readOnly || plpThin
+                                  ? "cursor-not-allowed"
                                   : "hover:bg-muted/40",
-                                plpThin && "bg-amber-500/[0.06]",
+                                plpThin && "bg-amber-500/[0.06] opacity-80",
                                 isOn && !plpThin && "bg-primary/5",
                                 isOn && plpThin && "bg-amber-500/10"
                               )}
                             >
-                              <SkuFloorTooltip count={collection.productCount}>
+                              <SkuFloorTooltip count={collection.productCount} floor={skuFloor}>
                                 <span
                                   tabIndex={0}
                                   className={cn(
@@ -422,7 +522,7 @@ export function StageSelectPanel({
                   {readOnly ? null : (
                   <button
                     type="button"
-                    onClick={() => toggleCollection(item.id)}
+                    onClick={() => removeCollection(item.id)}
                     className="text-muted-foreground hover:text-foreground"
                     aria-label={`Remove ${item.name} from scope`}
                   >
@@ -468,6 +568,74 @@ export function StageSelectPanel({
           </div>
         ) : null}
       </div>
+
+      <Dialog open={hintOpen} onOpenChange={setHintOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Lightbulb className="h-4 w-4 text-amber-500" />
+              What does &ldquo;dominating a niche&rdquo; mean?
+            </DialogTitle>
+            <DialogDescription>
+              Dominating means putting all your effort behind one specific,
+              narrow niche until you own it in search — not spreading thin
+              across many broad ones at once.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 text-sm">
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-3.5 py-3">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                Our recommendation
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Don&apos;t select multiple broad niches at once. The narrower
+                and deeper you go, the faster you can dominate — a small,
+                specific niche is easier to rank for and easier to fully own
+                than a wide, generic one.
+              </p>
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-semibold tracking-tight">
+                Example
+              </p>
+              <div className="space-y-1.5 rounded-xl border border-border/70 bg-card px-3.5 py-3">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="rounded-full border border-border/70 px-2 py-0.5">
+                    Eyewear
+                  </span>
+                  <span className="text-[10px]">broad — many competitors</span>
+                </div>
+                <div className="flex items-center gap-1.5 pl-4 text-xs text-muted-foreground">
+                  <ChevronRight className="h-3 w-3 shrink-0" />
+                  <span className="rounded-full border border-border/70 px-2 py-0.5">
+                    Women&apos;s Eyewear
+                  </span>
+                  <span className="text-[10px]">narrower — still crowded</span>
+                </div>
+                <div className="flex items-center gap-1.5 pl-8 text-xs">
+                  <ChevronRight className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span className="rounded-full border border-amber-500/50 bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400">
+                    Women&apos;s Gucci Sunglasses
+                  </span>
+                  <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-semibold text-white">
+                    Best pick
+                  </span>
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                If &ldquo;Women&apos;s Gucci Sunglasses&rdquo; has enough SKUs on
+                its own, it&apos;s the strongest choice — it&apos;s the most
+                specific. Select it, take every broad term generated for it in
+                the next stage, and build your collections around it, instead
+                of spreading the same effort across the wider Eyewear or
+                Women&apos;s Eyewear levels.
+              </p>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

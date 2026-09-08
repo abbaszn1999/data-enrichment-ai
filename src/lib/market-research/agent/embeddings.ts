@@ -10,10 +10,49 @@ import { createHash } from "node:crypto";
  */
 
 export const EMBEDDING_MODEL = "text-embedding-3-small";
-const EMBEDDING_DIMENSIONS = 512;
+export const EMBEDDING_DIMENSIONS = 512;
 const MAX_BATCH_SIZE = 256;
 const MAX_CHARS_PER_INPUT = 2000;
 const REQUEST_TIMEOUT_MS = 30_000;
+
+/** Cheap content hash used to skip re-embedding text that hasn't changed. */
+export function contentHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/**
+ * Persisted vectors are unit-normalized then quantized to int8 and
+ * base64-encoded. Cosine similarity is scale-invariant, so normalizing first
+ * removes any need to also persist a per-vector scale factor. This shrinks a
+ * 512-float vector from ~6KB of JSON down to ~0.5KB of base64, at well under
+ * 1% cosine error — the difference is irrelevant next to the threshold-based
+ * candidate cutoff downstream.
+ */
+export function encodeVectorInt8(vector: number[]): string {
+  let magSq = 0;
+  for (const v of vector) magSq += v * v;
+  const mag = Math.sqrt(magSq) || 1;
+
+  const bytes = new Int8Array(vector.length);
+  for (let i = 0; i < vector.length; i++) {
+    const normalized = vector[i] / mag;
+    bytes[i] = Math.max(-127, Math.min(127, Math.round(normalized * 127)));
+  }
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(
+    "base64"
+  );
+}
+
+/** Inverse of `encodeVectorInt8`. Returns a vector scaled back to ~unit length. */
+export function decodeVectorInt8(base64: string, dims: number): number[] {
+  const buf = Buffer.from(base64, "base64");
+  const bytes = new Int8Array(buf.buffer, buf.byteOffset, Math.min(dims, buf.byteLength));
+  const out = new Array<number>(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    out[i] = bytes[i] / 127;
+  }
+  return out;
+}
 
 /**
  * Keyed by content hash, so re-running a project only pays for collections

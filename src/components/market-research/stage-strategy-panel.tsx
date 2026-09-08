@@ -409,6 +409,43 @@ export function StageStrategyPanel({
                                 })}
                               </ul>
                             )}
+                            {row.skuLinks && row.skuLinks.length > 0 ? (
+                              <>
+                                <p className="mt-2 font-medium text-foreground">
+                                  Products
+                                </p>
+                                <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                                  {row.skuLinks.map((sku) => {
+                                    const href = storefrontHref(
+                                      storeUrl,
+                                      sku.url
+                                    );
+                                    return (
+                                      <li key={sku.url}>
+                                        {href ? (
+                                          <a
+                                            href={href}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
+                                            title={`${sku.productName} · ${href}`}
+                                          >
+                                            {sku.anchor}
+                                          </a>
+                                        ) : (
+                                          <span
+                                            className="text-foreground"
+                                            title={sku.productName}
+                                          >
+                                            {sku.anchor}
+                                          </span>
+                                        )}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </>
+                            ) : null}
                             {row.error ? (
                               <p className="mt-2 text-destructive">
                                 {row.error}

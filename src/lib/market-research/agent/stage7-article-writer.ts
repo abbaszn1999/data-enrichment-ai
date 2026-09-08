@@ -24,6 +24,7 @@ import { escapeHtml } from "@/lib/html-escape";
 import type { OpenAiResponse } from "@/lib/enrich/types";
 import type {
   ArticleLinkTarget,
+  ArticleSkuTarget,
   StrategyArticleType,
   StoreBlog,
 } from "@/components/market-research/workspace-data";
@@ -50,7 +51,11 @@ export interface ArticleWriteInput {
   keyword: string;
   type: StrategyArticleType;
   linksOut: ArticleLinkTarget[];
+  /** Verified product pages the article may link to; optional, capped at 5. */
+  skuLinks?: ArticleSkuTarget[];
   storeName?: string;
+  /** The storefront's real domain, so the model knows what "our website" is. */
+  storeUrl?: string;
   /** Blogs available on the store; the writer picks one or answers "none". */
   blogs?: StoreBlog[];
 }
@@ -110,40 +115,110 @@ async function postResponses(body: Record<string, unknown>): Promise<OpenAiRespo
   return parsed;
 }
 
+/**
+ * AI writing tells that make copy read as machine-generated. Banned outright
+ * rather than merely discouraged, because a soft "avoid if possible" rule is
+ * exactly the kind of instruction a model quietly ignores under pressure.
+ */
+const BANNED_PHRASES = [
+  "in today's fast-paced world",
+  "in today's digital age",
+  "delve into",
+  "delve",
+  "moreover",
+  "furthermore",
+  "it's important to note",
+  "it is important to note",
+  "when it comes to",
+  "unlock",
+  "elevate your",
+  "game-changer",
+  "game changer",
+  "in conclusion",
+  "in summary",
+  "at the end of the day",
+  "look no further",
+  "we've got you covered",
+];
+
 function buildPrompt(input: ArticleWriteInput): string {
   const blogList = (input.blogs ?? [])
     .map((blog) => blog.title)
     .filter(Boolean);
+  const skuLinks = input.skuLinks ?? [];
+  const term = input.keyword;
+  const hasAnyLinks = input.linksOut.length > 0 || skuLinks.length > 0;
 
   return [
-    `Write one publish-ready article for the store "${input.storeName || "our store"}".`,
+    `Write one publish-ready, SEO-optimized article for the store "${
+      input.storeName || "our store"
+    }"${input.storeUrl ? ` (${input.storeUrl})` : ""}.`,
     "",
     `Title: ${input.title}`,
-    `Target search query: ${input.keyword}`,
+    `Target search term: ${term}`,
     `Format: ${TYPE_BRIEF[input.type]}`,
     "",
-    "Body rules:",
+    "Voice — write like an experienced, opinionated writer in this niche, not an AI:",
+    `- Ban these phrases and any close variant of them, anywhere in the article: ${BANNED_PHRASES.map(
+      (phrase) => `"${phrase}"`
+    ).join(", ")}.`,
+    "- Vary sentence length and structure; do not start consecutive sentences the same way.",
+    '- Address the reader as "you". Prefer concrete specifics (sizes, materials, numbers, named use cases) over vague adjectives like "great" or "amazing".',
+    "- No closing paragraph that just restates the introduction — end on the last genuinely useful point instead.",
+    "- No emoji, no filler rhetorical questions, no title-case headings.",
+    "",
+    "SEO term placement — checked automatically after writing, follow exactly:",
+    `- The exact term "${term}" must appear in seoTitle, in seoDescription, within the first 100 words of the body, and in at least one — not every — <h2>.`,
+    `- Use the exact term or a close natural variant 3 to 6 times total across the whole body. Never more than once per sentence, never in every paragraph.`,
+    "",
+    "Structure:",
     "- Return the body as clean HTML using only <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <a>, and <table>.",
     "- Do not include an <h1>: the theme renders the title.",
-    "- Answer the query in the opening paragraph. No throat-clearing introduction.",
-    "- 900 to 1400 words. Specific and verifiable; if you are unsure of a fact, leave it out.",
+    "- Answer the query in the opening paragraph — no throat-clearing introduction.",
+    "- One <h2> per real subtopic, in sentence case, never just the keyword repeated. Use <h3> for items within a section.",
+    "- Paragraphs of 2 to 4 sentences. Include at least one <ul>, <ol>, or <table> so the page is scannable, not a wall of text.",
+    input.type === "comparison"
+      ? "- Include a <table> comparing the named options on the criteria that actually change a buyer's decision."
+      : "",
+    input.type === "roundup"
+      ? '- Give each pick its own <h3> plus one short "best for" line.'
+      : "",
+    input.type === "faq"
+      ? "- Phrase each <h2> as the question itself, answered in its first sentence."
+      : "",
+    "- 1000 to 1500 words. Specific and verifiable; if you are unsure of a fact, leave it out.",
     "- Never mention that this was written by an AI and never invent store policies, prices, or stock.",
     "",
-    "Internal links — this is a hard requirement:",
-    blogList.length > 0 || input.linksOut.length > 0 ? "" : "- None supplied; do not add any links.",
+    "Collection links — this is a hard requirement:",
+    input.linksOut.length > 0 ? "" : "- None supplied; do not add any collection links.",
     ...input.linksOut.map(
       (link, index) =>
-        `- Link ${index + 1}: place <a href="${link.url}">${link.anchor}</a> once, inside a sentence where a reader would genuinely want to browse ${link.collectionName}.`
+        `- Link ${index + 1}: place <a href="${link.url}">${link.anchor}</a> once, inside a sentence where a reader would genuinely want to browse ${link.collectionName} next.`
     ),
-    input.linksOut.length > 0
-      ? '- Use these exact href values verbatim. Never write any other URL, path, or slug — no external links at all.'
+    "",
+    skuLinks.length > 0
+      ? "Product links — optional, only where one specific product is the honest answer:"
+      : "",
+    ...skuLinks.map(
+      (sku) =>
+        `- You may place <a href="${sku.url}">${sku.anchor}</a> once, only in a sentence where "${sku.productName}" is genuinely the product being discussed.`
+    ),
+    hasAnyLinks
+      ? [
+          "",
+          "Link placement rules, for both collection and product links:",
+          "- Use these exact href values verbatim. Never write any other URL, path, or slug — no external links at all.",
+          "- Never place two links in the same sentence, and never link in the article's first or last sentence.",
+          '- Anchor text must describe what the reader will find — never "click here", "this page", or a bare URL.',
+          "- Use each URL at most once, even if it would fit naturally in more than one place.",
+        ].join("\n")
       : "",
     "",
     `Images — at most ${MAX_ARTICLE_IMAGES}, and only as many as genuinely help:`,
     "- Use web_search image results to find them. Copy each url exactly from a web_search image_result.image_url.",
     "- Do NOT write <img> tags. Instead put a placeholder on its own line where the image belongs: [[IMAGE_1]], [[IMAGE_2]], and so on.",
     "- Every placeholder in the body must have a matching entry in images, and every entry must be used once.",
-    "- Write alt text that describes what the image shows, not the keyword.",
+    `- Write alt text that describes what the image shows. At least one image's alt text must naturally include "${term}".`,
     "- If no result is genuinely useful, return an empty images list and no placeholders.",
     "",
     "Featured image — the cover shown on the blog listing:",
@@ -156,9 +231,9 @@ function buildPrompt(input: ArticleWriteInput): string {
       ? `- Choose the single best fit from these store blogs, copied exactly: ${blogList.join(" | ")}. If none fits the subject, answer "none".`
       : '- The store has no blogs, so answer "none".',
     "",
-    "SEO:",
-    "- seoTitle: under 60 characters, includes the subject, not a copy of the article title.",
-    "- seoDescription: 140 to 155 characters, describes the payoff of reading, no quotes.",
+    "SEO fields:",
+    `- seoTitle: under 60 characters, leads with or naturally includes "${term}" — not a copy of the article title.`,
+    `- seoDescription: 140 to 155 characters, includes "${term}", describes the payoff of reading, no quotes.`,
   ]
     .filter((line) => line !== "")
     .join("\n");
@@ -187,16 +262,84 @@ function renderImages(
   return { html: html.replace(/\n{3,}/g, "\n\n").trim(), used };
 }
 
-/** Drops any href the planner did not authorise, keeping the anchor text. */
-function stripUnauthorizedLinks(
+/**
+ * Drops any href the planner did not authorise, keeping the anchor text.
+ * Takes a flat, already-combined list of allowed hrefs so the same guard
+ * covers collection links and product (SKU) links alike — a link surviving
+ * this pass is guaranteed to be one of ours, invented URLs are stripped.
+ */
+export function stripUnauthorizedLinks(
   bodyHtml: string,
-  allowed: ArticleLinkTarget[]
+  allowedHrefs: string[]
 ): string {
-  const allowedHrefs = new Set(allowed.map((link) => link.url));
+  const allowed = new Set(allowedHrefs);
   return bodyHtml.replace(
     /<a\b[^>]*href=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi,
     (match, href: string, text: string) =>
-      allowedHrefs.has(href.trim()) ? match : text
+      allowed.has(href.trim()) ? match : text
+  );
+}
+
+/**
+ * Deterministic SEO enforcement, applied right before `writeArticle` returns.
+ * The prompt asks the model to place the target term in specific places, but
+ * a prompt rule is a request, not a guarantee — these are the checks. Each is
+ * a no-op when the term is already present.
+ */
+export function ensureTermInSeoTitle(
+  rawTitle: string,
+  term: string,
+  maxLength = 60
+): string {
+  const title = (rawTitle || "").replace(/\s+/g, " ").trim();
+  const cleanTerm = (term || "").trim();
+  if (!cleanTerm) return title.slice(0, maxLength);
+  if (title.toLowerCase().includes(cleanTerm.toLowerCase())) {
+    return title.slice(0, maxLength);
+  }
+  // Term-led rebuild: the exact term first, then as much of the original
+  // title as still fits, so the term is never at risk of being clamped off.
+  const combined = title ? `${cleanTerm} \u2013 ${title}` : cleanTerm;
+  return combined.slice(0, maxLength).trim();
+}
+
+export function ensureTermInSeoDescription(
+  rawDescription: string,
+  term: string,
+  maxLength = 160
+): string {
+  const description = (rawDescription || "").replace(/\s+/g, " ").trim();
+  const cleanTerm = (term || "").trim();
+  if (!cleanTerm) return description.slice(0, maxLength);
+  if (description.toLowerCase().includes(cleanTerm.toLowerCase())) {
+    return description.slice(0, maxLength);
+  }
+  const combined = description
+    ? `${cleanTerm}: ${description}`
+    : cleanTerm;
+  return combined.slice(0, maxLength).trim();
+}
+
+/**
+ * If none of the placed images' alt text mentions the term, blends it into
+ * the first image's alt so at least one does. Leaves every other image
+ * untouched, and is a no-op when nothing needs to change.
+ */
+export function ensureTermInAltText<T extends { alt: string }>(
+  images: T[],
+  term: string
+): T[] {
+  const cleanTerm = (term || "").trim();
+  if (!cleanTerm || images.length === 0) return images;
+  if (
+    images.some((image) => image.alt.toLowerCase().includes(cleanTerm.toLowerCase()))
+  ) {
+    return images;
+  }
+  return images.map((image, index) =>
+    index === 0
+      ? { ...image, alt: `${image.alt} \u2014 ${cleanTerm}`.trim() }
+      : image
   );
 }
 
@@ -338,8 +481,32 @@ export async function writeArticle(
     }
   }
 
-  const linked = stripUnauthorizedLinks(parsed.bodyHtml, input.linksOut);
-  const { html, used } = renderImages(linked, grounded);
+  const allowedHrefs = [
+    ...input.linksOut.map((link) => link.url),
+    ...(input.skuLinks ?? []).map((sku) => sku.url),
+  ];
+  const linked = stripUnauthorizedLinks(parsed.bodyHtml, allowedHrefs);
+  const { html: renderedHtml, used: renderedImages } = renderImages(
+    linked,
+    grounded
+  );
+
+  // The SEO term must land in a published image's alt, not merely a
+  // candidate that never made it into the body — so this runs after
+  // rendering, against `used`, and patches the one alt attribute it touches
+  // directly in the HTML rather than re-rendering from scratch.
+  const termedImages = ensureTermInAltText(renderedImages, input.keyword);
+  let html = renderedHtml;
+  if (
+    termedImages.length > 0 &&
+    termedImages[0].alt !== renderedImages[0]?.alt
+  ) {
+    html = html.replace(
+      `alt="${escapeHtml(renderedImages[0].alt)}"`,
+      `alt="${escapeHtml(termedImages[0].alt)}"`
+    );
+  }
+  const used = termedImages;
 
   // The cover goes through the same gate: a url the tool never returned would
   // be a broken image on the blog listing.
@@ -373,10 +540,21 @@ export async function writeArticle(
     searchCalls
   );
 
+  const seoTitle = ensureTermInSeoTitle(
+    clampText(parsed.seoTitle, 60, input.title),
+    input.keyword,
+    60
+  );
+  const seoDescription = ensureTermInSeoDescription(
+    clampText(parsed.seoDescription, 160, input.title),
+    input.keyword,
+    160
+  );
+
   return {
     articleId: input.articleId,
-    seoTitle: clampText(parsed.seoTitle, 60, input.title),
-    seoDescription: clampText(parsed.seoDescription, 160, input.title),
+    seoTitle,
+    seoDescription,
     blogTitle: pickBlogTitle(parsed.blogTitle, input.blogs),
     bodyHtml: html,
     images: used,

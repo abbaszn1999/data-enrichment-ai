@@ -4,10 +4,7 @@ import {
   jsonError,
   requireMrWrite,
 } from "@/lib/market-research/api-schema";
-import {
-  fetchStoreCatalog,
-  fetchStoreProductsForCollections,
-} from "@/lib/market-research/agent/store-catalog";
+import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { runStage3SeedGeneration } from "@/lib/market-research/agent/stage3-seed-generator";
 import { saveProjectSliceAdmin } from "@/lib/market-research/storage-admin";
 
@@ -38,13 +35,6 @@ export async function POST(request: NextRequest) {
       selectedCollections: parsed.data.selectedCollections,
     });
 
-    // Fetch full rich product details for the selected collections
-    const products = await fetchStoreProductsForCollections(
-      auth.admin,
-      parsed.data.workspaceId,
-      parsed.data.selectedCollections
-    );
-
     if (parsed.data.projectId) {
       await saveProjectSliceAdmin(
         auth.admin,
@@ -56,23 +46,18 @@ export async function POST(request: NextRequest) {
           manualSeeds: [],
         }
       ).catch((err) => console.error("[seeds] Error saving seeds slice:", err));
-
-      if (products.length > 0) {
-        await saveProjectSliceAdmin(
-          auth.admin,
-          parsed.data.workspaceId,
-          parsed.data.projectId,
-          "products",
-          products
-        ).catch((err) => console.error("[seeds] Error saving products slice:", err));
-      }
     }
 
+    // Rich product records are no longer fetched here: a selected collection
+    // can hold 20,000+ SKUs, far past what one page/one request can pull, and
+    // far too heavy to round-trip through this response and back through
+    // client autosave. The client drives a separate paginated, resumable
+    // fetch (`POST /api/market-research/products/fetch`) right after this
+    // call, writing directly into sharded storage.
     return NextResponse.json(
       {
         seedRows: result.seedRows,
         isAiGenerated: result.isAiGenerated,
-        products,
       },
       { headers: auth.headers }
     );

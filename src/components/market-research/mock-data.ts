@@ -33,12 +33,22 @@ export type MockCollection = {
   lastSyncedLabel?: string;
   /** "All X" collections that already contain every product of the niche. */
   coversNiche?: boolean;
+  /**
+   * "brand" marks a brand/vendor PLP (Shopify vendor page, WooCommerce brand
+   * archive) rather than a real category/collection. It is selected,
+   * displayed, and SKU-floor-gated exactly like any other PLP in Stage 2 —
+   * no dedicated UI treatment — the only difference is what its name is
+   * allowed to be used for downstream (never a niche name).
+   */
+  kind?: "collection" | "brand";
 };
 
 export type MockNiche = {
   id: string;
   name: string;
   productCount: number;
+  /** Every PLP under this niche — categories, subcategories, collections,
+   * and brand/vendor pages (kind: "brand") mixed in as normal entries. */
   collections: MockCollection[];
 };
 
@@ -109,6 +119,36 @@ export const MOCK_NICHES: MockNiche[] = [
         plpPath: "/collections/eyewear-accessories",
         lastSyncedLabel: "Synced yesterday",
       },
+      {
+        id: "brand-ray-ban",
+        name: "Ray-Ban",
+        productCount: 1200,
+        kind: "brand",
+      },
+      {
+        id: "brand-oakley",
+        name: "Oakley",
+        productCount: 950,
+        kind: "brand",
+      },
+      {
+        id: "brand-persol",
+        name: "Persol",
+        productCount: 430,
+        kind: "brand",
+      },
+      {
+        id: "brand-maui-jim",
+        name: "Maui Jim",
+        productCount: 300,
+        kind: "brand",
+      },
+      {
+        id: "brand-carrera",
+        name: "Carrera",
+        productCount: 260,
+        kind: "brand",
+      },
     ],
   },
   {
@@ -157,6 +197,36 @@ export const MOCK_NICHES: MockNiche[] = [
         plpPath: "/collections/rc-toys",
         lastSyncedLabel: "Synced 3 days ago",
       },
+      {
+        id: "brand-lego",
+        name: "LEGO",
+        productCount: 640,
+        kind: "brand",
+      },
+      {
+        id: "brand-hasbro",
+        name: "Hasbro",
+        productCount: 380,
+        kind: "brand",
+      },
+      {
+        id: "brand-mattel",
+        name: "Mattel",
+        productCount: 290,
+        kind: "brand",
+      },
+      {
+        id: "brand-fisher-price",
+        name: "Fisher-Price",
+        productCount: 210,
+        kind: "brand",
+      },
+      {
+        id: "brand-ravensburger",
+        name: "Ravensburger",
+        productCount: 150,
+        kind: "brand",
+      },
     ],
   },
   {
@@ -188,6 +258,30 @@ export const MOCK_NICHES: MockNiche[] = [
         description: "Analog dress and casual watches.",
         plpPath: "/collections/classic-watches",
         lastSyncedLabel: "Synced yesterday",
+      },
+      {
+        id: "brand-citizen",
+        name: "Citizen",
+        productCount: 180,
+        kind: "brand",
+      },
+      {
+        id: "brand-casio",
+        name: "Casio",
+        productCount: 220,
+        kind: "brand",
+      },
+      {
+        id: "brand-fossil",
+        name: "Fossil",
+        productCount: 160,
+        kind: "brand",
+      },
+      {
+        id: "brand-garmin",
+        name: "Garmin",
+        productCount: 90,
+        kind: "brand",
       },
     ],
   },
@@ -502,6 +596,14 @@ export function getSeedRowsForCollections(
 }
 
 export type SeedSeedGroup = {
+  /**
+   * The PLP this canonical seed family belongs to. Two different PLPs can
+   * legitimately produce the exact same `canonicalNicheSeed` NAME (e.g. two
+   * collections that both distill to "Smartphones") — they remain separate
+   * groups. Always disambiguate by `collectionId`, never by the display
+   * name alone.
+   */
+  collectionId: string;
   canonicalNicheSeed: string;
   selectedCollection: string;
   broadParentNiche: string;
@@ -520,6 +622,7 @@ export function groupSeedRowsByCanonical(rows: MockSeedRow[]): SeedSeedGroup[] {
       continue;
     }
     groups.set(key, {
+      collectionId: row.collectionId,
       canonicalNicheSeed: row.canonicalNicheSeed,
       selectedCollection: row.selectedCollection,
       broadParentNiche: row.broadParentNiche,

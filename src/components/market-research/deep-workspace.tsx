@@ -9,6 +9,7 @@ import { WorkspaceStepper } from "./workspace-stepper";
 import { cn } from "@/lib/utils";
 import type {
   CollectionContent,
+  CollectionLink,
   ExtractedKeyword,
   FlowTab,
   MarketResearchProduct,
@@ -40,6 +41,8 @@ export function DeepWorkspace({
   chargedUsd,
   onAnalyze,
   analyzeLoading,
+  analyzeProgress,
+  productEmbedProgress,
   analyzed,
   onNextCollections,
   onCancelExtract,
@@ -47,6 +50,8 @@ export function DeepWorkspace({
   collections,
   products,
   clustering,
+  clusterProgress,
+  termEmbedProgress,
   selectedCollectionIds,
   onChangeSelected,
   collectionsPaid,
@@ -58,7 +63,10 @@ export function DeepWorkspace({
   instructions,
   onInstruction,
   contentById,
+  internalLinksById,
+  linksBuildProgress,
   generating,
+  contentGenProgress,
   contentReady,
   pushed,
   syncingSeo = false,
@@ -99,6 +107,10 @@ export function DeepWorkspace({
   chargedUsd: number;
   onAnalyze: () => void;
   analyzeLoading: boolean;
+  /** Live progress across the chunked classification requests (Layer 1). */
+  analyzeProgress?: { done: number; total: number } | null;
+  /** Product embedding pass, driven in parallel with the Apify extract poll above. */
+  productEmbedProgress?: { embedded: number; total: number; done: boolean } | null;
   analyzed: boolean;
   onNextCollections: (filteredCategoryKeywords?: ExtractedKeyword[]) => void;
   onCancelExtract?: () => void;
@@ -106,6 +118,10 @@ export function DeepWorkspace({
   collections: ProposedCollection[];
   products?: MarketResearchProduct[];
   clustering: boolean;
+  /** Live progress across the Stage 5 cluster cursor job's offset pages. */
+  clusterProgress?: { processed: number; total: number } | null;
+  /** Category-term embedding pass that runs before the cluster job starts. */
+  termEmbedProgress?: { embedded: number; total: number; done: boolean } | null;
   selectedCollectionIds: string[];
   onChangeSelected: (ids: string[]) => void;
   collectionsPaid: boolean;
@@ -117,7 +133,12 @@ export function DeepWorkspace({
   instructions: OnPageInstructions;
   onInstruction: (field: OnPageInstructionField, value: string) => void;
   contentById: Record<string, CollectionContent>;
+  internalLinksById?: Record<string, CollectionLink[]>;
+  /** Live progress across the background internal-link cursor job's pages. */
+  linksBuildProgress?: { processed: number; total: number } | null;
   generating: boolean;
+  /** Live progress across the Stage 6 on-page copywriting cursor job's pages. */
+  contentGenProgress?: { processed: number; total: number } | null;
   contentReady: boolean;
   pushed: boolean;
   syncingSeo?: boolean;
@@ -185,6 +206,8 @@ export function DeepWorkspace({
             chargedUsd={chargedUsd}
             onAnalyze={onAnalyze}
             analyzeLoading={analyzeLoading}
+            analyzeProgress={analyzeProgress}
+            productEmbedProgress={productEmbedProgress}
             analyzed={analyzed}
             onNextCollections={onNextCollections}
             clustering={clustering}
@@ -197,6 +220,8 @@ export function DeepWorkspace({
             collections={collections}
             products={products}
             loading={clustering}
+            loadingProgress={clusterProgress}
+            termEmbedProgress={termEmbedProgress}
             selectedIds={selectedCollectionIds}
             onChangeSelected={onChangeSelected}
             paid={collectionsPaid}
@@ -213,9 +238,12 @@ export function DeepWorkspace({
               selectedCollectionIds.includes(c.id)
             )}
             contentById={contentById}
+            internalLinksById={internalLinksById}
+            linksBuildProgress={linksBuildProgress}
             instructions={instructions}
             onInstruction={onInstruction}
             generating={generating}
+            contentGenProgress={contentGenProgress}
             ready={contentReady}
             pushed={pushed}
             syncingSeo={syncingSeo}

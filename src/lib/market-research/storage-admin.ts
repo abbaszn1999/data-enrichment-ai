@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { KeywordRow } from "./providers/keyword-provider";
+import type { MarketResearchProduct } from "@/components/market-research/workspace-data";
+import { encodeVectorInt8, decodeVectorInt8 } from "./agent/embeddings";
+import type { ClassifiedSheetType } from "./agent/stage4-intent-classifier";
 
 export const MARKET_RESEARCH_STORAGE_BUCKET = "workspace-files";
 
@@ -13,7 +16,122 @@ export type MrSliceName =
   | "collections"
   | "content"
   | "strategy"
-  | "articles";
+  | "articles"
+  | "internal-links";
+
+/**
+ * Merge-not-overwrite for cursor-driven writes: each page of a cursor job
+ * (Stage 4 classification, Stage 5 clustering, …) only knows about its own
+ * slice of records, so a plain overwrite of the stored slice would erase
+ * every earlier page's results. This upserts `incoming` into `existing` by
+ * id — later entries win on a collision — and preserves the relative order
+ * of untouched existing entries followed by newly-appended ids.
+ */
+export function mergeById<T extends { id: string }>(
+  existing: T[],
+  incoming: T[]
+): T[] {
+  const byId = new Map(existing.map((item) => [item.id, item]));
+  for (const item of incoming) {
+    byId.set(item.id, item);
+  }
+  return Array.from(byId.values());
+}
+
+// ─── Sharded stores (products, product/term embeddings, classified keywords) ──
+//
+// These live under their own subfolders rather than in the single-file
+// `MrSliceName` slices above, because each can hold tens of thousands of
+// records — far past what a single JSON blob should carry. They are written
+// append-only (each call adds a new shard file) and read via a small
+// manifest that lists shard filenames in write order, so no call ever has to
+// read-modify-write a giant file. `listMrFilePathsAdmin` / `deleteProjectStorageFolder`
+// already walk arbitrary subfolders, so these need no changes there.
+
+export function mrProductsShardPath(
+  workspaceId: string,
+  projectId: string,
+  shard: string
+): string {
+  return `${mrProjectPath(workspaceId, projectId)}/products-shards/${shard}.json`;
+}
+
+export function mrProductsManifestPath(
+  workspaceId: string,
+  projectId: string
+): string {
+  return `${mrProjectPath(workspaceId, projectId)}/products-shards/manifest.json`;
+}
+
+export type ProductsManifest = {
+  /** Shard filenames (without extension), in write order. */
+  shards: string[];
+  /**
+   * Raw fetched-per-collection counts, not de-duplicated across collections.
+   * Good enough for a "how many products behind this term" display; the
+   * de-duplicated array length may be marginally lower when a product
+   * legitimately belongs to two selected collections.
+   */
+  productCountByCollectionId: Record<string, number>;
+  totalCount: number;
+  done: boolean;
+  updatedAt: string;
+};
+
+export type EmbeddingKind = "products" | "terms";
+
+export function mrEmbeddingsShardPath(
+  workspaceId: string,
+  projectId: string,
+  kind: EmbeddingKind,
+  shard: string
+): string {
+  return `${mrProjectPath(workspaceId, projectId)}/embeddings/${kind}/${shard}.json`;
+}
+
+export function mrEmbeddingsManifestPath(
+  workspaceId: string,
+  projectId: string,
+  kind: EmbeddingKind
+): string {
+  return `${mrProjectPath(workspaceId, projectId)}/embeddings/${kind}/manifest.json`;
+}
+
+export type EmbeddingManifest = {
+  model: string;
+  dims: number;
+  encoding: "int8-unit";
+  shards: string[];
+  /** id -> content hash, so a re-run skips anything whose text hasn't changed. */
+  hashes: Record<string, string>;
+  count: number;
+  updatedAt: string;
+};
+
+export function mrClassifiedShardPath(
+  workspaceId: string,
+  projectId: string,
+  shard: string
+): string {
+  return `${mrProjectPath(workspaceId, projectId)}/classified/${shard}.json`;
+}
+
+export function mrClassifiedManifestPath(
+  workspaceId: string,
+  projectId: string
+): string {
+  return `${mrProjectPath(workspaceId, projectId)}/classified/manifest.json`;
+}
+
+export type ClassifiedManifest = {
+  shards: string[];
+  totalCount: number;
+  categoryCount: number;
+  informationalCount: number;
+  excludedCount: number;
+  done: boolean;
+  updatedAt: string;
+};
 
 export function mrProjectPath(workspaceId: string, projectId: string): string {
   return `${workspaceId}/market-research/${projectId}`;
@@ -229,16 +347,20 @@ export async function listExtractChunkPathsAdmin(
 
 const CHUNK_READ_CONCURRENCY = 6;
 
+/** A raw archive row, stamped with the `seedId` its owning chunk was pulled for. */
+export type ArchiveKeywordRow = KeywordRow & { seedId: string };
+
 /**
  * Rebuilds the complete paid keyword set from the chunk archive. `keywords.json`
- * only carries a capped display sample, so this is the single source for exports.
+ * only carries a capped display sample, so this is the single source for exports
+ * and for full-scale Stage 4/5 processing.
  */
 export async function loadExtractRowsAdmin(
   admin: SupabaseClient,
   workspaceId: string,
   projectId: string,
   extractId?: string
-): Promise<KeywordRow[]> {
+): Promise<ArchiveKeywordRow[]> {
   const paths = await listExtractChunkPathsAdmin(
     admin,
     workspaceId,
@@ -247,7 +369,7 @@ export async function loadExtractRowsAdmin(
   );
   if (paths.length === 0) return [];
 
-  const byPhrase = new Map<string, KeywordRow>();
+  const byPhrase = new Map<string, ArchiveKeywordRow>();
   for (let i = 0; i < paths.length; i += CHUNK_READ_CONCURRENCY) {
     const batch = paths.slice(i, i + CHUNK_READ_CONCURRENCY);
     const chunks = await Promise.all(
@@ -263,7 +385,7 @@ export async function loadExtractRowsAdmin(
         const existing = byPhrase.get(key);
         // Same phrase can surface under several seeds; keep the richer metric.
         if (!existing || (row.volume ?? 0) > (existing.volume ?? 0)) {
-          byPhrase.set(key, row);
+          byPhrase.set(key, { ...row, seedId: chunk.seedId });
         }
       }
     }
@@ -272,4 +394,338 @@ export async function loadExtractRowsAdmin(
   return [...byPhrase.values()].sort(
     (a, b) => (b.volume ?? 0) - (a.volume ?? 0) || a.phrase.localeCompare(b.phrase)
   );
+}
+
+// ─── Products (paginated catalog fetch) ────────────────────────────────────
+
+function nextShardName(existingShards: string[]): string {
+  return String(existingShards.length).padStart(6, "0");
+}
+
+/** Writes a new products shard and folds its counts into the manifest. Append-only. */
+export async function appendProductsShardAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  products: MarketResearchProduct[],
+  opts: { done: boolean }
+): Promise<ProductsManifest> {
+  const manifest =
+    (await loadMrJsonAdmin<ProductsManifest>(
+      admin,
+      mrProductsManifestPath(workspaceId, projectId)
+    )) ?? {
+      shards: [],
+      productCountByCollectionId: {},
+      totalCount: 0,
+      done: false,
+      updatedAt: new Date().toISOString(),
+    };
+
+  if (products.length > 0) {
+    const shard = nextShardName(manifest.shards);
+    await saveMrJsonAdmin(
+      admin,
+      mrProductsShardPath(workspaceId, projectId, shard),
+      products
+    );
+    manifest.shards.push(shard);
+    manifest.totalCount += products.length;
+    for (const p of products) {
+      for (const cid of p.collectionIds) {
+        manifest.productCountByCollectionId[cid] =
+          (manifest.productCountByCollectionId[cid] ?? 0) + 1;
+      }
+    }
+  }
+  manifest.done = opts.done;
+  manifest.updatedAt = new Date().toISOString();
+
+  await saveMrJsonAdmin(
+    admin,
+    mrProductsManifestPath(workspaceId, projectId),
+    manifest
+  );
+  return manifest;
+}
+
+export async function loadProductsManifestAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<ProductsManifest | null> {
+  return loadMrJsonAdmin<ProductsManifest>(
+    admin,
+    mrProductsManifestPath(workspaceId, projectId)
+  );
+}
+
+const SHARD_READ_CONCURRENCY = 6;
+
+/**
+ * Reads every product shard and merges duplicate ids (a product can
+ * legitimately appear under two selected collections, fetched in different
+ * calls) by unioning `collectionIds`/`collectionNames` rather than
+ * overwriting. Falls back to the legacy single-file `products` slice for
+ * projects created before sharding existed.
+ */
+export async function loadProjectProducts(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<MarketResearchProduct[]> {
+  const manifest = await loadProductsManifestAdmin(admin, workspaceId, projectId);
+
+  if (!manifest || manifest.shards.length === 0) {
+    const legacy = await loadProjectSliceAdmin<MarketResearchProduct[]>(
+      admin,
+      workspaceId,
+      projectId,
+      "products"
+    ).catch(() => null);
+    return Array.isArray(legacy) ? legacy : [];
+  }
+
+  const byId = new Map<string, MarketResearchProduct>();
+  for (let i = 0; i < manifest.shards.length; i += SHARD_READ_CONCURRENCY) {
+    const batch = manifest.shards.slice(i, i + SHARD_READ_CONCURRENCY);
+    const shardLists = await Promise.all(
+      batch.map((shard) =>
+        loadMrJsonAdmin<MarketResearchProduct[]>(
+          admin,
+          mrProductsShardPath(workspaceId, projectId, shard)
+        ).catch(() => null)
+      )
+    );
+    for (const list of shardLists) {
+      if (!Array.isArray(list)) continue;
+      for (const p of list) {
+        const existing = byId.get(p.id);
+        if (!existing) {
+          byId.set(p.id, { ...p });
+          continue;
+        }
+        for (const cid of p.collectionIds) {
+          if (!existing.collectionIds.includes(cid)) {
+            existing.collectionIds.push(cid);
+          }
+        }
+        for (const cname of p.collectionNames) {
+          if (!existing.collectionNames.includes(cname)) {
+            existing.collectionNames.push(cname);
+          }
+        }
+      }
+    }
+  }
+  return Array.from(byId.values());
+}
+
+// ─── Embeddings (products + category terms) ───────────────────────────────
+
+export type EmbeddingShardItem = {
+  id: string;
+  hash: string;
+  vector: string; // int8-unit base64, see encodeVectorInt8
+  /** Only set for term embeddings — the collection this term is scoped to. */
+  collectionId?: string;
+};
+
+export async function loadEmbeddingsManifestAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  kind: EmbeddingKind
+): Promise<EmbeddingManifest | null> {
+  return loadMrJsonAdmin<EmbeddingManifest>(
+    admin,
+    mrEmbeddingsManifestPath(workspaceId, projectId, kind)
+  );
+}
+
+/**
+ * Appends a new embeddings shard (skipping nothing — callers pre-filter by
+ * hash before calling) and folds the id->hash map into the manifest so the
+ * next pass can skip unchanged text.
+ */
+export async function appendEmbeddingsShardAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  kind: EmbeddingKind,
+  items: EmbeddingShardItem[],
+  model: string,
+  dims: number
+): Promise<EmbeddingManifest> {
+  const manifest =
+    (await loadEmbeddingsManifestAdmin(admin, workspaceId, projectId, kind)) ?? {
+      model,
+      dims,
+      encoding: "int8-unit" as const,
+      shards: [],
+      hashes: {},
+      count: 0,
+      updatedAt: new Date().toISOString(),
+    };
+
+  if (items.length > 0) {
+    const shard = nextShardName(manifest.shards);
+    await saveMrJsonAdmin(
+      admin,
+      mrEmbeddingsShardPath(workspaceId, projectId, kind, shard),
+      items
+    );
+    manifest.shards.push(shard);
+    manifest.count += items.length;
+    for (const item of items) {
+      manifest.hashes[item.id] = item.hash;
+    }
+  }
+  manifest.updatedAt = new Date().toISOString();
+
+  await saveMrJsonAdmin(
+    admin,
+    mrEmbeddingsManifestPath(workspaceId, projectId, kind),
+    manifest
+  );
+  return manifest;
+}
+
+export type DecodedEmbedding = {
+  hash: string;
+  vector: number[];
+  collectionId?: string;
+};
+
+/** Reads every shard for a kind and decodes vectors back to float arrays. */
+export async function loadEmbeddingsMap(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  kind: EmbeddingKind
+): Promise<Map<string, DecodedEmbedding>> {
+  const manifest = await loadEmbeddingsManifestAdmin(admin, workspaceId, projectId, kind);
+  const out = new Map<string, DecodedEmbedding>();
+  if (!manifest || manifest.shards.length === 0) return out;
+
+  for (let i = 0; i < manifest.shards.length; i += SHARD_READ_CONCURRENCY) {
+    const batch = manifest.shards.slice(i, i + SHARD_READ_CONCURRENCY);
+    const shardLists = await Promise.all(
+      batch.map((shard) =>
+        loadMrJsonAdmin<EmbeddingShardItem[]>(
+          admin,
+          mrEmbeddingsShardPath(workspaceId, projectId, kind, shard)
+        ).catch(() => null)
+      )
+    );
+    for (const list of shardLists) {
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        out.set(item.id, {
+          hash: item.hash,
+          vector: decodeVectorInt8(item.vector, manifest.dims),
+          collectionId: item.collectionId,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** Encodes vectors to the persisted int8 form. Thin re-export for route callers. */
+export { encodeVectorInt8 };
+
+// ─── Classified keywords (full Stage 4 archive, not the 1.5k UI sample) ───
+
+export type ClassifiedShardItem = {
+  id: string;
+  keyword: string;
+  seedId: string;
+  sheet: ClassifiedSheetType;
+  reason: string;
+  plpConcept?: string;
+};
+
+export async function loadClassifiedManifestAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<ClassifiedManifest | null> {
+  return loadMrJsonAdmin<ClassifiedManifest>(
+    admin,
+    mrClassifiedManifestPath(workspaceId, projectId)
+  );
+}
+
+export async function appendClassifiedShardAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  items: ClassifiedShardItem[],
+  opts: { done: boolean }
+): Promise<ClassifiedManifest> {
+  const manifest =
+    (await loadClassifiedManifestAdmin(admin, workspaceId, projectId)) ?? {
+      shards: [],
+      totalCount: 0,
+      categoryCount: 0,
+      informationalCount: 0,
+      excludedCount: 0,
+      done: false,
+      updatedAt: new Date().toISOString(),
+    };
+
+  if (items.length > 0) {
+    const shard = nextShardName(manifest.shards);
+    await saveMrJsonAdmin(
+      admin,
+      mrClassifiedShardPath(workspaceId, projectId, shard),
+      items
+    );
+    manifest.shards.push(shard);
+    manifest.totalCount += items.length;
+    for (const item of items) {
+      if (item.sheet === "category") manifest.categoryCount += 1;
+      else if (item.sheet === "informational") manifest.informationalCount += 1;
+      else manifest.excludedCount += 1;
+    }
+  }
+  manifest.done = opts.done;
+  manifest.updatedAt = new Date().toISOString();
+
+  await saveMrJsonAdmin(
+    admin,
+    mrClassifiedManifestPath(workspaceId, projectId),
+    manifest
+  );
+  return manifest;
+}
+
+export async function loadClassifiedCategoryTerms(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<ClassifiedShardItem[]> {
+  const manifest = await loadClassifiedManifestAdmin(admin, workspaceId, projectId);
+  if (!manifest || manifest.shards.length === 0) return [];
+
+  const out: ClassifiedShardItem[] = [];
+  for (let i = 0; i < manifest.shards.length; i += SHARD_READ_CONCURRENCY) {
+    const batch = manifest.shards.slice(i, i + SHARD_READ_CONCURRENCY);
+    const shardLists = await Promise.all(
+      batch.map((shard) =>
+        loadMrJsonAdmin<ClassifiedShardItem[]>(
+          admin,
+          mrClassifiedShardPath(workspaceId, projectId, shard)
+        ).catch(() => null)
+      )
+    );
+    for (const list of shardLists) {
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        if (item.sheet === "category") out.push(item);
+      }
+    }
+  }
+  return out;
 }

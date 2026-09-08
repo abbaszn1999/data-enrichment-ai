@@ -4,6 +4,8 @@ import type {
   ProposedCollection,
 } from "@/components/market-research/workspace-data";
 import { runGeminiMarketResearch } from "./gemini-runner";
+import { cosineSimilarity, contentHash } from "./embeddings";
+import { runWithConcurrency } from "@/lib/sync/core/batch-executor";
 
 export interface KeywordToCluster {
   id: string;
@@ -37,6 +39,18 @@ export interface Stage5ClusteringInput {
     scopeMatch: string;
   }>;
   keywords: KeywordToCluster[];
+  /**
+   * Deterministic lineage: which collection each keyword's candidates must
+   * be scoped to (resolved by the caller from the term's `seedId` via the
+   * seeds slice). Not a similarity call — an exact `collectionIds.includes`
+   * filter. Keywords missing an entry fall back to matching against the
+   * full `products` array (legacy/manual-seed callers).
+   */
+  collectionIdByKeywordId?: Record<string, string>;
+  /** Term embedding vectors keyed by keyword id, decoded from int8 storage. */
+  termVectors?: Map<string, number[]>;
+  /** Product embedding vectors keyed by product id, decoded from int8 storage. */
+  productVectors?: Map<string, number[]>;
 }
 
 export interface Stage5ClusteringResult {
@@ -200,6 +214,37 @@ export function computeCollectionProductMatches(
   return candidates;
 }
 
+/**
+ * Stage 1 (embeddings path): collection-scoped vector cosine.
+ *
+ * `candidateProducts` must already be scoped to the term's exact
+ * `collectionId` lineage (a deterministic lookup, not a similarity call) —
+ * this function only ranks within that set, never widens it. Only products
+ * with a vector in `productVectors` participate; a missing vector silently
+ * drops that product rather than treating it as dissimilar, so a partial
+ * embedding pass never masquerades as "this product doesn't match".
+ */
+export function computeCollectionVectorMatches(
+  termVector: number[],
+  candidateProducts: MarketResearchProduct[],
+  productVectors: Map<string, number[]>,
+  minCosineThreshold = 0.32,
+  topCap = 200
+): CollectionProductMatch[] {
+  const scored: CollectionProductMatch[] = [];
+  for (const prod of candidateProducts) {
+    const vector = productVectors.get(prod.id);
+    if (!vector) continue;
+    const cosineRaw = cosineSimilarity(termVector, vector);
+    if (cosineRaw >= minCosineThreshold) {
+      const normalizedScore = Math.min(0.99, Math.max(0.6, cosineRaw));
+      scored.push({ productId: prod.id, score: Math.round(normalizedScore * 100) / 100 });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, topCap);
+}
+
 const BATCH_SIZE = 10;
 
 /**
@@ -210,12 +255,34 @@ const BATCH_SIZE = 10;
  * 4. 1-to-1 Direct Mapping: Preserves exact volume, difficulty, Title Case name, and validated products.
  * 5. Storage & Output: Outputs final ProposedCollection array.
  */
+/** Candidates sent to Gemini per term — bounds request payload size regardless of retrieval method. */
+const MAX_CANDIDATES_TO_GEMINI = 50;
+
+// Kept short deliberately: `runGeminiMarketResearch` already prepends the
+// full 05-collections.md skill text to this string (see gemini-runner.ts),
+// so the framework and exclusion rules live there once, not twice. This is
+// just the mechanical output contract.
+const CLUSTER_SYSTEM_INSTRUCTION = `Apply the single exclusion test from your instructions to every candidate product listed for every keyword below. Output strictly valid JSON matching this schema, one entry per input keyword, no more, no fewer:
+{
+  "collections": [
+    {
+      "keywordId": "string (matching input keywordId)",
+      "matchedProductIds": ["string"],
+      "rationale": "One concise sentence naming the specific exclusion reason applied, or why everything was kept"
+    }
+  ]
+}`;
+
 export async function runStage5CollectionClustering(
   input: Stage5ClusteringInput
 ): Promise<Stage5ClusteringResult> {
   const products = input.products ?? [];
   const seedRows = input.seedRows ?? [];
   const defaultNiche = input.parentNiches?.[0] || "General";
+  const collectionIdByKeywordId = input.collectionIdByKeywordId ?? {};
+  const termVectors = input.termVectors ?? new Map<string, number[]>();
+  const productVectors = input.productVectors ?? new Map<string, number[]>();
+  const useVectors = termVectors.size > 0 && productVectors.size > 0;
 
   if (!input.keywords || input.keywords.length === 0) {
     return {
@@ -245,8 +312,24 @@ export async function runStage5CollectionClustering(
   for (const p of products) {
     productById.set(p.id, p);
   }
+  // Products grouped by the collection they belong to, so scoping a term to
+  // its exact PLP lineage is an O(1) map lookup rather than an O(products)
+  // scan repeated per keyword.
+  const productsByCollectionId = new Map<string, MarketResearchProduct[]>();
+  for (const p of products) {
+    for (const cid of p.collectionIds) {
+      const list = productsByCollectionId.get(cid);
+      if (list) list.push(p);
+      else productsByCollectionId.set(cid, [p]);
+    }
+  }
 
-  // Step 1: Pre-compute candidate matches meeting threshold via Pure Vector Cosine Similarity
+  // Step 1: Pre-compute candidate matches per keyword. Every term is scoped
+  // to its exact collection lineage first (deterministic, not similarity),
+  // then ranked by vector cosine when embeddings are available, falling
+  // back to lexical TF cosine on that SAME scoped set otherwise — never
+  // against the whole catalog, which is both slower and prone to
+  // cross-collection leakage.
   const keywordCandidateMap = new Map<
     string,
     {
@@ -273,7 +356,16 @@ export async function runStage5CollectionClustering(
         defaultNiche;
     }
 
-    const candidates = computeCollectionProductMatches(title, rawKeyword, products);
+    const scopedCollectionId = collectionIdByKeywordId[kw.id];
+    const scopedProducts = scopedCollectionId
+      ? productsByCollectionId.get(scopedCollectionId) ?? []
+      : products;
+
+    const termVector = termVectors.get(kw.id);
+    const candidates =
+      useVectors && termVector
+        ? computeCollectionVectorMatches(termVector, scopedProducts, productVectors)
+        : computeCollectionProductMatches(title, rawKeyword, scopedProducts);
 
     keywordCandidateMap.set(kw.id, {
       title,
@@ -285,94 +377,80 @@ export async function runStage5CollectionClustering(
     });
   }
 
-  // Step 2: Gemini 3.7 Flash AI Validation in batches
+  // Step 2: Gemini 3.7 Flash exclusion pass, batches of 10 keywords run
+  // concurrently (5 at a time) — the batches are independent, so nothing
+  // about running them in parallel changes a single verdict.
   const aiApprovedMap = new Map<
     string,
     { matchedProductIds: string[]; rationale?: string }
   >();
 
-  const systemInstruction = `You are an expert eCommerce Product Categorization Specialist powered by Gemini 3.7 Flash.
-Your mission is to validate and refine product-to-category matches, ensuring products are placed in the most relevant categories for customer discoverability and SEO performance.
-
-## MATCHING VALIDATION FRAMEWORK
-1. Analyze Product: Core type, key attributes (vendor, material, style, color, specs), target audience & use case.
-2. Evaluate ALL Provided Candidates: Relevance Score (1-10): 9-10 perfect, 7-8 strong, 5-6 moderate, 1-4 weak.
-3. Matching Rules:
-   - INCLUDE (Validate): KEEP ALL products where Relevance >= 7 and product is a natural customer browsing fit.
-   - EXCLUDE: REMOVE ONLY the products where Relevance < 5, accessories, or attributes contradict category intent. If no product fits, return an empty array [].
-   - Do NOT cap or limit the number of matched products — if 10 or 20 candidates are valid, include all of them.
-
-Output strictly valid JSON matching this schema:
-{
-  "collections": [
-    {
-      "keywordId": "string (matching input keywordId)",
-      "matchedProductIds": ["string"],
-      "rationale": "Clear 1-sentence explanation of why products were validated or excluded"
-    }
-  ]
-}`;
-
-  // Process in batches of 10 keywords
   const keywordChunks: KeywordToCluster[][] = [];
   for (let i = 0; i < input.keywords.length; i += BATCH_SIZE) {
     keywordChunks.push(input.keywords.slice(i, i + BATCH_SIZE));
   }
 
-  let anyAiSucceeded = false;
+  const chunkRun = await runWithConcurrency(
+    keywordChunks,
+    async (batch) => {
+      const aiPayload = batch.map((kw) => {
+        const meta = keywordCandidateMap.get(kw.id)!;
+        const candidatesList = meta.candidates.slice(0, MAX_CANDIDATES_TO_GEMINI).map((c) => {
+          const prod = productById.get(c.productId);
+          return {
+            id: c.productId,
+            title: prod?.title ?? "",
+            price: prod?.price?.priceFormatted ?? "",
+            shortDescription: prod?.shortDescription ?? "",
+            tags: prod?.tags ?? [],
+            attributes: prod?.attributes ?? [],
+            similarityScore: c.score,
+          };
+        });
 
-  for (const chunk of keywordChunks) {
-    const aiPayload = chunk.map((kw) => {
-      const meta = keywordCandidateMap.get(kw.id)!;
-      const candidatesList = meta.candidates.map((c) => {
-        const prod = productById.get(c.productId);
         return {
-          id: c.productId,
-          title: prod?.title ?? "",
-          price: prod?.price?.priceFormatted ?? "",
-          shortDescription: prod?.shortDescription ?? "",
-          tags: prod?.tags ?? [],
-          attributes: prod?.attributes ?? [],
-          similarityScore: c.score,
+          keywordId: kw.id,
+          keyword: meta.rawKeyword,
+          collectionTitle: meta.title,
+          parentNiche: meta.parentNiche,
+          candidateProducts: candidatesList,
         };
       });
 
-      return {
-        keywordId: kw.id,
-        keyword: meta.rawKeyword,
-        collectionTitle: meta.title,
-        parentNiche: meta.parentNiche,
-        candidateProducts: candidatesList,
-      };
-    });
-
-    const userPrompt = `Store Name: "${input.storeName || "Store"}"
+      const userPrompt = `Store Name: "${input.storeName || "Store"}"
 Total Store Products: ${products.length}
 
-Review each collection opportunity, evaluate all candidate products, exclude only the failing ones, and validate all genuine matching products:
+Review each collection opportunity and run the exclusion test on every candidate product:
 ${JSON.stringify(aiPayload, null, 2)}`;
 
-    try {
       const geminiRes = await runGeminiMarketResearch<GeminiCurationResponse>({
         stage: 5,
-        systemInstruction,
+        systemInstruction: CLUSTER_SYSTEM_INSTRUCTION,
         userPrompt,
       });
+      return geminiRes.data;
+    },
+    { concurrency: 5 }
+  );
 
-      if (geminiRes.data && Array.isArray(geminiRes.data.collections)) {
-        anyAiSucceeded = true;
-        for (const item of geminiRes.data.collections) {
-          if (item.keywordId && Array.isArray(item.matchedProductIds)) {
-            aiApprovedMap.set(item.keywordId, {
-              matchedProductIds: item.matchedProductIds,
-              rationale: item.rationale,
-            });
-          }
+  let anyAiSucceeded = false;
+  for (const data of chunkRun.successes) {
+    if (data && Array.isArray(data.collections)) {
+      anyAiSucceeded = true;
+      for (const item of data.collections) {
+        if (item.keywordId && Array.isArray(item.matchedProductIds)) {
+          aiApprovedMap.set(item.keywordId, {
+            matchedProductIds: item.matchedProductIds,
+            rationale: item.rationale,
+          });
         }
       }
-    } catch (err) {
-      console.warn("[Stage 5] Gemini AI batch validation failed:", err);
     }
+  }
+  if (chunkRun.errors.length > 0) {
+    console.warn(
+      `[Stage 5] ${chunkRun.errors.length}/${keywordChunks.length} Gemini validation batches failed; those keywords fall back to their raw candidate list.`
+    );
   }
 
   // Step 3: Construct finalized 1-to-1 ProposedCollection list with Zero-Product Suppression
@@ -393,7 +471,9 @@ ${JSON.stringify(aiPayload, null, 2)}`;
     } else {
       // Fallback only if the entire AI request failed/errored out
       finalProductIds = meta.candidates.map((c) => c.productId);
-      rationale = "Matched via semantic vector retrieval.";
+      rationale = useVectors
+        ? "Matched via semantic vector retrieval."
+        : "Matched via lexical similarity retrieval.";
     }
 
     const candidateScoreMap = new Map<string, number>(
@@ -414,7 +494,7 @@ ${JSON.stringify(aiPayload, null, 2)}`;
     }
 
     collections.push({
-      id: `col-${slugify(meta.rawKeyword)}-${idx + 1}`,
+      id: `col-${slugify(meta.rawKeyword)}-${contentHash(kw.id).slice(0, 10)}`,
       name: meta.title,
       headKeyword: meta.rawKeyword,
       parentNiche: meta.parentNiche,
@@ -424,8 +504,10 @@ ${JSON.stringify(aiPayload, null, 2)}`;
       keywordCount: 1,
       status: "new",
       matchedProductIds: productMatches.map((m) => m.productId),
-      productMatches,
-      candidateMatches: meta.candidates,
+      // Capped for display payload size — `matchedProductIds` above (which
+      // decides what actually pushes live) is never truncated.
+      productMatches: productMatches.slice(0, 50),
+      candidateMatches: meta.candidates.slice(0, 50),
     });
   }
 

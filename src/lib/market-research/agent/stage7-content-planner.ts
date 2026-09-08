@@ -6,12 +6,14 @@ import {
   typeFromKeyword,
   uniqueInformationalKeywords,
   type ExtractedKeyword,
+  type MarketResearchProduct,
   type ProposedCollection,
   type StrategyArticle,
   type StrategyArticleType,
 } from "@/components/market-research/workspace-data";
 import { cosineSimilarity, embedTexts } from "./embeddings";
 import { buildArticleLinkTargets } from "./internal-links";
+import { buildArticleSkuTargets } from "./stage7-sku-links";
 import { runGeminiMarketResearch } from "./gemini-runner";
 import type { StoreCollectionItem } from "./store-catalog";
 
@@ -55,8 +57,11 @@ export interface Stage7PlanInput {
   parentNiches?: string[];
   storeCollections?: StoreCollectionItem[];
   proposedCollections?: ProposedCollection[];
+  /** Keyed by id for the SKU-link step; omitted entirely when unavailable. */
+  products?: Map<string, MarketResearchProduct>;
   collectionPrefix?: string;
   linksPerArticle?: number;
+  skuLinksPerArticle?: number;
   /** Skips the Gemini titling pass; titles fall back to the deterministic form. */
   disableAi?: boolean;
 }
@@ -272,7 +277,7 @@ export async function runStage7ContentPlan(
     };
   });
 
-  const linksByArticle = await buildArticleLinkTargets({
+  const { linksByArticle, collectionIdsByArticle } = await buildArticleLinkTargets({
     articles: drafts.map((draft) => ({
       id: draft.id,
       title: draft.title,
@@ -283,6 +288,18 @@ export async function runStage7ContentPlan(
     collectionPrefix: input.collectionPrefix,
     linksPerArticle: input.linksPerArticle,
   });
+
+  // Reuses the collections each article already links to — no extra AI call,
+  // no web_search, and the product is guaranteed topically tied to a
+  // collection the article is already sending readers toward.
+  const skusByArticle = input.products
+    ? buildArticleSkuTargets({
+        collectionIdsByArticle,
+        proposedCollections: input.proposedCollections ?? [],
+        productsById: input.products,
+        maxPerArticle: input.skuLinksPerArticle,
+      })
+    : {};
 
   const articles: StrategyArticle[] = drafts.map((draft) => {
     const merge = mergesByHeadId.get(draft.id);
@@ -296,6 +313,7 @@ export async function runStage7ContentPlan(
       volume: draft.volume,
       difficulty: draft.difficulty,
       linksOut: linksByArticle[draft.id] ?? [],
+      skuLinks: skusByArticle[draft.id] ?? [],
       // Volume stays verbatim so the row still matches Stage 4, but priority
       // counts the merged demand too: an article covering five phrasings is
       // worth more than its head keyword alone suggests.

@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
     const discovery = await runStage1NicheDiscovery({
       storeName: catalog.storeName,
       collections: catalog.collections,
+      storeBrands: catalog.storeBrands,
     });
 
     if (parsed.data.projectId) {
@@ -42,6 +43,7 @@ export async function POST(request: NextRequest) {
           provider: catalog.provider,
           baseUrl: catalog.baseUrl,
           collections: catalog.collections,
+          storeBrands: catalog.storeBrands,
         }).catch((err) => console.error("[analyze] Error saving catalog slice:", err)),
         saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "niches", {
           niches: discovery.niches,

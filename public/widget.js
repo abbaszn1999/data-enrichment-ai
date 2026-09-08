@@ -503,7 +503,7 @@
       html += '<span>' + escapeHtml(item.q) + '</span>';
       html += '<svg class="dea-faq-icon" style="stroke:' + accentColor + ';" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
       html += '</button>';
-      html += '<div class="dea-faq-answer" style="color:' + textColor + ';font-size:' + sizes.item + ';padding: 0 ' + sizes.pad + ' ' + sizes.pad + ' ' + sizes.pad + ';">' + escapeHtml(item.a) + '</div>';
+      html += '<div class="dea-faq-answer" style="color:' + textColor + ';font-size:' + sizes.item + ';padding: 0 ' + sizes.pad + ' ' + sizes.pad + ' ' + sizes.pad + ';">' + sanitizeFaqAnswer(item.a, accentColor) + '</div>';
       html += '</div>';
     }
 
@@ -653,6 +653,43 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+  }
+
+  // FAQ answers may contain a small number of contextual internal links
+  // written by the on-page agent, e.g. '...see our <a href="/collections/x">
+  // wireless chargers</a>...'. Blanket-escaping (like escapeHtml above) would
+  // turn those into literal, unclickable text, so answers go through this
+  // stricter sanitizer instead: only an exact <a href="...">text</a> pattern
+  // with a same-site, relative href is allowed through as a real link; every
+  // other character — including any other tag, attribute, or malformed
+  // markup — is escaped as plain text. This keeps FAQ answers safe from
+  // injected scripts or off-site/javascript: redirects while still letting
+  // genuine internal links render as clickable anchors.
+  function sanitizeFaqAnswer(str, accentColor) {
+    if (!str) return "";
+    var text = String(str);
+    var anchorRe = /<a\s+href="([^"<>]*)"\s*>([^<]*)<\/a>/gi;
+    var out = "";
+    var lastIndex = 0;
+    var match;
+    while ((match = anchorRe.exec(text)) !== null) {
+      out += escapeHtml(text.slice(lastIndex, match.index));
+      var href = match[1];
+      var label = match[2];
+      var isSafeRelativeHref = href.charAt(0) === "/" && href.charAt(1) !== "/";
+      if (isSafeRelativeHref) {
+        out +=
+          '<a href="' + escapeHtml(href) + '" style="color:' + (accentColor || "inherit") + ';text-decoration:underline;">' +
+          escapeHtml(label) +
+          "</a>";
+      } else {
+        // Not a verified same-site link — keep the visible text, drop the tag.
+        out += escapeHtml(label);
+      }
+      lastIndex = anchorRe.lastIndex;
+    }
+    out += escapeHtml(text.slice(lastIndex));
+    return out;
   }
 
   // Cache for fetched collection content

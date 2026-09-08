@@ -13,6 +13,12 @@ import type { GeneratedArticle } from "@/components/market-research/workspace-da
 
 export const maxDuration = 300;
 
+function normalizeStoreUrl(value: string | null | undefined): string {
+  const clean = (value ?? "").trim().replace(/\/+$/, "");
+  if (!clean) return "";
+  return /^https?:\/\//i.test(clean) ? clean : `https://${clean}`;
+}
+
 /**
  * Writes exactly one article per request. The client fires three of these in
  * parallel, which keeps a slow article from stalling the other two and keeps
@@ -32,18 +38,23 @@ export async function POST(request: NextRequest) {
   const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
-  const { article, blogs, projectId, workspaceId } = parsed.data;
+  const { article, blogs, projectId, workspaceId, storeUrl } = parsed.data;
 
   try {
     let storeName = "Ecommerce Store";
     const { data: integrationRow } = await auth.admin
       .from("workspace_integrations")
-      .select("integration_name")
+      .select("integration_name, base_url")
       .eq("workspace_id", workspaceId)
       .maybeSingle();
     if (integrationRow?.integration_name) {
       storeName = integrationRow.integration_name;
     }
+    // The client already fetched the storefront's real domain once on
+    // entering Stage 7 (via /api/market-research/blogs); this is only a
+    // fallback for a request that somehow arrives without it.
+    const resolvedStoreUrl =
+      normalizeStoreUrl(storeUrl) || normalizeStoreUrl(integrationRow?.base_url);
 
     const written = await writeArticle({
       articleId: article.id,
@@ -51,7 +62,9 @@ export async function POST(request: NextRequest) {
       keyword: article.keyword,
       type: article.type,
       linksOut: article.linksOut ?? [],
+      skuLinks: article.skuLinks ?? [],
       storeName,
+      storeUrl: resolvedStoreUrl,
       blogs: blogs ?? [],
     });
 

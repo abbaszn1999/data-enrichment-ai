@@ -205,6 +205,13 @@ export type ArticleLinkTarget = {
   collectionName: string;
 };
 
+/** A product page the article may link to, with the anchor text to use. */
+export type ArticleSkuTarget = {
+  anchor: string;
+  url: string;
+  productName: string;
+};
+
 export type ArticleStatus =
   | "pending"
   | "generating"
@@ -226,6 +233,8 @@ export type StrategyArticle = {
   /** Copied verbatim from the source keyword. */
   difficulty: number;
   linksOut: ArticleLinkTarget[];
+  /** Verified product pages the article may link to; optional and capped at 5. */
+  skuLinks?: ArticleSkuTarget[];
   priority: StrategyPriority;
   /**
    * Near-duplicate keywords folded into this article. One article covering the
@@ -541,8 +550,18 @@ export function typeFromKeyword(keyword: string): StrategyArticleType {
   return "guide";
 }
 
+/**
+ * How good a link/content target a keyword or collection is, purely from its
+ * demand data: high volume and low difficulty score highest. Shared by the
+ * Priority badge and by Stage 7's term and link-target ranking so "golden"
+ * opportunities are judged the same way everywhere.
+ */
+export function opportunityScore(volume: number, difficulty: number): number {
+  return volume / Math.max(12, difficulty);
+}
+
 export function priorityFor(volume: number, difficulty: number): StrategyPriority {
-  const score = volume / Math.max(12, difficulty);
+  const score = opportunityScore(volume, difficulty);
   if (score > 80) return "high";
   if (score > 28) return "medium";
   return "low";
@@ -574,11 +593,11 @@ export function uniqueInformationalKeywords(
 /**
  * Picks the informational keywords Stage 7 will plan articles for.
  *
- * Taking the top N by volume alone lets the busiest seed swallow the entire
- * plan — a large store ends up with a hundred articles about chargers and none
- * about a whole department. So the quota is dealt round-robin across seeds:
- * every seed gets its first pick before any seed gets a second, and volume
- * decides the order within a seed. Seeds that run dry simply drop out.
+ * Purely opportunity-driven: every unique keyword is ranked by
+ * `opportunityScore` (high volume, low-to-normal difficulty) and the top
+ * `limit` survive, with no guaranteed spread across seeds. A store where one
+ * department dominates search demand will get most of its plan from that
+ * department — that is the intent, not a bug.
  */
 export function selectStrategyKeywords(
   keywords: ExtractedKeyword[],
@@ -588,28 +607,13 @@ export function selectStrategyKeywords(
   const cap = Math.max(0, limit);
   if (unique.length <= cap) return unique;
 
-  const bySeed = new Map<string, ExtractedKeyword[]>();
-  for (const row of unique) {
-    const key = row.seedId || row.seed || "unknown";
-    const bucket = bySeed.get(key);
-    if (bucket) bucket.push(row);
-    else bySeed.set(key, [row]);
-  }
-
-  // Richest seeds first so the rounds stay full for as long as possible.
-  const buckets = [...bySeed.values()].sort((a, b) => b.length - a.length);
-  const picked: ExtractedKeyword[] = [];
-
-  for (let round = 0; picked.length < cap; round += 1) {
-    let placed = false;
-    for (const bucket of buckets) {
-      if (round >= bucket.length) continue;
-      picked.push(bucket[round]);
-      placed = true;
-      if (picked.length >= cap) break;
-    }
-    if (!placed) break;
-  }
+  const picked = [...unique]
+    .sort(
+      (a, b) =>
+        opportunityScore(b.volume, b.difficulty) -
+        opportunityScore(a.volume, a.difficulty)
+    )
+    .slice(0, cap);
 
   return picked.sort(
     (a, b) => b.volume - a.volume || a.keyword.localeCompare(b.keyword)
