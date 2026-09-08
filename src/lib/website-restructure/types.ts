@@ -15,6 +15,8 @@ export type WrPhase =
 export const WR_MAX_IMAGES = 10;
 export const WR_MAX_COMPETITORS = 4;
 export const WR_MAX_EDIT_MESSAGES = 10;
+/** Images attached to a single edit message (logo, palette, screenshot, …). */
+export const WR_MAX_CHAT_ATTACHMENTS = 4;
 
 /** Lifetime project limit per subscription plan. This counts every project a
  *  workspace has ever created, not just currently-active ones, so deleting a
@@ -53,12 +55,21 @@ export function canAdvanceWrPhase(current: WrPhase, next: WrPhase): boolean {
   return currentIdx !== -1 && nextIdx !== -1 && nextIdx >= currentIdx;
 }
 
+/** An image the merchant attached to an edit message (not a header screenshot). */
+export type WrChatAttachment = {
+  id: string;
+  storagePath: string;
+  filename: string;
+  mimeType: string;
+};
+
 export type WrChatMessage = {
   id: string;
   role: "agent" | "user";
   text: string;
   /** Set on the message that reports a failed build/edit, for a subtle error style. */
   isError?: boolean;
+  attachments?: WrChatAttachment[];
 };
 
 export type WrUploadedImage = {

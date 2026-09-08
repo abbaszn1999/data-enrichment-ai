@@ -11,6 +11,7 @@ import type {
 } from "@/types";
 import { DEFAULT_ENRICHMENT_COLUMNS, DEFAULT_ENRICHMENT_SETTINGS, resolveEnrichmentModel } from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
+import { expandToGroupMemberIds, visibleCatalogRows } from "@/lib/catalog/product-groups";
 
 function normalizeEnrichmentSettings(
   settings: EnrichmentSettings | Partial<EnrichmentSettings> | null | undefined
@@ -23,6 +24,13 @@ function normalizeEnrichmentSettings(
     ...merged,
     enrichmentModel: resolveEnrichmentModel(merged.enrichmentModel),
   };
+}
+
+function sheetRowsForState(state: Pick<SheetState, "rows" | "activeSheet" | "productGroupColumn">) {
+  return visibleCatalogRows(state.rows, {
+    groupColumn: state.productGroupColumn,
+    activeSheet: state.activeSheet,
+  });
 }
 
 type UndoAction =
@@ -76,6 +84,7 @@ interface SheetActions {
   ) => void;
   setRowEnrichedData: (rowId: string, data: EnrichedData) => void;
   setIsEnriching: (value: boolean) => void;
+  setStoppingEnrich: (value: boolean) => void;
   setEnrichProgress: (completed: number, total: number) => void;
   incrementError: () => void;
   resetEnrichState: () => void;
@@ -86,7 +95,7 @@ interface SheetActions {
   // Persistence
   restoreSession: () => Promise<boolean>;
   // Supabase project
-  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean) => void;
+  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean, productGroupColumn?: string | null) => void;
   applyProjectRows: (rows: ProductRow[], progress?: { completed: number; total: number; errors: number }) => void;
   /** Replace the whole AI configuration, e.g. when applying a saved setting. */
   applyEnrichmentPreset: (settings: { sourceColumns?: string[]; enrichmentColumns?: EnrichmentColumn[]; enrichmentSettings?: EnrichmentSettings }) => void;
@@ -111,6 +120,7 @@ const initialState: SheetState = {
   projectId: null,
   sessionKind: "product",
   matchingSkipped: false,
+  productGroupColumn: null,
   fileName: null,
   rows: [],
   originalColumns: [],
@@ -121,6 +131,7 @@ const initialState: SheetState = {
   selectedRowIds: new Set<string>(),
   isEnriching: false,
   isPaused: false,
+  isStoppingEnrich: false,
   enrichProgress: 0,
   totalToEnrich: 0,
   completedEnrich: 0,
@@ -139,6 +150,13 @@ const initialState: SheetState = {
 // Undo/Redo stacks (kept outside store to avoid triggering re-renders)
 const undoStack: UndoAction[] = [];
 const redoStack: UndoAction[] = [];
+const MAX_UNDO = 30;
+
+function recordUndo(action: UndoAction) {
+  undoStack.push(action);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+}
 
 export const useSheetStore = create<SheetStore>((set, get) => ({
   ...initialState,
@@ -180,10 +198,17 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   addCustomEnrichmentColumn: (col) =>
     set((state) => {
-      const id = col.label.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-      // Check if it already exists
-      if (state.enrichmentColumns.some((c) => c.id === id)) {
-        return state;
+      const slug =
+        col.label
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_|_$/g, "") || "column";
+      const taken = new Set(state.enrichmentColumns.map((c) => c.id));
+      let id = `custom_${slug}`;
+      let n = 2;
+      while (taken.has(id)) {
+        id = `custom_${slug}_${n}`;
+        n += 1;
       }
       const newCol: EnrichmentColumn = {
         ...col,
@@ -232,13 +257,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       // Match the sidebar: only AI columns that have data on the current selection.
       const scopeRows =
         state.selectedRowIds.size > 0
-          ? state.rows.filter(
-              (row) =>
-                state.selectedRowIds.has(row.id) &&
-                (state.activeSheet === "existing"
-                  ? row.matchType === "existing"
-                  : row.matchType !== "existing")
-            )
+          ? sheetRowsForState(state).filter((row) => state.selectedRowIds.has(row.id))
           : [];
 
       const enrichedWithData = state.enrichmentColumns
@@ -267,10 +286,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   selectAllRows: () =>
     set((state) => {
-      // Only select rows in the active sheet
-      const sheetRows = state.rows.filter((r) =>
-        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-      );
+      const sheetRows = sheetRowsForState(state);
       const sheetIds = new Set(sheetRows.map((r) => r.id));
       const newSelected = new Set(state.selectedRowIds);
       sheetIds.forEach((id) => newSelected.add(id));
@@ -285,10 +301,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   deselectAllRows: () =>
     set((state) => {
-      // Only deselect rows in the active sheet
-      const sheetRows = state.rows.filter((r) =>
-        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-      );
+      const sheetRows = sheetRowsForState(state);
       const sheetIds = new Set(sheetRows.map((r) => r.id));
       const newSelected = new Set(state.selectedRowIds);
       sheetIds.forEach((id) => newSelected.delete(id));
@@ -334,8 +347,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     if (!row) return;
     const oldValue = row.originalData[column] || "";
     if (oldValue === value) return;
-    undoStack.push({ type: "cell", rowId, column, oldValue, newValue: value });
-    redoStack.length = 0;
+    recordUndo({ type: "cell", rowId, column, oldValue, newValue: value });
     set({
       rows: state.rows.map((r) =>
         r.id === rowId
@@ -491,7 +503,14 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       ),
     })),
 
-  setIsEnriching: (value) => set({ isEnriching: value }),
+  setIsEnriching: (value) =>
+    set(
+      value
+        ? { isEnriching: true }
+        : { isEnriching: false, isStoppingEnrich: false }
+    ),
+
+  setStoppingEnrich: (value) => set({ isStoppingEnrich: value }),
 
   setEnrichProgress: (completed, total) =>
     set({
@@ -506,6 +525,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   resetEnrichState: () =>
     set((state) => ({
       isEnriching: false,
+      isStoppingEnrich: false,
       enrichProgress: 0,
       totalToEnrich: 0,
       completedEnrich: 0,
@@ -521,18 +541,14 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   deleteSelectedRows: () => {
     const state = get();
     // Only delete rows that are in the active sheet AND selected
-    const sheetIds = new Set(
-      state.rows
-        .filter((r) => state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing")
-        .map((r) => r.id)
-    );
+    const sheetIds = new Set(sheetRowsForState(state).map((r) => r.id));
+    const selectedOnSheet = [...state.selectedRowIds].filter((id) => sheetIds.has(id));
     const toDelete = new Set(
-      [...state.selectedRowIds].filter((id) => sheetIds.has(id))
+      expandToGroupMemberIds(selectedOnSheet, state.rows, state.productGroupColumn)
     );
     const deletedRows = state.rows.filter((r) => toDelete.has(r.id));
     const deletedIds = [...toDelete];
-    undoStack.push({ type: "deleteRows", deletedRows, deletedIds });
-    redoStack.length = 0;
+    recordUndo({ type: "deleteRows", deletedRows, deletedIds });
     const newSelected = new Set(state.selectedRowIds);
     toDelete.forEach((id) => newSelected.delete(id));
     set({
@@ -544,8 +560,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 
   renameColumn: (oldName, newName) => {
     if (!newName.trim() || oldName === newName) return;
-    undoStack.push({ type: "renameColumn", oldName, newName });
-    redoStack.length = 0;
+    recordUndo({ type: "renameColumn", oldName, newName });
     set((state) => ({
       originalColumns: state.originalColumns.map((c) => (c === oldName ? newName : c)),
       sourceColumns: state.sourceColumns.map((c) => (c === oldName ? newName : c)),
@@ -565,8 +580,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     for (const r of state.rows) {
       values[r.id] = r.originalData[colName] ?? "";
     }
-    undoStack.push({ type: "deleteColumn", colName, colIndex, sourceIncluded, values });
-    redoStack.length = 0;
+    recordUndo({ type: "deleteColumn", colName, colIndex, sourceIncluded, values });
     set({
       originalColumns: state.originalColumns.filter((c) => c !== colName),
       sourceColumns: state.sourceColumns.filter((c) => c !== colName),
@@ -581,9 +595,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   selectByStatus: (status) =>
     set((state) => {
       // Only select rows in active sheet with the given status
-      const sheetRows = state.rows.filter((r) =>
-        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-      );
+      const sheetRows = sheetRowsForState(state);
       const matching = new Set(sheetRows.filter((r) => r.status === status).map((r) => r.id));
       // Keep selections from other sheet
       const otherSheetSelected = [...state.selectedRowIds].filter((id) => !sheetRows.some((r) => r.id === id));
@@ -597,9 +609,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   invertSelection: () =>
     set((state) => {
       // Only invert selection within active sheet
-      const sheetRows = state.rows.filter((r) =>
-        state.activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-      );
+      const sheetRows = sheetRowsForState(state);
       const sheetIds = new Set(sheetRows.map((r) => r.id));
       const otherSheetSelected = [...state.selectedRowIds].filter((id) => !sheetIds.has(id));
       const invertedSheet = sheetRows.filter((r) => !state.selectedRowIds.has(r.id)).map((r) => r.id);
@@ -686,6 +696,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         selectedRowIds: new Set(session.rows.map((r) => r.id)),
         isEnriching: false,
         isPaused: false,
+        isStoppingEnrich: false,
       });
       return true;
     } catch {
@@ -694,22 +705,25 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   },
 
   // Supabase project
-  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped) => {
+  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped, productGroupColumn) => {
+    const groupColumn = productGroupColumn ?? null;
     set({
       workspaceId,
       projectId,
       sessionKind: sessionKind ?? "product",
       matchingSkipped: matchingSkipped ?? false,
+      productGroupColumn: groupColumn,
       fileName,
       originalColumns: columns,
-      rows,
+      rows: rows.map((r) => ({ ...r, selected: false })),
       sourceColumns,
       enrichmentColumns,
       enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
       columnVisibility,
-      selectedRowIds: new Set(rows.map((r) => r.id)),
+      selectedRowIds: new Set<string>(),
       isEnriching: false,
       isPaused: false,
+      isStoppingEnrich: false,
       enrichProgress: 0,
       totalToEnrich: 0,
       completedEnrich: 0,
@@ -717,6 +731,12 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       saveStatus: "saved",
       lastSavedAt: Date.now(),
     });
+    // A cross-session module-level "last saved" fingerprint would otherwise
+    // read as changed the instant a *different* project's data replaces it,
+    // scheduling a phantom autosave a few seconds after every page open —
+    // one that can race an in-progress background enrichment run and
+    // overwrite its freshly written results with this stale snapshot.
+    markProjectSnapshotAsSaved();
   },
 
   applyProjectRows: (rows, progress) => {
@@ -827,13 +847,28 @@ function configHash(state: SheetState): string {
     es: state.enrichmentSettings,
     cv: state.columnVisibility,
     cols: state.originalColumns,
+    pg: state.productGroupColumn,
   });
+}
+
+/** Re-baseline the "last saved" fingerprint against whatever is in the store
+ * right now (e.g. right after loading a project from Storage). Without this,
+ * opening/switching projects immediately looks "changed" against the
+ * previous project's fingerprint and schedules a save a few seconds later. */
+function markProjectSnapshotAsSaved(): void {
+  lastSavedVersion = useSheetStore.getState().undoVersion;
+  lastSavedConfigHash = configHash(useSheetStore.getState());
 }
 
 // The actual persist function (extracted so it can be called from multiple places)
 async function persistProject() {
   const s = useSheetStore.getState();
   if (!s.workspaceId || !s.projectId || !s.fileName) return;
+  // Re-check at execution time, not just at scheduling time: a debounce timer
+  // armed before enrichment started (e.g. right after opening the page) must
+  // not fire mid-run or right after it finishes and blindly overwrite the
+  // background job's freshly saved results with this stale row snapshot.
+  if (s.isEnriching || s.isStoppingEnrich) return;
 
   useSheetStore.setState({ saveStatus: "saving" });
 
@@ -844,6 +879,7 @@ async function persistProject() {
     const projectJson = {
       kind: s.sessionKind,
       matchingSkipped: s.matchingSkipped,
+      productGroupColumn: s.productGroupColumn,
       columns: s.originalColumns,
       rows: s.rows.map((r) => ({
         id: r.id,
@@ -906,7 +942,7 @@ useSheetStore.subscribe((state, prevState) => {
 
   const hasChanges = versionChanged || configChanged || rowCountChanged || enrichDataChanged;
   if (!hasChanges) return;
-  if (state.isEnriching) return;
+  if (state.isEnriching || state.isStoppingEnrich) return;
 
   // Mark as unsaved
   if (state.saveStatus === "saved") {

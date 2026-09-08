@@ -16,7 +16,7 @@ vi.mock("@/lib/ai-pricing", () => ({
   calculateCallCost: (...args: unknown[]) => calculateCallCostMock(...args),
 }));
 
-const { classifyProducts, CLASSIFY_TUNING } = await import("./classify");
+const { classifyProducts, CLASSIFY_TUNING, candidateTargetsForProduct } = await import("./classify");
 
 /** Queues one Gemini response and its matching billed cost — `classifyProducts`
  *  sums the cost across batches to bill the wallet at the agent's real price. */
@@ -70,7 +70,7 @@ describe("classifyProducts", () => {
     expect(validatedCount).toBe(0);
   });
 
-  it("always puts the product to the agent with every live category, no pre-filter", async () => {
+  it("sends every live category when the catalog is already within the candidate cap", async () => {
     generateContent.mockResolvedValue(geminiResult([]));
 
     const { decisions, validatedCount } = await classifyProducts({
@@ -237,5 +237,20 @@ describe("classifyProducts", () => {
     expect(assigned.map((d) => d.target?.taxonomyRef).sort()).toEqual(
       [cables.taxonomyRef, stands.taxonomyRef].sort()
     );
+  });
+
+  it("pre-filters a large catalog to the overlapping candidates", () => {
+    const noise = Array.from({ length: 40 }, (_, i) => ({
+      collectionId: `n${i}`,
+      taxonomyRef: `gid://shopify/Collection/${100 + i}`,
+      name: `Unrelated Niche ${i}`,
+    }));
+    const picked = candidateTargetsForProduct(
+      product("p1", "USB-C Charging Cable 2m"),
+      [...noise, cables, stands],
+      8
+    );
+    expect(picked).toHaveLength(8);
+    expect(picked.some((t) => t.taxonomyRef === cables.taxonomyRef)).toBe(true);
   });
 });

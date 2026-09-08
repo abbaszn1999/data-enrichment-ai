@@ -99,11 +99,14 @@ export default function WorkspaceLayout({
 
   const basePath = `/w/${slug}`;
 
-  // Hide workspace nav sidebar on enrichment tool (it has its own left panel).
+  // Hide workspace nav sidebar on enrichment workbench tool (it has its own left panel).
   // Keep the top app header visible so credits / workspace / user stay accessible.
-  const isEnrichPage = pathname.includes("/enrich");
+  // Exclude /new so the intake form can scroll normally with the sidebar intact.
+  const isEnrichPage =
+    /^\/w\/[^/]+\/catalog-intelligence\/[^/]+$/.test(pathname) &&
+    !pathname.endsWith("/new");
   const isSyncPage =
-    pathname === `${basePath}/sync` || pathname.startsWith(`${basePath}/sync/`);
+    pathname === `${basePath}/store-assistant` || pathname.startsWith(`${basePath}/store-assistant/`);
   const isMarketResearchPage = pathname.includes("/market-research");
   const isWebsiteRestructurePage = pathname.includes("/website-restructure");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
@@ -156,7 +159,7 @@ export default function WorkspaceLayout({
     },
     {
       href: hasIntegration ? `${basePath}/growth-sync` : "",
-      label: "Sync",
+      label: "Growth Sync",
       icon: RefreshCw,
       disabled: !hasIntegration,
     },
@@ -185,7 +188,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}`, label: "Dashboard", icon: LayoutDashboard },
     { href: `${basePath}/products`, label: "Products", icon: Package },
     { href: `${basePath}/categories`, label: "Categories", icon: FolderTree },
-    { href: `${basePath}/import`, label: "Catalog Intelligence", icon: Upload },
+    { href: `${basePath}/catalog-intelligence`, label: "Catalog Intelligence", icon: Upload },
   ];
 
   const toolsLinksAfterGrowthEngine = [
@@ -196,7 +199,7 @@ export default function WorkspaceLayout({
       disabled: !hasIntegration,
     },
     {
-      href: hasIntegration ? `${basePath}/sync` : "",
+      href: hasIntegration ? `${basePath}/store-assistant` : "",
       label: "Store assistant",
       icon: Bot,
       disabled: !hasIntegration,
@@ -441,7 +444,7 @@ export default function WorkspaceLayout({
                     Autommerce
                   </span>
                   <span className="mt-0.5 block text-[8px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
-                    Data Entry
+                    AI Commerce Operations
                   </span>
                 </span>
               </Link>
@@ -485,8 +488,9 @@ export default function WorkspaceLayout({
                   }`}
                 >
                   <Coins className="h-3.5 w-3.5" />
-                  <span>{formatCredits(credits.remaining)}</span>
-                  <span className="text-muted-foreground/60">/ {formatCredits(credits.total)}</span>
+                  <span title={`Monthly ${formatCredits(credits.total)} · bonus included in available`}>
+                    {formatCredits(credits.remaining)} available
+                  </span>
                 </Link>
               )}
 

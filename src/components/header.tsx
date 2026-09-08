@@ -8,10 +8,11 @@ import { useTheme } from "next-themes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSheetStore } from "@/store/sheet-store";
+import { visibleCatalogRows } from "@/lib/catalog/product-groups";
 
 export function Header() {
   const router = useRouter();
-  const { fileName, rows, undo, redo, canUndo, canRedo, undoVersion, saveStatus, projectId, activeSheet, setActiveSheet } = useSheetStore();
+  const { fileName, rows, undo, redo, canUndo, canRedo, undoVersion, saveStatus, projectId, activeSheet, setActiveSheet, productGroupColumn } = useSheetStore();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
@@ -25,6 +26,10 @@ export function Header() {
   const doneCount = rows.filter((r) => r.status === "done").length;
   const errorCount = rows.filter((r) => r.status === "error").length;
   const processingCount = rows.filter((r) => r.status === "processing").length;
+  const productCount = visibleCatalogRows(rows, {
+    groupColumn: productGroupColumn,
+    activeSheet: "all",
+  }).length;
 
   const cycleTheme = () => {
     if (theme === "light") setTheme("dark");
@@ -63,7 +68,7 @@ export function Header() {
                 priority
               />
             </div>
-            <h1 className="font-bold text-sm tracking-tight text-foreground">Autommerce Data Entry</h1>
+            <h1 className="font-bold text-sm tracking-tight text-foreground">Autommerce Platform</h1>
           </div>
 
           {fileName && (
@@ -155,7 +160,9 @@ export function Header() {
                 </Badge>
               )}
               <Badge variant="outline" className="text-[10px] font-mono">
-                {rows.length} rows
+                {productGroupColumn && productCount !== rows.length
+                  ? `${productCount} products`
+                  : `${rows.length} rows`}
               </Badge>
             </>
           )}

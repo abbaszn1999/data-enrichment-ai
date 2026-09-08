@@ -5,7 +5,7 @@
  * inside the API routes so Apify cannot start without a successful hold.
  */
 
-export const MARKET_RESEARCH_WALLET_MODULE = "Market Research";
+export const MARKET_RESEARCH_WALLET_MODULE = "market-research";
 
 export type MrChargeKind =
   | "apify_seed_probe"

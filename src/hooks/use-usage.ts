@@ -27,7 +27,10 @@ async function dedupedFetch(url: string, forceRefresh = false) {
   return promise;
 }
 
-export function useUsage(workspaceId: string | null) {
+export function useUsage(
+  workspaceId: string | null,
+  range?: { from?: string; to?: string }
+) {
   const [state, setState] = useState<{
     data: any;
     isLoading: boolean;
@@ -53,7 +56,10 @@ export function useUsage(workspaceId: string | null) {
   const refresh = useCallback(async (force = false) => {
     if (!workspaceId) return;
     try {
-      const url = `/api/credits?workspaceId=${workspaceId}&limit=200`;
+      const params = new URLSearchParams({ workspaceId, limit: "200" });
+      if (range?.from) params.set("from", range.from);
+      if (range?.to) params.set("to", range.to);
+      const url = `/api/credits?${params.toString()}`;
       const data = await dedupedFetch(url, force);
       setState({
         data,
@@ -63,7 +69,7 @@ export function useUsage(workspaceId: string | null) {
     } catch (err: any) {
       setState((prev) => ({ ...prev, isLoading: false, error: err.message }));
     }
-  }, [workspaceId]);
+  }, [workspaceId, range?.from, range?.to]);
 
   useEffect(() => {
     refresh(false);

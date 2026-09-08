@@ -131,4 +131,116 @@ describe("enrichProductRow OpenAI agent", () => {
       imageUrl
     );
   });
+
+  it("retries without source input_image when OpenAI cannot download it", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const deadImage = "https://cdn.example/mh01-gray.jpg";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              message:
+                "Error while downloading file. Upstream status code: 404.",
+            },
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                content: [
+                  {
+                    type: "output_text",
+                    text: JSON.stringify({
+                      enhancedTitle: "Chaz Kangeroo Hoodie",
+                      notes: "continued without source photo",
+                    }),
+                  },
+                ],
+              },
+            ],
+            usage: { input_tokens: 900, output_tokens: 80 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await enrichProductRow(
+      {
+        Title: "Chaz Kangeroo Hoodie",
+        SKU: "MH01",
+        Images: deadImage,
+      },
+      ["enhancedTitle"],
+      [
+        {
+          id: "enhancedTitle",
+          label: "Enhanced Title",
+          description: "SEO title",
+          type: "text",
+          enabled: true,
+        },
+      ],
+      { enrichmentModel: "standard", outputLanguage: "English" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const first = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
+    const second = JSON.parse(String(fetchMock.mock.calls[1]![1].body));
+    expect(
+      first.input[0].content.some(
+        (part: { type?: string; image_url?: string }) =>
+          part.type === "input_image" && part.image_url === deadImage
+      )
+    ).toBe(true);
+    expect(
+      second.input[0].content.some(
+        (part: { type?: string }) => part.type === "input_image"
+      )
+    ).toBe(false);
+    expect(result.data.enhancedTitle).toBe("Chaz Kangeroo Hoodie");
+  });
+
+  it("does not retry source-image stripping for unrelated OpenAI errors", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { message: "OpenAI enrich failed (429)" },
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      enrichProductRow(
+        {
+          Title: "Chaz Kangeroo Hoodie",
+          Images: "https://cdn.example/mh01-gray.jpg",
+        },
+        ["enhancedTitle"],
+        [
+          {
+            id: "enhancedTitle",
+            label: "Enhanced Title",
+            description: "SEO title",
+            type: "text",
+            enabled: true,
+          },
+        ],
+        { enrichmentModel: "standard", outputLanguage: "English" }
+      )
+    ).rejects.toThrow("OpenAI enrich failed (429)");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

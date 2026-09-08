@@ -1,6 +1,6 @@
 "use client";
 
-import type { WrPhase, WrProjectRow, WrVersion } from "./types";
+import type { WrChatAttachment, WrPhase, WrProjectRow, WrUploadedImage, WrVersion } from "./types";
 
 const BASE = "/api/website-restructure";
 
@@ -79,7 +79,7 @@ export async function fetchWrSourcesApi(workspaceId: string, projectId: string) 
 export async function uploadWrAssetApi(input: {
   workspaceId: string;
   projectId: string;
-  kind: "image" | "logo";
+  kind: "image" | "logo" | "chat";
   filename: string;
   mimeType: string;
   dataBase64: string;
@@ -89,7 +89,11 @@ export async function uploadWrAssetApi(input: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  return asJson<{ ok: true; asset: { id: string; storagePath: string; filename: string }; url: string | null }>(res);
+  return asJson<{
+    ok: true;
+    asset: { id: string; storagePath: string; filename: string; mimeType?: string };
+    url: string | null;
+  }>(res);
 }
 
 export async function deleteWrAssetApi(input: {
@@ -121,7 +125,13 @@ export function fileToBase64(file: File): Promise<string> {
 
 export type WrStreamEvent =
   | { type: "status"; message: string }
-  | { type: "version"; data: WrVersion; logoUrl: string | null; editMessagesUsed?: number }
+  | {
+      type: "version";
+      data: WrVersion;
+      logoUrl: string | null;
+      logo?: WrUploadedImage | null;
+      editMessagesUsed?: number;
+    }
   | { type: "error"; error: string };
 
 async function readNdjsonStream(res: Response, onEvent: (event: WrStreamEvent) => void): Promise<void> {
@@ -176,7 +186,12 @@ export async function runWrBuildApi(
 }
 
 export async function runWrEditApi(
-  input: { workspaceId: string; projectId: string; instruction: string },
+  input: {
+    workspaceId: string;
+    projectId: string;
+    instruction: string;
+    attachments?: WrChatAttachment[];
+  },
   onEvent: (event: WrStreamEvent) => void
 ): Promise<void> {
   const res = await fetch(`${BASE}/chat`, {

@@ -191,12 +191,17 @@
    taken from the merchant's chosen style — meant for the live storefront,
    which is normally light. In dark mode that reads as a stray white card, so
    force the preview surface itself to black here without touching the
-   snippet/config the merchant actually saves. */
+   snippet/config the merchant actually saves. Cards / two-column FAQ items
+   mix the merchant background onto each row; those nested surfaces stay
+   white unless we darken them too, which made light text invisible. */
 .dark .cp-preview-surface {
   background-color: #000 !important;
 }
 .dark .cp-preview-surface * {
   color: #f5f5f5 !important;
+}
+.dark .cp-preview-surface .cp-preview-card {
+  background: #171717 !important;
 }
 
 /* ═══ Dashboard Animations ═══ */

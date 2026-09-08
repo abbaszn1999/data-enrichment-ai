@@ -39,7 +39,7 @@ export default function DemoRegisterPage() {
             <FileSpreadsheet className="h-7 w-7 text-primary-foreground" />
           </div>
           <h1 className="text-xl font-bold tracking-tight">Create Account</h1>
-          <p className="text-xs text-muted-foreground mt-1">Get started with DataSheet AI</p>
+          <p className="text-xs text-muted-foreground mt-1">Get started with Autommerce Platform</p>
         </div>
 
         <form onSubmit={handleRegister} className="space-y-4">

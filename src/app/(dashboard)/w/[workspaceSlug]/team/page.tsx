@@ -76,7 +76,23 @@ export default function TeamPage() {
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [resendingInvite, setResendingInvite] = useState<string | null>(null);
   const [updatingRoleId, setUpdatingRoleId] = useState<string | null>(null);
+  const [memberPage, setMemberPage] = useState(1);
+  const [memberSearch, setMemberSearch] = useState("");
+  const MEMBER_PAGE_SIZE = 15;
 
+  const visibleMembers = members.filter((member) => {
+    if (!memberSearch.trim()) return true;
+    const q = memberSearch.toLowerCase();
+    return (
+      (member.profiles?.full_name || "").toLowerCase().includes(q) ||
+      (member.email || "").toLowerCase().includes(q)
+    );
+  });
+  const memberPageCount = Math.max(1, Math.ceil(visibleMembers.length / MEMBER_PAGE_SIZE));
+  const pagedMembers = visibleMembers.slice(
+    (memberPage - 1) * MEMBER_PAGE_SIZE,
+    memberPage * MEMBER_PAGE_SIZE
+  );
   const pendingInviteCount = invites.length;
   const currentMemberCount = members.length;
   const currentSeatCount = currentMemberCount + pendingInviteCount;
@@ -144,9 +160,10 @@ export default function TeamPage() {
   };
 
   const handleCancelInvite = async (inviteId: string) => {
+    if (!workspace) return;
     if (!confirm("Cancel this invite?")) return;
     try {
-      await cancelInvite(inviteId);
+      await cancelInvite(inviteId, workspace.id);
       refreshTeam();
     } catch (err: any) {
       alert(err?.message || "Failed to cancel invite");
@@ -467,6 +484,42 @@ export default function TeamPage() {
                 </p>
               </div>
             </div>
+            <div className="flex items-center gap-2">
+              <Input
+                value={memberSearch}
+                onChange={(e) => {
+                  setMemberSearch(e.target.value);
+                  setMemberPage(1);
+                }}
+                placeholder="Search name or email"
+                className="h-8 w-48 text-xs"
+              />
+              {memberPageCount > 1 && (
+                <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2"
+                    disabled={memberPage <= 1}
+                    onClick={() => setMemberPage((p) => Math.max(1, p - 1))}
+                  >
+                    Prev
+                  </Button>
+                  <span>
+                    {memberPage}/{memberPageCount}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2"
+                    disabled={memberPage >= memberPageCount}
+                    onClick={() => setMemberPage((p) => Math.min(memberPageCount, p + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -489,7 +542,7 @@ export default function TeamPage() {
                 </tr>
               </thead>
               <tbody>
-                {members.map((member) => {
+                {pagedMembers.map((member) => {
                   const rl = ROLE_LABELS[member.role] || ROLE_LABELS.viewer;
                   const initials = (
                     member.profiles?.full_name ||

@@ -12,7 +12,11 @@ export async function POST(request: NextRequest) {
 
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
+    const webhookSecret = (process.env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+    if (!webhookSecret) {
+      return NextResponse.json({ error: "Webhook secret is not set" }, { status: 500 });
+    }
+    event = Stripe.webhooks.constructEvent(body, signature, webhookSecret);
   } catch (err: any) {
     console.error("[Stripe Webhook] Signature failed:", err.message);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
@@ -117,7 +121,10 @@ async function handleWalletTopup(
 ) {
   const workspaceId = session.metadata?.workspaceId;
   if (!workspaceId) return;
-  const amountUsd = (session.amount_total ?? 0) / 100;
+  const targetCents = session.metadata?.targetAmountCents
+    ? parseInt(session.metadata.targetAmountCents, 10)
+    : (session.amount_subtotal ?? session.amount_total ?? 0);
+  const amountUsd = targetCents > 0 ? targetCents / 100 : (session.amount_total ?? 0) / 100;
   if (amountUsd <= 0) return;
 
   const credited = await creditWorkspaceWallet(admin, {
@@ -132,6 +139,7 @@ async function handleWalletTopup(
     details: {
       stripeSessionId: session.id,
       stripePaymentIntentId: (session.payment_intent as string) || null,
+      amountPaidUsd: (session.amount_total ?? 0) / 100,
     },
   });
   if (!credited.ok) {

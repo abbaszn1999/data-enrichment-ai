@@ -76,6 +76,10 @@ import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import type { ProductRow } from "@/types";
 import { FileSpreadsheet, Package, Cloud, CloudOff } from "lucide-react";
+import {
+  buildProductGroupIndex,
+  visibleCatalogRows,
+} from "@/lib/catalog/product-groups";
 
 // --- Status Icon ---
 function StatusCell({ status, errorMessage }: { status: ProductRow["status"]; errorMessage?: string }) {
@@ -1764,6 +1768,7 @@ export function DataTable() {
     enrichingTab,
     enrichingExistingColumns,
     sessionKind,
+    productGroupColumn,
   } = useSheetStore();
 
   const { role } = useWorkspaceStore();
@@ -1791,13 +1796,19 @@ export function DataTable() {
   const [dragOverColId, setDragOverColId] = useState<string | null>(null);
   const dragColIdRef = useRef<string | null>(null);
 
-  // Pre-filter rows by active sheet (existing/new)
+  const groupIndex = useMemo(
+    () => buildProductGroupIndex(rows, productGroupColumn),
+    [rows, productGroupColumn]
+  );
+
+  // Pre-filter rows by active sheet (existing/new), collapsing variant rows
+  // when a product group column is set.
   const sheetFilteredRows = useMemo(() => {
-    return rows.filter((r) => {
-      if (activeSheet === "existing") return r.matchType === "existing";
-      return r.matchType !== "existing"; // "new" sheet shows new + unmatched
+    return visibleCatalogRows(rows, {
+      groupColumn: productGroupColumn,
+      activeSheet,
     });
-  }, [rows, activeSheet]);
+  }, [rows, activeSheet, productGroupColumn]);
 
   // Selection state scoped to current sheet only
   const sheetSelectedCount = useMemo(() => {
@@ -1822,10 +1833,17 @@ export function DataTable() {
 
   // Count rows per sheet
   const sheetCounts = useMemo(() => {
-    const existing = rows.filter((r) => r.matchType === "existing").length;
-    const newCount = rows.filter((r) => r.matchType !== "existing").length;
-    return { existing, new: newCount };
-  }, [rows]);
+    return {
+      existing: visibleCatalogRows(rows, {
+        groupColumn: productGroupColumn,
+        activeSheet: "existing",
+      }).length,
+      new: visibleCatalogRows(rows, {
+        groupColumn: productGroupColumn,
+        activeSheet: "new",
+      }).length,
+    };
+  }, [rows, productGroupColumn]);
 
   // Pre-filter rows by status
   const statusFilteredRows = useMemo(() => {
@@ -2025,13 +2043,25 @@ export function DataTable() {
             (!isEnriching ||
             row.original.status === "done" ||
             row.original.status === "pending");
+          const groupSize = groupIndex.sizeByPrimary.get(row.original.id) ?? 1;
+          const showGroupBadge =
+            groupIndex.enabled &&
+            groupIndex.column === colName &&
+            groupSize > 1;
           return (
+            <div className="flex min-w-0 items-center gap-1.5">
             <EditableCell
               value={row.original.originalData[colName] || ""}
               rowId={row.original.id}
               column={colName}
               isEditable={canEdit}
             />
+            {showGroupBadge && (
+              <Badge variant="secondary" className="shrink-0 text-[8px] px-1.5 py-0">
+                {groupSize} variants
+              </Badge>
+            )}
+            </div>
           );
         },
         size: colName.toLowerCase().includes("description")
@@ -2131,6 +2161,8 @@ export function DataTable() {
     activeSheet,
     enrichingTab,
     enrichingExistingColumns,
+    groupIndex,
+    productGroupColumn,
   ]);
 
   const table = useReactTable({
@@ -2260,7 +2292,8 @@ export function DataTable() {
 
             {/* Row count */}
             <span className="text-[10px] text-muted-foreground font-mono">
-              {globalFilter ? `${filteredCount}/` : ""}{statusFilteredRows.length} rows
+              {globalFilter ? `${filteredCount}/` : ""}{statusFilteredRows.length}{" "}
+              {productGroupColumn ? "products" : "rows"}
             </span>
 
             {/* Selection info */}
@@ -2671,7 +2704,7 @@ export function DataTable() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {allSelected
-                ? <>You are about to delete all <strong>{sheetFilteredRows.length} rows</strong> in this tab. This action can be undone with Ctrl+Z.</>
+                ? <>You are about to delete all <strong>{sheetFilteredRows.length} {productGroupColumn ? "products" : "rows"}</strong> in this tab. This action can be undone with Ctrl+Z.</>
                 : <>You are about to delete <strong>{sheetSelectedCount} selected rows</strong>. This action can be undone with Ctrl+Z.</>
               }
             </AlertDialogDescription>

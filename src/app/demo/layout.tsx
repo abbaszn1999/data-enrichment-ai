@@ -37,7 +37,7 @@ const sidebarLinks = [
   { href: "/demo/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/demo/products", label: "Products", icon: Package },
   { href: "/demo/categories", label: "Categories", icon: FolderTree },
-  { href: "/demo/import", label: "Catalog Intelligence", icon: Upload },
+  { href: "/demo/catalog-intelligence", label: "Catalog Intelligence", icon: Upload },
   { href: "/demo/usage", label: "Usage", icon: CreditCard },
   { href: "/demo/team", label: "Team", icon: Users },
   { href: "/demo/settings", label: "Settings", icon: Settings },
@@ -67,7 +67,7 @@ export default function DemoLayout({ children }: { children: React.ReactNode }) 
                 <div className="p-1 rounded-md bg-primary">
                   <FileSpreadsheet className="h-4 w-4 text-primary-foreground" />
                 </div>
-                <span className="font-bold text-sm tracking-tight">DataSheet AI</span>
+                <span className="font-bold text-sm tracking-tight">Autommerce Platform</span>
               </div>
 
               <span className="text-muted-foreground/30">|</span>

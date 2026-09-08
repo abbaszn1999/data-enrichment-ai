@@ -8,9 +8,47 @@ import {
   type GalleryWorksheetJson,
 } from "@/lib/gallery/types";
 import { galleryError, galleryWarn } from "@/lib/gallery/log";
+import { recordStorageWriteBytes } from "@/lib/observability/metrics";
+import { galleryRowStoreEnabled } from "@/lib/catalog/flag";
+import {
+  hydrateWorksheetRows,
+  replaceWorksheetRows,
+} from "@/lib/worksheet-rows/store";
 
 const BUCKET = "workspace-files";
 const STORAGE_RETRIES = 3;
+
+/**
+ * Storage GET requests are served through a CDN that can hand back a copy that
+ * predates the write we just made. The generation worker reads → mutates →
+ * writes this worksheet on every row, so a stale read silently resurrects old
+ * rows and erases progress that was just persisted. A unique query string per
+ * request forces a cache miss.
+ */
+async function downloadFresh(path: string): Promise<string | null> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) return null;
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  const response = await fetch(
+    `${url}/storage/v1/object/${BUCKET}/${encoded}?cb=${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`,
+    {
+      cache: "no-store",
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        "Cache-Control": "no-cache",
+      },
+    }
+  );
+  if (response.status === 404 || response.status === 400) return "";
+  if (!response.ok) {
+    throw new Error(`Storage download failed (${response.status})`);
+  }
+  return response.text();
+}
 
 function isTransientStorageError(error: unknown): boolean {
   const text =
@@ -46,13 +84,28 @@ async function withStorageRetry<T>(
   throw lastError;
 }
 
+async function hydrateGalleryIfEnabled(
+  sessionId: string,
+  worksheet: GalleryWorksheetJson | null
+): Promise<GalleryWorksheetJson | null> {
+  if (!worksheet || !galleryRowStoreEnabled()) return worksheet;
+  const admin = createAdminClient();
+  return hydrateWorksheetRows(admin, "gallery_session_rows", sessionId, worksheet);
+}
+
 export async function loadGalleryWorksheetAdmin(
   workspaceId: string,
   sessionId: string
 ): Promise<GalleryWorksheetJson | null> {
-  return withStorageRetry("load worksheet", async () => {
-    const admin = createAdminClient();
+  const worksheet = await withStorageRetry("load worksheet", async () => {
     const path = getGalleryWorksheetPath(workspaceId, sessionId);
+    const fresh = await downloadFresh(path);
+    if (fresh !== null) {
+      return fresh === ""
+        ? null
+        : normalizeGalleryWorksheet(JSON.parse(fresh) as GalleryWorksheetJson);
+    }
+    const admin = createAdminClient();
     const { data, error } = await admin.storage.from(BUCKET).download(path);
     if (error) {
       const message = error.message || "";
@@ -65,6 +118,7 @@ export async function loadGalleryWorksheetAdmin(
       JSON.parse(text) as GalleryWorksheetJson
     );
   });
+  return hydrateGalleryIfEnabled(sessionId, worksheet);
 }
 
 export async function loadGalleryWorksheetConsistentAdmin(
@@ -137,9 +191,10 @@ export async function saveGalleryWorksheetAdmin(
   // operational worksheet rows/results so settings saves cannot overwrite images.
   const { settings: _settings, ...persistedWorksheet } = normalized;
   void _settings;
+  const serialized = JSON.stringify(persistedWorksheet);
   return withStorageRetry("save worksheet", async () => {
     const admin = createAdminClient();
-    const blob = new Blob([JSON.stringify(persistedWorksheet)], {
+    const blob = new Blob([serialized], {
       type: "application/octet-stream",
     });
     const { error } = await admin.storage.from(BUCKET).upload(path, blob, {
@@ -148,6 +203,18 @@ export async function saveGalleryWorksheetAdmin(
       contentType: "application/json",
     });
     if (error) throw error;
+    recordStorageWriteBytes(Buffer.byteLength(serialized, "utf8"), {
+      kind: "gallery",
+      workspaceId,
+    });
+    if (galleryRowStoreEnabled()) {
+      await replaceWorksheetRows(
+        admin,
+        "gallery_session_rows",
+        sessionId,
+        normalized.rows
+      );
+    }
     return path;
   });
 }

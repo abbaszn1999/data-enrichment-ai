@@ -1,6 +1,7 @@
 import { HttpClient } from "../../core/http-client";
 import type { IntegrationRecord } from "../../core/types";
 import { buildWooCommerceAuthHeader } from "./auth";
+import { decryptIntegrationConfig } from "@/lib/integrations/crypto";
 
 export function createWooClient(integration: IntegrationRecord): HttpClient {
   if (integration.provider !== "woocommerce") {
@@ -9,7 +10,10 @@ export function createWooClient(integration: IntegrationRecord): HttpClient {
   if (!integration.base_url) {
     throw new Error("Missing WooCommerce base URL");
   }
-  const config = (integration.config ?? {}) as { username?: string; application_password?: string };
+  const config = decryptIntegrationConfig(integration.config).plaintext as {
+    username?: string;
+    application_password?: string;
+  };
   const authHeader = buildWooCommerceAuthHeader(config.username ?? "", config.application_password ?? "");
 
   return new HttpClient({

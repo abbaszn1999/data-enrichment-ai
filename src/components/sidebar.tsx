@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   Sparkles,
@@ -20,7 +19,6 @@ import {
   PanelLeft,
   Plus,
   X,
-  ArrowLeft,
   Lock,
   Search,
   FileEdit,
@@ -71,6 +69,13 @@ import type { EnrichSettings } from "@/lib/enrich";
 import type { ProjectJson } from "@/lib/storage-helpers";
 import { getEnrichmentPresets, saveEnrichmentPreset } from "@/lib/supabase";
 import type { ProductRow } from "@/types";
+import { visibleCatalogRows } from "@/lib/catalog/product-groups";
+import {
+  catalogEnrichingContextFromRun,
+  catalogPollShouldApplySnapshot,
+  overlayCatalogRowsForActiveRun,
+  type CatalogPollRun,
+} from "@/lib/catalog/enrich-poll-merge";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -97,7 +102,6 @@ function projectJsonToProductRows(project: ProjectJson): ProductRow[] {
 }
 
 export function Sidebar() {
-  const router = useRouter();
   const { workspace, invalidateCredits, role } = useWorkspaceStore();
   const isViewer = role === "viewer";
   const {
@@ -110,6 +114,7 @@ export function Sidebar() {
     selectedRowIds,
     activeSheet,
     sessionKind,
+    productGroupColumn,
     workspaceId: sheetWorkspaceId,
     projectId,
     applyProjectRows,
@@ -129,7 +134,9 @@ export function Sidebar() {
     updateCellValue,
     isEnriching,
     isPaused,
+    isStoppingEnrich,
     setIsEnriching,
+    setStoppingEnrich,
     setPaused,
     enrichProgress,
     totalToEnrich,
@@ -150,6 +157,14 @@ export function Sidebar() {
   const enrichRunIdRef = useRef<string | null>(null);
   const enrichPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enrichPollSawActiveRef = useRef(false);
+  const enrichEpochRef = useRef(0);
+
+  const beginEnrichEpoch = useCallback(() => {
+    enrichEpochRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = new AbortController();
+    return enrichEpochRef.current;
+  }, []);
   const isPlp = sessionKind === "plp";
 
   const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
@@ -231,9 +246,10 @@ export function Sidebar() {
     .map((col) => col.id);
 
   // Scope selection to active sheet
-  const sheetRows = rows.filter((r) =>
-    activeSheet === "existing" ? r.matchType === "existing" : r.matchType !== "existing"
-  );
+  const sheetRows = visibleCatalogRows(rows, {
+    groupColumn: productGroupColumn,
+    activeSheet,
+  });
   const selectedRows = sheetRows.filter((r) => selectedRowIds.has(r.id));
   const enrichableRows = selectedRows.filter(
     (r) => r.status === "pending" || r.status === "error" || r.status === "done"
@@ -243,13 +259,10 @@ export function Sidebar() {
   // selected product(s). Empty on the selected row(s) → do not list the column.
   const enrichedColumnsWithData = useMemo(() => {
     if (selectedRowIds.size === 0) return [];
-    const selected = rows.filter(
-      (r) =>
-        selectedRowIds.has(r.id) &&
-        (activeSheet === "existing"
-          ? r.matchType === "existing"
-          : r.matchType !== "existing")
-    );
+    const selected = visibleCatalogRows(rows, {
+      groupColumn: productGroupColumn,
+      activeSheet,
+    }).filter((r) => selectedRowIds.has(r.id));
     if (selected.length === 0) return [];
     return enrichmentColumns.filter((col) =>
       selected.some((r) => {
@@ -258,71 +271,27 @@ export function Sidebar() {
         return val !== undefined && val !== null && val !== "";
       })
     );
-  }, [activeSheet, enrichmentColumns, rows, selectedRowIds]);
-
-  const handleStopEnrich = useCallback(async () => {
-    const workspaceId = workspace?.id || sheetWorkspaceId;
-    if (enrichPollRef.current) {
-      clearTimeout(enrichPollRef.current);
-      enrichPollRef.current = null;
-    }
-    if (workspaceId) {
-      try {
-        await fetch("/api/enrich/cancel", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            workspaceId,
-            sessionId: projectId,
-            runId: enrichRunIdRef.current,
-          }),
-        });
-      } catch {
-        // Cancellation is best-effort; the orchestrator also watches the flag.
-      }
-    }
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setIsEnriching(false);
-    setPaused(false);
-    setEnrichingContext(null, []);
-    for (const row of rows) {
-      if (row.status === "processing") {
-        setRowStatus(row.id, "pending");
-      }
-    }
-    toast.info("Enrichment stop requested");
-  }, [
-    workspace?.id,
-    sheetWorkspaceId,
-    projectId,
-    rows,
-    setIsEnriching,
-    setPaused,
-    setRowStatus,
-    setEnrichingContext,
-  ]);
+  }, [activeSheet, enrichmentColumns, productGroupColumn, rows, selectedRowIds]);
 
   const applyStatusPayload = useCallback(
     (payload: {
-      run?: {
-        id: string;
-        status: string;
-        completed_count: number;
-        failed_count: number;
-        target_ids: string[];
-      } | null;
+      run?: CatalogPollRun | null;
       project?: ProjectJson | null;
     }) => {
       if (payload.project) {
-        const productRows = projectJsonToProductRows(payload.project);
-        const total = payload.run?.target_ids.length || productRows.length;
+        const productRows = overlayCatalogRowsForActiveRun(
+          projectJsonToProductRows(payload.project),
+          payload.run
+        );
+        const total = payload.run?.target_ids?.length || productRows.length;
         applyProjectRows(productRows, {
-          completed: payload.run?.completed_count ?? productRows.filter((r) => r.status === "done").length,
+          completed:
+            payload.run?.completed_count ??
+            productRows.filter((r) => r.status === "done").length,
           total,
-          errors: payload.run?.failed_count ?? productRows.filter((r) => r.status === "error").length,
+          errors:
+            payload.run?.failed_count ??
+            productRows.filter((r) => r.status === "error").length,
         });
       }
     },
@@ -332,28 +301,55 @@ export function Sidebar() {
   const pollEnrichRun = useCallback(async () => {
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (!workspaceId || !projectId) return false;
+    const epoch = enrichEpochRef.current;
     const params = new URLSearchParams({
       workspaceId,
       sessionId: projectId,
     });
     if (enrichRunIdRef.current) params.set("runId", enrichRunIdRef.current);
-    const res = await fetch(`/api/enrich/status?${params.toString()}`);
+    let res: Response;
+    try {
+      res = await fetch(
+        `/api/catalog-intelligence/status?${params.toString()}`,
+        {
+          cache: "no-store",
+          signal: abortControllerRef.current?.signal,
+        }
+      );
+    } catch (error) {
+      if (
+        (typeof DOMException !== "undefined" &&
+          error instanceof DOMException &&
+          error.name === "AbortError") ||
+        (error instanceof Error && error.name === "AbortError")
+      ) {
+        return false;
+      }
+      throw error;
+    }
+    if (epoch !== enrichEpochRef.current) return false;
     if (!res.ok) return false;
     const data = (await res.json()) as {
-      run?: {
-        id: string;
-        status: string;
-        completed_count: number;
-        failed_count: number;
-        target_ids: string[];
-      } | null;
+      run?: CatalogPollRun | null;
       project?: ProjectJson | null;
     };
+    const decision = catalogPollShouldApplySnapshot({
+      epoch,
+      currentEpoch: enrichEpochRef.current,
+      localRunId: enrichRunIdRef.current,
+      locallyEnriching: useSheetStore.getState().isEnriching,
+      run: data.run,
+    });
+    if (decision === "ignore") {
+      return true;
+    }
     if (data.run?.id) enrichRunIdRef.current = data.run.id;
     applyStatusPayload(data);
     const active =
-      data.run && (data.run.status === "queued" || data.run.status === "running");
+      data.run &&
+      (data.run.status === "queued" || data.run.status === "running");
     if (!active) {
+      const wasStopping = useSheetStore.getState().isStoppingEnrich;
       const shouldToast = enrichPollSawActiveRef.current && Boolean(data.run);
       enrichPollSawActiveRef.current = false;
       enrichRunIdRef.current = null;
@@ -367,10 +363,11 @@ export function Sidebar() {
         });
       } else if (shouldToast && data.run?.status === "failed") {
         toast.error("Enrichment failed");
-      } else if (shouldToast && data.run?.status === "completed") {
-        toast.success("Enrichment complete", {
-          description: `${data.run.completed_count} rows processed`,
-        });
+      } else if (
+        wasStopping ||
+        (shouldToast && data.run?.status === "cancelled")
+      ) {
+        toast.success("Stopped. Rows already sent to the AI were saved.");
       }
       return false;
     }
@@ -378,9 +375,11 @@ export function Sidebar() {
     const run = data.run;
     if (!run) return false;
     setIsEnriching(true);
+    const enrichingContext = catalogEnrichingContextFromRun(run);
+    setEnrichingContext(enrichingContext.tab, enrichingContext.existingColumns);
     setEnrichProgress(
-      run.completed_count + run.failed_count,
-      run.target_ids.length
+      (run.completed_count ?? 0) + (run.failed_count ?? 0),
+      run.target_ids?.length ?? 0
     );
     invalidateCredits();
     return true;
@@ -395,8 +394,60 @@ export function Sidebar() {
     invalidateCredits,
   ]);
 
+  const handleStopEnrich = useCallback(async () => {
+    if (useSheetStore.getState().isStoppingEnrich) return;
+    setStoppingEnrich(true);
+    const workspaceId = workspace?.id || sheetWorkspaceId;
+    if (!workspaceId || !projectId) {
+      setStoppingEnrich(false);
+      return;
+    }
+    try {
+      const response = await fetch("/api/catalog-intelligence/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId,
+          sessionId: projectId,
+          runId: enrichRunIdRef.current,
+        }),
+      });
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`Stop failed (${response.status})`);
+      }
+      toast.message(
+        "Stop requested. Rows already sent to the AI will finish and be saved."
+      );
+    } catch {
+      setStoppingEnrich(false);
+      toast.error("Could not request stop");
+      return;
+    }
+    if (!enrichPollRef.current) {
+      const tick = async () => {
+        try {
+          const keep = await pollEnrichRun();
+          if (keep) {
+            enrichPollRef.current = setTimeout(tick, 2500);
+          }
+        } catch (error) {
+          console.error("Enrichment poll failed:", error);
+          enrichPollRef.current = setTimeout(tick, 4000);
+        }
+      };
+      void tick();
+    }
+  }, [
+    workspace?.id,
+    sheetWorkspaceId,
+    projectId,
+    pollEnrichRun,
+    setStoppingEnrich,
+  ]);
+
   const handleEnrich = useCallback(async () => {
     const isNewTab = enrichOutputTab === "new";
+    if (useSheetStore.getState().isStoppingEnrich) return;
     if ((isNewTab ? enabledColumns.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (!workspaceId || !projectId) {
@@ -404,11 +455,17 @@ export function Sidebar() {
       return;
     }
 
+    beginEnrichEpoch();
     setIsEnriching(true);
     setPaused(false);
     setEnrichProgress(0, enrichableRows.length);
     setLastError(null);
     setEnrichingContext(isNewTab ? "new" : "existing", isNewTab ? [] : existingColumnsToEnrich);
+    // Show the per-cell spinners immediately instead of waiting for the first
+    // status poll (~2.5 s) to report the run as running.
+    for (const row of enrichableRows) {
+      setRowStatus(row.id, "processing");
+    }
     if (enrichPollRef.current) {
       clearTimeout(enrichPollRef.current);
       enrichPollRef.current = null;
@@ -461,7 +518,7 @@ export function Sidebar() {
       : [];
 
     try {
-      const response = await fetch("/api/enrich/start", {
+      const response = await fetch("/api/catalog-intelligence/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -513,10 +570,6 @@ export function Sidebar() {
 
       enrichPollSawActiveRef.current = true;
 
-      toast.message("Enrichment is running in the background", {
-        description: "You can leave this page. We'll notify you when it finishes.",
-      });
-
       const tick = async () => {
         try {
           const keep = await pollEnrichRun();
@@ -555,6 +608,8 @@ export function Sidebar() {
     setPaused,
     setEnrichProgress,
     setEnrichingContext,
+    setRowStatus,
+    beginEnrichEpoch,
   ]);
 
   useEffect(() => {
@@ -653,11 +708,18 @@ export function Sidebar() {
 
   const handleAddCustomColumn = useCallback(() => {
     if (!newColLabel.trim()) return;
+    const label = newColLabel.trim();
+    const instruction = newColPrompt.trim();
     addCustomEnrichmentColumn({
-      label: newColLabel.trim(),
-      description: newColPrompt.trim() || `Generate ${newColLabel.trim()} for this product.`,
+      label,
+      description: instruction || `Generate ${label} for this product.`,
+      customInstruction: instruction,
       type: newColType,
     });
+    const added = useSheetStore.getState().enrichmentColumns.at(-1);
+    if (added?.isCustom) {
+      setExpandedColumns((prev) => new Set(prev).add(added.id));
+    }
     setNewColLabel("");
     setNewColPrompt("");
     setNewColType("text");
@@ -690,15 +752,6 @@ export function Sidebar() {
       {/* Header with Tab Toggle */}
       <div className="border-b bg-muted/30 shrink-0">
         <div className="p-3 flex items-center justify-between">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 mr-1"
-            onClick={() => router.back()}
-            title="Back"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
           {isViewer ? (
             <div className="flex items-center gap-1.5 flex-1 mr-2 px-2 py-1.5 rounded-lg bg-muted/60 border border-border/50">
               <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -774,7 +827,8 @@ export function Sidebar() {
             <div className="flex items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
               <span className="text-xs font-medium text-muted-foreground">
-                {selectedRows.length} of {sheetRows.length} rows selected
+                {selectedRows.length} of {sheetRows.length}{" "}
+                {productGroupColumn ? "products" : "rows"} selected
               </span>
             </div>
             <Badge
@@ -990,18 +1044,19 @@ export function Sidebar() {
                       return next;
                     });
                   };
-                  // Any free-text column can carry tone/length, so PLP columns
-                  // get the same controls as the product ones.
-                  const hasToneControls = col.type === "text";
+                  // Built-in free-text columns keep tone/length. Custom columns
+                  // are only a name + instruction — those controls would look
+                  // like the user's wording was replaced by defaults.
+                  const hasToneControls = col.type === "text" && !col.isCustom;
                   const hasSettings =
+                    col.isCustom ||
                     col.type === "imageUrls" ||
                     col.type === "sourceUrls" ||
                     col.type === "categories" ||
                     col.type === "faq" ||
                     col.type === "internalLinks" ||
                     col.type === "keywords" ||
-                    hasToneControls ||
-                    col.isCustom;
+                    hasToneControls;
 
                   return (
                     <div
@@ -1080,7 +1135,50 @@ export function Sidebar() {
                           className="space-y-2.5 border-t border-border/50 px-2 pb-2.5 pt-2"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Writing Tone & length — any free-text column */}
+                          {col.isCustom && (
+                            <>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-medium text-muted-foreground">
+                                  Column name
+                                </label>
+                                <input
+                                  type="text"
+                                  value={col.label}
+                                  onChange={(e) =>
+                                    updateEnrichmentColumnConfig(col.id, {
+                                      label: e.target.value,
+                                    })
+                                  }
+                                  disabled={isEnriching}
+                                  placeholder="Column name"
+                                  className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 normal-case"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-medium text-muted-foreground">
+                                  AI instruction
+                                </label>
+                                <textarea
+                                  value={col.customInstruction ?? col.description ?? ""}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    updateEnrichmentColumnConfig(col.id, {
+                                      customInstruction: value,
+                                      description:
+                                        value.trim() ||
+                                        `Generate ${col.label} for this product.`,
+                                    });
+                                  }}
+                                  disabled={isEnriching}
+                                  rows={3}
+                                  placeholder="AI instruction for this column..."
+                                  className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 resize-none normal-case"
+                                />
+                              </div>
+                            </>
+                          )}
+
+                          {/* Writing Tone & length — built-in free-text columns only */}
                           {hasToneControls && (
                             <>
                               <div className="space-y-1">
@@ -1306,24 +1404,25 @@ export function Sidebar() {
                             </div>
                           )}
 
-                          {/* Custom Instruction — for all expandable columns */}
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-medium text-muted-foreground">
-                              Custom instruction
-                            </label>
-                            <input
-                              type="text"
-                              value={col.customInstruction ?? ""}
-                              onChange={(e) =>
-                                updateEnrichmentColumnConfig(col.id, {
-                                  customInstruction: e.target.value,
-                                })
-                              }
-                              disabled={isEnriching}
-                              placeholder="Add specific instructions for this column..."
-                              className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50"
-                            />
-                          </div>
+                          {!col.isCustom && (
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-medium text-muted-foreground">
+                                Custom instruction
+                              </label>
+                              <input
+                                type="text"
+                                value={col.customInstruction ?? ""}
+                                onChange={(e) =>
+                                  updateEnrichmentColumnConfig(col.id, {
+                                    customInstruction: e.target.value,
+                                  })
+                                }
+                                disabled={isEnriching}
+                                placeholder="Add specific instructions for this column..."
+                                className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50"
+                              />
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1357,14 +1456,14 @@ export function Sidebar() {
                       placeholder="Column name (e.g. Target Audience)"
                       value={newColLabel}
                       onChange={(e) => setNewColLabel(e.target.value)}
-                      className="w-full h-8 px-2.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      className="w-full h-8 px-2.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 normal-case"
                     />
                     <textarea
                       placeholder="AI instruction (e.g. Identify the target audience for this product)"
                       value={newColPrompt}
                       onChange={(e) => setNewColPrompt(e.target.value)}
                       rows={2}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 resize-none"
+                      className="w-full px-2.5 py-1.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 resize-none normal-case"
                     />
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] text-muted-foreground">Output type:</span>
@@ -1638,7 +1737,9 @@ export function Sidebar() {
               <div className="flex items-center justify-between text-sm">
                 <span className="text-foreground flex items-center gap-2">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                  <span className="font-medium text-xs">Enriching...</span>
+                  <span className="font-medium text-xs">
+                    {isStoppingEnrich ? "Stopping..." : "Enriching..."}
+                  </span>
                 </span>
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[10px] text-muted-foreground bg-background px-2 py-0.5 rounded">
@@ -1649,15 +1750,18 @@ export function Sidebar() {
                     size="sm"
                     className="h-6 px-2 text-[10px] text-destructive hover:bg-destructive/10 hover:text-destructive"
                     onClick={handleStopEnrich}
+                    disabled={isStoppingEnrich}
                   >
                     <X className="h-3 w-3 mr-1" />
-                    Stop
+                    {isStoppingEnrich ? "Stopping" : "Stop"}
                   </Button>
                 </div>
               </div>
               <Progress value={enrichProgress} className="h-1.5" />
               <p className="text-[9px] text-muted-foreground/60">
-                {Math.round(enrichProgress)}% complete · {totalToEnrich - completedEnrich} remaining
+                {isStoppingEnrich
+                  ? "Finishing rows already sent to the AI, then saving."
+                  : `${Math.round(enrichProgress)}% complete · ${totalToEnrich - completedEnrich} remaining`}
               </p>
             </div>
           )}

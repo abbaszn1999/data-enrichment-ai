@@ -2,9 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { stripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { stripeCheckoutBlockedReason } from "@/lib/stripe-mode";
 
 export async function POST(request: NextRequest) {
   try {
+    const blocked = stripeCheckoutBlockedReason();
+    if (blocked) {
+      return NextResponse.json({ error: blocked }, { status: 503 });
+    }
+
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });

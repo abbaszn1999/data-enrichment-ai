@@ -115,6 +115,16 @@ export async function POST(request: NextRequest) {
       throw updateErr;
     }
 
+    // The embed endpoint always re-reads widget_settings live (it never trusts
+    // the cached copy for style), so this isn't required for correctness —
+    // but dropping any cached pages for this workspace keeps embed_page_cache
+    // from growing stale rows indefinitely.
+    try {
+      await admin.from("embed_page_cache").delete().eq("workspace_id", workspaceId);
+    } catch (cacheErr) {
+      console.warn("[widget-settings] Could not clear embed_page_cache:", cacheErr);
+    }
+
     return NextResponse.json({ success: true, settings: mergedSettings });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal error";

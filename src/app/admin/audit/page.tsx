@@ -11,6 +11,7 @@ import { pageCount } from "@/components/platform-admin/pagination-bar";
 import { useDebouncedValue } from "@/components/platform-admin/use-debounced-value";
 import { adminJson } from "@/lib/platform-admin/client-api";
 import { formatDateTime } from "@/lib/platform-admin/format";
+import { activityEntityLabel } from "@/lib/platform-admin/labels";
 import { DATE_WINDOW_OPTIONS, LEDGER_PAGE_SIZE, toggleSort, type DateWindow, type SortState } from "@/lib/platform-admin/list-query";
 import type { LiveAuditRow } from "@/lib/platform-admin/live-types";
 import { adminRoutes } from "@/lib/platform-admin/paths";
@@ -82,7 +83,7 @@ export default function AdminAuditPage() {
     <>
       <PageHeader
         title={<PageTitle label="Activity" badge={<LiveBadge>{total} live</LiveBadge>} />}
-        description="Workspace actions from the product: imports, catalog changes, and related events."
+        description="Workspace actions from the product: Catalog Intelligence, Store Assistant, Gallery, Visualizer, and related events."
       />
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       <AdminListLayout>
@@ -98,7 +99,7 @@ export default function AdminAuditPage() {
         emptyTitle={!hasFilters && total === 0 ? "No activity yet" : "No matching activity"}
         emptyDescription={
           !hasFilters && total === 0
-            ? "Imports, catalog changes, and other workspace events will appear here."
+            ? "Catalog Intelligence, Store Assistant, and other workspace events will appear here."
             : "Try a different search or clear the active filters."
         }
         onClearFilters={hasFilters ? clearFilters : undefined}
@@ -125,7 +126,7 @@ export default function AdminAuditPage() {
                 },
                 options: [
                   { value: "all", label: "All entities" },
-                  ...entityTypes.map((type) => ({ value: type, label: type })),
+                  ...entityTypes.map((type) => ({ value: type, label: activityEntityLabel(type) })),
                 ],
               },
               {
@@ -180,7 +181,9 @@ export default function AdminAuditPage() {
             sortKey: "entity",
             className: "text-muted-foreground",
             cell: (row) =>
-              row.entityType ? `${row.entityType}${row.entityId ? ` · ${row.entityId.slice(0, 8)}` : ""}` : "—",
+              row.entityType
+                ? `${activityEntityLabel(row.entityType)}${row.entityId ? ` · ${row.entityId.slice(0, 8)}` : ""}`
+                : "—",
           },
         ]}
       />

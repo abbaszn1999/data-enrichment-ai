@@ -1,22 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { runRule } from "@/lib/growth-sync/engine";
 import { claimDueRules, deferRule } from "@/lib/growth-sync/repo";
+import { cronSecretMatches } from "@/lib/auth/cron-secret";
 
 /**
  * Scheduler entry point, called by Supabase `pg_cron` through `pg_net`.
  *
- * `pg_net` is fire-and-forget: it does not retry, does not alert on a 5xx, and
- * only records the response in `net._http_response`. Resumability replaces
- * retries — each tick claims a few due rules, works within a wall-clock budget,
- * and leaves the rest due for the next tick.
+ * The tick only claims due rules and enqueues them. Execution continues after
+ * the HTTP response so one slow tenant cannot starve the rest of the platform.
  */
 
-/** Rules claimed per tick. Bounded so one tick cannot outlive the request. */
-const RULES_PER_TICK = 3;
-
-/** Stop claiming new rules past this point, well inside the platform timeout. */
-const TICK_BUDGET_MS = 45_000;
+/** Rules claimed per tick. Execution continues after the HTTP response. */
+const RULES_PER_TICK = 12;
 
 export const maxDuration = 60;
 
@@ -27,13 +23,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Scheduler not configured" }, { status: 503 });
   }
 
-  const presented = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  if (presented !== secret) {
+  if (!cronSecretMatches(request, secret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const admin = createAdminClient();
-  const startedAt = Date.now();
 
   let rules;
   try {
@@ -44,40 +38,28 @@ export async function POST(request: NextRequest) {
   }
 
   if (rules.length === 0) {
-    return NextResponse.json({ ok: true, claimed: 0, processed: 0 });
+    return NextResponse.json({ ok: true, claimed: 0, queued: 0 });
   }
 
-  const outcomes: Array<{ ruleId: string; status: string; error?: string }> = [];
-  let deferred = 0;
-  for (const rule of rules) {
-    if (Date.now() - startedAt > TICK_BUDGET_MS) {
-      // Out of budget. Handing the lease back leaves the rule due, so the next
-      // tick takes it minutes from now instead of waiting out the lease.
-      deferred = rules.length - outcomes.length;
-      console.warn(`[growth-sync/tick] budget exhausted, deferring ${deferred} rule(s)`);
-      for (const pending of rules.slice(outcomes.length)) {
-        await deferRule(admin, pending.id).catch((err) => {
-          console.error(`[growth-sync/tick] could not defer ${pending.id}:`, err);
+  after(async () => {
+    for (const rule of rules) {
+      try {
+        const outcome = await runRule({ admin, rule, trigger: "cron" });
+        if (outcome.error) {
+          console.error(`[growth-sync/tick] rule ${rule.id} failed: ${outcome.error}`);
+        }
+      } catch (err) {
+        console.error(`[growth-sync/tick] rule ${rule.id} threw:`, err);
+        await deferRule(admin, rule.id).catch((deferErr) => {
+          console.error(`[growth-sync/tick] could not defer ${rule.id}:`, deferErr);
         });
       }
-      break;
     }
-    const outcome = await runRule({ admin, rule, trigger: "cron" });
-    outcomes.push({
-      ruleId: rule.id,
-      status: outcome.status,
-      error: outcome.error,
-    });
-    if (outcome.error) {
-      console.error(`[growth-sync/tick] rule ${rule.id} failed: ${outcome.error}`);
-    }
-  }
+  });
 
   return NextResponse.json({
     ok: true,
     claimed: rules.length,
-    processed: outcomes.length,
-    deferred,
-    outcomes,
+    queued: rules.length,
   });
 }

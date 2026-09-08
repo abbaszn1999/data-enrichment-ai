@@ -14,9 +14,47 @@ import {
   collectVisualizerImagePaths,
   resolveVisualizerHtmlImages,
 } from "@/lib/visualizer/html-embed";
+import { recordStorageWriteBytes } from "@/lib/observability/metrics";
+import { visualizerRowStoreEnabled } from "@/lib/catalog/flag";
+import {
+  hydrateWorksheetRows,
+  replaceWorksheetRows,
+} from "@/lib/worksheet-rows/store";
 
 const BUCKET = "workspace-files";
 const STORAGE_RETRIES = 5;
+
+/**
+ * Storage GET requests are served through a CDN that can hand back a copy that
+ * predates the write we just made. The generation worker reads → mutates →
+ * writes this worksheet on every row, so a stale read silently resurrects old
+ * rows and erases progress that was just persisted. A unique query string per
+ * request forces a cache miss.
+ */
+async function downloadFresh(path: string): Promise<string | null> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) return null;
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  const response = await fetch(
+    `${url}/storage/v1/object/${BUCKET}/${encoded}?cb=${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`,
+    {
+      cache: "no-store",
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        "Cache-Control": "no-cache",
+      },
+    }
+  );
+  if (response.status === 404 || response.status === 400) return "";
+  if (!response.ok) {
+    throw new Error(`Storage download failed (${response.status})`);
+  }
+  return response.text();
+}
 
 function storageErrorText(error: unknown): string {
   if (!(error instanceof Error)) return JSON.stringify(error);
@@ -63,13 +101,35 @@ async function withStorageRetry<T>(
   throw lastError;
 }
 
+async function hydrateVisualizerIfEnabled(
+  sessionId: string,
+  worksheet: VisualizerWorksheetJson | null
+): Promise<VisualizerWorksheetJson | null> {
+  if (!worksheet || !visualizerRowStoreEnabled()) return worksheet;
+  const admin = createAdminClient();
+  return hydrateWorksheetRows(
+    admin,
+    "visualizer_session_rows",
+    sessionId,
+    worksheet
+  );
+}
+
 export async function loadVisualizerWorksheetAdmin(
   workspaceId: string,
   sessionId: string
 ): Promise<VisualizerWorksheetJson | null> {
-  return withStorageRetry("load worksheet", async () => {
-    const admin = createAdminClient();
+  const worksheet = await withStorageRetry("load worksheet", async () => {
     const path = getVisualizerWorksheetPath(workspaceId, sessionId);
+    const fresh = await downloadFresh(path);
+    if (fresh !== null) {
+      return fresh === ""
+        ? null
+        : normalizeVisualizerWorksheet(
+            JSON.parse(fresh) as VisualizerWorksheetJson
+          );
+    }
+    const admin = createAdminClient();
     const { data, error } = await admin.storage.from(BUCKET).download(path);
     if (error) {
       const message = error.message || "";
@@ -82,6 +142,7 @@ export async function loadVisualizerWorksheetAdmin(
       JSON.parse(text) as VisualizerWorksheetJson
     );
   });
+  return hydrateVisualizerIfEnabled(sessionId, worksheet);
 }
 
 export async function loadVisualizerWorksheetMatchingRevisionAdmin(
@@ -122,7 +183,8 @@ export async function saveVisualizerWorksheetAdmin(
   }
   return withStorageRetry("save worksheet", async () => {
     const admin = createAdminClient();
-    const blob = new Blob([JSON.stringify(normalized)], {
+    const serialized = JSON.stringify(normalized);
+    const blob = new Blob([serialized], {
       type: "application/octet-stream",
     });
     const { error } = await admin.storage.from(BUCKET).upload(path, blob, {
@@ -131,6 +193,18 @@ export async function saveVisualizerWorksheetAdmin(
       contentType: "application/json",
     });
     if (error) throw error;
+    recordStorageWriteBytes(Buffer.byteLength(serialized, "utf8"), {
+      kind: "visualizer",
+      workspaceId,
+    });
+    if (visualizerRowStoreEnabled()) {
+      await replaceWorksheetRows(
+        admin,
+        "visualizer_session_rows",
+        sessionId,
+        normalized.rows
+      );
+    }
     return path;
   });
 }

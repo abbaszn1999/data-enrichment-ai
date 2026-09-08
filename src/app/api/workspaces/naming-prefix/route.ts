@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { decryptedIntegrationConfig } from "@/lib/integrations/load";
 
 export async function GET(request: NextRequest) {
   try {
@@ -46,7 +47,7 @@ export async function GET(request: NextRequest) {
     const integration = integrationResult.data;
     let storeUrl = integration?.base_url || "";
     if (!storeUrl && integration?.config && typeof integration.config === "object") {
-      const cfg = integration.config as Record<string, unknown>;
+      const cfg = decryptedIntegrationConfig(integration.config);
       storeUrl = String(cfg.store_url || cfg.url || "");
     }
 

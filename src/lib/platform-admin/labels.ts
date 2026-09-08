@@ -1,3 +1,4 @@
+import { CATALOG_INTELLIGENCE, STORE_ASSISTANT } from "@/lib/product-modules";
 import type {
   AdminCreditOperation,
   AdminIntegrationProvider,
@@ -11,28 +12,26 @@ import type {
 } from "./types";
 
 export const CREDIT_OPERATION_LABELS: Record<AdminCreditOperation, string> = {
-  ai_enrichment: "AI Enrichment",
-  ai_image_search: "AI Image Search",
+  catalog_intelligence: CATALOG_INTELLIGENCE.label,
+  ai_image_search: "Products Gallery",
   ai_column_mapping: "Column Mapping",
   ai_category_suggest: "Category Suggest",
   ai_function: "AI Function",
-  sync_agent: "Sync Agent",
-  image_classification: "Image Classify",
-  gallery_google: "Gallery · Google",
-  gallery_ai: "Gallery · AI",
-  visualizer_description: "Visualizer · Description",
-  visualizer_images: "Visualizer · Images",
+  store_assistant: STORE_ASSISTANT.label,
+  image_classification: "Image Classification",
+  gallery_google: "Products Gallery",
+  gallery_ai: "Products Gallery",
+  visualizer_description: "Products Visualizer",
+  visualizer_images: "Products Visualizer",
   credit_topup: "Credit Top-up",
   monthly_reset: "Monthly Reset",
 };
 
 export const WALLET_MODULE_LABELS: Record<AdminWalletModule, string> = {
   "market-research": "Market Research",
-  "Market Research": "Market Research",
   "growth-sync": "Growth Sync",
   "website-restructure": "Website Restructure",
   topup: "Wallet Top-up",
-  Sync: "Sync",
   Billing: "Billing",
 };
 
@@ -43,9 +42,10 @@ export const WALLET_KIND_LABELS: Record<AdminWalletTxKind, string> = {
 };
 
 export const JOB_KIND_LABELS: Record<AdminJobKind, string> = {
-  catalog: "Catalog",
-  gallery: "Gallery",
-  visualizer: "Visualizer",
+  catalog: CATALOG_INTELLIGENCE.label,
+  gallery: "Products Gallery",
+  visualizer: "Products Visualizer",
+  mr_extract: "Market Research",
 };
 
 export const JOB_STATUS_LABELS: Record<AdminJobStatus, string> = {
@@ -91,6 +91,14 @@ export const RANGE_LABELS = {
   "90d": "Last 90 days",
 } as const;
 
+export const ACTIVITY_ENTITY_LABELS: Record<string, string> = {
+  catalog_intelligence: CATALOG_INTELLIGENCE.label,
+  store_assistant: STORE_ASSISTANT.label,
+  gallery_session: "Products Gallery",
+  visualizer_session: "Products Visualizer",
+  image_classification_session: "Image Classification",
+};
+
 export function creditOperationLabel(operation: string): string {
   return CREDIT_OPERATION_LABELS[operation as AdminCreditOperation] ?? operation;
 }
@@ -98,4 +106,9 @@ export function creditOperationLabel(operation: string): string {
 export function walletModuleLabel(module: string): string {
   if (!module) return "—";
   return WALLET_MODULE_LABELS[module as AdminWalletModule] ?? module;
+}
+
+export function activityEntityLabel(entityType: string | null | undefined): string {
+  if (!entityType) return "—";
+  return ACTIVITY_ENTITY_LABELS[entityType] ?? entityType;
 }

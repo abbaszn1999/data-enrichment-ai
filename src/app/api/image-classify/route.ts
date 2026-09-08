@@ -19,6 +19,7 @@ import {
   type ImageClassificationItem,
 } from "@/lib/storage-helpers";
 import { saveJsonToStorageServer } from "@/lib/storage-helpers-server";
+import { mapLimit } from "@/lib/async/map-limit";
 import { requireGeminiApiKey } from "@/lib/sync/agent/ai-utils";
 
 export const maxDuration = 300;
@@ -304,8 +305,8 @@ async function runClassificationJob(params: {
   } = params;
 
   try {
-    const downloads = await Promise.all(
-      images.map((img) => downloadImage(admin, img.storagePath))
+    const downloads = await mapLimit(images, 6, (img) =>
+      downloadImage(admin, img.storagePath)
     );
     const inlineParts: Array<{
       inlineData: { mimeType: string; data: string };

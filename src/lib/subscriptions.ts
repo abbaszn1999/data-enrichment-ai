@@ -67,7 +67,7 @@ export async function checkLimit(workspaceId: string, resource: "members" | "pro
     }
     case "imports": {
       const { count } = await supabase
-        .from("import_sessions")
+        .from("catalog_sessions")
         .select("id", { count: "exact", head: true })
         .eq("workspace_id", workspaceId);
       current = count ?? 0;

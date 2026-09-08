@@ -29,7 +29,26 @@ export async function saveJsonToStorage(storagePath: string, data: unknown): Pro
 
 export async function loadJsonFromStorage<T = unknown>(storagePath: string): Promise<T | null> {
   const supabase = createClient();
-  // Use download (not public URL) to bypass CDN cache
+
+  // A plain download can be answered from the storage CDN with a copy that
+  // predates a very recent write (e.g. results a background job just saved).
+  // A one-off signed URL plus a cache buster guarantees a fresh object.
+  try {
+    const signed = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(storagePath, 60);
+    if (signed.data?.signedUrl) {
+      const response = await fetch(
+        `${signed.data.signedUrl}&cb=${Date.now()}`,
+        { cache: "no-store" }
+      );
+      if (response.status === 404) return null;
+      if (response.ok) return (await response.json()) as T;
+    }
+  } catch {
+    // Fall through to the SDK download below.
+  }
+
   const { data, error } = await supabase.storage
     .from(BUCKET)
     .download(storagePath);
@@ -72,6 +91,12 @@ export interface ProjectJson {
    * Later steps must not re-derive matchType, which would undo that choice.
    */
   matchingSkipped?: boolean;
+  /**
+   * Column used to collapse variant/attribute rows into one product
+   * (typically Shopify `Handle`). `null` means grouping is explicitly off.
+   * Absent means later steps may auto-detect.
+   */
+  productGroupColumn?: string | null;
 }
 
 export interface ProjectRow {
@@ -89,14 +114,30 @@ export function getProjectStoragePath(workspaceId: string, sessionId: string): s
 }
 
 export async function saveProjectJson(workspaceId: string, sessionId: string, data: ProjectJson): Promise<string> {
-  const path = getProjectStoragePath(workspaceId, sessionId);
-  await saveJsonToStorage(path, data);
-  return path;
+  const res = await fetch("/api/catalog-intelligence/project", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, sessionId, project: data }),
+  });
+  const payload = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) {
+    throw new Error(payload.error || "Failed to save catalog session");
+  }
+  return getProjectStoragePath(workspaceId, sessionId);
 }
 
 export async function loadProjectJson(workspaceId: string, sessionId: string): Promise<ProjectJson | null> {
-  const path = getProjectStoragePath(workspaceId, sessionId);
-  return loadJsonFromStorage<ProjectJson>(path);
+  const params = new URLSearchParams({ workspaceId, sessionId });
+  const res = await fetch(`/api/catalog-intelligence/project?${params.toString()}`);
+  if (res.status === 404) return null;
+  const payload = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    project?: ProjectJson | null;
+  };
+  if (!res.ok) {
+    throw new Error(payload.error || "Failed to load catalog session");
+  }
+  return payload.project ?? null;
 }
 
 // ─── Image Classification ────────────────────────────────
@@ -219,14 +260,19 @@ export function getProductsStoragePath(workspaceId: string): string {
 }
 
 export async function saveProductsJson(workspaceId: string, products: MasterProductJson[]): Promise<string> {
-  const path = getProductsStoragePath(workspaceId);
-  await saveJsonToStorage(path, products);
-  // Keep the count sidecar (read by the dashboard) accurate after a client-side
-  // write so it never falls back to downloading the full products.json.
-  try {
-    await saveJsonToStorage(`${workspaceId}/master/products.count.json`, { count: products.length, ts: Date.now() });
-  } catch { /* non-fatal */ }
-  return path;
+  const res = await fetch("/api/products/catalog", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, products }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    code?: string;
+  };
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to save catalog");
+  }
+  return getProductsStoragePath(workspaceId);
 }
 
 export async function loadProductsJson(workspaceId: string): Promise<MasterProductJson[]> {

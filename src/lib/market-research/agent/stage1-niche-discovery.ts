@@ -4,6 +4,7 @@ import type {
   NicheReading,
 } from "@/components/market-research/mock-data";
 import type { StoreCollectionItem } from "./store-catalog";
+import { compressCollectionsForStage1 } from "./stage1-catalog";
 import { runGeminiMarketResearch } from "./gemini-runner";
 
 export type Stage1DiscoveryResult = {
@@ -65,18 +66,11 @@ export async function runStage1NicheDiscovery(input: {
     return runHeuristicStage1Discovery(input);
   }
 
-  const catalogSummary = allItems.map((c) => ({
-    id: c.id,
-    name: c.name,
-    productCount: c.productCount,
-    description: c.description || undefined,
-    // WooCommerce hierarchy only — undefined/omitted for Shopify's flat collections
-    // and always omitted for brand items, which never have a parent category.
-    parentId: c.parentId && c.parentId !== "0" ? c.parentId : undefined,
-    depth: c.depth ?? 0,
-    // Present only on brand/vendor PLPs — every other item omits this key.
-    kind: c.kind === "brand" ? ("brand" as const) : undefined,
-  }));
+  // Brand PLPs are compressed together with regular collections so a store
+  // with hundreds of vendor pages still gets a bounded payload, and so the
+  // "largest by product count" ranking below considers both fairly.
+  const compressed = compressCollectionsForStage1(allItems);
+  const catalogSummary = compressed.kept;
 
   const systemInstruction = `You are the Market Research Store Discovery Agent powered by Gemini 3.7 Flash.
 Your job is Stage 1 of the Collection Builder:
@@ -123,9 +117,15 @@ Output strictly valid JSON with this exact schema:
   "agentConclusion": "Conversational conclusion summary written in professional plain English."
 }`;
 
+  const overflowLine =
+    compressed.overflowCount > 0
+      ? `\nPlus ${compressed.overflowCount} smaller collections (${compressed.overflowProducts} products) omitted from this list — map only the collections given; leftover live collections are assigned in code by name.`
+      : "";
+
   const userPrompt = `Store Name: ${input.storeName}
-Existing Collections, Categories and Brand/Vendor PLPs (${allItems.length} total — items with "kind": "brand" are brand/vendor pages):
+Existing Collections, Categories and Brand/Vendor PLPs (${allItems.length} total, showing the ${catalogSummary.length} largest by product count — items with "kind": "brand" are brand/vendor pages):
 ${JSON.stringify(catalogSummary, null, 2)}
+${overflowLine}
 
 Identify the broad parent niches and group every item (including brand/vendor PLPs) under them.`;
 

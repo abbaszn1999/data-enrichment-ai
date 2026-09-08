@@ -33,13 +33,10 @@ export type ClassifyResult = {
 };
 
 /**
- * Single-stage classification: every product is shown every category the
- * project has live on the store, and Gemini alone decides membership — no
- * pre-filtering step, no dependency on a second AI provider. That keeps the
- * pipeline entirely on Gemini 3.7 Flash (what the wallet is billed for), at
- * the cost of the prompt growing with the number of live categories — a
- * store with only a modest catalog of live categories pays this in a
- * fraction of a cent either way.
+ * Classification: products are scored against live categories with cheap
+ * lexical overlap, then Gemini judges only the top candidates. That keeps
+ * the pipeline on Gemini 3.7 Flash (what the wallet is billed for) without
+ * dumping thousands of irrelevant collections into every prompt.
  */
 
 /** Products per agent call. One call per product would be needlessly slow and
@@ -64,22 +61,88 @@ type AgentVerdict = {
   reason: string;
 };
 
+const MAX_CANDIDATES_PER_PRODUCT = 15;
+
+function tokenize(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter((token) => token.length > 1);
+}
+
+export function scoreTargetForProduct(
+  product: DetectedProduct,
+  target: ClassificationTarget
+): number {
+  const hay = new Set(
+    tokenize(
+      [
+        product.title,
+        product.productType,
+        product.vendor,
+        ...(product.tags ?? []),
+        product.description?.slice(0, 300),
+      ]
+        .filter(Boolean)
+        .join(" ")
+    )
+  );
+  const needle = tokenize(
+    [target.name, target.targetKeyword].filter(Boolean).join(" ")
+  );
+  if (hay.size === 0 || needle.length === 0) return 0;
+  let hits = 0;
+  for (const token of needle) {
+    if (hay.has(token)) hits += 1;
+  }
+  return hits / needle.length;
+}
+
+export function candidateTargetsForProduct(
+  product: DetectedProduct,
+  targets: ClassificationTarget[],
+  limit = MAX_CANDIDATES_PER_PRODUCT
+): ClassificationTarget[] {
+  if (targets.length <= limit) return targets;
+  return [...targets]
+    .map((target) => ({ target, score: scoreTargetForProduct(product, target) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((row) => row.target);
+}
+
+function unionCandidates(
+  batch: DetectedProduct[],
+  targets: ClassificationTarget[]
+): ClassificationTarget[] {
+  if (targets.length <= MAX_CANDIDATES_PER_PRODUCT) return targets;
+  const seen = new Set<string>();
+  const out: ClassificationTarget[] = [];
+  for (const product of batch) {
+    for (const target of candidateTargetsForProduct(product, targets)) {
+      if (seen.has(target.taxonomyRef)) continue;
+      seen.add(target.taxonomyRef);
+      out.push(target);
+    }
+  }
+  return out.length > 0 ? out : targets.slice(0, MAX_CANDIDATES_PER_PRODUCT);
+}
+
 function buildPrompt(
   batch: DetectedProduct[],
   targets: ClassificationTarget[]
 ): string {
   const lines: string[] = [
-    "Decide, for each product below, which of the store's live categories it genuinely belongs in.",
+    "Decide, for each product below, which of the listed candidate categories it genuinely belongs in.",
     "",
-    "The category list is every category this project already has live on the store — it is not",
-    "pre-filtered, so most will be irrelevant to most products. A product may belong in several",
-    "categories, or in none. Only say a product belongs where it is a genuine, confident match.",
+    "Candidates were pre-filtered by lexical overlap; only judge among the categories listed.",
+    "A product may belong in several categories, or in none. Only say a product belongs where it is a genuine, confident match.",
     "",
     "Return JSON: { \"verdicts\": [{ \"productId\", \"taxonomyRef\", \"belongs\", \"reason\" }] }",
     "Only include a verdict for a category a product actually belongs in — omit the rest.",
     "Keep each reason under 20 words.",
     "",
-    "LIVE CATEGORIES:",
+    "CANDIDATE CATEGORIES:",
   ];
   for (const target of targets) {
     lines.push(
@@ -203,7 +266,10 @@ export async function classifyProducts(input: {
     const settled = await Promise.all(
       wave.map(async (batch) => {
         try {
-          return { batch, outcome: await validateBatch(batch, targets) };
+          return {
+            batch,
+            outcome: await validateBatch(batch, unionCandidates(batch, targets)),
+          };
         } catch (err) {
           // One batch failing must not discard the ones that succeeded
           // alongside it, so the error travels with its own batch.
@@ -273,4 +339,5 @@ export async function classifyProducts(input: {
 export const CLASSIFY_TUNING = {
   PRODUCTS_PER_CALL,
   CONCURRENT_CALLS,
+  MAX_CANDIDATES_PER_PRODUCT,
 } as const;

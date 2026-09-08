@@ -153,7 +153,7 @@ export default function AdminWorkspaceDetailPage() {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Delete this workspace?"
-        description={`This removes ${workspace.name}, every database row tied to it, and all files under that workspace in storage. Type the slug to confirm.`}
+        description={`This removes ${workspace.name}, its products, sessions, members, store connection, files, and workspace activity. A security audit receipt of this deletion is kept. Type the slug to confirm.`}
         confirmLabel={`Type ${workspace.slug}`}
         confirmValue={workspace.slug}
         actionLabel="Delete workspace"

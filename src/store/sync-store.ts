@@ -70,11 +70,9 @@ export interface SyncMessage {
   thinkingText?: string;
 }
 
-export type SyncSheetSnapshot = {
-  title: string;
-  columns: string[];
-  rows: Record<string, unknown>[];
-};
+import { compactFromTo, restoreSnapshot, type CompactSheetSnapshot, type SheetSnapshot } from "@/lib/sync/sheet-history";
+
+export type SyncSheetSnapshot = SheetSnapshot;
 
 const MAX_SHEET_HISTORY = 5;
 
@@ -91,7 +89,7 @@ interface SyncState {
   webEnabled: boolean;
   pendingAttachments: File[];
   workingMemory: SyncWorkingMemory;
-  sheetHistory: SyncSheetSnapshot[];
+  sheetHistory: CompactSheetSnapshot[];
   redoHistory: SyncSheetSnapshot[];
   // v3 UI state driven by the agent
   currentColumnProfile: ColumnProfileKey | null;
@@ -120,9 +118,9 @@ interface SyncActions {
   setWorkingMemory: (workingMemory: SyncWorkingMemory) => void;
   updateLastAssistantActionReceipt: (receipt: SyncActionReceipt) => void;
   appendAssistantTraceEvent: (event: SyncTraceEvent) => void;
-  pushSheetSnapshot: (sheet: SyncSheetSnapshot) => void;
+  pushSheetSnapshot: (previous: SyncSheetSnapshot, next?: SyncSheetSnapshot) => void;
   pushRedoSnapshot: (sheet: SyncSheetSnapshot) => void;
-  undoSheet: () => SyncSheetSnapshot | null;
+  undoSheet: (current: SyncSheetSnapshot) => SyncSheetSnapshot | null;
   redoSheet: () => SyncSheetSnapshot | null;
   clearSheetHistory: () => void;
   clearRedoHistory: () => void;
@@ -248,21 +246,24 @@ export const useSyncStore = create<SyncState & SyncActions>((set, get) => ({
       }
       return { messages: msgs };
     }),
-  pushSheetSnapshot: (sheet) =>
+  pushSheetSnapshot: (previous, next) =>
     set((s) => ({
-      sheetHistory: [...s.sheetHistory, sheet].slice(-MAX_SHEET_HISTORY),
+      sheetHistory: [
+        ...s.sheetHistory,
+        next ? compactFromTo(previous, next) : { kind: "full" as const, ...previous },
+      ].slice(-MAX_SHEET_HISTORY),
       redoHistory: [],
     })),
   pushRedoSnapshot: (sheet) =>
     set((s) => ({
       redoHistory: [...s.redoHistory, sheet].slice(-MAX_SHEET_HISTORY),
     })),
-  undoSheet: () => {
+  undoSheet: (current) => {
     const { sheetHistory } = get();
     if (sheetHistory.length === 0) return null;
     const last = sheetHistory[sheetHistory.length - 1];
     set({ sheetHistory: sheetHistory.slice(0, -1) });
-    return last;
+    return restoreSnapshot(current, last);
   },
   redoSheet: () => {
     const { redoHistory } = get();

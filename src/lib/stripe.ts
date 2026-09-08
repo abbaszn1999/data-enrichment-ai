@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { roundCredits } from "@/lib/format-credits";
+import { assertStripeKeyAllowed, getStripeKeyMode } from "@/lib/stripe-mode";
 
 /** Flat rate for the free-form credit top-up — derived from (and replacing)
  *  the old fixed packs, which all priced out to exactly $0.30/credit
@@ -16,10 +17,12 @@ let _stripe: Stripe | null = null;
 
 export function getStripe(): Stripe {
   if (!_stripe) {
-    if (!process.env.STRIPE_SECRET_KEY) {
+    assertStripeKeyAllowed();
+    const secret = (process.env.STRIPE_SECRET_KEY ?? "").trim();
+    if (getStripeKeyMode() === "unset") {
       throw new Error("STRIPE_SECRET_KEY is not set");
     }
-    _stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+    _stripe = new Stripe(secret, {
       apiVersion: "2025-03-31.basil" as any,
       typescript: true,
     });

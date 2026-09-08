@@ -159,6 +159,38 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  try {
+    const { data: workspace } = await auth.admin
+      .from("workspaces")
+      .select("slug")
+      .eq("id", parsed.data.workspaceId)
+      .maybeSingle();
+    const { insertJobRun } = await import("@/lib/jobs/repo");
+    const { dispatchJob } = await import("@/lib/jobs/dispatch");
+    const job = await insertJobRun(auth.admin, {
+      workspaceId: parsed.data.workspaceId,
+      kind: "mr_extract",
+      sessionId: extractId,
+      createdBy: auth.user.id,
+      targetIds: started.map((seed) => seed.seedId),
+      settings: {
+        projectId: parsed.data.projectId,
+        workspaceSlug: workspace?.slug,
+        sessionName: project.name,
+      },
+    });
+    await auth.admin
+      .from("mr_extracts")
+      .update({ job_run_id: job.id })
+      .eq("id", extractId);
+    await dispatchJob(job.id, "mr_extract");
+  } catch (error) {
+    console.error(
+      "[mr-extract] job_run insert or dispatch failed; client poll remains the pump",
+      error instanceof Error ? error.message : error
+    );
+  }
+
   return NextResponse.json(
     {
       extractId,

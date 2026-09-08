@@ -23,6 +23,8 @@ import type {
 export const WR_MODEL = "gemini-3.7-flash";
 
 type InlineImage = { mimeType: string; data: string };
+type GenerationPart = { text?: string; inlineData?: InlineImage };
+type AttachedEditImage = InlineImage & { filename?: string };
 
 async function getClient() {
   const apiKey = requireGeminiApiKey();
@@ -198,12 +200,20 @@ type GenerationAttempt = { rawText: string; usageMetadata: unknown; finishReason
 async function streamGeneration(input: {
   systemInstruction: string;
   userPrompt: string;
+  images?: AttachedEditImage[];
 }): Promise<GenerationAttempt> {
   const ai = await getClient();
 
+  const parts: GenerationPart[] = [{ text: input.userPrompt }];
+  for (const [i, img] of (input.images ?? []).entries()) {
+    const name = img.filename?.trim();
+    parts.push({ text: name ? `ATTACHED IMAGE ${i + 1} (${name}):` : `ATTACHED IMAGE ${i + 1}:` });
+    parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
+  }
+
   const stream = await ai.models.generateContentStream({
     model: WR_MODEL,
-    contents: [{ role: "user", parts: [{ text: input.userPrompt }] }],
+    contents: [{ role: "user", parts }],
     config: {
       systemInstruction: input.systemInstruction,
       responseMimeType: "application/json",
@@ -269,6 +279,7 @@ function addCosts(a: AiCallCost, b: AiCallCost): AiCallCost {
 async function runGenerationCall(input: {
   systemInstruction: string;
   userPrompt: string;
+  images?: AttachedEditImage[];
 }): Promise<{ result: WrBuildResult; cost: AiCallCost }> {
   const first = await streamGeneration(input);
   let cost = calculateCallCost(WR_MODEL, first.usageMetadata);
@@ -285,6 +296,7 @@ async function runGenerationCall(input: {
   const second = await streamGeneration({
     systemInstruction: input.systemInstruction,
     userPrompt: `${input.userPrompt}\n\n${WR_RECITATION_RETRY_HINT}`,
+    images: input.images,
   });
   cost = addCosts(cost, calculateCallCost(WR_MODEL, second.usageMetadata));
 
@@ -338,12 +350,17 @@ export async function runEdit(input: {
   taxonomyTree: WrTaxonomyTree;
   recentChat: WrChatMessage[];
   instruction: string;
+  images?: AttachedEditImage[];
 }): Promise<{ result: WrBuildResult; cost: AiCallCost }> {
   const historyText = input.recentChat
     .slice(-6)
-    .map((m) => `${m.role.toUpperCase()}: ${m.text}`)
+    .map((m) => {
+      const extra = m.attachments?.length ? ` [${m.attachments.length} image(s) attached]` : "";
+      return `${m.role.toUpperCase()}: ${m.text}${extra}`;
+    })
     .join("\n");
 
+  const attached = input.images ?? [];
   const userPrompt = [
     "You previously built this header. Apply the requested edit and return the FULL updated html/css/js again (not a diff).",
     "",
@@ -363,8 +380,23 @@ export async function runEdit(input: {
     input.currentResult.js,
     "",
     historyText ? `RECENT CONVERSATION:\n${historyText}\n` : "",
+    attached.length > 0
+      ? [
+          `ATTACHED REFERENCE IMAGES: ${attached.length} image(s) follow this prompt, labeled ATTACHED IMAGE 1..${attached.length}.`,
+          "They are ground truth for this edit:",
+          "- Logo: keep src=\"{{WR_LOGO_SRC}}\". Do not embed the image as base64 or a URL — the platform will swap the logo file.",
+          "- Palette / colors: read the actual hex values off the image and apply them in CSS.",
+          "- Screenshot or mock: match layout, spacing, and colors as closely as the header skill allows.",
+          "Never invent URLs. Never put attached image bytes into the HTML.",
+          "",
+        ].join("\n")
+      : "",
     `REQUESTED EDIT: ${input.instruction}`,
   ].join("\n");
 
-  return runGenerationCall({ systemInstruction: WR_SKILL_INSTRUCTIONS, userPrompt });
+  return runGenerationCall({
+    systemInstruction: WR_SKILL_INSTRUCTIONS,
+    userPrompt,
+    images: attached.length > 0 ? attached : undefined,
+  });
 }

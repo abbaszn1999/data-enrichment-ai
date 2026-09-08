@@ -1,3 +1,4 @@
+import { CRAWLER_USER_AGENT } from "@/lib/brand";
 import { buildSearchPrompt } from "./prompts";
 import type { SourceUrl, ImageUrl, ThinkingLevelOption } from "@/types";
 import {
@@ -7,12 +8,12 @@ import {
 } from "./ai-pricing";
 
 /**
- * Gemini helpers retained for Sync (web research + Serper image search).
- * Import AI enrichment uses `@/lib/enrich` (OpenAI Responses) — do not call
+ * Gemini helpers retained for Store Assistant (web research + Serper image search).
+ * Catalog Intelligence AI enrichment uses `@/lib/enrich` (OpenAI Responses) — do not call
  * removed enrichProductRow from this module.
  */
 
-/** Settings for Gemini helpers still used by Sync (not Import enrich). */
+/** Settings for Gemini helpers still used by Store Assistant (not Catalog Intelligence). */
 export interface GeminiSettings {
   enrichmentModel?: string;
   thinkingLevel?: ThinkingLevelOption;
@@ -78,7 +79,7 @@ async function resolveRedirectUrl(url: string): Promise<string> {
       method: "HEAD",
       redirect: "follow",
       signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; DataSheetAI/1.0)" },
+      headers: { "User-Agent": CRAWLER_USER_AGENT },
     });
     clearTimeout(timeout);
     // After following redirects, res.url is the final destination
@@ -179,7 +180,7 @@ async function validateImageUrl(url: string): Promise<boolean> {
     const res = await fetch(url, {
       method: "HEAD",
       signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; DataSheetAI/1.0)" },
+      headers: { "User-Agent": CRAWLER_USER_AGENT },
       redirect: "follow",
     });
     clearTimeout(timeout);

@@ -49,6 +49,11 @@ import {
   type HandlerResult,
 } from "./tool-handlers";
 import {
+  clearStoreAssistantCheckpoint,
+  saveStoreAssistantCheckpoint,
+  shouldWriteCheckpoint,
+} from "./checkpoint";
+import {
   MODELS,
   requireGeminiApiKey,
   resolveThinkingLevel,
@@ -654,7 +659,8 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
   let currentToolCallId: string | null = null;
 
   // Handler context — shared across tool calls so the sheet/memory accumulate.
-  const handlerCtx: HandlerContext = {
+  let handlerCtx: HandlerContext;
+  handlerCtx = {
     integration: params.integration,
     integrationContext: params.integration
       ? {
@@ -699,6 +705,21 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<void> {
         partialValues: update.partialValues,
         failedCount: update.failedCount,
       });
+      if (
+        params.admin &&
+        params.workspaceId &&
+        handlerCtx.sheet &&
+        shouldWriteCheckpoint(update.processed)
+      ) {
+        void saveStoreAssistantCheckpoint(params.admin, params.workspaceId, {
+          sheet: handlerCtx.sheet,
+          processed: update.processed,
+          total: update.total,
+          column: update.column,
+        }).catch((error) => {
+          console.warn("[store-assistant] checkpoint failed", error);
+        });
+      }
     },
     admin: params.admin,
     workspaceId: params.workspaceId,

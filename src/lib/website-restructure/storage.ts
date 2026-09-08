@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WrDesignBrief, WrTaxonomyTree, WrVersion } from "./types";
 
@@ -22,6 +23,58 @@ export function wrImagePath(
 
 export function wrLogoPath(workspaceId: string, projectId: string, ext: string): string {
   return `${wrProjectPath(workspaceId, projectId)}/logo.${ext.replace(/[^a-z0-9]/gi, "") || "png"}`;
+}
+
+export function wrChatAttachmentsPrefix(workspaceId: string, projectId: string): string {
+  return `${wrProjectPath(workspaceId, projectId)}/chat`;
+}
+
+export function wrChatAttachmentPath(
+  workspaceId: string,
+  projectId: string,
+  imageId: string,
+  ext: string
+): string {
+  return `${wrChatAttachmentsPrefix(workspaceId, projectId)}/${imageId}.${ext.replace(/[^a-z0-9]/gi, "") || "png"}`;
+}
+
+/** True when `storagePath` is a chat attachment that belongs to this project. */
+export function isWrChatAttachmentPath(
+  workspaceId: string,
+  projectId: string,
+  storagePath: string
+): boolean {
+  const prefix = `${wrChatAttachmentsPrefix(workspaceId, projectId)}/`;
+  if (!storagePath.startsWith(prefix)) return false;
+  if (storagePath.includes("..") || storagePath.includes("\\")) return false;
+  const rest = storagePath.slice(prefix.length);
+  return rest.length > 0 && !rest.includes("/");
+}
+
+const WR_VISION_MAX_EDGE = 1280;
+
+export async function downloadWrImageAsInline(
+  admin: SupabaseClient,
+  storagePath: string
+): Promise<{ mimeType: string; data: string } | null> {
+  const { data, error } = await admin.storage.from(WR_STORAGE_BUCKET).download(storagePath);
+  if (error || !data) return null;
+  const buf = Buffer.from(await data.arrayBuffer());
+  try {
+    const scaled = await sharp(buf, { failOn: "error", limitInputPixels: 40_000_000 })
+      .rotate()
+      .resize({
+        width: WR_VISION_MAX_EDGE,
+        height: WR_VISION_MAX_EDGE,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: 72, mozjpeg: true })
+      .toBuffer();
+    return { mimeType: "image/jpeg", data: scaled.toString("base64") };
+  } catch {
+    return { mimeType: data.type || "image/jpeg", data: buf.toString("base64") };
+  }
 }
 
 export function wrBriefPath(workspaceId: string, projectId: string): string {

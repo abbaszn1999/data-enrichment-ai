@@ -18,7 +18,7 @@ vi.mock("@/lib/ai-pricing", () => ({
   calculateGroundedCallCost: (...args: unknown[]) => calculateCallCostMock(...args),
 }));
 
-const { runGeneration, runVisionBrief } = await import("./agent");
+const { runEdit, runGeneration, runVisionBrief } = await import("./agent");
 const { WR_SKILL_INSTRUCTIONS, WR_VISION_INSTRUCTIONS } = await import("./skill");
 
 function cost(totalCost: number): AiCallCost {
@@ -160,6 +160,72 @@ describe("runGeneration", () => {
     expect(generateContentStream.mock.calls[0][0].config.systemInstruction).toBe(
       WR_SKILL_INSTRUCTIONS
     );
+  });
+});
+
+describe("runEdit", () => {
+  const currentResult = { html: "<header></header>", css: "", js: "", notes: "" };
+
+  it("sends only the text prompt when no images are attached", async () => {
+    queueStream(HEADER_JSON, "STOP");
+
+    await runEdit({
+      brief,
+      currentResult,
+      taxonomyTree: tree,
+      recentChat: [],
+      instruction: "make the bar green",
+    });
+
+    const parts = generateContentStream.mock.calls[0][0].contents[0].parts as Array<{
+      text?: string;
+      inlineData?: unknown;
+    }>;
+    expect(parts).toHaveLength(1);
+    expect(parts[0].text).toContain("REQUESTED EDIT: make the bar green");
+    expect(parts.some((p) => p.inlineData)).toBe(false);
+  });
+
+  it("labels each attached image so the model can tell them apart", async () => {
+    queueStream(HEADER_JSON, "STOP");
+
+    await runEdit({
+      brief,
+      currentResult,
+      taxonomyTree: tree,
+      recentChat: [],
+      instruction: "use this as the logo",
+      images: [{ mimeType: "image/png", data: "logo-bytes", filename: "logo.png" }],
+    });
+
+    const parts = generateContentStream.mock.calls[0][0].contents[0].parts as Array<{
+      text?: string;
+      inlineData?: { data: string };
+    }>;
+    expect(parts[0].text).toContain("ATTACHED REFERENCE IMAGES");
+    expect(parts[0].text).toContain("{{WR_LOGO_SRC}}");
+    expect(parts.some((p) => p.text === "ATTACHED IMAGE 1 (logo.png):")).toBe(true);
+    expect(parts.filter((p) => p.inlineData).map((p) => p.inlineData!.data)).toEqual(["logo-bytes"]);
+  });
+
+  it("keeps attached images on the recitation retry", async () => {
+    queueStream("", "RECITATION");
+    queueStream(HEADER_JSON, "STOP");
+
+    await runEdit({
+      brief,
+      currentResult,
+      taxonomyTree: tree,
+      recentChat: [],
+      instruction: "extract these colors",
+      images: [{ mimeType: "image/png", data: "palette", filename: "swatches.png" }],
+    });
+
+    expect(generateContentStream).toHaveBeenCalledTimes(2);
+    const retryParts = generateContentStream.mock.calls[1][0].contents[0].parts as Array<{
+      inlineData?: { data: string };
+    }>;
+    expect(retryParts.filter((p) => p.inlineData).map((p) => p.inlineData!.data)).toEqual(["palette"]);
   });
 });
 

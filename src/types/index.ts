@@ -480,10 +480,10 @@ export const CMS_CATEGORY_COLUMNS: Record<string, CmsCategoryColumns> = {
   },
   shopify: {
     nameColumns: ["title", "name", "collection"],
-    parentColumns: ["parent_id", "handle"],
-    descColumns: ["body_html", "description"],
-    idColumns: ["id"],
-    hint: "Shopify: title, parent_id, body_html",
+    parentColumns: ["parent_id", "parent_collection", "parent"],
+    descColumns: ["body (html)", "body_html", "description"],
+    idColumns: ["handle", "id"],
+    hint: "Shopify: title, body_html / description, handle",
   },
   woocommerce: {
     nameColumns: ["name", "category_name"],
@@ -539,6 +539,11 @@ export interface SheetState {
   sessionKind: SessionKind;
   /** Step 2 was skipped, so autosave must not drop that decision. */
   matchingSkipped: boolean;
+  /**
+   * When set, the enrich sheet shows one row per product and hides variant
+   * siblings. `null` means grouping is off.
+   */
+  productGroupColumn: string | null;
   fileName: string | null;
   rows: ProductRow[];
   originalColumns: string[];
@@ -549,6 +554,8 @@ export interface SheetState {
   selectedRowIds: Set<string>;
   isEnriching: boolean;
   isPaused: boolean;
+  /** Stop was requested; in-flight AI rows are draining and must not be autosaved over. */
+  isStoppingEnrich: boolean;
   enrichProgress: number;
   totalToEnrich: number;
   completedEnrich: number;

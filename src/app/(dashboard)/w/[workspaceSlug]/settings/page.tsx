@@ -225,6 +225,7 @@ export default function SettingsPage() {
       setIntegrationSuccess(`Connected to ${savedIntegration.integration_name}`);
       setIntegrationDialogOpen(false);
       resetIntegrationDialog();
+      window.location.reload();
     } catch (err: any) {
       setIntegrationError(err?.message || `Failed to save ${selectedProvider} integration`);
     } finally {
@@ -240,6 +241,7 @@ export default function SettingsPage() {
       await disconnectWorkspaceIntegration(workspace.id);
       setIntegration(null);
       setIntegrationSuccess("Integration disconnected");
+      window.location.reload();
     } catch (err: any) {
       setIntegrationError(err?.message || "Failed to disconnect integration");
     } finally {
@@ -564,7 +566,8 @@ export default function SettingsPage() {
             <div className="space-y-4 p-5">
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Deleting a workspace permanently removes all products,
-                categories, imports, and files.{" "}
+                sessions, store data, and files. A security audit record of
+                the deletion is kept.{" "}
                 <strong className="text-foreground">
                   This action cannot be undone.
                 </strong>
@@ -770,6 +773,13 @@ export default function SettingsPage() {
                       <p className="mt-1">
                         Store: {testedConnection.accountLabel}
                       </p>
+                    </div>
+                  )}
+
+                  {integrationError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <span>{integrationError}</span>
                     </div>
                   )}
                 </div>

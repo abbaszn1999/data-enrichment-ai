@@ -1,4 +1,4 @@
-# Data Enrichment AI
+# Autommerce Platform
 
 A multi-workspace SaaS platform for e-commerce catalog teams. Upload worksheets, enrich product data with AI, generate and source imagery, classify photos, and sync changes back to connected storefronts — with credits, billing, and team roles built in.
 
@@ -120,7 +120,7 @@ Team invites and magic links are sent by **Supabase Auth**. To deliver them from
 | Field | Value |
 |--------|--------|
 | Sender email | `noreply@autommerce.com` |
-| Sender name | e.g. `Autommerce` / `Data Enrichment` |
+| Sender name | `Autommerce Platform` |
 | Host | `smtp.resend.com` |
 | Port | `465` |
 | Username | `resend` |

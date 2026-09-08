@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { actualExtractCostUsd, roundUsd } from "./cost";
 import { chargeWorkspaceWallet, creditWorkspaceWallet } from "@/lib/wallet/server";
 
-export const MARKET_RESEARCH_WALLET_MODULE = "Market Research";
+export const MARKET_RESEARCH_WALLET_MODULE = "market-research";
 
 type ExtractRow = {
   id: string;

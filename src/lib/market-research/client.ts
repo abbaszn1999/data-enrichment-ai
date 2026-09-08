@@ -159,7 +159,7 @@ export async function pollExtractApi(
   workspaceId: string,
   projectId: string,
   extractId: string,
-  cursors: Array<{
+  cursors?: Array<{
     seedId: string;
     cursor?: string;
     status?: ExtractPollSeed["status"];
@@ -170,6 +170,7 @@ export async function pollExtractApi(
   rowsReturned: number;
   settledUsd?: number;
   billingPending?: boolean;
+  sample?: import("./map-keywords").DisplayKeyword[];
 }> {
   const response = await fetch("/api/market-research/extract/poll", {
     method: "POST",
@@ -177,6 +178,39 @@ export async function pollExtractApi(
     body: JSON.stringify({ workspaceId, projectId, extractId, cursors }),
   });
   return readJson(response);
+}
+
+export type ExtractStatusResponse = {
+  extract: {
+    id: string;
+    status: string;
+    billingStatus: string;
+    rowsReturned: number;
+    heldUsd: number;
+    actualUsd: number;
+    createdAt: string;
+  } | null;
+  seeds: Array<{
+    seedId: string;
+    term: string;
+    status: string;
+    rowsReturned: number;
+    pages: number;
+  }>;
+  sample?: import("./map-keywords").DisplayKeyword[];
+};
+
+export async function extractStatusApi(
+  workspaceId: string,
+  projectId: string,
+  extractId?: string
+): Promise<ExtractStatusResponse> {
+  const params = new URLSearchParams({ workspaceId, projectId });
+  if (extractId) params.set("extractId", extractId);
+  const response = await fetch(
+    `/api/market-research/extract/status?${params.toString()}`
+  );
+  return readJson<ExtractStatusResponse>(response);
 }
 
 export async function cancelExtractApi(

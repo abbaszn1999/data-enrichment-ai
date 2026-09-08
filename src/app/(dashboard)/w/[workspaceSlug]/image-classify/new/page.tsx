@@ -116,16 +116,7 @@ export default function NewImageClassifyPage() {
       setAnalyzeProgress(8);
       return;
     }
-    const interval = setInterval(() => {
-      setAnalyzeProgress((prev) => {
-        if (prev >= 95) return prev;
-        if (prev < 30) return prev + Math.random() * 8 + 4;
-        if (prev < 65) return prev + Math.random() * 4 + 2;
-        if (prev < 85) return prev + Math.random() * 1.5 + 0.5;
-        return prev + Math.random() * 0.4 + 0.1;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
+    setAnalyzeProgress(20);
   }, [phase]);
 
   const handleFiles = useCallback(

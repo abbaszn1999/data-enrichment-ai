@@ -48,3 +48,11 @@ export const AUTOMMERCE_LOGOS = {
   dark: "/autommerce-white.png",
 } as const;
 
+/** Canonical product identity. Import these; do not restating the name as a JSX literal. */
+export const PRODUCT_NAME = "Autommerce";
+export const PRODUCT_FULL_NAME = "Autommerce Platform";
+export const PRODUCT_TAGLINE = "AI Commerce Operations";
+export const PRODUCT_ORIGIN = "https://platform.autommerce.com";
+export const CRAWLER_USER_AGENT =
+  "Mozilla/5.0 (compatible; AutommerceBot/1.0; +https://platform.autommerce.com/bot)";
+

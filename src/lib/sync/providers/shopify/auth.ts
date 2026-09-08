@@ -47,6 +47,10 @@ export async function testShopifyConnection(config: Record<string, any>): Promis
     baseUrl: normalizedStoreUrl,
     metadata: {
       storeDomain,
+      customDomain:
+        typeof shop.domain === "string" && shop.domain.trim()
+          ? shop.domain.trim()
+          : null,
       storeName: shop.name ?? null,
     },
   };

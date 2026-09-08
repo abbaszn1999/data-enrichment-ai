@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { createCheckpointGate, ENRICH_CHECKPOINT } from "./checkpoint";
 import { JOB_BATCH_SIZE } from "./config";
 import {
   catalogPendingRowIds,
@@ -19,8 +20,14 @@ import {
   loadProjectJsonAdmin,
   saveProjectJsonAdmin,
 } from "./project-json";
+import { catalogRowStoreEnabled } from "@/lib/catalog/flag";
+import { patchCatalogSessionRows } from "@/lib/catalog/session-rows";
+import {
+  applyPrimaryEnrichmentToGroup,
+  collapseToPrimaryRowIds,
+  resolveProductGroupColumn,
+} from "@/lib/catalog/product-groups";
 import type { CatalogJobSettings } from "./types";
-import type { ProjectRow } from "@/lib/storage-helpers";
 
 function splitEnriched(data: Record<string, unknown>): {
   enriched: Record<string, unknown>;
@@ -75,99 +82,42 @@ async function runEnrichSessionInner(
     return;
   }
 
+  const groupColumn = resolveProductGroupColumn({
+    saved: project.productGroupColumn,
+    columns: project.columns,
+    rows: project.rows,
+    kind: settings.kind,
+  });
   const byId = new Map(project.rows.map((row) => [row.id, row]));
   const processed = new Set(
     (Array.isArray(settings.processedRowIds) ? settings.processedRowIds : []).map(String)
   );
-  const pending = catalogPendingRowIds(run.target_ids, project.rows, [...processed]);
+  const pending = catalogPendingRowIds(
+    collapseToPrimaryRowIds(run.target_ids, project.rows, groupColumn),
+    project.rows,
+    [...processed]
+  );
 
-  let completed = run.completed_count;
-  let failed = run.failed_count;
+  // Durable progress is the last checkpointed blob + processedRowIds, not
+  // whatever heartbeat counts happened to land before a crash.
+  let completed = 0;
+  let failed = 0;
+  for (const rowId of processed) {
+    const row = byId.get(rowId);
+    if (!row) continue;
+    if (row.status === "done") completed += 1;
+    else if (row.status === "error") failed += 1;
+  }
   let pausedNoCredits = false;
+  let stopObserved = false;
+  const gate = createCheckpointGate(ENRICH_CHECKPOINT);
 
-  for (let i = 0; i < pending.length; i += JOB_BATCH_SIZE) {
-    if (await isJobCancelRequested(admin, run.id)) {
-      const cancelled = await finishJobRun(admin, run.id, {
-        status: "cancelled",
-        completedCount: completed,
-        failedCount: failed,
-      });
-      void cancelled;
-      return;
-    }
-
-    const batchIds = pending.slice(i, i + JOB_BATCH_SIZE);
-    const outcomes = await Promise.all(
-      batchIds.map((id) => {
-        if (options?.processRow) return options.processRow(id);
-        const row = byId.get(id);
-        if (!row) {
-          return Promise.resolve({
-            ok: false as const,
-            rowId: id,
-            error: "Row not found",
-          });
-        }
-        return processCatalogRow({
-          sessionId: run.session_id,
-          workspaceId: run.workspace_id,
-          row,
-          settings,
-        });
-      })
-    );
-
-    const persisted: ProjectRow[] = [];
-    for (const outcome of outcomes) {
-      const row = byId.get(outcome.rowId);
-      if (!row) continue;
-      if (!outcome.ok) {
-        row.status = "error";
-        row.errorMessage = outcome.error;
-        failed += 1;
-        persisted.push(row);
-        continue;
-      }
-      const split = splitEnriched(outcome.data);
-      if (Object.keys(split.originalPatches).length > 0) {
-        row.originalData = { ...row.originalData, ...split.originalPatches };
-      }
-      if (Object.keys(split.enriched).length > 0) {
-        row.enrichedData = { ...(row.enrichedData ?? {}), ...split.enriched };
-      }
-      row.status = "done";
-      row.errorMessage = undefined;
-      persisted.push(row);
-    }
-
-    await saveProjectJsonAdmin(run.workspace_id, run.session_id, project, admin);
-
-    for (const outcome of outcomes) {
-      processed.add(outcome.rowId);
-      if (!outcome.ok) continue;
-      const charged = await chargeCatalogRow({
-        runId: run.id,
-        sessionId: run.session_id,
-        workspaceId: run.workspace_id,
-        rowId: outcome.rowId,
-        rowIndex: byId.get(outcome.rowId)?.rowIndex ?? 0,
-        credits: outcome.credits,
-        cost: outcome.cost,
-        tokens: outcome.tokens,
-        settings,
-      });
-      if (!charged.ok && charged.noCredits) {
-        pausedNoCredits = true;
-        break;
-      }
-      completed += 1;
-    }
-
+  const persistCold = async () => {
     settings.processedRowIds = [...processed];
-
     const enrichedCount = project.rows.filter((row) => row.status === "done").length;
+    await saveProjectJsonAdmin(run.workspace_id, run.session_id, project, admin);
     await admin
-      .from("import_sessions")
+      .from("catalog_sessions")
       .update({
         enriched_count: enrichedCount,
         status: "enriching",
@@ -175,26 +125,168 @@ async function runEnrichSessionInner(
       })
       .eq("id", run.session_id)
       .eq("workspace_id", run.workspace_id);
+    await touchJobHeartbeat(admin, run.id, { completed, failed, settings });
+    gate.markFlushed();
+  };
 
-    await touchJobHeartbeat(admin, run.id, {
-      completed,
-      failed,
-      settings,
+  // Serialize mutations. Hot state is the session row + heartbeat; the full
+  // project.json blob flushes on the checkpoint budget and on terminal states.
+  let writeQueue: Promise<void> = Promise.resolve();
+  const commit = (mutate: () => string[]): Promise<void> => {
+    const operation = writeQueue.then(async () => {
+      const patchedRowIds = mutate();
+      if (patchedRowIds.length > 0 && catalogRowStoreEnabled()) {
+        const patches = patchedRowIds
+          .map((id) => byId.get(id))
+          .filter((row): row is NonNullable<typeof row> => Boolean(row))
+          .map((row) => ({
+            id: row.id,
+            status: row.status,
+            errorMessage: row.errorMessage,
+            originalData: row.originalData,
+            enrichedData: row.enrichedData,
+            matchType: row.matchType,
+          }));
+        if (patches.length > 0) {
+          await patchCatalogSessionRows(admin, run.session_id, patches);
+        }
+      }
+      gate.noteCompletedRow();
+      await touchJobHeartbeat(admin, run.id, { completed, failed });
+      if (gate.shouldFlush()) await persistCold();
     });
+    writeQueue = operation.catch(() => undefined);
+    return operation;
+  };
 
-    if (pausedNoCredits) {
-      const paused = await finishJobRun(admin, run.id, {
-        status: "paused_no_credits",
-        completedCount: completed,
-        failedCount: failed,
-        lastError: "Out of credits",
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      if (stopObserved) return;
+      if (await isJobCancelRequested(admin, run.id)) {
+        stopObserved = true;
+        return;
+      }
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= pending.length) return;
+      const rowId = pending[index]!;
+
+      const outcome = options?.processRow
+        ? await options.processRow(rowId)
+        : await (async () => {
+            const row = byId.get(rowId);
+            if (!row) {
+              return {
+                ok: false as const,
+                rowId,
+                error: "Row not found",
+              };
+            }
+            return processCatalogRow({
+              sessionId: run.session_id,
+              workspaceId: run.workspace_id,
+              row,
+              settings,
+            });
+          })();
+
+      let charged: Awaited<ReturnType<typeof chargeCatalogRow>> | null = null;
+      if (outcome.ok) {
+        charged = await chargeCatalogRow({
+          runId: run.id,
+          sessionId: run.session_id,
+          workspaceId: run.workspace_id,
+          rowId: outcome.rowId,
+          rowIndex: byId.get(outcome.rowId)?.rowIndex ?? 0,
+          credits: outcome.credits,
+          cost: outcome.cost,
+          tokens: outcome.tokens,
+          settings,
+        });
+      }
+
+      await commit(() => {
+        const row = byId.get(outcome.rowId);
+        if (!row) {
+          processed.add(outcome.rowId);
+          return [outcome.rowId];
+        }
+        if (!outcome.ok) {
+          row.status = "error";
+          row.errorMessage = outcome.error;
+          failed += 1;
+          processed.add(outcome.rowId);
+          return [outcome.rowId];
+        }
+        if (charged && !charged.ok) {
+          row.status = "error";
+          row.errorMessage = charged.error;
+          if (charged.noCredits) {
+            // Do not mark as processed — a future run should retry this row
+            // once credits are topped up.
+            pausedNoCredits = true;
+            stopObserved = true;
+          } else {
+            failed += 1;
+            processed.add(outcome.rowId);
+          }
+          return [outcome.rowId];
+        }
+        processed.add(outcome.rowId);
+        const split = splitEnriched(outcome.data);
+        if (Object.keys(split.originalPatches).length > 0) {
+          row.originalData = { ...row.originalData, ...split.originalPatches };
+        }
+        if (Object.keys(split.enriched).length > 0) {
+          row.enrichedData = { ...(row.enrichedData ?? {}), ...split.enriched };
+        }
+        row.status = "done";
+        row.errorMessage = undefined;
+        completed += 1;
+        const siblings = applyPrimaryEnrichmentToGroup(
+          project.rows,
+          outcome.rowId,
+          groupColumn
+        );
+        return [outcome.rowId, ...siblings];
       });
-      if (paused) await notifyJobEvent(paused, "paused_no_credits", admin);
-      return;
+
+      if (pausedNoCredits) return;
     }
+  };
+
+  const workerCount = Math.min(JOB_BATCH_SIZE, pending.length || 1);
+  if (pending.length > 0) {
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  }
+  await writeQueue.catch(() => undefined);
+  // Always flush drained in-flight rows before finishing — Stop must not
+  // discard AI replies that were already charged.
+  await persistCold();
+
+  if (pausedNoCredits) {
+    const paused = await finishJobRun(admin, run.id, {
+      status: "paused_no_credits",
+      completedCount: completed,
+      failedCount: failed,
+      lastError: "Out of credits",
+    });
+    if (paused) await notifyJobEvent(paused, "paused_no_credits", admin);
+    return;
   }
 
   if (await isJobCancelRequested(admin, run.id)) {
+    const enrichedCount = project.rows.filter((row) => row.status === "done").length;
+    await admin
+      .from("catalog_sessions")
+      .update({
+        enriched_count: enrichedCount,
+        status: "completed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", run.session_id)
+      .eq("workspace_id", run.workspace_id);
     await finishJobRun(admin, run.id, {
       status: "cancelled",
       completedCount: completed,
@@ -205,7 +297,7 @@ async function runEnrichSessionInner(
 
   const enrichedCount = project.rows.filter((row) => row.status === "done").length;
   await admin
-    .from("import_sessions")
+    .from("catalog_sessions")
     .update({
       enriched_count: enrichedCount,
       status: "completed",

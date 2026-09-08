@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
         return 0;
       }),
       admin
-        .from("import_sessions")
+        .from("catalog_sessions")
         .select("id", { count: "exact", head: true })
         .eq("workspace_id", workspaceId),
       admin
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
         .gte("created_at", thirtyDaysAgo.toISOString())
         .order("created_at", { ascending: true }),
       admin
-        .from("import_sessions")
+        .from("catalog_sessions")
         .select("id, created_at")
         .eq("workspace_id", workspaceId)
         .gte("created_at", thirtyDaysAgo.toISOString())

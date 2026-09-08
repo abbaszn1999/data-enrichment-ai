@@ -10,7 +10,7 @@ describe("jobHref", () => {
         workspaceSlug: "acme",
         sessionId: "sess-1",
       })
-    ).toBe("/w/acme/import/sess-1/enrich");
+    ).toBe("/w/acme/catalog-intelligence/sess-1");
     expect(
       jobHref({
         kind: "gallery",
@@ -25,11 +25,19 @@ describe("jobHref", () => {
         sessionId: "xyz",
       })
     ).toBe("/w/acme/products-visualizer?project=xyz");
+    expect(
+      jobHref({
+        kind: "mr_extract",
+        workspaceSlug: "acme",
+        sessionId: "extract-1",
+      })
+    ).toBe("/w/acme/market-research");
   });
 
   it("labels tools for the inbox", () => {
     expect(jobKindLabel("catalog")).toBe("Catalog Intelligence");
     expect(jobKindLabel("gallery")).toBe("Products Gallery");
+    expect(jobKindLabel("mr_extract")).toBe("Market Research");
   });
 });
 

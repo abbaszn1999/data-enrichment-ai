@@ -35,9 +35,36 @@ describe("visualizer description phase helpers", () => {
           selectedColumns: ["Name"],
           productImageColumn: "Image",
         },
-        ["Name", "Image"]
+        ["Name", "Image"],
+        [
+          {
+            originalData: {
+              Name: "Bag",
+              Image: "https://cdn.example/bag.jpg",
+            },
+          },
+        ]
       )
     ).toBeNull();
+
+    expect(
+      validateVisualizerSettings(
+        {
+          ...DEFAULT_VISUALIZER_SETTINGS,
+          selectedColumns: ["Name"],
+          productImageColumn: "Title",
+        },
+        ["Name", "Title"],
+        [
+          {
+            originalData: {
+              Name: "Bag",
+              Title: "Leather tote",
+            },
+          },
+        ]
+      )
+    ).toMatch(/image URLs/i);
   });
 
   it("builds the elite prompt with analysis phases and brand colors", () => {

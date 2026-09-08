@@ -33,7 +33,7 @@ describe("estimateSyncHoldUsd", () => {
 });
 
 describe("holdSyncRun", () => {
-  it("charges the wallet module 'Sync' with a run-scoped idempotency key", async () => {
+  it("charges the Growth Sync wallet module with a run-scoped idempotency key", async () => {
     const result = await holdSyncRun(admin, {
       workspaceId: "ws-1",
       userId: "user-1",
@@ -48,7 +48,7 @@ describe("holdSyncRun", () => {
         workspaceId: "ws-1",
         userId: "user-1",
         amountUsd: 0.05,
-        module: "Sync",
+        module: "growth-sync",
         idempotencyKey: "gs_run:hold:run-1",
         details: { runId: "run-1", productCount: 100 },
       })
@@ -118,7 +118,7 @@ describe("settleSyncRun", () => {
         userId: "user-1",
         amountUsd: 0.048,
         kind: "refund",
-        module: "Sync",
+        module: "growth-sync",
         idempotencyKey: "gs_run:refund:run-1",
         details: { runId: "run-1", ruleId: "rule-1", ruleName: "New arrivals", productCount: 100 },
       })
@@ -139,7 +139,7 @@ describe("settleSyncRun", () => {
       admin,
       expect.objectContaining({
         amountUsd: 0.003,
-        module: "Sync",
+        module: "growth-sync",
         idempotencyKey: "gs_run:extra:run-1",
       })
     );

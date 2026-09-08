@@ -173,7 +173,7 @@ export default function AdminUserDetailPage() {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Delete this user?"
-        description={`This removes ${user.email}, every workspace they own, all files in those workspaces, and their auth account. Type the email to confirm.`}
+        description={`This removes ${user.email}, every workspace they own, and those files. Memberships in other workspaces are dropped; those workspaces stay. A security audit record of the deletion is kept. Type the email to confirm.`}
         confirmLabel={`Type ${user.email}`}
         confirmValue={user.email}
         actionLabel="Delete user and owned workspaces"

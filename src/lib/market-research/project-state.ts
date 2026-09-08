@@ -52,6 +52,7 @@ export type MrProjectStateJson = {
   keywords?: ExtractedKeyword[];
   strategy?: StrategyArticle[];
   articles?: Record<string, GeneratedArticle>;
+  extractId?: string;
   /** Fingerprints of the heavy slices stored in object storage, so autosave can skip unchanged uploads. */
   sliceHashes?: Record<string, string>;
 };
@@ -185,6 +186,9 @@ export function rowsToPersisted(
     if (Array.isArray(state.keywords)) {
       next.keywordsByProject[id] = state.keywords;
     }
+    if (typeof state.extractId === "string" && state.extractId) {
+      next.extractIdByProject[id] = state.extractId;
+    }
     if (Array.isArray(state.strategy)) {
       next.strategyByProject[id] = state.strategy;
     }
@@ -229,6 +233,7 @@ export function projectStateSlice(
     extractCharge: persisted.extractChargeByProject[projectId] ?? 0,
     extractRows: persisted.extractRowsByProject[projectId] ?? 0,
     keywords: Array.isArray(keywords) ? keywords : [],
+    extractId: persisted.extractIdByProject[projectId],
     strategy: persisted.strategyByProject?.[projectId] ?? [],
     articles: persisted.articlesByProject?.[projectId] ?? {},
   };
@@ -280,6 +285,7 @@ export function remapPersistedIds(
     strategyApprovedIds: remapIds(persisted.strategyApprovedIds),
     extractChargeByProject: remapRecord(persisted.extractChargeByProject),
     extractRowsByProject: remapRecord(persisted.extractRowsByProject),
+    extractIdByProject: remapRecord(persisted.extractIdByProject ?? {}),
     keywordsByProject: remapRecord(persisted.keywordsByProject),
     strategyByProject: remapRecord(persisted.strategyByProject ?? {}),
     articlesByProject: remapRecord(persisted.articlesByProject ?? {}),

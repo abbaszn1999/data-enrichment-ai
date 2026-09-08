@@ -1,16 +1,17 @@
 ---
-name: sync-pro-openai-web
+name: store-assistant-openai-web
 description: >-
-  Sync Pro uses OpenAI Sol only for product image search (replacing Serper).
-  Use when changing sync_images_search, Serper, or openai-web in Sync agent.
+  Store Assistant Pro uses OpenAI Sol only for product image search (replacing Serper).
+  Use when changing sync_images_search, Serper, or openai-web in the Store Assistant agent.
 ---
 
-# Sync Pro — OpenAI images only
+# Store Assistant Pro — OpenAI images only
 
 ## Scope
 
 - **In scope:** `sync_images_search` backend when mode is Pro.
-- **Out of scope:** Text research, orchestrator, load/write/apply, Import enrich.
+- **Out of scope:** Text research, orchestrator, load/write/apply, Catalog Intelligence enrich.
+- Transport lives in `src/lib/sync/**` (keep that name). The product route is `/w/{slug}/store-assistant` and `/api/store-assistant/*`.
 
 ## Behavior
 
@@ -47,3 +48,4 @@ Flow for Pro images:
 - `src/lib/sync/agent/injection-guards.ts` — tiered product directory
 - `src/lib/sync/agent/image-target.ts` — `matchCatalogRows` / image row targeting
 - `src/lib/sync/agent/tool-handlers.ts` — partial-success grounding for images/columns
+- `src/app/api/store-assistant/agent/route.ts` — Store Assistant HTTP entry

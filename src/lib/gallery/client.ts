@@ -52,16 +52,42 @@ export async function createGallerySession(params: {
 export async function getGallerySession(
   workspaceId: string,
   sessionId: string,
-  options?: { includeSignedUrls?: boolean }
+  options?: { includeSignedUrls?: boolean; signRowIds?: string[] }
 ) {
-  const includeSignedUrls = options?.includeSignedUrls !== false;
+  const params = new URLSearchParams({
+    workspaceId,
+    includeSignedUrls: options?.includeSignedUrls === false ? "0" : "1",
+  });
+  if (options?.signRowIds?.length) {
+    params.set("includeSignedUrls", "0");
+    params.set("signRowIds", options.signRowIds.join(","));
+  }
   const res = await fetch(
-    `/api/gallery/sessions/${sessionId}?workspaceId=${encodeURIComponent(workspaceId)}&includeSignedUrls=${includeSignedUrls ? "1" : "0"}`
+    `/api/gallery/sessions/${sessionId}?${params.toString()}`
   );
   return parseJson<{
     session: GallerySession;
     worksheet: GalleryWorksheetJson | null;
     signedUrls?: Record<string, string>;
+  }>(res);
+}
+
+export async function getGalleryProgress(workspaceId: string, sessionId: string) {
+  const res = await fetch(
+    `/api/gallery/sessions/${sessionId}/progress?workspaceId=${encodeURIComponent(workspaceId)}`
+  );
+  return parseJson<{
+    sessionId: string;
+    status: GallerySession["status"];
+    total: number;
+    readyRows: number;
+    failedRows: number;
+    worksheetRevision: number;
+    cancelRequested: boolean;
+    completed: number;
+    failed: number;
+    jobId: string | null;
+    jobStatus: string | null;
   }>(res);
 }
 

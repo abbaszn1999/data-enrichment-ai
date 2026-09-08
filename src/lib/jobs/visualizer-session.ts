@@ -1,4 +1,6 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { visualizerRowStoreEnabled } from "@/lib/catalog/flag";
+import { upsertWorksheetRow } from "@/lib/worksheet-rows/store";
 import {
   loadVisualizerWorksheetAdmin,
   loadVisualizerWorksheetMatchingRevisionAdmin,
@@ -16,6 +18,7 @@ import type {
   VisualizerWorksheetJson,
 } from "@/lib/visualizer/types";
 import { JOB_BATCH_SIZE } from "./config";
+import { createCheckpointGate, WORKSHEET_CHECKPOINT } from "./checkpoint";
 import { isInsufficientCredits } from "./credits";
 import { executeVisualizerRow, type VisualizerRowOutcome } from "./visualizer-row";
 import type { VisualizerJobSettings } from "./visualizer-settings";
@@ -88,6 +91,7 @@ async function runVisualizerSessionInner(
   let pausedNoCredits = false;
   let worksheetWriteQueue: Promise<void> = Promise.resolve();
   let expectedRevision = Number(worksheet.revision ?? 0);
+  const gate = createCheckpointGate(WORKSHEET_CHECKPOINT);
 
   const persistRevision = async () => {
     const { data: claimedRevision, error } = await admin.rpc(
@@ -146,12 +150,36 @@ async function runVisualizerSessionInner(
     );
   };
 
-  const commitWorksheet = (mutate: () => void | Promise<void>): Promise<void> => {
+  const commitWorksheet = (
+    mutate: () => void | Promise<void>,
+    persistMode: "never" | "maybe" | "always" = "maybe",
+    rowId?: string
+  ): Promise<void> => {
     const operation = worksheetWriteQueue.then(async () => {
+      await mutate();
+      if (rowId && visualizerRowStoreEnabled()) {
+        const row = worksheet!.rows.find((candidate) => candidate.id === rowId);
+        if (row) {
+          await upsertWorksheetRow(
+            admin,
+            "visualizer_session_rows",
+            sessionId,
+            row
+          );
+        }
+      }
+      if (persistMode === "never") return;
+      if (persistMode === "maybe") {
+        gate.noteCompletedRow();
+        if (!gate.shouldFlush()) return;
+      } else {
+        gate.markDirty();
+      }
       await withVisualizerWorksheetLock(workspaceId, sessionId, async () => {
-        await mutate();
         await persistRevision();
       });
+      await writeResults({ signImages: false });
+      gate.markFlushed();
     });
     worksheetWriteQueue = operation.catch(() => undefined);
     return operation;
@@ -237,7 +265,7 @@ async function runVisualizerSessionInner(
           worksheet!.activeRun.updatedAt = new Date().toISOString();
         }
         claimedRow = structuredClone(worksheet!.rows[index]!) as VisualizerRow;
-      });
+      }, "never", rowId);
       if (!claimedRow) continue;
       const inputRow: VisualizerRow = claimedRow;
 
@@ -292,8 +320,7 @@ async function runVisualizerSessionInner(
           worksheet!.activeRun.usedCredits = usedCredits;
           worksheet!.activeRun.updatedAt = new Date().toISOString();
         }
-      });
-      await writeResults({ signImages: false });
+      }, "maybe", rowId);
       await touchJobHeartbeat(admin, run.id, { completed, failed });
 
       if (pausedNoCredits) return;

@@ -23,6 +23,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -60,6 +61,7 @@ import {
   deleteVisualizerAsset,
   exportVisualizer,
   generateVisualizerFull,
+  getVisualizerProgress,
   getVisualizerSession,
   listVisualizerSessions,
   requestVisualizerGenerationStop,
@@ -67,9 +69,18 @@ import {
   uploadVisualizerAsset,
   VisualizerApiError,
 } from "@/lib/visualizer/client";
-import { mergePolledVisualizerWorksheet } from "@/lib/visualizer/generation-worksheet-merge";
+import {
+  adoptIncomingVisualizerWorksheet,
+  mergePolledVisualizerWorksheet,
+  visualizerRowIsBusy,
+  visualizerRunIsActive,
+} from "@/lib/visualizer/generation-worksheet-merge";
+import { maxRevision, snapshotRevision } from "@/lib/jobs/snapshot-clock";
 import { resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
-import { productDisplayName } from "@/lib/visualizer/row-fields";
+import {
+  productDisplayName,
+  visualizerImageColumnOptions,
+} from "@/lib/visualizer/row-fields";
 import {
   DescriptionLayoutDialog,
   LayoutSettingsButton,
@@ -270,11 +281,15 @@ export default function ProductsVisualizerPage() {
   const [tableViewportWidth, setTableViewportWidth] = useState(0);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const stickyScrollRef = useRef<HTMLDivElement>(null);
+  const createFileInputRef = useRef<HTMLInputElement>(null);
   const settingsRevisionRef = useRef(0);
   const worksheetRevisionRef = useRef(0);
+  const fencedSessionIdRef = useRef<string | null>(null);
   const settingsRef = useRef(settings);
   const sessionRef = useRef(session);
   const worksheetRef = useRef(worksheet);
+  const stopRequestedRef = useRef(false);
+  const stopSavedToastRef = useRef(false);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -286,9 +301,27 @@ export default function ProductsVisualizerPage() {
     worksheetRef.current = worksheet;
   }, [worksheet]);
   useEffect(() => {
-    settingsRevisionRef.current = Number(session?.settings_revision ?? 0);
-    worksheetRevisionRef.current = Number(session?.worksheet_revision ?? 0);
-  }, [session?.settings_revision, session?.worksheet_revision]);
+    if (!session?.id) {
+      fencedSessionIdRef.current = null;
+      settingsRevisionRef.current = 0;
+      worksheetRevisionRef.current = 0;
+      return;
+    }
+    if (fencedSessionIdRef.current !== session.id) {
+      fencedSessionIdRef.current = session.id;
+      settingsRevisionRef.current = snapshotRevision(session.settings_revision);
+      worksheetRevisionRef.current = snapshotRevision(session.worksheet_revision);
+      return;
+    }
+    settingsRevisionRef.current = maxRevision(
+      settingsRevisionRef.current,
+      session.settings_revision
+    );
+    worksheetRevisionRef.current = maxRevision(
+      worksheetRevisionRef.current,
+      session.worksheet_revision
+    );
+  }, [session?.id, session?.settings_revision, session?.worksheet_revision]);
 
   const openProject = useCallback(
     (sessionId: string) => {
@@ -374,6 +407,12 @@ export default function ProductsVisualizerPage() {
     }
   }, [reviewRowId, worksheet]);
 
+  const toastStopSavedIfNeeded = useCallback(() => {
+    if (!stopRequestedRef.current || stopSavedToastRef.current) return;
+    stopSavedToastRef.current = true;
+    toast.success("Stopped. Products already sent to the AI were saved.");
+  }, []);
+
   const shouldPollGeneration = generating || generationRun !== null;
   const lastCreditsProgressRef = useRef(0);
   useEffect(() => {
@@ -388,50 +427,132 @@ export default function ProductsVisualizerPage() {
 
     const pollProgress = async () => {
       try {
-        const fresh = await getVisualizerSession(workspace.id, projectId, {
-          includeSignedUrls: false,
-        });
-        if (cancelled || !fresh.worksheet) return;
-        setSession(fresh.session);
-        setWorksheet((current) => {
-          if (!current) return fresh.worksheet!;
-          const merged = mergePolledVisualizerWorksheet({
-            local: current,
-            polled: fresh.worksheet!,
-            clientRunActive: generating,
-          });
-          return {
-            ...current,
-            rows: merged.rows,
-            activeRun: merged.activeRun,
-            revision: merged.revision,
-          };
-        });
-        if (fresh.signedUrls) setSignedUrls(fresh.signedUrls);
-        const run = fresh.worksheet.activeRun;
-        if (run && (run.status === "running" || run.status === "queued")) {
-          const done = run.completed + run.failed;
+        const progress = await getVisualizerProgress(workspace.id, projectId);
+        if (cancelled) return;
+        setSession((current) =>
+          current && current.id === progress.sessionId
+            ? {
+                ...current,
+                status: progress.status,
+                ready_rows: progress.readyRows,
+                failed_rows: progress.failedRows,
+                cancel_requested: progress.cancelRequested,
+                worksheet_revision: progress.worksheetRevision,
+                active_phase: progress.activePhase,
+                awaiting_user_action: progress.awaitingUserAction,
+              }
+            : current
+        );
+        setSessions((current) =>
+          current.map((item) =>
+            item.id === progress.sessionId
+              ? {
+                  ...item,
+                  status: progress.status,
+                  ready_rows: progress.readyRows,
+                  failed_rows: progress.failedRows,
+                  cancel_requested: progress.cancelRequested,
+                  worksheet_revision: progress.worksheetRevision,
+                  active_phase: progress.activePhase,
+                  awaiting_user_action: progress.awaitingUserAction,
+                }
+              : item
+          )
+        );
+        const done = progress.completed + progress.failed;
+        const jobStillRunning =
+          progress.jobStatus === "running" ||
+          progress.jobStatus === "queued" ||
+          progress.status === "processing";
+        const localWorksheet = worksheetRef.current;
+        const localBusy = (localWorksheet?.rows ?? []).some(visualizerRowIsBusy);
+        const localRunActive = visualizerRunIsActive(localWorksheet);
+        if (jobStillRunning) {
           setGenerationRun({
-            total: run.total,
+            total: progress.total,
             completed: done,
-            runId: run.id,
+            runId: progress.jobId || "",
           });
-          if (done > lastCreditsProgressRef.current) {
-            lastCreditsProgressRef.current = done;
-            invalidateCredits();
+          if (progress.cancelRequested) {
+            stopRequestedRef.current = true;
+            setStopping(true);
           }
-          if (fresh.session.cancel_requested) setStopping(true);
-        } else if (!generating) {
-          if (lastCreditsProgressRef.current > 0 || run) {
-            invalidateCredits();
-          }
+        } else if (!generating && !localBusy && !localRunActive) {
+          if (lastCreditsProgressRef.current > 0) invalidateCredits();
+          toastStopSavedIfNeeded();
+          stopRequestedRef.current = false;
           setGenerationRun(null);
           setStopping(false);
+        }
+        const newlyDone = done > lastCreditsProgressRef.current;
+        if (newlyDone) {
+          lastCreditsProgressRef.current = done;
+          invalidateCredits();
+        }
+        const serverRevision = snapshotRevision(progress.worksheetRevision);
+        const needsWorksheet =
+          serverRevision > worksheetRevisionRef.current ||
+          (!jobStillRunning && (localBusy || localRunActive));
+        if (needsWorksheet) {
+          const fresh = await getVisualizerSession(workspace.id, projectId, {
+            includeSignedUrls: true,
+          });
+          if (cancelled || !fresh.worksheet) return;
+          worksheetRevisionRef.current = maxRevision(
+            worksheetRevisionRef.current,
+            fresh.session.worksheet_revision,
+            fresh.worksheet.revision,
+            progress.worksheetRevision
+          );
+          setSession((current) => {
+            const next = fresh.session;
+            if (!current || current.id !== next.id) return next;
+            return {
+              ...next,
+              worksheet_revision: maxRevision(
+                current.worksheet_revision,
+                next.worksheet_revision
+              ),
+            };
+          });
+          setWorksheet((current) => {
+            const applied = current
+              ? mergePolledVisualizerWorksheet({
+                  local: current,
+                  polled: fresh.worksheet!,
+                  clientRunActive: generating,
+                })
+              : fresh.worksheet!;
+            const next = {
+              ...(current ?? applied),
+              rows: applied.rows,
+              activeRun: applied.activeRun,
+              revision: applied.revision,
+            };
+            worksheetRef.current = next;
+            return next;
+          });
+          if (fresh.signedUrls) {
+            setSignedUrls((current) => ({ ...current, ...fresh.signedUrls }));
+          }
+          if (!jobStillRunning && !generating) {
+            const applied = worksheetRef.current;
+            if (
+              applied &&
+              !applied.rows.some(visualizerRowIsBusy) &&
+              !visualizerRunIsActive(applied)
+            ) {
+              toastStopSavedIfNeeded();
+              stopRequestedRef.current = false;
+              setGenerationRun(null);
+              setStopping(false);
+            }
+          }
         }
       } catch {
         // Next poll or final generate response recovers.
       } finally {
-        if (!cancelled) timer = setTimeout(pollProgress, 750);
+        if (!cancelled) timer = setTimeout(pollProgress, 2_000);
       }
     };
 
@@ -445,6 +566,7 @@ export default function ProductsVisualizerPage() {
     invalidateCredits,
     projectId,
     shouldPollGeneration,
+    toastStopSavedIfNeeded,
     workspace?.id,
   ]);
 
@@ -609,6 +731,28 @@ export default function ProductsVisualizerPage() {
       (column) => !(imageColumn && column === imageColumn)
     );
   }, [settings.productImageColumn, worksheet]);
+
+  const imageColumnCandidates = useMemo(() => {
+    if (!worksheet) return [];
+    return visualizerImageColumnOptions({
+      columns: worksheet.columns,
+      rows: worksheet.rows,
+      selected: settings.productImageColumn,
+    });
+  }, [settings.productImageColumn, worksheet]);
+
+  const detectedImageColumns = useMemo(() => {
+    if (!worksheet) return [];
+    return visualizerImageColumnOptions({
+      columns: worksheet.columns,
+      rows: worksheet.rows,
+    });
+  }, [worksheet]);
+
+  const imageColumnIsValid = Boolean(
+    settings.productImageColumn &&
+      detectedImageColumns.includes(settings.productImageColumn)
+  );
 
   const toggleColumn = (column: string) => {
     if (settings.productImageColumn && column === settings.productImageColumn) {
@@ -775,6 +919,12 @@ export default function ProductsVisualizerPage() {
     if (!workspace || !sessionRef.current || !worksheetRef.current || !canEdit) {
       return null;
     }
+    if (generating || generationRun) {
+      if (!options?.silent) {
+        toast.message("Wait until generation finishes before saving.");
+      }
+      return null;
+    }
     setSaveStatus("saving");
     const attemptSave = async () => {
       const activeSession = sessionRef.current!;
@@ -883,7 +1033,7 @@ export default function ProductsVisualizerPage() {
   };
 
   const settingsReady =
-    settings.selectedColumns.length > 0 && !!settings.productImageColumn;
+    settings.selectedColumns.length > 0 && imageColumnIsValid;
 
   const rows = useMemo(() => worksheet?.rows ?? [], [worksheet?.rows]);
 
@@ -1125,7 +1275,11 @@ export default function ProductsVisualizerPage() {
   const runGenerate = async (retryFailed = false) => {
     if (!workspace || !session || !worksheet || !canEdit || generating) return;
     if (!settingsReady) {
-      toast.error("Select worksheet columns and a Product image column first");
+      toast.error(
+        imageColumnIsValid
+          ? "Select worksheet columns first"
+          : "Choose a Product image column that contains image URLs"
+      );
       return;
     }
     const rowIds = retryFailed
@@ -1150,6 +1304,9 @@ export default function ProductsVisualizerPage() {
     if (!prepared) return;
     const { activeSession, activeWorksheet, activeSettings } = prepared;
 
+    stopRequestedRef.current = false;
+    stopSavedToastRef.current = false;
+    setStopping(false);
     setGenerating(true);
     setGenerationRun({ total: rowIds.length, completed: 0 });
     setWorksheet((current) =>
@@ -1195,18 +1352,45 @@ export default function ProductsVisualizerPage() {
         retryFailed,
       });
 
-      if (result.session) setSession(result.session);
-      if (result.worksheet) setWorksheet(result.worksheet);
-      if (result.signedUrls) setSignedUrls(result.signedUrls);
+      if (result.session) {
+        setSession((current) => {
+          if (!current || current.id !== result.session!.id) return result.session!;
+          return {
+            ...result.session!,
+            worksheet_revision: maxRevision(
+              current.worksheet_revision,
+              result.session!.worksheet_revision
+            ),
+          };
+        });
+        worksheetRevisionRef.current = maxRevision(
+          worksheetRevisionRef.current,
+          result.session.worksheet_revision
+        );
+      }
+      if (result.worksheet) {
+        const incoming = result.worksheet;
+        setWorksheet((current) => {
+          const next = adoptIncomingVisualizerWorksheet(current, incoming);
+          worksheetRef.current = next;
+          return next;
+        });
+      }
+      if (result.signedUrls) {
+        setSignedUrls((current) => ({ ...current, ...result.signedUrls }));
+      }
       setSaveStatus("saved");
 
       if (result.status === "running") {
-        setGenerationRun({
-          total: result.worksheet?.activeRun?.total ?? rowIds.length,
-          completed: result.worksheet?.activeRun?.completed ?? 0,
-          runId: result.runId,
-        });
-        toast.message("Generation continues in the background");
+        if (visualizerRunIsActive(worksheetRef.current)) {
+          const run = worksheetRef.current!.activeRun!;
+          setGenerationRun({
+            total: run.total ?? rowIds.length,
+            completed: run.completed + run.failed,
+            runId: result.runId || run.id,
+          });
+          toast.message("Generation continues in the background");
+        }
       } else if (result.status === "completed") {
         toast.success(
           result.message ||
@@ -1217,24 +1401,35 @@ export default function ProductsVisualizerPage() {
       } else if (result.status === "failed") {
         toast.error("Generation failed");
       } else {
-        toast.success(
-          result.message ||
-            `Stopped after ${result.completed ?? 0} product${
-              (result.completed ?? 0) === 1 ? "" : "s"
-            }`
-        );
+        toastStopSavedIfNeeded();
+        if (!stopSavedToastRef.current) {
+          toast.success(
+            result.message ||
+              `Stopped after ${result.completed ?? 0} product${
+                (result.completed ?? 0) === 1 ? "" : "s"
+              }`
+          );
+        }
       }
     } catch (error) {
       await handleGenerateError(error, "Generation failed");
     } finally {
       setGenerating(false);
-      setStopping(false);
+      if (
+        !stopRequestedRef.current ||
+        !visualizerRunIsActive(worksheetRef.current)
+      ) {
+        toastStopSavedIfNeeded();
+        stopRequestedRef.current = false;
+        setStopping(false);
+      }
       invalidateCredits();
     }
   };
 
   const stopGeneration = async () => {
     if (!workspace || !session || stopping) return;
+    stopRequestedRef.current = true;
     setStopping(true);
     try {
       await requestVisualizerGenerationStop({
@@ -1242,9 +1437,10 @@ export default function ProductsVisualizerPage() {
         sessionId: session.id,
       });
       toast.message(
-        "Stop requested. The current product will finish, then generation will stop."
+        "Stop requested. Products already sent to the AI will finish and be saved."
       );
     } catch (error) {
+      stopRequestedRef.current = false;
       setStopping(false);
       toast.error(
         error instanceof VisualizerApiError
@@ -1348,7 +1544,7 @@ export default function ProductsVisualizerPage() {
                 size="sm"
                 variant="outline"
                 className="gap-1.5 text-xs"
-                disabled={isExporting || generating}
+                disabled={isExporting || generating || stopping || !!generationRun}
                 onClick={() => void handleExport()}
               >
                 {isExporting ? (
@@ -1366,6 +1562,8 @@ export default function ProductsVisualizerPage() {
               disabled={
                 !canEdit ||
                 generating ||
+                stopping ||
+                !!generationRun ||
                 saveStatus === "saving" ||
                 saveStatus === "saved"
               }
@@ -1415,12 +1613,28 @@ export default function ProductsVisualizerPage() {
                 }}
                 options={[
                   { value: "none", label: "Not selected" },
-                  ...worksheet.columns.map((column) => ({
+                  ...imageColumnCandidates.map((column) => ({
                     value: column,
                     label: column,
                   })),
                 ]}
               />
+              {detectedImageColumns.length === 0 ? (
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  No worksheet column contains image URLs. Add a column of
+                  http(s) image links — the header name can be anything.
+                </p>
+              ) : settings.productImageColumn && !imageColumnIsValid ? (
+                <p className="text-[11px] leading-snug text-amber-600 dark:text-amber-400">
+                  This column is not image URLs. Pick a column whose cells are
+                  http(s) links.
+                </p>
+              ) : (
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  Only columns whose values are image URLs are listed. Generate
+                  stays disabled until one is selected.
+                </p>
+              )}
               <div className="overflow-hidden rounded-md border">
                 <div className="grid grid-cols-[auto_1fr] gap-x-2 border-b bg-muted/50 px-2.5 py-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                   <input
@@ -1777,7 +1991,7 @@ export default function ProductsVisualizerPage() {
                   </p>
                   <p className="text-[10px] text-muted-foreground">
                     {stopping
-                      ? "Finishing the current product before stopping"
+                      ? "Finishing products already sent to the AI, then saving."
                       : bannerCompleted > 0
                         ? `${bannerCompleted} of ${bannerTotal} done · Keep this page open`
                         : "Keep this page open until generation finishes"}
@@ -2693,63 +2907,88 @@ export default function ProductsVisualizerPage() {
           }
         }}
       >
-        <DialogContent className="overflow-hidden rounded-[24px] border-border/60 p-0 sm:max-w-lg">
+        <DialogContent className="overflow-hidden rounded-[24px] border-border/60 p-0 sm:max-w-xl">
           <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
           <div className="border-b bg-gradient-to-br from-[#400095]/10 via-[#F76D01]/5 to-transparent px-6 py-5">
             <DialogHeader>
-              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-[#400095] text-white dark:bg-[#F76D01]">
-                <Sparkles className="h-4 w-4" />
+              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]">
+                <Plus className="h-4 w-4" />
               </div>
-              <DialogTitle>New visualizer project</DialogTitle>
-              <DialogDescription>Upload a product worksheet to generate coordinated descriptions and lifestyle imagery.</DialogDescription>
+              <DialogTitle>Create visualizer project</DialogTitle>
+              <DialogDescription>
+                Upload a product worksheet to generate coordinated descriptions
+                and lifestyle imagery.
+              </DialogDescription>
             </DialogHeader>
           </div>
-          <div className="space-y-4 px-6 py-5">
+          <div className="space-y-5 px-6 py-5">
             <div className="space-y-1.5">
               <Label htmlFor="visualizer-project-name">Project name</Label>
               <Input
                 id="visualizer-project-name"
+                autoFocus
                 value={projectName}
                 onChange={(event) => setProjectName(event.target.value)}
-                placeholder="Summer collection descriptions"
+                placeholder="e.g. Summer collection"
                 maxLength={120}
-                className="h-10 rounded-xl bg-muted/35"
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="visualizer-file">Product worksheet</Label>
-              <Input
-                id="visualizer-file"
+              <Label>Product worksheet</Label>
+              <button
+                type="button"
+                onClick={() => createFileInputRef.current?.click()}
+                className={`flex min-h-32 w-full flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-4 text-center transition-colors ${
+                  uploadFile
+                    ? "border-[#400095]/40 bg-[#400095]/5 dark:border-[#F76D01]/40"
+                    : "hover:border-[#6B358D]/40 hover:bg-muted/30"
+                }`}
+              >
+                <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                  {uploadFile ? (
+                    <FileSpreadsheet className="h-4 w-4 text-[#6B358D] dark:text-[#F76D01]" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                </div>
+                <span className="max-w-full truncate text-xs font-medium">
+                  {uploadFile?.name || "Choose an Excel or CSV file"}
+                </span>
+                <span className="mt-1 text-[10px] text-muted-foreground">
+                  {uploadFile
+                    ? `${(uploadFile.size / 1024 / 1024).toFixed(2)} MB · Click to replace`
+                    : "XLSX, XLS, or CSV · Maximum 20 MB"}
+                </span>
+              </button>
+              <input
+                ref={createFileInputRef}
                 type="file"
-                accept=".xlsx,.xls,.csv"
-                className="h-10 rounded-xl"
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
                 onChange={(event) =>
-                  setUploadFile(event.target.files?.[0] ?? null)
+                  setUploadFile(event.target.files?.[0] || null)
                 }
               />
             </div>
           </div>
           <DialogFooter className="border-t bg-muted/20 px-6 py-4">
             <Button
-              type="button"
               variant="outline"
-              className="rounded-xl"
               disabled={creating}
               onClick={() => setShowCreate(false)}
             >
               Cancel
             </Button>
             <Button
-              type="button"
-              className="rounded-xl bg-[#400095] px-5 text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
-              disabled={
-                creating || !projectName.trim() || !uploadFile || !canEdit
-              }
+              className="gap-1.5 rounded-xl bg-[#400095] px-5 text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
+              disabled={!projectName.trim() || !uploadFile || creating || !canEdit}
               onClick={() => void createProject()}
             >
               {creating ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : null}
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}
               Create project
             </Button>
           </DialogFooter>

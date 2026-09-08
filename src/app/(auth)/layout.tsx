@@ -18,7 +18,7 @@ export default function AuthLayout({
             priority
           />
         </div>
-        <span className="font-bold text-lg tracking-tight">Autommerce Data Entry</span>
+        <span className="font-bold text-lg tracking-tight">Autommerce Platform</span>
       </div>
       <div className="w-full max-w-md">{children}</div>
     </div>

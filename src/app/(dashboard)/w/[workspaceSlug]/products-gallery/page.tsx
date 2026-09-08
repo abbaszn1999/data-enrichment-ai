@@ -76,6 +76,7 @@ import {
   listGallerySessions,
   createGallerySession,
   getGallerySession,
+  getGalleryProgress,
   patchGallerySession,
   saveGallerySettings,
   generateGallery,
@@ -111,7 +112,13 @@ import {
   pendingImageDeleteKey,
   stripPendingImageDeletes as stripPendingDeletesFromWorksheet,
 } from "@/lib/gallery/pending-image-deletes";
-import { mergePolledGenerationWorksheet } from "@/lib/gallery/generation-worksheet-merge";
+import {
+  adoptIncomingGenerationWorksheet,
+  galleryRowIsBusy,
+  galleryRunIsActive,
+  mergePolledGenerationWorksheet,
+} from "@/lib/gallery/generation-worksheet-merge";
+import { maxRevision, snapshotRevision } from "@/lib/jobs/snapshot-clock";
 
 type ImageUploadPreview = {
   name: string;
@@ -380,6 +387,9 @@ export default function ProductsGalleryPage() {
   const currentSettingsSignatureRef = useRef("");
   const worksheetRevisionRef = useRef(0);
   const settingsRevisionRef = useRef(0);
+  const worksheetRef = useRef<GalleryWorksheetJson | null>(null);
+  const stopRequestedRef = useRef(false);
+  const stopSavedToastRef = useRef(false);
   const lastSavedRowSignatureRef = useRef("");
   const aiAssetPathsRef = useRef<{
     logoPath: string | null;
@@ -684,6 +694,9 @@ export default function ProductsGalleryPage() {
   ) => {
     const worksheetToSave = worksheetOverride ?? worksheet;
     if (!workspace || !projectId || !canEdit || !worksheetToSave) return null;
+    if (generationRun || isGenerating || isStoppingGeneration) {
+      return worksheetToSave;
+    }
     const settings = buildSettingsPatch();
     const signature = JSON.stringify(settings);
     if (signature === lastSavedSettingsSignatureRef.current) {
@@ -741,6 +754,9 @@ export default function ProductsGalleryPage() {
     buildSettingsPatch,
     canEdit,
     enqueueMutation,
+    generationRun,
+    isGenerating,
+    isStoppingGeneration,
     projectId,
     workspace,
     worksheet,
@@ -1014,6 +1030,8 @@ export default function ProductsGalleryPage() {
       setEditingRowId(null);
       setRowDraft(null);
       setGenerationRun(null);
+      worksheetRevisionRef.current = 0;
+      worksheetRef.current = null;
       return;
     }
     let cancelled = false;
@@ -1021,6 +1039,8 @@ export default function ProductsGalleryPage() {
     setWorksheet(null);
     setSignedUrls({});
     setSelectedRowIds(new Set());
+    worksheetRevisionRef.current = 0;
+    worksheetRef.current = null;
     setEditingRowId(null);
     setRowDraft(null);
     setGenerationRun(null);
@@ -1071,6 +1091,16 @@ export default function ProductsGalleryPage() {
     };
   }, [workspace?.id, projectId, hasWorksheet]);
 
+  useEffect(() => {
+    worksheetRef.current = worksheet;
+  }, [worksheet]);
+
+  const toastStopSavedIfNeeded = useCallback(() => {
+    if (!stopRequestedRef.current || stopSavedToastRef.current) return;
+    stopSavedToastRef.current = true;
+    toast.success("Stopped. Products already sent to the AI were saved.");
+  }, []);
+
   const shouldPollGeneration = isGenerating || generationRun !== null;
   const lastCreditsProgressRef = useRef(0);
   useEffect(() => {
@@ -1085,68 +1115,150 @@ export default function ProductsGalleryPage() {
 
     const pollProgress = async () => {
       try {
-        const fresh = await getGallerySession(workspace.id, projectId, {
-          includeSignedUrls: false,
-        });
+        const progress = await getGalleryProgress(workspace.id, projectId);
         if (cancelled) return;
-        if (!fresh.worksheet) return;
-        const freshWorksheet = fresh.worksheet;
-        worksheetRevisionRef.current = Number(
-          fresh.session.worksheet_revision ?? worksheetRevisionRef.current
+        setActiveSession((current) =>
+          current && current.id === progress.sessionId
+            ? {
+                ...current,
+                status: progress.status,
+                ready_rows: progress.readyRows,
+                failed_rows: progress.failedRows,
+                cancel_requested: progress.cancelRequested,
+                worksheet_revision: progress.worksheetRevision,
+              }
+            : current
         );
-        setActiveSession(fresh.session);
         setSessions((current) =>
           current.map((session) =>
-            session.id === fresh.session.id ? fresh.session : session
+            session.id === progress.sessionId
+              ? {
+                  ...session,
+                  status: progress.status,
+                  ready_rows: progress.readyRows,
+                  failed_rows: progress.failedRows,
+                  cancel_requested: progress.cancelRequested,
+                  worksheet_revision: progress.worksheetRevision,
+                }
+              : session
           )
         );
-        const mergedFresh = stripPendingDeletesFromWorksheet(
-          freshWorksheet,
-          pendingImageDeletesRef.current
-        );
-        setWorksheet((current) => {
-          if (!current) return mergedFresh;
-          const merged = mergePolledGenerationWorksheet({
-            local: current,
-            polled: mergedFresh,
-            clientRunActive: isGenerating,
-          });
-          return {
-            ...current,
-            rows: merged.rows,
-            activeRun: merged.activeRun,
-            revision: merged.revision,
-          };
-        });
-        const run = mergedFresh.activeRun;
-        if (run && (run.status === "running" || run.status === "queued")) {
-          const done = run.completed + run.failed;
+        const done = progress.completed + progress.failed;
+        const jobStillRunning =
+          progress.jobStatus === "running" ||
+          progress.jobStatus === "queued" ||
+          progress.status === "processing";
+        const localWorksheet = worksheetRef.current;
+        const localBusy = (localWorksheet?.rows ?? []).some(galleryRowIsBusy);
+        const localRunActive = galleryRunIsActive(localWorksheet);
+        if (jobStillRunning) {
           setGenerationRun({
-            total: run.total,
+            total: progress.total,
             completed: done,
-            runId: run.id,
+            runId: progress.jobId || "",
           });
-          if (done > lastCreditsProgressRef.current) {
-            lastCreditsProgressRef.current = done;
-            invalidateCredits();
-          }
-          if (fresh.session.cancel_requested) {
+          if (progress.cancelRequested) {
+            stopRequestedRef.current = true;
             setIsStoppingGeneration(true);
           }
-        } else if (!isGenerating) {
-          if (lastCreditsProgressRef.current > 0 || run) {
-            invalidateCredits();
-          }
-          // Do not clear generationRun while the client request is still in flight —
-          // that was causing the Processing banner to disappear mid-run.
+        } else if (!isGenerating && !localBusy && !localRunActive) {
+          if (lastCreditsProgressRef.current > 0) invalidateCredits();
+          toastStopSavedIfNeeded();
+          stopRequestedRef.current = false;
           setGenerationRun(null);
           setIsStoppingGeneration(false);
+        }
+        const newlyDone = done > lastCreditsProgressRef.current;
+        if (newlyDone) {
+          lastCreditsProgressRef.current = done;
+          invalidateCredits();
+        }
+        const serverRevision = snapshotRevision(progress.worksheetRevision);
+        const needsWorksheet =
+          serverRevision > worksheetRevisionRef.current ||
+          (!jobStillRunning && (localBusy || localRunActive));
+        if (needsWorksheet) {
+          const fresh = await getGallerySession(workspace.id, projectId, {
+            includeSignedUrls: false,
+          });
+          if (cancelled || !fresh.worksheet) return;
+          const freshWorksheet = stripPendingDeletesFromWorksheet(
+            fresh.worksheet,
+            pendingImageDeletesRef.current
+          );
+          worksheetRevisionRef.current = maxRevision(
+            worksheetRevisionRef.current,
+            fresh.session.worksheet_revision,
+            freshWorksheet.revision,
+            progress.worksheetRevision
+          );
+          const missingSignIds = freshWorksheet.rows
+            .filter((row) => row.status === "ready")
+            .map((row) => row.id);
+          setActiveSession((current) => {
+            const next = fresh.session;
+            if (!current || current.id !== next.id) return next;
+            return {
+              ...next,
+              worksheet_revision: maxRevision(
+                current.worksheet_revision,
+                next.worksheet_revision
+              ),
+            };
+          });
+          setWorksheet((current) => {
+            const applied = current
+              ? mergePolledGenerationWorksheet({
+                  local: current,
+                  polled: freshWorksheet,
+                  clientRunActive: isGenerating,
+                })
+              : freshWorksheet;
+            const next = {
+              ...(current ?? applied),
+              rows: applied.rows,
+              activeRun: applied.activeRun,
+              revision: applied.revision,
+            };
+            worksheetRef.current = next;
+            return next;
+          });
+          if (!jobStillRunning && !isGenerating) {
+            const applied = worksheetRef.current;
+            if (
+              applied &&
+              !applied.rows.some(galleryRowIsBusy) &&
+              !galleryRunIsActive(applied)
+            ) {
+              toastStopSavedIfNeeded();
+              stopRequestedRef.current = false;
+              setGenerationRun(null);
+              setIsStoppingGeneration(false);
+            }
+          }
+          if (missingSignIds.length > 0) {
+            getGallerySession(workspace.id, projectId, {
+              includeSignedUrls: false,
+              signRowIds: missingSignIds,
+            })
+              .then((withUrls) => {
+                if (!cancelled && withUrls.signedUrls) {
+                  setSignedUrls((current) => ({
+                    ...current,
+                    ...withUrls.signedUrls,
+                  }));
+                }
+              })
+              .catch(() => {
+                // Next revision or a manual refresh retries this.
+              });
+          }
         }
       } catch {
         // The next poll or the final generate response will recover.
       } finally {
         if (!cancelled) {
-          timer = setTimeout(pollProgress, 750);
+          timer = setTimeout(pollProgress, 2_000);
         }
       }
     };
@@ -1161,6 +1273,7 @@ export default function ProductsGalleryPage() {
     isGenerating,
     projectId,
     shouldPollGeneration,
+    toastStopSavedIfNeeded,
     workspace?.id,
   ]);
 
@@ -1423,6 +1536,7 @@ export default function ProductsGalleryPage() {
     ) {
       return;
     }
+    stopRequestedRef.current = true;
     setIsStoppingGeneration(true);
     try {
       await requestGalleryGenerationStop({
@@ -1430,9 +1544,10 @@ export default function ProductsGalleryPage() {
         sessionId: projectId,
       });
       toast.message(
-        "Stop requested. The current product will finish, then generation will stop."
+        "Stop requested. Products already sent to the AI will finish and be saved."
       );
     } catch (error) {
+      stopRequestedRef.current = false;
       setIsStoppingGeneration(false);
       toast.error(
         error instanceof Error ? error.message : "Could not request stop"
@@ -1514,6 +1629,8 @@ export default function ProductsGalleryPage() {
       }
     }
 
+    stopRequestedRef.current = false;
+    stopSavedToastRef.current = false;
     setIsStoppingGeneration(false);
     setIsGenerating(true);
     const worksheetBeforeGeneration = worksheet;
@@ -1576,6 +1693,11 @@ export default function ProductsGalleryPage() {
         settingsSnapshot,
         worksheetSnapshot: worksheet!,
         worksheetRevision: worksheetRevisionRef.current,
+        imagesPerRow:
+          Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4,
+        mainImagesPerRow:
+          Number(activeTab === "scraping" ? scrapingMainImages : aiMainImages) ||
+          1,
         // Mixed selections omit runPhase so the server resolves per row.
         ...(selectionPhase.phase === "mixed"
           ? {}
@@ -1583,28 +1705,43 @@ export default function ProductsGalleryPage() {
       });
       receivedResult = true;
       if (result.worksheet) {
-        setWorksheet(result.worksheet);
-        if (result.signedUrls) setSignedUrls(result.signedUrls);
-        if (
-          result.worksheet.activeRun &&
-          (result.worksheet.activeRun.status === "running" ||
-            result.worksheet.activeRun.status === "queued")
-        ) {
+        const incoming = stripPendingImageDeletes(result.worksheet);
+        setWorksheet((current) => {
+          const next = adoptIncomingGenerationWorksheet(current, incoming);
+          worksheetRef.current = next;
+          return next;
+        });
+        if (result.signedUrls) {
+          setSignedUrls((current) => ({ ...current, ...result.signedUrls }));
+        }
+        if (galleryRunIsActive(worksheetRef.current)) {
+          const run = worksheetRef.current!.activeRun!;
           setGenerationRun({
-            total: result.worksheet.activeRun.total,
-            completed:
-              result.worksheet.activeRun.completed + result.worksheet.activeRun.failed,
-            runId: result.worksheet.activeRun.id,
+            total: run.total,
+            completed: run.completed + run.failed,
+            runId: run.id,
           });
-        } else {
+        } else if (result.status === "cancelled") {
           setGenerationRun(null);
         }
       }
       if (result.session) {
-        worksheetRevisionRef.current = Number(
-          result.session.worksheet_revision ?? worksheetRevisionRef.current
+        worksheetRevisionRef.current = maxRevision(
+          worksheetRevisionRef.current,
+          result.session.worksheet_revision
         );
-        setActiveSession(result.session);
+        setActiveSession((current) => {
+          if (!current || current.id !== result.session!.id) {
+            return result.session!;
+          }
+          return {
+            ...result.session!,
+            worksheet_revision: maxRevision(
+              current.worksheet_revision,
+              result.session!.worksheet_revision
+            ),
+          };
+        });
         setSessions((current) => {
           const idx = current.findIndex((s) => s.id === result.session!.id);
           if (idx < 0) return [result.session!, ...current];
@@ -1614,7 +1751,10 @@ export default function ProductsGalleryPage() {
         });
       }
       if (result.status === "cancelled") {
-        toast.message("Generation cancelled");
+        toastStopSavedIfNeeded();
+        if (!stopSavedToastRef.current) {
+          toast.message("Generation cancelled");
+        }
       } else if (result.status === "running") {
         toast.message("Generation is running in the background", {
           description: "You can leave this page. We'll notify you when it finishes.",
@@ -1636,7 +1776,14 @@ export default function ProductsGalleryPage() {
       }
     } finally {
       setIsGenerating(false);
-      setIsStoppingGeneration(false);
+      if (
+        !stopRequestedRef.current ||
+        !galleryRunIsActive(worksheetRef.current)
+      ) {
+        toastStopSavedIfNeeded();
+        stopRequestedRef.current = false;
+        setIsStoppingGeneration(false);
+      }
       invalidateCredits();
       if (receivedResult) {
         return;
@@ -1663,6 +1810,8 @@ export default function ProductsGalleryPage() {
 
   const retryRow = async (rowId: string) => {
     if (!workspace || !projectId || !canEdit) return;
+    stopRequestedRef.current = false;
+    stopSavedToastRef.current = false;
     setIsStoppingGeneration(false);
     setIsGenerating(true);
     setGenerationRun({ total: 1, completed: 0 });
@@ -1721,31 +1870,53 @@ export default function ProductsGalleryPage() {
         worksheetSnapshot: worksheet!,
         worksheetRevision: worksheetRevisionRef.current,
         retryFailed: true,
+        imagesPerRow:
+          Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4,
+        mainImagesPerRow:
+          Number(activeTab === "scraping" ? scrapingMainImages : aiMainImages) ||
+          1,
         ...(retryPhase.phase === "mixed"
           ? {}
           : { runPhase: retryPhase.phase }),
       });
       receivedResult = true;
-      if (result.worksheet) setWorksheet(result.worksheet);
-      if (result.signedUrls) setSignedUrls(result.signedUrls);
-      if (
-        result.worksheet?.activeRun &&
-        (result.worksheet.activeRun.status === "running" ||
-          result.worksheet.activeRun.status === "queued")
-      ) {
+      if (result.worksheet) {
+        const incoming = stripPendingImageDeletes(result.worksheet);
+        setWorksheet((current) => {
+          const next = adoptIncomingGenerationWorksheet(current, incoming);
+          worksheetRef.current = next;
+          return next;
+        });
+      }
+      if (result.signedUrls) {
+        setSignedUrls((current) => ({ ...current, ...result.signedUrls }));
+      }
+      if (galleryRunIsActive(worksheetRef.current)) {
+        const run = worksheetRef.current!.activeRun!;
         setGenerationRun({
-          total: result.worksheet.activeRun.total,
-          completed:
-            result.worksheet.activeRun.completed + result.worksheet.activeRun.failed,
-          runId: result.worksheet.activeRun.id,
+          total: run.total,
+          completed: run.completed + run.failed,
+          runId: run.id,
         });
         toast.message("Generation is running in the background");
       }
       if (result.session) {
-        worksheetRevisionRef.current = Number(
-          result.session.worksheet_revision ?? worksheetRevisionRef.current
+        worksheetRevisionRef.current = maxRevision(
+          worksheetRevisionRef.current,
+          result.session.worksheet_revision
         );
-        setActiveSession(result.session);
+        setActiveSession((current) => {
+          if (!current || current.id !== result.session!.id) {
+            return result.session!;
+          }
+          return {
+            ...result.session!,
+            worksheet_revision: maxRevision(
+              current.worksheet_revision,
+              result.session!.worksheet_revision
+            ),
+          };
+        });
         setSessions((current) => {
           const idx = current.findIndex((s) => s.id === result.session!.id);
           if (idx < 0) return current;
@@ -1758,7 +1929,14 @@ export default function ProductsGalleryPage() {
       toast.error((err as Error)?.message || "Retry failed");
     } finally {
       setIsGenerating(false);
-      setIsStoppingGeneration(false);
+      if (
+        !stopRequestedRef.current ||
+        !galleryRunIsActive(worksheetRef.current)
+      ) {
+        toastStopSavedIfNeeded();
+        stopRequestedRef.current = false;
+        setIsStoppingGeneration(false);
+      }
       invalidateCredits();
     }
   };
@@ -1778,7 +1956,8 @@ export default function ProductsGalleryPage() {
       !canEdit ||
       savingRowId ||
       generationRun ||
-      isGenerating
+      isGenerating ||
+      isStoppingGeneration
     ) return null;
     const signature = JSON.stringify(draft.originalData);
     if (signature === lastSavedRowSignatureRef.current) return worksheet;
@@ -1825,6 +2004,7 @@ export default function ProductsGalleryPage() {
     enqueueMutation,
     generationRun,
     isGenerating,
+    isStoppingGeneration,
     projectId,
     savingRowId,
     workspace,
@@ -1868,6 +2048,10 @@ export default function ProductsGalleryPage() {
   };
 
   const saveAndLeave = async () => {
+    if (generationRun || isGenerating || isStoppingGeneration) {
+      toast.message("Wait until generation finishes before saving.");
+      return;
+    }
     try {
       let latestWorksheet = worksheet;
       if (rowDraft) {
@@ -2342,6 +2526,7 @@ export default function ProductsGalleryPage() {
                 saveStatus === "saved" ||
                 !!generationRun ||
                 isGenerating ||
+                isStoppingGeneration ||
                 !!editingRowId
               }
               onClick={() => {
@@ -2375,7 +2560,7 @@ export default function ProductsGalleryPage() {
               variant="outline"
               size="sm"
               className="h-8 gap-1.5 rounded-lg border-border/60 text-[10px]"
-              disabled={isExporting || !worksheet || !!generationRun || isGenerating}
+              disabled={isExporting || !worksheet || !!generationRun || isGenerating || isStoppingGeneration}
               onClick={handleExport}
             >
               {isExporting ? (
@@ -3247,7 +3432,7 @@ export default function ProductsGalleryPage() {
                     </p>
                     <p className="text-[10px] text-muted-foreground">
                       {isStoppingGeneration
-                        ? "Finishing the current product before stopping"
+                        ? "Finishing products already sent to the AI, then saving."
                         : bannerCompleted > 0
                           ? `${bannerCompleted} of ${bannerTotal} done · Keep this page open`
                           : "Keep this page open until generation finishes"}

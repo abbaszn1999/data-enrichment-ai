@@ -2,13 +2,15 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { runEnrichSession } from "./enrich-session";
 import { runGallerySession } from "./gallery-session";
 import { runVisualizerSession } from "./visualizer-session";
+import { runMrExtractSession } from "./mr-extract-session";
 import { loadJobRun } from "./repo";
 import type { JobKind } from "./types";
 
 export function workflowTaskName(kind: JobKind): string {
   if (kind === "catalog") return "enrichSession";
   if (kind === "gallery") return "gallerySession";
-  return "visualizerSession";
+  if (kind === "visualizer") return "visualizerSession";
+  return "mrExtractSession";
 }
 
 export async function runOrchestrator(runId: string, kind?: JobKind): Promise<void> {
@@ -23,6 +25,10 @@ export async function runOrchestrator(runId: string, kind?: JobKind): Promise<vo
   }
   if (resolved === "visualizer") {
     await runVisualizerSession(runId);
+    return;
+  }
+  if (resolved === "mr_extract") {
+    await runMrExtractSession(runId);
     return;
   }
   await runEnrichSession(runId);

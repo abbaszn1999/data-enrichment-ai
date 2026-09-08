@@ -27,8 +27,8 @@ describe("ledger query helpers", () => {
 
   it("builds quoted in() filters and or() lists", () => {
     expect(postgrestIn("user_id", [])).toBeNull();
-    expect(postgrestIn("module", ["Market Research", "Sync"])).toBe(
-      'module.in.("Market Research","Sync")'
+    expect(postgrestIn("module", ["market-research", "growth-sync"])).toBe(
+      'module.in.("market-research","growth-sync")'
     );
     expect(postgrestOr([null, 'user_id.in.("a")', 'workspace_id.in.("b")'])).toBe(
       'user_id.in.("a"),workspace_id.in.("b")'

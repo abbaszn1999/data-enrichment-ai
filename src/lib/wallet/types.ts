@@ -21,12 +21,20 @@ export type WalletAutoReload = {
   amount: number;
 };
 
+export type WalletSummaries = {
+  spent7: number;
+  spent30: number;
+  byModule: { module: string; amount: number }[];
+  lastTopup: WalletTx | null;
+};
+
 export type WalletState = {
   balance: number;
   currency: "USD";
   transactions: WalletTx[];
   autoReload: WalletAutoReload;
   allowDevTopup: boolean;
+  summaries?: WalletSummaries;
 };
 
 export type WalletRpcResult = {

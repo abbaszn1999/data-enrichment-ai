@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isAdminInternalPath, isAdminPublicPath } from "@/lib/platform-admin/paths";
+import { jwtSecretFromEnv, verifySupabaseAccessToken } from "@/lib/auth/verify-jwt";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -54,14 +55,32 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse;
   }
 
-  // Use getSession() instead of getUser() — reads from cookies locally,
-  // no network round-trip to Supabase auth servers (~400-800ms saved per navigation)
+  // Check session
   const {
     data: { session },
   } = await supabase.auth.getSession();
 
-  // If not logged in, redirect to login
-  if (!session?.user) {
+  const secret = jwtSecretFromEnv();
+  let isAuthenticated = false;
+
+  if (session?.access_token && secret) {
+    const verified = verifySupabaseAccessToken(session.access_token, secret);
+    if (verified) {
+      isAuthenticated = true;
+    }
+  }
+
+  // Fallback to auth server check if secret is not configured or token expired/unverified
+  if (!isAuthenticated) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      isAuthenticated = true;
+    }
+  }
+
+  if (!isAuthenticated) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirect", pathname);
