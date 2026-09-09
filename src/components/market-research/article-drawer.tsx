@@ -214,8 +214,16 @@ export function ArticleDrawer({
             </p>
           ) : (
             <p className="text-[11px] text-muted-foreground">
-              {row.linksOut.length} internal link
-              {row.linksOut.length === 1 ? "" : "s"} placed ·{" "}
+              {(() => {
+                const linkCount =
+                  row.linksOut.length + (row.skuLinks?.length ?? 0);
+                return (
+                  <>
+                    {linkCount} internal link
+                    {linkCount === 1 ? "" : "s"} placed ·{" "}
+                  </>
+                );
+              })()}
               {article.images.length} image
               {article.images.length === 1 ? "" : "s"}
             </p>

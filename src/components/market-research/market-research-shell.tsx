@@ -25,18 +25,23 @@ import {
   buildContentPlanApi,
   cancelExtractApi,
   chatAgentApi,
-  classifyIntentApi,
-  clusterCollectionsApi,
   createMrProjectApi,
   deleteMrProjectApi,
   fetchStoreBlogsApi,
-  generateOnPageApi,
   generateSeedsApi,
   loadMrStateApi,
+  loadProjectProductsApi,
   pollExtractApi,
   extractStatusApi,
   probeSeedsApi,
   pushCollectionsApi,
+  runBuildInternalLinksLoop,
+  runClassifyArchiveLoop,
+  runClusterCollectionsLoop,
+  runEmbedProductsLoop,
+  runEmbedTermsLoop,
+  runOnPageGenerationLoop,
+  runProductsFetchLoop,
   saveMrStateApi,
   startExtractApi,
   syncArticlesApi,
@@ -57,6 +62,7 @@ import {
 } from "@/lib/market-research/map-keywords";
 import type {
   CollectionContent,
+  CollectionLink,
   ExtractedKeyword,
   MarketResearchProduct,
   ProposedCollection,
@@ -311,6 +317,25 @@ export function MarketResearchShell() {
   const [productsByProject, setProductsByProject] = useState<
     Record<string, MarketResearchProduct[]>
   >({});
+  /**
+   * Real fetched-per-collection product counts from the paginated fetch
+   * (Tab 2 -> 3), keyed by collectionId. Not persisted/autosaved — it's a
+   * display cache; the source of truth is the sharded products manifest.
+   */
+  const [productCountByCollectionIdByProject, setProductCountByCollectionIdByProject] =
+    useState<Record<string, Record<string, number>>>({});
+  const [productFetchProgressByProject, setProductFetchProgressByProject] =
+    useState<Record<string, { fetched: number; done: boolean } | undefined>>({});
+  /** Product embedding pass, driven alongside the Apify extract poll (Tab 3 -> 4). */
+  const [productEmbedProgressByProject, setProductEmbedProgressByProject] = useState<
+    Record<string, { embedded: number; total: number; done: boolean } | undefined>
+  >({});
+  /** Category-term embedding pass, driven during the Tab 4 -> 5 loading. */
+  const [termEmbedProgressByProject, setTermEmbedProgressByProject] = useState<
+    Record<string, { embedded: number; total: number; done: boolean } | undefined>
+  >({});
+  const productEmbedGen = useRef<Record<string, number>>({});
+  const termEmbedGen = useRef<Record<string, number>>({});
   const [seedRowsByProject, setSeedRowsByProject] = useState<
     Record<string, MockSeedRow[]>
   >({});
@@ -375,12 +400,38 @@ export function MarketResearchShell() {
   const [extractProgress, setExtractProgress] = useState(0);
   const [seedProgress, setSeedProgress] = useState<SeedExtractProgress[]>([]);
   const [analyzeLoading, setAnalyzeLoading] = useState(false);
+  const [analyzeProgress, setAnalyzeProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [clustering, setClustering] = useState(false);
+  /** Live progress across the Stage 5 cluster cursor job's offset pages. */
+  const [clusterProgress, setClusterProgress] = useState<{
+    processed: number;
+    total: number;
+  } | null>(null);
   const [generating, setGenerating] = useState(false);
   const [strategyLoading, setStrategyLoading] = useState(false);
   const [contentByIdByProject, setContentByIdByProject] = useState<
     Record<string, Record<string, CollectionContent>>
   >({});
+  /**
+   * Internal link graph, precomputed in the background right after collections
+   * are pushed to the store (see handlePushToStore) so the "Links" column in
+   * Tab 6 is already filled by the time the user opens it. Keyed by
+   * collectionId, per project.
+   */
+  const [internalLinksByProject, setInternalLinksByProject] = useState<
+    Record<string, Record<string, CollectionLink[]>>
+  >({});
+  /** Live progress across the background internal-link cursor job's pages. */
+  const [linksBuildProgressByProject, setLinksBuildProgressByProject] =
+    useState<Record<string, { processed: number; total: number } | null>>({});
+  /** Live progress across the Stage 6 on-page copywriting cursor job's pages. */
+  const [contentGenProgress, setContentGenProgress] = useState<{
+    processed: number;
+    total: number;
+  } | null>(null);
   const [strategyByProject, setStrategyByProject] = useState<
     Record<string, StrategyArticle[]>
   >({});
@@ -413,6 +464,7 @@ export function MarketResearchShell() {
   const analyzeGen = useRef(0);
   const clusterGen = useRef(0);
   const contentGen = useRef(0);
+  const linksGen = useRef<Record<string, number>>({});
   const strategyGen = useRef(0);
   const analysisGen = useRef(0);
   const stage2Gen = useRef(0);
@@ -562,7 +614,13 @@ export function MarketResearchShell() {
       seedSelectionByProject,
       nichesByProject,
       structuredNichesByProject,
-      productsByProject,
+      // Never round-tripped through autosave: a project's real product
+      // records can run into the tens of thousands, far past what a JSON
+      // blob (or localStorage) should carry, and a stale client copy could
+      // clobber the sharded `products-shards/` store that is now the real
+      // source of truth. `productsByProject` stays purely in-memory,
+      // populated on demand via `loadProjectProductsApi` for display only.
+      productsByProject: {},
       seedRowsByProject,
       marketByProject,
       probesByProject,
@@ -599,7 +657,6 @@ export function MarketResearchShell() {
       seedSelectionByProject,
       nichesByProject,
       structuredNichesByProject,
-      productsByProject,
       seedRowsByProject,
       marketByProject,
       probesByProject,
@@ -905,6 +962,16 @@ export function MarketResearchShell() {
     if (!activeProject) return {};
     return contentByIdByProject[activeProject.id] ?? {};
   }, [activeProject, contentByIdByProject]);
+
+  const internalLinksById = useMemo(() => {
+    if (!activeProject) return {};
+    return internalLinksByProject[activeProject.id] ?? {};
+  }, [activeProject, internalLinksByProject]);
+
+  const linksBuildProgress = useMemo(() => {
+    if (!activeProject) return null;
+    return linksBuildProgressByProject[activeProject.id] ?? null;
+  }, [activeProject, linksBuildProgressByProject]);
 
   // Read off the content itself rather than a session flag, so the button stays
   // off after a refresh and comes back on the moment copy is regenerated or a
@@ -1491,23 +1558,32 @@ export function MarketResearchShell() {
 
       const currentStructured =
         structuredNichesByProject[projectId] ?? MOCK_NICHES;
+      const selectedIdSet = new Set(collectionIds);
       const selectedScopeCollections: Array<{
         id: string;
         name: string;
         description?: string;
         productCount: number;
         parentNicheName: string;
+        nicheFullySelected: boolean;
       }> = [];
 
       for (const niche of currentStructured) {
+        // Whole niche was picked as a unit (Stage 2's "select all" toggle)
+        // vs. the customer hand-picked only some of its PLPs.
+        const nicheFullySelected =
+          niche.collections.length > 0 &&
+          niche.collections.every((c) => selectedIdSet.has(c.id));
+
         for (const col of niche.collections) {
-          if (collectionIds.includes(col.id)) {
+          if (selectedIdSet.has(col.id)) {
             selectedScopeCollections.push({
               id: col.id,
               name: col.name,
               description: col.description,
               productCount: col.productCount,
               parentNicheName: niche.name,
+              nicheFullySelected,
             });
           }
         }
@@ -1563,12 +1639,6 @@ export function MarketResearchShell() {
           const rows = res.seedRows;
           const rowIds = new Set(rows.map((r) => r.id));
           setSeedRowsByProject((prev) => ({ ...prev, [projectId]: rows }));
-          if (Array.isArray(res.products) && res.products.length > 0) {
-            setProductsByProject((prev) => ({
-              ...prev,
-              [projectId]: res.products!,
-            }));
-          }
           setStage3ScopeByProject((prev) => ({
             ...prev,
             [projectId]: [...collectionIds],
@@ -1579,6 +1649,55 @@ export function MarketResearchShell() {
             const kept = current.filter((id) => rowIds.has(id));
             return { ...prev, [projectId]: kept };
           });
+
+          // Real product records are no longer returned inline (a selected
+          // collection can hold 20,000+ SKUs) — page through the real
+          // catalog now, in the same loading state, so the Products column
+          // and later embedding passes have real fetched counts rather than
+          // the catalog's advertised number.
+          const scopeForFetch =
+            selectedScopeCollections.length > 0
+              ? selectedScopeCollections
+              : collectionIds.map((cid) => ({ id: cid, name: cid }));
+
+          setProductFetchProgressByProject((prev) => ({
+            ...prev,
+            [projectId]: { fetched: 0, done: false },
+          }));
+
+          try {
+            const productCountByCollectionId = await runProductsFetchLoop(
+              workspaceId,
+              projectId,
+              scopeForFetch,
+              (state) => {
+                if (stage3Gen.current !== gen) return;
+                setProductFetchProgressByProject((prev) => ({
+                  ...prev,
+                  [projectId]: { fetched: state.totalFetched, done: state.done },
+                }));
+              },
+              () => stage3Gen.current !== gen
+            );
+            if (stage3Gen.current === gen) {
+              setProductCountByCollectionIdByProject((prev) => ({
+                ...prev,
+                [projectId]: productCountByCollectionId,
+              }));
+            }
+          } catch (fetchErr) {
+            console.error("[startStage3Prep] Product fetch failed:", fetchErr);
+          }
+
+          // Best-effort display snapshot for the Tab 5 products sheet. Never
+          // autosaved back — the sharded store is the source of truth.
+          void loadProjectProductsApi(workspaceId, projectId)
+            .then((products) => {
+              if (stage3Gen.current !== gen) return;
+              setProductsByProject((prev) => ({ ...prev, [projectId]: products }));
+            })
+            .catch((err) => console.error("[startStage3Prep] Product snapshot load failed:", err));
+
           setPreparingStage3(false);
           setStage3ReadyIds((prev) => {
             const next = new Set(prev);
@@ -1853,10 +1972,14 @@ export function MarketResearchShell() {
     }
   };
 
-  const handleAddManualSeed = (term: string, canonicalKey: string) => {
+  const handleAddManualSeed = (term: string, collectionId: string) => {
     if (!canEdit || !activeProject) return;
+    // Keyed by collectionId, not the canonical NAME — two different PLPs can
+    // legitimately share the same canonical seed name (e.g. two collections
+    // that both distill to "Smartphones"), so only the PLP id reliably
+    // identifies which family the term should join.
     const reference = stage3Rows.find(
-      (row) => row.canonicalNicheSeed === canonicalKey
+      (row) => row.collectionId === collectionId
     );
     if (!reference) return;
     const row = createManualSeedRow(term, reference);
@@ -1871,7 +1994,7 @@ export function MarketResearchShell() {
     clearCommitment(activeProject.id);
     appendAgent(
       activeProject.id,
-      `Added “${term}” to the ${canonicalKey} family as your own broad seed. It has no demand data yet — run a check when you’re ready.`
+      `Added “${term}” to the ${reference.canonicalNicheSeed} family (${reference.selectedCollection}) as your own broad seed. It has no demand data yet — run a check when you’re ready.`
     );
   };
 
@@ -2071,6 +2194,39 @@ export function MarketResearchShell() {
         pulled: 0,
       }))
     );
+
+    // Embed the products behind the selected terms now, in the same loading
+    // state as the Apify extract poll below — the two have nothing to do
+    // with each other, so running them together uses otherwise-dead wait
+    // time instead of adding a second sequential wait after extraction.
+    const embedGenId = (productEmbedGen.current[projectId] ?? 0) + 1;
+    productEmbedGen.current[projectId] = embedGenId;
+    const embedCollectionIds = Array.from(
+      new Set(seeds.map((seed) => seed.collectionId).filter(Boolean))
+    );
+    if (embedCollectionIds.length > 0) {
+      setProductEmbedProgressByProject((prev) => ({
+        ...prev,
+        [projectId]: { embedded: 0, total: 0, done: false },
+      }));
+      void runEmbedProductsLoop(
+        workspaceId,
+        projectId,
+        embedCollectionIds,
+        (state) => {
+          if (productEmbedGen.current[projectId] !== embedGenId) return;
+          setProductEmbedProgressByProject((prev) => ({
+            ...prev,
+            [projectId]: {
+              embedded: (prev[projectId]?.embedded ?? 0) + state.embedded,
+              total: state.total,
+              done: state.done,
+            },
+          }));
+        },
+        () => productEmbedGen.current[projectId] !== embedGenId
+      ).catch((err) => console.error("[handleExtract] Product embedding pass failed:", err));
+    }
 
     try {
       const started = await startExtractApi(
@@ -2276,49 +2432,44 @@ export function MarketResearchShell() {
 
     const gen = ++analyzeGen.current;
     setAnalyzeLoading(true);
+    setAnalyzeProgress({ done: 0, total: currentKws.length });
 
+    // Classification now runs server-side as a cursor job over the FULL
+    // extract archive (not just this browser's capped 1.5k sample) — a
+    // 20k-keyword extract is 40+ pages at 500/page, each internally batched
+    // at 100 keywords/batch with concurrency 5. The client just loops on
+    // `offset` until `done`, same pattern as the Apify extract poll.
     try {
-      const parentNiches = (nichesByProject[projectId] ?? activeNiches).map((n) => n.name);
-      const collectionNames = Array.from(
-        new Set(stage3Rows.map((r) => r.selectedCollection).filter(Boolean))
-      );
-
-      const res = await classifyIntentApi(
+      const result = await runClassifyArchiveLoop(
         workspaceId,
         projectId,
-        currentKws.map((k) => ({
-          id: k.id,
-          keyword: k.keyword,
-          seed: k.seed,
-          volume: k.volume,
-          difficulty: k.difficulty,
-        })),
-        { parentNiches, collections: collectionNames }
+        (state) => {
+          if (analyzeGen.current !== gen) return;
+          setAnalyzeProgress({ done: state.nextOffset, total: state.total });
+        },
+        () => analyzeGen.current !== gen
       );
-
       if (analyzeGen.current !== gen) return;
 
-      const classificationMap = new Map<string, (typeof res.classified)[number]>();
-      for (const item of res.classified) {
-        classificationMap.set(item.id, item);
+      if (!result) {
+        toast.error("Classification error", {
+          description: "Could not classify keywords. Please try again.",
+        });
+        return;
       }
 
-      setKeywordsByProject((prev) => {
-        const list = prev[projectId] ?? [];
-        const updated = list.map((k) => {
-          const match = classificationMap.get(k.id);
-          if (match) {
-            return {
-              ...k,
-              sheet: match.sheet,
-              exclusionReason: match.reason,
-              plpConcept: match.plpConcept,
-            };
-          }
-          return k;
-        });
-        return { ...prev, [projectId]: updated };
-      });
+      // The route overlays verdicts onto the stored "keywords" slice by
+      // text as it goes; pull the refreshed sample back into the UI.
+      try {
+        const state = await loadMrStateApi(workspaceId);
+        if (analyzeGen.current !== gen) return;
+        const refreshed = state.keywordsByProject?.[projectId];
+        if (Array.isArray(refreshed) && refreshed.length > 0) {
+          setKeywordsByProject((prev) => ({ ...prev, [projectId]: refreshed }));
+        }
+      } catch (refreshErr) {
+        console.error("[handleAnalyze] Failed to refresh sample:", refreshErr);
+      }
 
       setAnalyzedProjectIds((prev) => {
         const next = new Set(prev);
@@ -2329,11 +2480,12 @@ export function MarketResearchShell() {
       if (analyzeGen.current !== gen) return;
       console.error("[handleAnalyze] Error:", err);
       toast.error("Classification error", {
-        description: err instanceof Error ? err.message : "Failed to classify keywords",
+        description: "Could not classify keywords. Please try again.",
       });
     } finally {
       if (analyzeGen.current === gen) {
         setAnalyzeLoading(false);
+        setAnalyzeProgress(null);
       }
     }
   };
@@ -2362,47 +2514,69 @@ export function MarketResearchShell() {
     unlockWorkspaceTab(projectId, "collections");
     const gen = ++clusterGen.current;
     setClustering(true);
+    setClusterProgress(null);
 
+    // Embed every surviving category term with its PLP context before
+    // clustering — Stage 5 Phase 1 needs vectors to do collection-scoped
+    // cosine matching instead of the slower lexical fallback. Runs in the
+    // same Tab 4 -> 5 loading state, before the cluster cursor job starts.
+    const termEmbedGenId = (termEmbedGen.current[projectId] ?? 0) + 1;
+    termEmbedGen.current[projectId] = termEmbedGenId;
+    setTermEmbedProgressByProject((prev) => ({
+      ...prev,
+      [projectId]: { embedded: 0, total: 0, done: false },
+    }));
     try {
-      const parentNiches = (nichesByProject[projectId] ?? activeNiches).map(
-        (n) => n.name
-      );
-      const res = await clusterCollectionsApi(
+      await runEmbedTermsLoop(
         workspaceId,
         projectId,
-        targetKeywords.map((k) => ({
-          id: k.id,
-          keyword: k.keyword,
-          seed: k.seed,
-          volume: k.volume,
-          difficulty: k.difficulty,
-          plpConcept: k.plpConcept,
-          reason: k.exclusionReason,
-        })),
-        {
-          parentNiches,
-          seedRows: stage3Rows.map((s) => ({
-            id: s.id,
-            canonicalNicheSeed: s.canonicalNicheSeed,
-            broadSeedVariation: s.broadSeedVariation,
-            selectedCollection: s.selectedCollection,
-            broadParentNiche: s.broadParentNiche,
-            productCount: s.productCount,
-            scopeMatch: s.scopeMatch,
-          })),
-        }
+        (state) => {
+          if (termEmbedGen.current[projectId] !== termEmbedGenId) return;
+          setTermEmbedProgressByProject((prev) => ({
+            ...prev,
+            [projectId]: {
+              embedded: (prev[projectId]?.embedded ?? 0) + state.embedded,
+              total: state.total,
+              done: state.done,
+            },
+          }));
+        },
+        () => termEmbedGen.current[projectId] !== termEmbedGenId
       );
+    } catch (embedErr) {
+      console.error("[handleNextCollections] Term embedding pass failed:", embedErr);
+    }
+    if (clusterGen.current !== gen) return;
 
+    // Stage 5 now runs server-side as a cursor job over the FULL classified
+    // "category" archive (not just this browser's filtered/capped view) —
+    // thousands of surviving terms means thousands of candidate collections,
+    // far past one request or one route call. The client loops on `offset`
+    // until `done`, merging the server's running collection list into state
+    // as each page lands.
+    try {
+      const result = await runClusterCollectionsLoop(
+        workspaceId,
+        projectId,
+        (state) => {
+          if (clusterGen.current !== gen) return;
+          setProposedCollectionsByProject((prev) => ({
+            ...prev,
+            [projectId]: state.collections,
+          }));
+          setClusterProgress({ processed: state.nextOffset, total: state.total });
+        },
+        () => clusterGen.current !== gen
+      );
       if (clusterGen.current !== gen) return;
 
-      setProposedCollectionsByProject((prev) => ({
-        ...prev,
-        [projectId]: res.collections,
-      }));
+      if (!result) {
+        throw new Error("Clustering did not return a result");
+      }
 
       setClusterSelectionByProject((prev) => ({
         ...prev,
-        [projectId]: res.collections.map((c) => c.id),
+        [projectId]: result.collections.map((c) => c.id),
       }));
     } catch (err) {
       if (clusterGen.current !== gen) return;
@@ -2451,7 +2625,7 @@ export function MarketResearchShell() {
     setPushingCollectionsByProject((prev) => ({ ...prev, [projectId]: true }));
 
     try {
-      await pushCollectionsApi(workspaceId, projectId, targetIds);
+      const pushResult = await pushCollectionsApi(workspaceId, projectId, targetIds);
       invalidateWallet();
 
       setPaidCollectionProjectIds((prev) => {
@@ -2463,6 +2637,70 @@ export function MarketResearchShell() {
         const next = new Set(prev);
         next.add(projectId);
         return next;
+      });
+
+      // The server just assigned real store handles to these collections; mirror
+      // that into local state before using it, otherwise the link graph would
+      // treat every collection pushed in this batch as unresolved (no verified
+      // href) and none of them could link to each other.
+      const handleById = new Map(
+        (pushResult.storeResults ?? [])
+          .filter((r) => r.success && r.handle)
+          .map((r) => [r.id, r.handle as string])
+      );
+      if (handleById.size > 0) {
+        setProposedCollectionsByProject((prev) => {
+          const list = prev[projectId] ?? [];
+          if (list.length === 0) return prev;
+          return {
+            ...prev,
+            [projectId]: list.map((c) =>
+              handleById.has(c.id)
+                ? { ...c, storeHandle: handleById.get(c.id) }
+                : c
+            ),
+          };
+        });
+      }
+
+      // Kick off internal-link graph building in the background now that these
+      // collections have real store handles, so the "Links" column in Tab 6 is
+      // already filled by the time the tab unlocks. Fire-and-forget: a failure
+      // here just means on-page generation falls back to building it inline.
+      // A resumable cursor loop rather than one call, so a 10k-collection push
+      // keeps filling the Links column instead of dying at 60 seconds. A
+      // second push for the same project supersedes an in-flight build.
+      const gen = (linksGen.current[projectId] = (linksGen.current[projectId] ?? 0) + 1);
+      setLinksBuildProgressByProject((prev) => ({
+        ...prev,
+        [projectId]: { processed: 0, total: targetIds.length },
+      }));
+      runBuildInternalLinksLoop(
+        workspaceId,
+        projectId,
+        targetIds,
+        (page) => {
+          if (linksGen.current[projectId] !== gen) return;
+          setInternalLinksByProject((prev) => ({
+            ...prev,
+            [projectId]: {
+              ...(prev[projectId] ?? {}),
+              ...page.linksByCollectionId,
+            },
+          }));
+          setLinksBuildProgressByProject((prev) => ({
+            ...prev,
+            [projectId]: page.done
+              ? null
+              : { processed: page.nextOffset, total: page.total },
+          }));
+        },
+        () => linksGen.current[projectId] !== gen
+      ).catch((err) => {
+        console.error("[handlePushToStore] Internal link build failed:", err);
+        if (linksGen.current[projectId] === gen) {
+          setLinksBuildProgressByProject((prev) => ({ ...prev, [projectId]: null }));
+        }
       });
 
       window.setTimeout(() => {
@@ -2517,28 +2755,35 @@ export function MarketResearchShell() {
 
     setGenerating(true);
     setContentByIdByProject((prev) => ({ ...prev, [projectId]: {} }));
+    setContentGenProgress({ processed: 0, total: selected.length });
     const instructions = customInstructions;
+    const selectedIds = selected.map((c) => c.id);
+
+    // A collection with no content by the time the loop ends — whether from a
+    // network failure or the guard tripping — still needs something to show
+    // rather than staying blank forever.
+    const fillMissingWithFallback = () => {
+      setContentByIdByProject((prev) => {
+        const current = prev[projectId] ?? {};
+        const missing = selected.filter((row) => !current[row.id]);
+        if (missing.length === 0) return prev;
+        const filled = { ...current };
+        for (const row of missing) {
+          filled[row.id] = buildCollectionContent(row, instructions);
+        }
+        return { ...prev, [projectId]: filled };
+      });
+    };
 
     try {
       const parentNiches = (nichesByProject[projectId] ?? activeNiches).map(
         (n) => n.name
       );
 
-      const res = await generateOnPageApi(
+      await runOnPageGenerationLoop(
         workspaceId,
         projectId,
-        selected.map((c) => ({
-          id: c.id,
-          name: c.name,
-          headKeyword: c.headKeyword,
-          parentNiche: c.parentNiche,
-          volume: c.volume,
-          difficulty: c.difficulty,
-          productCount: c.productCount,
-          keywordCount: c.keywordCount,
-          status: c.status,
-          existingName: c.existingName,
-        })),
+        selectedIds,
         {
           parentNiches,
           customInstructions: {
@@ -2547,15 +2792,26 @@ export function MarketResearchShell() {
             collectionDescription: instructions.collectionDescription || undefined,
             faq: instructions.faq || undefined,
           },
-        }
+        },
+        (page) => {
+          if (contentGen.current !== gen) return;
+          setContentByIdByProject((prev) => ({
+            ...prev,
+            [projectId]: {
+              ...(prev[projectId] ?? {}),
+              ...page.contentById,
+            },
+          }));
+          setContentGenProgress(
+            page.done ? null : { processed: page.nextOffset, total: page.total }
+          );
+        },
+        () => contentGen.current !== gen
       );
 
       if (contentGen.current !== gen) return;
 
-      setContentByIdByProject((prev) => ({
-        ...prev,
-        [projectId]: res.contentById,
-      }));
+      fillMissingWithFallback();
 
       setContentReadyIds((prev) => {
         const next = new Set(prev);
@@ -2565,15 +2821,7 @@ export function MarketResearchShell() {
     } catch (err) {
       if (contentGen.current !== gen) return;
       console.error("[handleStartContent] Error:", err);
-      // Fallback
-      const fallback: Record<string, CollectionContent> = {};
-      for (const row of selected) {
-        fallback[row.id] = buildCollectionContent(row, instructions);
-      }
-      setContentByIdByProject((prev) => ({
-        ...prev,
-        [projectId]: fallback,
-      }));
+      fillMissingWithFallback();
       setContentReadyIds((prev) => {
         const next = new Set(prev);
         next.add(projectId);
@@ -2586,6 +2834,7 @@ export function MarketResearchShell() {
     } finally {
       if (contentGen.current === gen) {
         setGenerating(false);
+        setContentGenProgress(null);
       }
     }
   };
@@ -2814,8 +3063,10 @@ export function MarketResearchShell() {
                 volume: row.volume,
                 difficulty: row.difficulty,
                 linksOut: row.linksOut,
+                skuLinks: row.skuLinks,
               },
-              storeBlogs
+              storeBlogs,
+              storeUrl
             );
 
             setArticlesByProject((prev) => ({
@@ -3783,6 +4034,12 @@ export function MarketResearchShell() {
                         walletHref={`/w/${slug}/wallet`}
                         walletBalance={wallet?.balance ?? null}
                         readOnly={reviewingBrief || !canEdit}
+                        productCountByCollectionId={
+                          productCountByCollectionIdByProject[activeProject.id] ?? {}
+                        }
+                        productFetchProgress={
+                          productFetchProgressByProject[activeProject.id] ?? null
+                        }
                       />
                     </div>
                   )}
@@ -3818,6 +4075,10 @@ export function MarketResearchShell() {
                     }
                     onAnalyze={handleAnalyze}
                     analyzeLoading={analyzeLoading}
+                    analyzeProgress={analyzeProgress}
+                    productEmbedProgress={
+                      productEmbedProgressByProject[activeProject.id] ?? null
+                    }
                     analyzed={analyzed}
                     onNextCollections={handleNextCollections}
                     onCancelExtract={handleCancelExtract}
@@ -3829,6 +4090,10 @@ export function MarketResearchShell() {
                     collections={proposedCollections}
                     products={productsByProject[activeProject.id] ?? []}
                     clustering={clustering}
+                    clusterProgress={clusterProgress}
+                    termEmbedProgress={
+                      termEmbedProgressByProject[activeProject.id] ?? null
+                    }
                     selectedCollectionIds={clusterSelection}
                     onChangeSelected={(ids) =>
                       setClusterSelectionByProject((prev) => ({
@@ -3856,7 +4121,10 @@ export function MarketResearchShell() {
                       }))
                     }
                     contentById={contentById}
+                    internalLinksById={internalLinksById}
+                    linksBuildProgress={linksBuildProgress}
                     generating={generating}
+                    contentGenProgress={contentGenProgress}
                     contentReady={contentReady}
                     pushed={contentPushed}
                     syncingSeo={Boolean(

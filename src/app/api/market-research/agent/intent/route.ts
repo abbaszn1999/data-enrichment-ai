@@ -4,11 +4,25 @@ import {
   jsonError,
   requireMrWrite,
 } from "@/lib/market-research/api-schema";
-import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { runStage4IntentClassification } from "@/lib/market-research/agent/stage4-intent-classifier";
-import { saveProjectSliceAdmin } from "@/lib/market-research/storage-admin";
+import {
+  loadExtractRowsAdmin,
+  appendClassifiedShardAdmin,
+  loadClassifiedManifestAdmin,
+  loadProjectSliceAdmin,
+  saveProjectSliceAdmin,
+  type ClassifiedShardItem,
+} from "@/lib/market-research/storage-admin";
+import type { ExtractedKeyword } from "@/components/market-research/workspace-data";
 
 export const maxDuration = 60;
+
+// One page of the full extract archive per call. Each page runs through
+// Stage 4 at its own internal batch size (100 keywords/batch, concurrency
+// 5), so 500 keywords/page is ~5 batches — one wave, fast — while still
+// bounding how much a single HTTP call and route invocation has to do when
+// the archive holds tens of thousands of rows.
+const PAGE_SIZE = 500;
 
 export async function POST(request: NextRequest) {
   let json: unknown;
@@ -27,57 +41,104 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   try {
-    let storeName = "Ecommerce Store";
-    try {
-      const catalog = await fetchStoreCatalog(auth.admin, parsed.data.workspaceId);
-      storeName = catalog.storeName || storeName;
-    } catch {
-      // Allow intent classification even if store catalog fetch fails
-    }
+    // Source of truth is the full chunk archive, not the UI's capped 1.5k
+    // display sample — otherwise classification (and everything downstream
+    // in Stage 5) silently stops at whatever the browser happened to keep.
+    const archive = await loadExtractRowsAdmin(
+      auth.admin,
+      parsed.data.workspaceId,
+      parsed.data.projectId
+    );
+    const total = archive.length;
+    const offset = Math.min(parsed.data.offset, total);
+    const batchRows = archive.slice(offset, offset + PAGE_SIZE);
+    const nextOffset = offset + batchRows.length;
+    const done = nextOffset >= total;
 
-    const result = await runStage4IntentClassification({
-      storeName,
-      parentNiches: parsed.data.parentNiches,
-      collections: parsed.data.collections,
-      keywords: parsed.data.keywords,
-    });
+    let isAiGenerated = false;
 
-    if (parsed.data.projectId) {
-      // Map classified result back to full keyword format if possible
-      const byId = new Map(result.classified.map((c) => [c.id, c]));
-      const fullKeywords = parsed.data.keywords.map((kw) => {
-        const item = byId.get(kw.id);
-        return {
-          id: kw.id,
-          seedId: kw.seed || "",
-          seed: kw.seed || "",
-          keyword: kw.keyword,
-          volume: kw.volume ?? 0,
-          difficulty: kw.difficulty ?? 0,
-          wordCount: kw.keyword.trim().split(/\s+/).length,
-          isQuestion: item?.sheet === "informational",
-          sheet: item?.sheet ?? "category",
-          exclusionReason: item?.reason,
-          plpConcept: item?.plpConcept,
-          productMatches: 0,
-          weight: 1,
-        };
+    if (batchRows.length > 0) {
+      const byPhrase = new Map(batchRows.map((r) => [r.phrase, r]));
+
+      const result = await runStage4IntentClassification({
+        keywords: batchRows.map((r) => ({ id: r.phrase, keyword: r.phrase })),
       });
+      isAiGenerated = result.isAiGenerated;
 
-      await saveProjectSliceAdmin(
+      const items: ClassifiedShardItem[] = result.classified.map((c) => ({
+        id: c.id,
+        keyword: c.keyword,
+        seedId: byPhrase.get(c.id)?.seedId ?? "",
+        sheet: c.sheet,
+        reason: c.reason,
+        plpConcept: c.plpConcept,
+      }));
+
+      await appendClassifiedShardAdmin(
         auth.admin,
         parsed.data.workspaceId,
         parsed.data.projectId,
-        "keywords",
-        fullKeywords
-      ).catch((err) => console.error("[intent] Error saving keywords slice:", err));
+        items,
+        { done }
+      );
+
+      // Overlay the same verdicts onto the UI's capped display sample by
+      // keyword text, so Tab 4's table keeps showing sheet/reason for
+      // whatever it already has — archive rows and UI sample rows don't
+      // share an id space, so text is the only stable join key here.
+      const stored = await loadProjectSliceAdmin<ExtractedKeyword[]>(
+        auth.admin,
+        parsed.data.workspaceId,
+        parsed.data.projectId,
+        "keywords"
+      ).catch(() => null);
+
+      if (Array.isArray(stored) && stored.length > 0) {
+        const byKeywordText = new Map(
+          items.map((i) => [i.keyword.trim().toLowerCase(), i])
+        );
+        let touched = false;
+        const updated = stored.map((row) => {
+          const match = byKeywordText.get(row.keyword.trim().toLowerCase());
+          if (!match) return row;
+          touched = true;
+          return {
+            ...row,
+            sheet: match.sheet,
+            isQuestion: match.sheet === "informational",
+            exclusionReason: match.reason,
+            plpConcept: match.plpConcept,
+          };
+        });
+        if (touched) {
+          await saveProjectSliceAdmin(
+            auth.admin,
+            parsed.data.workspaceId,
+            parsed.data.projectId,
+            "keywords",
+            updated
+          ).catch((err) => console.error("[intent] Error saving keywords slice:", err));
+        }
+      }
     }
+
+    const manifest = await loadClassifiedManifestAdmin(
+      auth.admin,
+      parsed.data.workspaceId,
+      parsed.data.projectId
+    );
 
     return NextResponse.json(
       {
-        classified: result.classified,
-        summary: result.summary,
-        isAiGenerated: result.isAiGenerated,
+        offset,
+        nextOffset,
+        done,
+        processed: batchRows.length,
+        total,
+        categoryCount: manifest?.categoryCount ?? 0,
+        informationalCount: manifest?.informationalCount ?? 0,
+        excludedCount: manifest?.excludedCount ?? 0,
+        isAiGenerated,
       },
       { headers: auth.headers }
     );

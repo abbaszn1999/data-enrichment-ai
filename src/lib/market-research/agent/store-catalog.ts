@@ -1,11 +1,251 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { IntegrationRecord } from "@/lib/sync/core/types";
+import type { IntegrationRecord, ShopifyGraphQLResult } from "@/lib/sync/core/types";
 import { fetchAllShopifyCollections } from "@/lib/sync/providers/shopify/collections";
 import { shopifyGraphQL } from "@/lib/sync/providers/shopify/graphql-client";
 import { fetchWooCommerceCategories } from "@/lib/sync/providers/woocommerce/categories";
 import { createWooClient } from "@/lib/sync/providers/woocommerce/client";
 import { MOCK_NICHES } from "@/components/market-research/mock-data";
 import type { MarketResearchProduct } from "@/components/market-research/workspace-data";
+
+// ─── Brand / vendor discovery ──────────────────────────────────────────────
+
+const SHOPIFY_VENDORS_QUERY = /* GraphQL */ `
+  query ProductVendorsPage($first: Int!, $after: String) {
+    products(first: $first, after: $after) {
+      edges {
+        cursor
+        node {
+          vendor
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
+
+/** URL-safe id fragment for a brand/vendor pseudo-collection, e.g. "Ray-Ban" -> "ray-ban". */
+function slugifyBrandName(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "") || "brand"
+  );
+}
+
+/**
+ * Walks every product in the store (paginated, uncapped) and tallies a real
+ * product count per vendor in the same pass — no extra per-brand requests.
+ * Each vendor becomes its own PLP-shaped item (`kind: "brand"`), treated by
+ * every downstream stage exactly like a normal collection/category. This is
+ * the store's complete brand roster; sampling or truncating it would
+ * silently hide real, selectable brand pages from the merchant.
+ */
+type ShopifyVendorsResponse = {
+  products: {
+    edges: Array<{ cursor: string; node: { vendor?: string | null } }>;
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  };
+};
+
+async function fetchShopifyVendors(
+  integration: IntegrationRecord
+): Promise<StoreCollectionItem[]> {
+  const counts = new Map<string, number>();
+  let after: string | null = null;
+  let hasNextPage = true;
+  let pages = 0;
+  const MAX_PAGES = 80; // safety cap: 80 * 250 = 20,000 products
+
+  while (hasNextPage && pages < MAX_PAGES) {
+    const res: ShopifyGraphQLResult<ShopifyVendorsResponse> = await shopifyGraphQL<ShopifyVendorsResponse>({
+      integration,
+      query: SHOPIFY_VENDORS_QUERY,
+      variables: { first: 250, after },
+      options: { estimatedCost: 30, tag: "productVendors" },
+    });
+
+    const edges = res.data?.products?.edges ?? [];
+    for (const edge of edges) {
+      const vendor = edge.node?.vendor?.trim();
+      if (vendor) counts.set(vendor, (counts.get(vendor) ?? 0) + 1);
+    }
+
+    if (edges.length === 0) break;
+
+    hasNextPage = res.data?.products?.pageInfo?.hasNextPage ?? false;
+    after = res.data?.products?.pageInfo?.endCursor ?? null;
+    pages += 1;
+  }
+
+  return Array.from(counts.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, productCount]) => {
+      const handle = slugifyBrandName(name);
+      return {
+        id: `brand-${handle}`,
+        name,
+        handle,
+        description: "",
+        productCount,
+        plpPath: "",
+        published: true,
+        kind: "brand" as const,
+      };
+    });
+}
+
+type WooAttribute = { id?: number; name?: string; slug?: string };
+type WooAttributeTerm = { id?: number; name?: string; slug?: string; count?: number };
+type WooBrandTerm = { id?: number; name?: string; slug?: string; count?: number };
+
+/** Attribute names commonly used for the "Brand" field across WooCommerce stores. */
+const BRAND_ATTRIBUTE_NAMES = [
+  "brand",
+  "brands",
+  "vendor",
+  "vendors",
+  "manufacturer",
+  "marque",
+];
+
+function wooBrandTermToItem(term: WooBrandTerm | WooAttributeTerm): StoreCollectionItem | null {
+  const name = (term.name ?? "").trim();
+  if (!name) return null;
+  const handle = (term.slug ?? "").trim() || slugifyBrandName(name);
+  return {
+    id: `brand-${handle}`,
+    name,
+    handle,
+    description: "",
+    // WooCommerce term endpoints (both the brand taxonomy and attribute
+    // terms) return a real `count` of products carrying that term — this is
+    // the brand's true product count, not an estimate.
+    productCount: Number(term.count) || 0,
+    // Most brand-taxonomy plugins rewrite to /brand/<slug>/; left blank for
+    // the plain-attribute fallback since there is no standard archive route.
+    plpPath: "",
+    published: true,
+    kind: "brand",
+  };
+}
+
+/**
+ * WooCommerce has no single standard for brands. Most stores expose them one
+ * of two ways:
+ *   1. A dedicated brand taxonomy registered by a plugin (YITH / Perfect
+ *      Brands / etc.), which mirrors the categories REST shape at
+ *      `/products/brands` — including a real per-term `count`.
+ *   2. A plain product attribute named "Brand" (`pa_brand`), whose terms live
+ *      at `/products/attributes/{id}/terms` — the standard WP term shape,
+ *      which also carries a real `count`.
+ * Tries (1) first since it is purpose-built, falls back to (2), and returns
+ * an empty list — never a thrown error — if the store has neither. Every
+ * returned item is a full PLP-shaped `StoreCollectionItem` with a real
+ * product count, treated identically to a category by every later stage.
+ */
+async function fetchWooBrands(
+  integration: IntegrationRecord
+): Promise<StoreCollectionItem[]> {
+  const client = createWooClient(integration);
+
+  // 1. Dedicated brand taxonomy endpoint, if a brands plugin is active.
+  try {
+    const brands: StoreCollectionItem[] = [];
+    let page = 1;
+    while (true) {
+      const terms = await client.get<WooBrandTerm[]>("/products/brands", {
+        per_page: 100,
+        page,
+      });
+      if (!Array.isArray(terms) || terms.length === 0) break;
+      for (const term of terms) {
+        const item = wooBrandTermToItem(term);
+        if (item) brands.push(item);
+      }
+      if (terms.length < 100) break;
+      page += 1;
+      if (page > 30) break; // safety cap
+    }
+    if (brands.length > 0) {
+      return brands.sort((a, b) => a.name.localeCompare(b.name));
+    }
+  } catch {
+    // No brands plugin registered on this store — fall through to attributes.
+  }
+
+  // 2. Plain "Brand" product attribute.
+  try {
+    const attributes = await client.get<WooAttribute[]>("/products/attributes", {
+      per_page: 100,
+    });
+    if (!Array.isArray(attributes)) return [];
+
+    const brandAttr = attributes.find((attr) => {
+      const name = (attr.name ?? "").toLowerCase().trim();
+      return BRAND_ATTRIBUTE_NAMES.some(
+        (candidate) => name === candidate || name.includes(candidate)
+      );
+    });
+    if (!brandAttr?.id) return [];
+
+    const brands: StoreCollectionItem[] = [];
+    let page = 1;
+    while (true) {
+      const terms = await client.get<WooAttributeTerm[]>(
+        `/products/attributes/${brandAttr.id}/terms`,
+        { per_page: 100, page }
+      );
+      if (!Array.isArray(terms) || terms.length === 0) break;
+      for (const term of terms) {
+        const item = wooBrandTermToItem(term);
+        if (item) brands.push(item);
+      }
+      if (terms.length < 100) break;
+      page += 1;
+      if (page > 30) break; // safety cap
+    }
+    return brands.sort((a, b) => a.name.localeCompare(b.name));
+  } catch (error) {
+    console.error("[fetchWooBrands] Failed to fetch brand attribute terms:", error);
+    return [];
+  }
+}
+
+/**
+ * Derives each collection's hierarchy depth from its `parentId` chain and
+ * writes it back onto the item in place. Top-level categories (parentId
+ * missing or "0") are depth 0; every step down the parent chain adds 1.
+ * Cycle-safe: a broken or circular parent chain resolves to 0 rather than
+ * looping forever.
+ */
+function computeCollectionDepths(collections: StoreCollectionItem[]): void {
+  const byId = new Map(collections.map((c) => [c.id, c]));
+  const resolved = new Map<string, number>();
+
+  function resolveDepth(id: string, guard: number): number {
+    if (guard > 25) return 0;
+    const cached = resolved.get(id);
+    if (cached !== undefined) return cached;
+
+    const item = byId.get(id);
+    if (!item || !item.parentId || item.parentId === "0") {
+      resolved.set(id, 0);
+      return 0;
+    }
+
+    const depth = resolveDepth(item.parentId, guard + 1) + 1;
+    resolved.set(id, depth);
+    return depth;
+  }
+
+  for (const item of collections) {
+    item.depth = resolveDepth(item.id, 0);
+  }
+}
 
 export type StoreCollectionItem = {
   id: string;
@@ -20,6 +260,24 @@ export type StoreCollectionItem = {
    * as an internal link target.
    */
   published?: boolean;
+  /**
+   * WooCommerce only. The parent category id ("0" = top-level). Shopify
+   * collections are flat and never set this field.
+   */
+  parentId?: string;
+  /**
+   * WooCommerce only. 0 = top-level category, 1 = subcategory, 2 = sub-subcategory,
+   * derived by walking the parentId chain. Shopify collections are always 0.
+   */
+  depth?: number;
+  /**
+   * "brand" marks a brand/vendor PLP (Shopify `vendor` filter page, or a
+   * WooCommerce brand taxonomy/attribute archive) rather than a real
+   * category or collection. Omitted (undefined) means "collection" — every
+   * downstream stage treats a brand item exactly like any other collection
+   * except for what its name is allowed to become (never a niche name).
+   */
+  kind?: "collection" | "brand";
 };
 
 export type StoreCatalogResult = {
@@ -28,6 +286,15 @@ export type StoreCatalogResult = {
   baseUrl: string;
   isMock: boolean;
   collections: StoreCollectionItem[];
+  /**
+   * Every brand/vendor found on the store, each as a full PLP-shaped item
+   * (`kind: "brand"`) with a real product count — the Shopify `vendor`
+   * roster or the WooCommerce brand taxonomy/attribute terms. Not capped or
+   * sampled. Empty array when the store has none. Callers typically merge
+   * this straight into the `collections` list before niche discovery so
+   * every stage treats a brand exactly like any other collection.
+   */
+  storeBrands: StoreCollectionItem[];
 };
 
 export type ScopeCollectionInput = {
@@ -97,12 +364,17 @@ export async function fetchStoreCatalog(
       });
 
       if (collections.length > 0) {
+        const storeBrands = await fetchShopifyVendors(integration).catch((error) => {
+          console.error("[fetchStoreCatalog] Failed to fetch Shopify vendors:", error);
+          return [] as StoreCollectionItem[];
+        });
         return {
           storeName,
           provider: "shopify",
           baseUrl,
           isMock: false,
           collections,
+          storeBrands,
         };
       }
     } else if (provider === "woocommerce" || provider === "wordpress") {
@@ -117,6 +389,7 @@ export async function fetchStoreCatalog(
         const description = stripHtml(String(row.description ?? ""));
         const productCount = Number(row.count) || 0;
         const plpPath = handle ? `/product-category/${handle}` : "";
+        const parentId = String(row.parent ?? 0);
         return {
           id: id || handle || name,
           name: name || handle,
@@ -125,16 +398,24 @@ export async function fetchStoreCatalog(
           productCount,
           plpPath,
           published: true,
+          parentId,
         };
       });
 
+      computeCollectionDepths(collections);
+
       if (collections.length > 0) {
+        const storeBrands = await fetchWooBrands(integration).catch((error) => {
+          console.error("[fetchStoreCatalog] Failed to fetch WooCommerce brands:", error);
+          return [] as StoreCollectionItem[];
+        });
         return {
           storeName,
           provider: "woocommerce",
           baseUrl,
           isMock: false,
           collections,
+          storeBrands,
         };
       }
     }
@@ -145,13 +426,13 @@ export async function fetchStoreCatalog(
   return getFallbackStoreCatalog(storeName);
 }
 
-const SHOPIFY_COLLECTION_PRODUCTS_QUERY = /* GraphQL */ `
-  query CollectionProducts($id: ID!, $first: Int!) {
+const SHOPIFY_COLLECTION_PRODUCTS_PAGE_QUERY = /* GraphQL */ `
+  query CollectionProductsPage($id: ID!, $first: Int!, $after: String) {
     collection(id: $id) {
       id
       title
       handle
-      products(first: $first) {
+      products(first: $first, after: $after) {
         edges {
           node {
             id
@@ -185,18 +466,215 @@ const SHOPIFY_COLLECTION_PRODUCTS_QUERY = /* GraphQL */ `
             options { name values }
           }
         }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
       }
     }
   }
 `;
 
-export async function fetchStoreProductsForCollections(
+// ─── Paginated, resumable product fetch ────────────────────────────────────
+//
+// A single GraphQL/REST page tops out at 250 (Shopify) / 100 (WooCommerce)
+// products, and a store's selected collections can hold 20,000+ SKUs — far
+// past what one request or one `maxDuration = 60` route call can pull. This
+// walks collections in order, one page at a time, and returns a resumable
+// cursor so the caller can drive it in a client-side loop (same pattern as
+// the existing Apify extract poll) until every selected collection is fully
+// paged or the global cap is hit.
+
+/** Safety ceiling: no single project embeds/matches against more than this many SKUs. */
+export const GLOBAL_PRODUCT_FETCH_CAP = 20_000;
+const PRODUCT_FETCH_TIME_BUDGET_MS = 40_000;
+const SHOPIFY_PRODUCTS_PAGE_SIZE = 250;
+const WOO_PRODUCTS_PAGE_SIZE = 100;
+
+export type ProductFetchCursorState = {
+  /** Index into the caller's `selectedCollections` array of the collection currently paging. */
+  collectionIndex: number;
+  shopifyAfter: string | null;
+  wooPage: number;
+  totalFetched: number;
+  perCollectionFetched: Record<string, number>;
+  done: boolean;
+};
+
+export function initProductFetchCursor(): ProductFetchCursorState {
+  return {
+    collectionIndex: 0,
+    shopifyAfter: null,
+    wooPage: 1,
+    totalFetched: 0,
+    perCollectionFetched: {},
+    done: false,
+  };
+}
+
+type ShopifyProductNode = {
+  id: string;
+  title: string;
+  handle: string;
+  descriptionHtml?: string;
+  vendor?: string;
+  productType?: string;
+  tags?: string[];
+  totalInventory?: number;
+  featuredMedia?: {
+    image?: { url: string };
+    preview?: { image?: { url: string } };
+  };
+  media?: { nodes: Array<{ preview?: { image?: { url: string } } }> };
+  variants?: {
+    nodes: Array<{
+      id: string;
+      price: string;
+      compareAtPrice?: string | null;
+      title?: string;
+    }>;
+  };
+  options?: Array<{ name: string; values: string[] }>;
+};
+
+function mapShopifyProductNode(
+  p: ShopifyProductNode,
+  col: ScopeCollectionInput,
+  baseUrl: string
+): MarketResearchProduct {
+  const cleanDesc = stripHtml(p.descriptionHtml);
+  const shortDesc =
+    cleanDesc.length > 200 ? `${cleanDesc.slice(0, 197).trim()}...` : cleanDesc;
+
+  const primaryImg =
+    p.featuredMedia?.image?.url ||
+    p.featuredMedia?.preview?.image?.url ||
+    p.media?.nodes?.[0]?.preview?.image?.url ||
+    "";
+
+  const allImages: string[] = [];
+  if (primaryImg) allImages.push(primaryImg);
+  for (const m of p.media?.nodes ?? []) {
+    const url = m.preview?.image?.url;
+    if (url && !allImages.includes(url)) allImages.push(url);
+  }
+
+  const firstVar = p.variants?.nodes?.[0];
+  const amount = Number(firstVar?.price) || 0;
+  const compareAt = firstVar?.compareAtPrice
+    ? Number(firstVar.compareAtPrice)
+    : undefined;
+
+  const attributes: Array<{ name: string; value: string }> = [];
+  for (const opt of p.options ?? []) {
+    if (opt.name && opt.values && opt.values.length > 0) {
+      attributes.push({ name: opt.name, value: opt.values.join(", ") });
+    }
+  }
+
+  return {
+    id: p.id,
+    title: p.title || "Untitled Product",
+    handle: p.handle || "",
+    url: p.handle ? `${baseUrl}/products/${p.handle}` : "",
+    primaryImage: primaryImg,
+    images: allImages,
+    price: {
+      amount,
+      currency: "USD",
+      compareAtPrice: compareAt,
+      priceFormatted: `$${amount.toFixed(2)}`,
+    },
+    shortDescription: shortDesc,
+    fullDescription: cleanDesc,
+    vendor: p.vendor || "",
+    productType: p.productType || "",
+    tags: Array.isArray(p.tags) ? p.tags : [],
+    attributes,
+    collectionIds: [col.id],
+    collectionNames: [col.name],
+    inStock: (p.totalInventory ?? 1) > 0,
+    totalInventory: p.totalInventory ?? undefined,
+  };
+}
+
+function mapWooProductNode(
+  p: Record<string, unknown>,
+  col: ScopeCollectionInput,
+  baseUrl: string
+): MarketResearchProduct | null {
+  const id = String(p.id ?? "");
+  if (!id) return null;
+
+  const cleanDesc = stripHtml(String(p.description ?? ""));
+  const shortDesc =
+    stripHtml(String(p.short_description ?? "")) || cleanDesc.slice(0, 180);
+
+  const images = Array.isArray(p.images)
+    ? (p.images as Array<{ src?: string }>).map((img) => img.src || "").filter(Boolean)
+    : [];
+  const primaryImg = images[0] || "";
+
+  const amount = Number(p.price) || 0;
+  const compareAt = p.regular_price ? Number(p.regular_price) : undefined;
+
+  const attributes: Array<{ name: string; value: string }> = [];
+  if (Array.isArray(p.attributes)) {
+    for (const attr of p.attributes as Array<{ name?: string; options?: unknown }>) {
+      if (attr.name) {
+        const val = Array.isArray(attr.options)
+          ? attr.options.join(", ")
+          : String(attr.options ?? "");
+        attributes.push({ name: attr.name, value: val });
+      }
+    }
+  }
+
+  const tags = Array.isArray(p.tags)
+    ? (p.tags as Array<{ name?: string }>).map((t) => t.name || "").filter(Boolean)
+    : [];
+
+  return {
+    id,
+    title: String(p.name ?? "Untitled Product"),
+    handle: String(p.slug ?? ""),
+    url: String(p.permalink ?? (baseUrl ? `${baseUrl}/product/${p.slug}` : "")),
+    primaryImage: primaryImg,
+    images,
+    price: {
+      amount,
+      currency: "USD",
+      compareAtPrice: compareAt,
+      priceFormatted: `$${amount.toFixed(2)}`,
+    },
+    shortDescription: shortDesc,
+    fullDescription: cleanDesc,
+    vendor: String(p.vendor ?? ""),
+    productType: String(p.type ?? ""),
+    tags,
+    attributes,
+    collectionIds: [col.id],
+    collectionNames: [col.name],
+    inStock: p.stock_status !== "outofstock",
+    totalInventory: typeof p.stock_quantity === "number" ? p.stock_quantity : undefined,
+  };
+}
+
+/**
+ * Fetches one resumable "page" of products for the given cursor position —
+ * as many pages as fit inside the time budget, advancing through
+ * `selectedCollections` in order. Call again with the returned `cursor`
+ * until `cursor.done` is true. Falls back to mock data in one shot when the
+ * workspace has no live store integration.
+ */
+export async function fetchStoreProductsPage(
   admin: SupabaseClient,
   workspaceId: string,
-  selectedCollections: ScopeCollectionInput[]
-): Promise<MarketResearchProduct[]> {
+  selectedCollections: ScopeCollectionInput[],
+  cursor: ProductFetchCursorState
+): Promise<{ products: MarketResearchProduct[]; cursor: ProductFetchCursorState }> {
   if (!selectedCollections || selectedCollections.length === 0) {
-    return [];
+    return { products: [], cursor: { ...cursor, done: true } };
   }
 
   const { data: integrationRow } = await admin
@@ -206,247 +684,103 @@ export async function fetchStoreProductsForCollections(
     .maybeSingle();
 
   if (!integrationRow || !integrationRow.provider) {
-    return generateMockProductsForCollections(selectedCollections, "Demo Store");
+    // No live store: return the whole mock set in one shot, cursor closes immediately.
+    if (cursor.collectionIndex > 0 || cursor.totalFetched > 0) {
+      return { products: [], cursor: { ...cursor, done: true } };
+    }
+    const products = generateMockProductsForCollections(selectedCollections, "Demo Store");
+    return {
+      products,
+      cursor: { ...cursor, collectionIndex: selectedCollections.length, totalFetched: products.length, done: true },
+    };
   }
 
   const integration = integrationRow as IntegrationRecord;
-  const storeName = integration.integration_name || "Connected Store";
   const provider = String(integration.provider).toLowerCase();
   const baseUrl = (integration.base_url || "").replace(/\/+$/, "");
 
-  const productMap = new Map<string, MarketResearchProduct>();
+  const next: ProductFetchCursorState = {
+    ...cursor,
+    perCollectionFetched: { ...cursor.perCollectionFetched },
+  };
+  const collected: MarketResearchProduct[] = [];
+  const startedAt = Date.now();
 
-  try {
-    if (provider === "shopify") {
-      for (const col of selectedCollections) {
-        try {
-          const colGid = col.id.startsWith("gid://")
-            ? col.id
-            : `gid://shopify/Collection/${col.id}`;
+  while (
+    next.collectionIndex < selectedCollections.length &&
+    next.totalFetched < GLOBAL_PRODUCT_FETCH_CAP &&
+    Date.now() - startedAt < PRODUCT_FETCH_TIME_BUDGET_MS
+  ) {
+    const col = selectedCollections[next.collectionIndex];
 
-          const res = await shopifyGraphQL<{
-            collection: {
-              id: string;
-              title: string;
-              handle: string;
-              products: {
-                edges: Array<{
-                  node: {
-                    id: string;
-                    title: string;
-                    handle: string;
-                    descriptionHtml?: string;
-                    vendor?: string;
-                    productType?: string;
-                    tags?: string[];
-                    totalInventory?: number;
-                    featuredMedia?: {
-                      image?: { url: string };
-                      preview?: { image?: { url: string } };
-                    };
-                    media?: {
-                      nodes: Array<{ preview?: { image?: { url: string } } }>;
-                    };
-                    variants?: {
-                      nodes: Array<{
-                        id: string;
-                        price: string;
-                        compareAtPrice?: string | null;
-                        title?: string;
-                      }>;
-                    };
-                    options?: Array<{ name: string; values: string[] }>;
-                  };
-                }>;
-              };
-            } | null;
-          }>({
-            integration,
-            query: SHOPIFY_COLLECTION_PRODUCTS_QUERY,
-            variables: { id: colGid, first: 50 },
-            options: { estimatedCost: 35, tag: "collectionProducts" },
-          });
+    try {
+      if (provider === "shopify") {
+        const colGid = col.id.startsWith("gid://")
+          ? col.id
+          : `gid://shopify/Collection/${col.id}`;
 
-          const edges = res.data?.collection?.products?.edges ?? [];
-          for (const edge of edges) {
-            const p = edge.node;
-            if (!p || !p.id) continue;
+        const res = await shopifyGraphQL<{
+          collection: { products: { edges: Array<{ node: ShopifyProductNode }>; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } | null;
+        }>({
+          integration,
+          query: SHOPIFY_COLLECTION_PRODUCTS_PAGE_QUERY,
+          variables: { id: colGid, first: SHOPIFY_PRODUCTS_PAGE_SIZE, after: next.shopifyAfter },
+          options: { estimatedCost: 35, tag: "collectionProducts" },
+        });
 
-            const existing = productMap.get(p.id);
-            if (existing) {
-              if (!existing.collectionIds.includes(col.id)) {
-                existing.collectionIds.push(col.id);
-                existing.collectionNames.push(col.name);
-              }
-              continue;
-            }
-
-            const cleanDesc = stripHtml(p.descriptionHtml);
-            const shortDesc =
-              cleanDesc.length > 200
-                ? `${cleanDesc.slice(0, 197).trim()}...`
-                : cleanDesc;
-
-            const primaryImg =
-              p.featuredMedia?.image?.url ||
-              p.featuredMedia?.preview?.image?.url ||
-              p.media?.nodes?.[0]?.preview?.image?.url ||
-              "";
-
-            const allImages: string[] = [];
-            if (primaryImg) allImages.push(primaryImg);
-            for (const m of p.media?.nodes ?? []) {
-              const url = m.preview?.image?.url;
-              if (url && !allImages.includes(url)) allImages.push(url);
-            }
-
-            const firstVar = p.variants?.nodes?.[0];
-            const amount = Number(firstVar?.price) || 0;
-            const compareAt = firstVar?.compareAtPrice
-              ? Number(firstVar.compareAtPrice)
-              : undefined;
-
-            const attributes: Array<{ name: string; value: string }> = [];
-            for (const opt of p.options ?? []) {
-              if (opt.name && opt.values && opt.values.length > 0) {
-                attributes.push({
-                  name: opt.name,
-                  value: opt.values.join(", "),
-                });
-              }
-            }
-
-            productMap.set(p.id, {
-              id: p.id,
-              title: p.title || "Untitled Product",
-              handle: p.handle || "",
-              url: p.handle ? `${baseUrl}/products/${p.handle}` : "",
-              primaryImage: primaryImg,
-              images: allImages,
-              price: {
-                amount,
-                currency: "USD",
-                compareAtPrice: compareAt,
-                priceFormatted: `$${amount.toFixed(2)}`,
-              },
-              shortDescription: shortDesc,
-              fullDescription: cleanDesc,
-              vendor: p.vendor || "",
-              productType: p.productType || "",
-              tags: Array.isArray(p.tags) ? p.tags : [],
-              attributes,
-              collectionIds: [col.id],
-              collectionNames: [col.name],
-              inStock: (p.totalInventory ?? 1) > 0,
-              totalInventory: p.totalInventory ?? undefined,
-            });
-          }
-        } catch (colErr) {
-          console.error(
-            `[fetchStoreProductsForCollections] Failed for collection ${col.id}:`,
-            colErr
-          );
+        const edges = res.data?.collection?.products?.edges ?? [];
+        for (const edge of edges) {
+          if (edge.node?.id) collected.push(mapShopifyProductNode(edge.node, col, baseUrl));
         }
-      }
+        next.totalFetched += edges.length;
+        next.perCollectionFetched[col.id] = (next.perCollectionFetched[col.id] ?? 0) + edges.length;
 
-      if (productMap.size > 0) {
-        return Array.from(productMap.values());
-      }
-    } else if (provider === "woocommerce" || provider === "wordpress") {
-      const client = createWooClient(integration);
-      for (const col of selectedCollections) {
-        try {
-          const resp = await client.requestRaw("/products", {
-            method: "GET",
-            query: { category: col.id, per_page: 50, status: "publish" },
-          });
-          const list = (await resp.json().catch(() => [])) as Array<Record<string, unknown>>;
-          if (Array.isArray(list)) {
-            for (const p of list) {
-              const id = String(p.id ?? "");
-              if (!id) continue;
-
-              const existing = productMap.get(id);
-              if (existing) {
-                if (!existing.collectionIds.includes(col.id)) {
-                  existing.collectionIds.push(col.id);
-                  existing.collectionNames.push(col.name);
-                }
-                continue;
-              }
-
-              const cleanDesc = stripHtml(String(p.description ?? ""));
-              const shortDesc = stripHtml(String(p.short_description ?? "")) || cleanDesc.slice(0, 180);
-
-              const images = Array.isArray(p.images)
-                ? (p.images as Array<{ src?: string }>)
-                    .map((img) => img.src || "")
-                    .filter(Boolean)
-                : [];
-              const primaryImg = images[0] || "";
-
-              const amount = Number(p.price) || 0;
-              const compareAt = p.regular_price ? Number(p.regular_price) : undefined;
-
-              const attributes: Array<{ name: string; value: string }> = [];
-              if (Array.isArray(p.attributes)) {
-                for (const attr of p.attributes as Array<{ name?: string; options?: unknown }>) {
-                  if (attr.name) {
-                    const val = Array.isArray(attr.options)
-                      ? attr.options.join(", ")
-                      : String(attr.options ?? "");
-                    attributes.push({ name: attr.name, value: val });
-                  }
-                }
-              }
-
-              const tags = Array.isArray(p.tags)
-                ? (p.tags as Array<{ name?: string }>).map((t) => t.name || "").filter(Boolean)
-                : [];
-
-              productMap.set(id, {
-                id,
-                title: String(p.name ?? "Untitled Product"),
-                handle: String(p.slug ?? ""),
-                url: String(p.permalink ?? (baseUrl ? `${baseUrl}/product/${p.slug}` : "")),
-                primaryImage: primaryImg,
-                images,
-                price: {
-                  amount,
-                  currency: "USD",
-                  compareAtPrice: compareAt,
-                  priceFormatted: `$${amount.toFixed(2)}`,
-                },
-                shortDescription: shortDesc,
-                fullDescription: cleanDesc,
-                vendor: String(p.vendor ?? ""),
-                productType: String(p.type ?? ""),
-                tags,
-                attributes,
-                collectionIds: [col.id],
-                collectionNames: [col.name],
-                inStock: p.stock_status !== "outofstock",
-                totalInventory: typeof p.stock_quantity === "number" ? p.stock_quantity : undefined,
-              });
-            }
-          }
-        } catch (wooErr) {
-          console.error(
-            `[fetchStoreProductsForCollections] WooCommerce failed for collection ${col.id}:`,
-            wooErr
-          );
+        const pageInfo = res.data?.collection?.products?.pageInfo;
+        if (pageInfo?.hasNextPage && edges.length > 0) {
+          next.shopifyAfter = pageInfo.endCursor ?? null;
+        } else {
+          next.collectionIndex += 1;
+          next.shopifyAfter = null;
         }
-      }
+      } else if (provider === "woocommerce" || provider === "wordpress") {
+        const client = createWooClient(integration);
+        const resp = await client.requestRaw("/products", {
+          method: "GET",
+          query: { category: col.id, per_page: WOO_PRODUCTS_PAGE_SIZE, page: next.wooPage, status: "publish" },
+        });
+        const list = (await resp.json().catch(() => [])) as Array<Record<string, unknown>>;
+        const rows = Array.isArray(list) ? list : [];
+        for (const p of rows) {
+          const mapped = mapWooProductNode(p, col, baseUrl);
+          if (mapped) collected.push(mapped);
+        }
+        next.totalFetched += rows.length;
+        next.perCollectionFetched[col.id] = (next.perCollectionFetched[col.id] ?? 0) + rows.length;
 
-      if (productMap.size > 0) {
-        return Array.from(productMap.values());
+        if (rows.length < WOO_PRODUCTS_PAGE_SIZE) {
+          next.collectionIndex += 1;
+          next.wooPage = 1;
+        } else {
+          next.wooPage += 1;
+        }
+      } else {
+        // Unknown provider: nothing more to page, close out this collection.
+        next.collectionIndex += 1;
       }
+    } catch (err) {
+      console.error(
+        `[fetchStoreProductsPage] Failed for collection ${col.id}, skipping it:`,
+        err
+      );
+      next.collectionIndex += 1;
+      next.shopifyAfter = null;
+      next.wooPage = 1;
     }
-  } catch (err) {
-    console.error("[fetchStoreProductsForCollections] Error querying store products:", err);
   }
 
-  return generateMockProductsForCollections(selectedCollections, storeName);
+  next.done = next.collectionIndex >= selectedCollections.length || next.totalFetched >= GLOBAL_PRODUCT_FETCH_CAP;
+
+  return { products: collected, cursor: next };
 }
 
 export function generateMockProductsForCollections(
@@ -1006,6 +1340,7 @@ export function getFallbackStoreCatalog(storeName = "Demo Store"): StoreCatalogR
         description: c.description || "",
         productCount: c.productCount,
         plpPath: c.plpPath || "",
+        kind: c.kind,
       });
     }
   }
@@ -1014,6 +1349,9 @@ export function getFallbackStoreCatalog(storeName = "Demo Store"): StoreCatalogR
     provider: "demo",
     baseUrl: "",
     isMock: true,
+    // Demo brand PLPs already live inside MOCK_NICHES[].collections (kind:
+    // "brand") and were flattened in above — nothing separate to merge here.
     collections,
+    storeBrands: [],
   };
 }

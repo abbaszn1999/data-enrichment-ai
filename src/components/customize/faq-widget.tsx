@@ -8,6 +8,7 @@ import {
   type FaqTemplateId,
   type WidgetStyle,
 } from "@/lib/customize-widgets";
+import { sanitizeRichText } from "@/lib/market-research/rich-text";
 
 export function FaqWidgetPreview({
   style,
@@ -141,9 +142,11 @@ function FaqItem({
         <p
           className="pb-3 leading-relaxed"
           style={{ fontSize: scale.item, maxWidth: "42rem" }}
-        >
-          {item.a}
-        </p>
+          // The on-page agent may weave one verified internal link into an
+          // answer as `<a href="/...">text</a>`; sanitizeRichText only ever
+          // lets that exact shape through, escaping everything else.
+          dangerouslySetInnerHTML={{ __html: sanitizeRichText(item.a) }}
+        />
       ) : null}
     </div>
   );

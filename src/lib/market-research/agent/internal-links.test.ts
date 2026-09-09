@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  buildArticleLinkTargets,
   buildInternalLinkGraph,
   classifyRelation,
   stripCollectionPrefix,
@@ -275,5 +276,187 @@ describe("buildInternalLinkGraph", () => {
       const anchors = links.map((link) => link.label.toLowerCase());
       expect(new Set(anchors).size).toBe(anchors.length);
     }
+  });
+});
+
+describe("buildArticleLinkTargets", () => {
+  beforeEach(() => {
+    // Keep the suite offline: no embeddings request, purely lexical scoring.
+    process.env.OPENAI_API_KEY = "";
+  });
+
+  // Every collection's title is "Widgets" plus a distinct stop word (filtered
+  // out by tokenize, so every node's token set is identically ["widgets"]),
+  // giving all six a perfect 1.0 lexical match against an article that is
+  // just "widgets" — the only thing that can trim the list is the cap itself.
+  const widgetsSuffixes = ["And", "For", "With", "All", "Our", "From"];
+  function widgetVariants() {
+    return widgetsSuffixes.map((suffix, i) =>
+      proposed({
+        id: `widgets-${i}`,
+        name: `Widgets ${suffix}`,
+        volume: 100,
+        difficulty: 20,
+        productCount: 5,
+        storeHandle: `widgets-variant-${i}`,
+      })
+    );
+  }
+
+  it("defaults to 5 links per article, not 4", async () => {
+    const { linksByArticle } = await buildArticleLinkTargets({
+      articles: [{ id: "a1", title: "widgets", keyword: "widgets" }],
+      proposed: widgetVariants(),
+    });
+
+    expect(linksByArticle.a1.length).toBe(5);
+  });
+
+  it("respects an explicit linksPerArticle override", async () => {
+    const { linksByArticle } = await buildArticleLinkTargets({
+      articles: [{ id: "a1", title: "widgets", keyword: "widgets" }],
+      proposed: widgetVariants(),
+      linksPerArticle: 3,
+    });
+
+    expect(linksByArticle.a1.length).toBe(3);
+  });
+
+  it("reports the proposed collection id behind each chosen link, including when it matched an existing store node", async () => {
+    const golden = proposed({
+      id: "golden-collection-id",
+      name: "AI - Golden Widgets",
+      volume: 100000,
+      difficulty: 12,
+      productCount: 40,
+      storeHandle: "ai-golden-widgets",
+    });
+
+    const { linksByArticle, collectionIdsByArticle } = await buildArticleLinkTargets({
+      articles: [
+        { id: "a1", title: "Guide to Golden Widgets", keyword: "golden widgets" },
+      ],
+      proposed: [golden],
+      storeCollections: [
+        storeCollection({
+          id: "gid://shopify/Collection/99",
+          name: "AI - Golden Widgets",
+          handle: "ai-golden-widgets",
+          productCount: 40,
+        }),
+      ],
+      collectionPrefix: "AI",
+      linksPerArticle: 1,
+    });
+
+    expect(linksByArticle.a1).toHaveLength(1);
+    expect(collectionIdsByArticle.a1).toEqual(["golden-collection-id"]);
+  });
+
+  it("reuses a golden (high-volume, low-difficulty) collection across every relevant article with no inbound cap", async () => {
+    const golden = proposed({
+      id: "golden",
+      name: "Golden Widgets",
+      volume: 100000,
+      difficulty: 12,
+      productCount: 40,
+      storeHandle: "golden-widgets",
+    });
+    const silver = proposed({
+      id: "silver",
+      name: "Silver Widgets",
+      volume: 100,
+      difficulty: 50,
+      productCount: 40,
+      storeHandle: "silver-widgets",
+    });
+    // Unrelated filler nodes inflate the total linkable pool so a proportional,
+    // fair-share style inbound cap (if one existed) would bind well below 10.
+    const fillerNames = [
+      "Umbrellas",
+      "Kettles",
+      "Ladders",
+      "Lanterns",
+      "Blenders",
+      "Toolboxes",
+      "Backpacks",
+      "Mirrors",
+      "Curtains",
+      "Cushions",
+      "Planters",
+      "Notebooks",
+      "Sunglasses",
+      "Thermostats",
+      "Doormats",
+    ];
+    const filler = fillerNames.map((word, i) =>
+      proposed({
+        id: `filler-${i}`,
+        name: `Filler ${word}`,
+        volume: 10,
+        difficulty: 80,
+        productCount: 5,
+        storeHandle: `filler-${word.toLowerCase()}`,
+      })
+    );
+
+    const articles = Array.from({ length: 10 }, (_, i) => ({
+      id: `article-${i}`,
+      title: "Guide to Golden Widgets",
+      keyword: "golden widgets",
+    }));
+
+    const { linksByArticle } = await buildArticleLinkTargets({
+      articles,
+      proposed: [golden, silver, ...filler],
+      linksPerArticle: 1,
+    });
+
+    for (const article of articles) {
+      expect(linksByArticle[article.id]).toHaveLength(1);
+      expect(linksByArticle[article.id][0].collectionName).toBe("Golden Widgets");
+    }
+  });
+
+  it("lets a much better opportunity score outrank a merely-more-literal relevance match", async () => {
+    // Both candidates share almost every descriptor with the article (a
+    // realistic "close paraphrase" gap, not an exact-match-vs-unrelated one):
+    // "Precise Match" has all twelve plus its own extra word; "Broad Match"
+    // is missing just one of the twelve, so it is slightly less relevant.
+    // Precise's opportunity is terrible (tiny volume, sky-high difficulty)
+    // while Broad's is excellent (huge volume, easy difficulty) — the
+    // authority weighting should let Broad win despite the relevance gap.
+    const descriptors =
+      "black steel folding wireless bluetooth rechargeable portable waterproof heavy compact durable premium";
+
+    const precise = proposed({
+      id: "precise",
+      name: `${descriptors} sigma`,
+      volume: 5,
+      difficulty: 5000,
+      productCount: 10,
+      storeHandle: "precise-match",
+    });
+    const broad = proposed({
+      id: "broad",
+      // Missing "premium" — 11 of the 12 shared descriptors, plus its own
+      // extra word instead of "sigma".
+      name: "black steel folding wireless bluetooth rechargeable portable waterproof heavy compact durable omega",
+      volume: 200000,
+      difficulty: 12,
+      productCount: 10,
+      storeHandle: "broad-match",
+    });
+
+    const { linksByArticle } = await buildArticleLinkTargets({
+      articles: [{ id: "a1", title: descriptors, keyword: descriptors }],
+      proposed: [precise, broad],
+      linksPerArticle: 1,
+    });
+
+    expect(linksByArticle.a1).toHaveLength(1);
+    expect(linksByArticle.a1[0].collectionName.toLowerCase()).toBe(
+      "black steel folding wireless bluetooth rechargeable portable waterproof heavy compact durable omega"
+    );
   });
 });

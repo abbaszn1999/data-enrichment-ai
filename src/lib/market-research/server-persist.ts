@@ -336,11 +336,11 @@ export async function saveMrPersistedState(
           (persisted.nichesByProject[projectId] ?? []).length === 0 &&
           (persisted.structuredNichesByProject[projectId] ?? []).length === 0,
       },
-      {
-        name: "products",
-        payload: persisted.productsByProject?.[projectId] ?? [],
-        empty: (persisted.productsByProject?.[projectId] ?? []).length === 0,
-      },
+      // No "products" entry: real product records are written directly to
+      // the sharded `products-shards/` store by `/api/market-research/products/fetch`
+      // and `/api/market-research/agent/seeds`, never through client autosave —
+      // a project's product set can be 20,000+ records, and the client always
+      // reports an empty `productsByProject` now (see market-research-shell.tsx).
       {
         name: "seeds",
         payload: {

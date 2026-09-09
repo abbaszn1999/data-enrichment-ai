@@ -7,7 +7,8 @@ import {
 function keyword(
   seedId: string,
   keyword: string,
-  volume: number
+  volume: number,
+  difficulty = 20
 ): ExtractedKeyword {
   return {
     id: `${seedId}-${keyword}`,
@@ -15,7 +16,7 @@ function keyword(
     seed: seedId,
     keyword,
     volume,
-    difficulty: 20,
+    difficulty,
     wordCount: keyword.split(" ").length,
     isQuestion: false,
     sheet: "informational",
@@ -48,24 +49,40 @@ describe("selectStrategyKeywords", () => {
     expect(selectStrategyKeywords(rows, 10)).toHaveLength(2);
   });
 
-  it("gives every seed a share instead of letting the busiest one take the cap", () => {
-    // Seed "loud" would win all four slots on volume alone.
+  it("ranks purely by opportunity score, with no guaranteed spread across seeds", () => {
+    // Seed "loud" wins every slot because it has the best volume-vs-difficulty
+    // score, even though that means "quiet" and "other" get nothing.
     const rows = [
-      keyword("loud", "loud one", 5000),
-      keyword("loud", "loud two", 4000),
-      keyword("loud", "loud three", 3000),
-      keyword("loud", "loud four", 2000),
-      keyword("quiet", "quiet one", 40),
-      keyword("other", "other one", 30),
+      keyword("loud", "loud one", 5000, 20),
+      keyword("loud", "loud two", 4000, 20),
+      keyword("loud", "loud three", 3000, 20),
+      keyword("loud", "loud four", 2000, 20),
+      keyword("quiet", "quiet one", 40, 20),
+      keyword("other", "other one", 30, 20),
     ];
 
     const picked = selectStrategyKeywords(rows, 4);
     const seeds = picked.map((row) => row.seedId);
 
     expect(picked).toHaveLength(4);
-    expect(seeds).toContain("quiet");
-    expect(seeds).toContain("other");
-    expect(seeds.filter((seed) => seed === "loud")).toHaveLength(2);
+    expect(seeds.filter((seed) => seed === "loud")).toHaveLength(4);
+    expect(seeds).not.toContain("quiet");
+    expect(seeds).not.toContain("other");
+  });
+
+  it("prefers lower-difficulty keywords over a higher-volume, much harder one", () => {
+    const rows = [
+      // Highest volume, but opportunity = 10000 / 500 = 20 — the worst score.
+      keyword("s1", "hard high volume", 10000, 500),
+      // opportunity = 5000 / 12 = 416.7
+      keyword("s2", "easy top", 5000, 10),
+      // opportunity = 4000 / 12 = 333.3
+      keyword("s3", "easy second", 4000, 10),
+    ];
+
+    const picked = selectStrategyKeywords(rows, 2).map((r) => r.keyword);
+    expect(picked).toEqual(["easy top", "easy second"]);
+    expect(picked).not.toContain("hard high volume");
   });
 
   it("picks the highest volume keyword within each seed", () => {

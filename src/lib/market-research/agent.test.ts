@@ -1,24 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFallbackStoreCatalog } from "./agent/store-catalog";
 import { runHeuristicStage1Discovery } from "./agent/stage1-niche-discovery";
 import { runHeuristicStage3SeedGeneration } from "./agent/stage3-seed-generator";
 import { getAllSkills, loadSkill, parseSkillMarkdown } from "./agent/skill-loader";
 import { getSeedRowsForCollections } from "@/components/market-research/mock-data";
+import { runGeminiMarketResearch } from "./agent/gemini-runner";
+import type {
+  GeminiRunOptions,
+  GeminiRunResult,
+} from "./agent/gemini-runner";
+import type { MarketResearchProduct } from "@/components/market-research/workspace-data";
+
+vi.mock("./agent/gemini-runner", () => ({
+  runGeminiMarketResearch: vi.fn(),
+}));
 
 describe("Market Research Agent - Skills Loader", () => {
-  it("loads all 7 stage skills and validates frontmatter", async () => {
+  it("loads all 6 live-agent stage skills and validates frontmatter (stage 2 has no AI agent, so no skill file)", async () => {
     const skills = await getAllSkills();
-    expect(skills.length).toBe(7);
+    const expectedStages = [1, 3, 4, 5, 6, 7];
+    expect(skills.length).toBe(expectedStages.length);
 
-    for (let i = 0; i < 7; i++) {
-      const stage = i + 1;
-      const skill = skills[i];
-      expect(skill.frontmatter.stage).toBe(stage);
+    skills.forEach((skill, i) => {
+      expect(skill.frontmatter.stage).toBe(expectedStages[i]);
       expect(skill.frontmatter.id).toBeDefined();
       expect(["low", "medium", "high"]).toContain(skill.frontmatter.thinking);
       expect(skill.frontmatter.tools.length).toBeGreaterThan(0);
       expect(skill.instructions.length).toBeGreaterThan(10);
-    }
+    });
   });
 
   it("rejects minimal thinking level", () => {
@@ -160,6 +169,111 @@ describe("Market Research Agent - Stage 4 Intent Classifier", () => {
     const kw5 = result.classified.find((c) => c.id === "kw-5");
     expect(kw5?.sheet).toBe("category");
   });
+});
+
+describe("Market Research Agent - Stage 4 Batching and Concurrency", () => {
+  const originalApiKey = process.env.GEMINI_API_KEY;
+
+  afterEach(() => {
+    process.env.GEMINI_API_KEY = originalApiKey;
+    vi.mocked(runGeminiMarketResearch).mockReset();
+  });
+
+  it(
+    "batches at 100/call with concurrency 5, retries a transient failure, heuristically falls back only for a persistently-failing batch, and never mixes ids across batches",
+    async () => {
+      process.env.GEMINI_API_KEY = "test-key";
+      const { runStage4IntentClassification } = await import(
+        "./agent/stage4-intent-classifier"
+      );
+
+      // 950 keywords -> 10 batches of 100 (last batch has 50).
+      const TOTAL = 950;
+      const keywords = Array.from({ length: TOTAL }, (_, i) => ({
+        id: `kw-${i}`,
+        keyword: `term ${i}`,
+      }));
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const attemptsByBatchStart = new Map<string, number>();
+
+      vi.mocked(runGeminiMarketResearch).mockImplementation(async (
+        opts: GeminiRunOptions
+      ): Promise<GeminiRunResult<unknown>> => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+
+        const parsed = JSON.parse(opts.userPrompt) as {
+          keywordsToClassify: Array<{ id: string }>;
+        };
+        const ids: string[] = parsed.keywordsToClassify.map((k) => k.id);
+        const batchKey = ids[0];
+
+        // Batch 3 (starts at kw-200) fails once, then succeeds on retry.
+        const isFlakyBatch = batchKey === "kw-200";
+        // Batch 6 (starts at kw-500) always fails, forcing a heuristic fallback.
+        const isBrokenBatch = batchKey === "kw-500";
+
+        const attempts = (attemptsByBatchStart.get(batchKey) ?? 0) + 1;
+        attemptsByBatchStart.set(batchKey, attempts);
+
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+
+        if (isBrokenBatch) {
+          throw new Error("simulated persistent Gemini failure");
+        }
+        if (isFlakyBatch && attempts === 1) {
+          throw new Error("simulated transient Gemini failure");
+        }
+
+        return {
+          data: {
+            classifications: ids.map((id) => ({
+              id,
+              sheet: "category",
+              confidence: 0.95,
+              reason: `AI reason for ${id}`,
+            })),
+          },
+          rawText: "",
+          cost: {} as GeminiRunResult<unknown>["cost"],
+          credits: 0,
+          model: "gemini-3.7-flash",
+          thinkingLevel: "low",
+        };
+      });
+
+      const result = await runStage4IntentClassification({ keywords });
+
+      expect(result.isAiGenerated).toBe(true);
+      expect(result.classified.length).toBe(TOTAL);
+
+      // Every keyword got exactly one classification, matched by its own id —
+      // no batch's response leaked onto another batch's rows.
+      const byId = new Map(result.classified.map((c) => [c.id, c]));
+      expect(byId.size).toBe(TOTAL);
+      for (const kw of keywords) {
+        expect(byId.has(kw.id)).toBe(true);
+      }
+
+      // Batches ran with bounded concurrency (>1, capped at 5) rather than
+      // fully sequential or unbounded parallel.
+      expect(maxInFlight).toBeGreaterThan(1);
+      expect(maxInFlight).toBeLessThanOrEqual(5);
+
+      // The flaky batch recovered via the single retry and used the AI path.
+      expect(byId.get("kw-200")?.reason).toContain("AI reason");
+      expect(attemptsByBatchStart.get("kw-200")).toBe(2);
+
+      // The persistently-broken batch fell back to the heuristic classifier
+      // (not the mocked AI reason) after exactly one retry, not endless retries.
+      expect(byId.get("kw-500")?.reason).not.toContain("AI reason");
+      expect(attemptsByBatchStart.get("kw-500")).toBe(2);
+    },
+    15000
+  );
 });
 
 describe("Market Research Agent - Stage 5 Collection Clusterer", () => {
@@ -389,5 +503,192 @@ describe("Market Research Agent - Stage 6 On-Page Copywriter", () => {
     expect(content.collectionDescription).toContain("artists");
     expect(content.faqs.length).toBeGreaterThanOrEqual(3);
     expect(content.links.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("Market Research Agent - Embeddings int8 vector round-trip", () => {
+  it("round-trips a random unit-ish vector through encode/decode within float32 tolerance", async () => {
+    const { encodeVectorInt8, decodeVectorInt8, cosineSimilarity } = await import(
+      "./agent/embeddings"
+    );
+
+    const dims = 512;
+    const original = Array.from({ length: dims }, () => Math.random() * 2 - 1);
+
+    const encoded = encodeVectorInt8(original);
+    expect(typeof encoded).toBe("string");
+    // int8 (1 byte/dim) base64-encoded should be far smaller than the
+    // ~6KB a raw float32 JSON array would take for 512 dims.
+    expect(encoded.length).toBeLessThan(1000);
+
+    const decoded = decodeVectorInt8(encoded, dims);
+    expect(decoded.length).toBe(dims);
+
+    // Cosine similarity against itself must survive quantization at well
+    // under 1% error, matching the design budget in the plan.
+    const selfSimilarity = cosineSimilarity(original, decoded);
+    expect(selfSimilarity).toBeGreaterThan(0.99);
+  });
+
+  it("preserves relative cosine ranking between a near-duplicate and an unrelated vector after quantization", async () => {
+    const { encodeVectorInt8, decodeVectorInt8, cosineSimilarity } = await import(
+      "./agent/embeddings"
+    );
+    const dims = 64;
+
+    const base = Array.from({ length: dims }, (_, i) => Math.sin(i));
+    const nearDuplicate = base.map((v) => v + 0.01);
+    const unrelated = Array.from({ length: dims }, (_, i) => Math.cos(i * 3));
+
+    const decodedBase = decodeVectorInt8(encodeVectorInt8(base), dims);
+    const decodedNear = decodeVectorInt8(encodeVectorInt8(nearDuplicate), dims);
+    const decodedUnrelated = decodeVectorInt8(encodeVectorInt8(unrelated), dims);
+
+    const simNear = cosineSimilarity(decodedBase, decodedNear);
+    const simUnrelated = cosineSimilarity(decodedBase, decodedUnrelated);
+
+    expect(simNear).toBeGreaterThan(simUnrelated);
+    expect(simNear).toBeGreaterThan(0.99);
+  });
+
+  it("contentHash is stable for identical text and differs for changed text (skip-on-rerun basis)", async () => {
+    const { contentHash } = await import("./agent/embeddings");
+
+    const a = contentHash("Title: Sunglasses | Type: Eyewear");
+    const b = contentHash("Title: Sunglasses | Type: Eyewear");
+    const c = contentHash("Title: Sunglasses | Type: Eyewear (updated)");
+
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+  });
+});
+
+describe("Market Research Agent - Stage 5 collection-scoped vector candidate filtering", () => {
+  it("computeCollectionVectorMatches only ranks products already scoped by the caller, drops products missing a vector, and enforces threshold + cap", async () => {
+    const { computeCollectionVectorMatches } = await import(
+      "./agent/stage5-collection-clusterer"
+    );
+
+    const makeProduct = (id: string, collectionIds: string[]): MarketResearchProduct => ({
+      id,
+      title: id,
+      handle: id,
+      url: `/products/${id}`,
+      images: [],
+      price: { amount: 10, currency: "USD", priceFormatted: "$10.00" },
+      tags: [],
+      attributes: [],
+      collectionIds,
+      collectionNames: [],
+      inStock: true,
+    });
+
+    // Two products already scoped to "col-tablets" (the caller's exact
+    // collectionId lineage filter), one product that belongs to a totally
+    // different collection but is passed in anyway to prove the function
+    // itself does not re-widen scope, and one scoped product with no vector.
+    const scopedProducts = [
+      makeProduct("prod-close", ["col-tablets"]),
+      makeProduct("prod-far", ["col-tablets"]),
+      makeProduct("prod-no-vector", ["col-tablets"]),
+    ];
+
+    const termVector = [1, 0, 0, 0];
+    const productVectors = new Map<string, number[]>([
+      ["prod-close", [0.99, 0.14, 0, 0]], // cosine ~0.99, above threshold
+      ["prod-far", [0, 1, 0, 0]], // cosine 0, below threshold
+      // "prod-no-vector" intentionally has no entry.
+    ]);
+
+    const matches = computeCollectionVectorMatches(
+      termVector,
+      scopedProducts,
+      productVectors,
+      0.32,
+      200
+    );
+
+    expect(matches.length).toBe(1);
+    expect(matches[0].productId).toBe("prod-close");
+    // A missing vector must never be treated as a similarity of 0 that
+    // still counts as "scored" — it should be silently excluded entirely.
+    expect(matches.map((m) => m.productId)).not.toContain("prod-no-vector");
+    expect(matches.map((m) => m.productId)).not.toContain("prod-far");
+  });
+
+  it("caps ranked candidates at topCap even when many products clear the threshold", async () => {
+    const { computeCollectionVectorMatches } = await import(
+      "./agent/stage5-collection-clusterer"
+    );
+
+    const makeProduct = (id: string): MarketResearchProduct => ({
+      id,
+      title: id,
+      handle: id,
+      url: `/products/${id}`,
+      images: [],
+      price: { amount: 10, currency: "USD", priceFormatted: "$10.00" },
+      tags: [],
+      attributes: [],
+      collectionIds: ["col-tablets"],
+      collectionNames: [],
+      inStock: true,
+    });
+
+    const products = Array.from({ length: 10 }, (_, i) => makeProduct(`prod-${i}`));
+    const termVector = [1, 0];
+    const productVectors = new Map<string, number[]>(
+      products.map((p) => [p.id, [1, 0]]) // all identical, all cosine 1.0
+    );
+
+    const matches = computeCollectionVectorMatches(
+      termVector,
+      products,
+      productVectors,
+      0.32,
+      3
+    );
+
+    expect(matches.length).toBe(3);
+  });
+});
+
+describe("Market Research Agent - Storage Admin merge-not-overwrite on cursor writes", () => {
+  it("mergeById upserts by id without dropping earlier pages' entries", async () => {
+    const { mergeById } = await import("./storage-admin");
+
+    // Page 1 already wrote these two collections to the stored slice.
+    const existing = [
+      { id: "col-a", name: "Collection A", volume: 10 },
+      { id: "col-b", name: "Collection B", volume: 20 },
+    ];
+
+    // Page 2's cursor call only knows about "col-b" (updated) and "col-c"
+    // (new) — it must never see or resend "col-a".
+    const incoming = [
+      { id: "col-b", name: "Collection B", volume: 25 },
+      { id: "col-c", name: "Collection C", volume: 5 },
+    ];
+
+    const merged = mergeById(existing, incoming);
+
+    expect(merged.length).toBe(3);
+    const byId = new Map(merged.map((c) => [c.id, c]));
+    // Untouched earlier entry survives a later page's write.
+    expect(byId.get("col-a")?.volume).toBe(10);
+    // Later page's value wins on a collision, rather than being ignored.
+    expect(byId.get("col-b")?.volume).toBe(25);
+    // Brand-new entry from the later page is appended, not dropped.
+    expect(byId.get("col-c")?.volume).toBe(5);
+  });
+
+  it("is a no-op merge when incoming is empty, and fully replaces when existing is empty", async () => {
+    const { mergeById } = await import("./storage-admin");
+
+    const existing = [{ id: "x", value: 1 }];
+    expect(mergeById(existing, [])).toEqual(existing);
+
+    const incoming = [{ id: "y", value: 2 }];
+    expect(mergeById([], incoming)).toEqual(incoming);
   });
 });

@@ -8,6 +8,12 @@ export function compressCollectionsForStage1(collections: StoreCollectionItem[])
     name: string;
     productCount: number;
     description?: string;
+    // WooCommerce hierarchy only — undefined/omitted for Shopify's flat collections
+    // and always omitted for brand items, which never have a parent category.
+    parentId?: string;
+    depth?: number;
+    // Present only on brand/vendor PLPs — every other item omits this key.
+    kind?: "brand";
   }>;
   overflowCount: number;
   overflowProducts: number;
@@ -21,6 +27,9 @@ export function compressCollectionsForStage1(collections: StoreCollectionItem[])
       name: c.name,
       productCount: c.productCount,
       description: c.description || undefined,
+      parentId: c.parentId && c.parentId !== "0" ? c.parentId : undefined,
+      depth: c.depth ?? 0,
+      kind: c.kind === "brand" ? ("brand" as const) : undefined,
     })),
     overflowCount: overflow.length,
     overflowProducts: overflow.reduce((sum, c) => sum + (c.productCount || 0), 0),

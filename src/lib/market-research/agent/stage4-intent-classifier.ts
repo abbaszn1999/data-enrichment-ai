@@ -1,15 +1,11 @@
 import { runGeminiMarketResearch } from "./gemini-runner";
-import { mapLimit } from "@/lib/async/map-limit";
+import { runWithConcurrency, chunk } from "@/lib/sync/core/batch-executor";
 
 export type ClassifiedSheetType = "category" | "informational" | "excluded";
 
 export interface KeywordToClassify {
   id: string;
   keyword: string;
-  seed?: string;
-  volume?: number;
-  difficulty?: number;
-  intents?: string[];
 }
 
 export interface ClassifiedKeywordItem {
@@ -123,9 +119,6 @@ export function runHeuristicStage4Classification(input: {
 }
 
 export async function runStage4IntentClassification(input: {
-  storeName?: string;
-  parentNiches?: string[];
-  collections?: string[];
   keywords: KeywordToClassify[];
 }): Promise<Stage4ClassificationResult> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -133,36 +126,36 @@ export async function runStage4IntentClassification(input: {
     return runHeuristicStage4Classification(input);
   }
 
-  const BATCH_SIZE = 60;
-  const batches: KeywordToClassify[][] = [];
-  for (let i = 0; i < input.keywords.length; i += BATCH_SIZE) {
-    batches.push(input.keywords.slice(i, i + BATCH_SIZE));
-  }
+  const BATCH_SIZE = 100;
+  const BATCH_CONCURRENCY = 5;
+  const batches: KeywordToClassify[][] = chunk(input.keywords, BATCH_SIZE);
 
-  const batchResults = await mapLimit(batches, 4, async (batch) => {
-    try {
-      const userPrompt = JSON.stringify({
-        storeContext: {
-          storeName: input.storeName || "Ecommerce Store",
-          confirmedNiches: input.parentNiches || [],
-          storeCollections: input.collections || [],
-        },
-        keywordsToClassify: batch.map((kw) => ({
-          id: kw.id,
-          keyword: kw.keyword,
-          seed: kw.seed || "",
-          volume: kw.volume || 0,
-          difficulty: kw.difficulty || 0,
-          semrushIntents: kw.intents || [],
-        })),
-      });
+  const systemInstruction = `You are the Autommerce Intent Classification Agent powered by Gemini 3.7 Flash.
+You receive bare keywords — no store name, no niche list, no collections, no volume, no
+difficulty. Classify each one strictly into one of three sheets, using only ordinary world
+knowledge of how shopping and search work — never store-specific context you were not given:
 
-      const systemInstruction = `You are the Autommerce Collection Opportunity Agent powered by Gemini 3.7 Flash.
-Analyze each provided keyword and classify it strictly into one of three sheets:
+1. "category" (PLP suitable) -> A real shopper searching this exact phrase would expect to land on
+   a page listing MULTIPLE different, comparable products to browse and compare (main categories,
+   brand+category terms, audience/use-case/feature/style/material/compatibility/occasion/
+   problem-solution collections). A commercial-sounding label alone is not enough — there must
+   genuinely be multiple different products behind it.
+2. "informational" -> A real shopper searching this exact phrase wants to learn or decide, not
+   browse a product grid right now: questions, "vs" comparisons, buying guides, care/how-to
+   content, single-product reviews with no browsing intent.
+3. "excluded" -> The catch-all: fails BOTH tests above, for any reason. This is NOT limited to
+   single-SKU/PDP terms (e.g. "iPhone 15 Pro Max 256GB") — it also covers navigational/brand-login
+   queries, support/manuals/careers/jobs queries, and vague or malformed phrases too generic to
+   represent any real purchasable product group. Never treat "excluded" as a synonym for "single
+   product"; always name the actual applicable reason.
 
-1. "category" (PLP suitable) -> Commercial/transactional product groups, styles, materials, features, use-cases, audiences where shoppers expect to browse and compare MULTIPLE products.
-2. "informational" -> Educational questions, how-tos, vs comparisons, buying guides, tutorials, or informational search queries (suitable for Blog / Strategy).
-3. "excluded" -> Single SKUs/models (PDP intent, e.g. "iPhone 15 Pro Max 256GB"), navigational brand logins/locations, support/manuals/drivers, jobs, or terms outside the confirmed store niches.
+Batch consistency: this batch runs concurrently with other batches from the same job. Near-identical
+or same-shape keywords must get the same verdict regardless of which batch they landed in — apply
+the fixed rules only, never an impression based on this batch's specific mix of keywords.
+
+There is no fourth "needs review" bucket. For a genuinely ambiguous keyword, pick the
+best-supported sheet, lower "confidence" (below ~0.6), and name the ambiguity directly in "reason"
+instead of guessing silently or forcing false confidence.
 
 Output strictly valid JSON with this exact schema:
 {
@@ -177,49 +170,102 @@ Output strictly valid JSON with this exact schema:
   ]
 }`;
 
+  /**
+   * Calls Gemini for a single batch, with one retry (short backoff) before
+   * giving up. A thrown error here means the WHOLE batch is undecided and
+   * must fall back to heuristics — a single retry protects against
+   * transient/rate-limit blips without silently downgrading quality.
+   */
+  async function classifyBatchWithGemini(
+    batch: KeywordToClassify[]
+  ): Promise<GeminiIntentClassificationResponse> {
+    const userPrompt = JSON.stringify({
+      keywordsToClassify: batch.map((kw) => ({
+        id: kw.id,
+        keyword: kw.keyword,
+      })),
+    });
+
+    try {
       const aiResponse = await runGeminiMarketResearch<GeminiIntentClassificationResponse>({
         stage: 4,
         systemInstruction,
         userPrompt,
       });
-
-      const responseMap = new Map<string, GeminiKeywordClassificationItem>();
-      if (Array.isArray(aiResponse.data?.classifications)) {
-        for (const item of aiResponse.data.classifications) {
-          if (item?.id) {
-            responseMap.set(item.id, item);
-          }
-        }
-      }
-
-      const classified: ClassifiedKeywordItem[] = [];
-      for (const kw of batch) {
-        const item = responseMap.get(kw.id);
-        if (item) {
-          classified.push({
-            id: kw.id,
-            keyword: kw.keyword,
-            sheet: normalizeSheet(item.sheet || "category"),
-            confidence: Math.min(1, Math.max(0.1, item.confidence || 0.9)),
-            reason: item.reason || "Classified by Gemini 3.7 Flash",
-            plpConcept: item.plpConcept || undefined,
-          });
-        } else {
-          const heuristic = runHeuristicStage4Classification({ keywords: [kw] });
-          if (heuristic.classified[0]) {
-            classified.push(heuristic.classified[0]);
-          }
-        }
-      }
-      return classified;
+      return aiResponse.data;
     } catch (err) {
-      console.error("[runStage4IntentClassification] Batch failed, falling back to heuristics:", err);
-      const heuristic = runHeuristicStage4Classification({ keywords: batch });
-      return heuristic.classified;
+      console.error("[runStage4IntentClassification] Batch call failed, retrying once:", err);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const retryResponse = await runGeminiMarketResearch<GeminiIntentClassificationResponse>({
+        stage: 4,
+        systemInstruction,
+        userPrompt,
+      });
+      return retryResponse.data;
     }
+  }
+
+  /**
+   * Runs one batch end-to-end and returns its classified rows. Each batch
+   * builds its own `responseMap` from ONLY its own Gemini response and
+   * matches ONLY its own input keywords by `id` — this is what guarantees
+   * no cross-batch data contamination, regardless of how many batches run
+   * concurrently.
+   */
+  async function classifyOneBatch(
+    batch: KeywordToClassify[]
+  ): Promise<ClassifiedKeywordItem[]> {
+    const data = await classifyBatchWithGemini(batch);
+
+    const responseMap = new Map<string, GeminiKeywordClassificationItem>();
+    if (Array.isArray(data?.classifications)) {
+      for (const item of data.classifications) {
+        if (item?.id) {
+          responseMap.set(item.id, item);
+        }
+      }
+    }
+
+    const results: ClassifiedKeywordItem[] = [];
+    for (const kw of batch) {
+      const item = responseMap.get(kw.id);
+      if (item) {
+        results.push({
+          id: kw.id,
+          keyword: kw.keyword,
+          sheet: normalizeSheet(item.sheet || "category"),
+          confidence: Math.min(1, Math.max(0.1, item.confidence || 0.9)),
+          reason: item.reason || "Classified by Gemini 3.7 Flash",
+          plpConcept: item.plpConcept || undefined,
+        });
+      } else {
+        // Fallback for individual items missing from an otherwise-valid response
+        const heuristic = runHeuristicStage4Classification({ keywords: [kw] });
+        if (heuristic.classified[0]) {
+          results.push(heuristic.classified[0]);
+        }
+      }
+    }
+    return results;
+  }
+
+  const batchRun = await runWithConcurrency(batches, classifyOneBatch, {
+    concurrency: BATCH_CONCURRENCY,
   });
 
-  const allClassified = batchResults.flat();
+  const allClassified: ClassifiedKeywordItem[] = [];
+  for (const rows of batchRun.successes) {
+    allClassified.push(...rows);
+  }
+  for (const { index } of batchRun.errors) {
+    const failedBatch = batches[index];
+    if (!failedBatch) continue;
+    console.error(
+      `[runStage4IntentClassification] Batch ${index + 1}/${batches.length} failed after retry, falling back to heuristics for ${failedBatch.length} keywords`
+    );
+    const heuristic = runHeuristicStage4Classification({ keywords: failedBatch });
+    allClassified.push(...heuristic.classified);
+  }
 
   const categoryCount = allClassified.filter((c) => c.sheet === "category").length;
   const informationalCount = allClassified.filter((c) => c.sheet === "informational").length;

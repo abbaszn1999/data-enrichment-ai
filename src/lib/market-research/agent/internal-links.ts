@@ -3,9 +3,11 @@ import type {
   CollectionLink,
   ProposedCollection,
 } from "@/components/market-research/workspace-data";
+import { opportunityScore } from "@/components/market-research/workspace-data";
 import type { StoreCollectionItem } from "./store-catalog";
 import { cosineSimilarity, embedTexts } from "./embeddings";
 import { runGeminiMarketResearch } from "./gemini-runner";
+import { runWithConcurrency } from "@/lib/sync/core/batch-executor";
 
 /**
  * Internal linking engine.
@@ -69,6 +71,13 @@ const MAX_EMBEDDED_NODES = 2000;
 
 export interface InternalLinkInput {
   proposed: ProposedCollection[];
+  /**
+   * When set, only these collections get retrieval/judgement/assembly — the
+   * full `proposed` list still builds the registry, so a page's sources can
+   * link to collections outside their own page (e.g. an earlier page). Used
+   * to paginate the engine at scale without shrinking the link target pool.
+   */
+  sourceCollections?: ProposedCollection[];
   storeCollections?: StoreCollectionItem[];
   /** Prefix the push step prepends to store titles, e.g. "AI". */
   collectionPrefix?: string;
@@ -77,6 +86,8 @@ export interface InternalLinkInput {
   /** Disables the Gemini re-ranking pass (deterministic ordering only). */
   disableAi?: boolean;
 }
+
+const JUDGEMENT_CONCURRENCY = 5;
 
 export type InternalLinkGraph = Record<string, CollectionLink[]>;
 
@@ -92,6 +103,8 @@ type LinkNode = {
   published: boolean;
   productCount: number;
   volume: number;
+  /** Keyword difficulty behind this collection's demand; neutral default when unknown. */
+  difficulty: number;
   embedText: string;
   vector?: number[] | null;
 };
@@ -282,6 +295,7 @@ function buildRegistry(input: InternalLinkInput): {
     published: boolean;
     productCount: number;
     volume?: number;
+    difficulty?: number;
     extraText?: string;
   }): LinkNode => {
     const title = stripCollectionPrefix(params.rawTitle, prefix) || params.rawTitle;
@@ -298,6 +312,7 @@ function buildRegistry(input: InternalLinkInput): {
       published: params.published,
       productCount: params.productCount,
       volume: params.volume ?? 0,
+      difficulty: params.difficulty ?? 50,
       embedText: [title, params.extraText].filter(Boolean).join(". ").slice(0, 800),
     };
   };
@@ -342,6 +357,7 @@ function buildRegistry(input: InternalLinkInput): {
       // Already live in the store: reuse the verified node and enrich it with
       // the demand data we know from the research pipeline.
       existing.volume = Math.max(existing.volume, collection.volume || 0);
+      existing.difficulty = collection.difficulty ?? existing.difficulty;
       if (collection.headKeyword && !existing.embedText.includes(collection.headKeyword)) {
         existing.embedText = `${existing.embedText}. ${collection.headKeyword}`.slice(0, 800);
       }
@@ -368,6 +384,7 @@ function buildRegistry(input: InternalLinkInput): {
       published: Boolean(pushedHandle),
       productCount: collection.productCount ?? 0,
       volume: collection.volume ?? 0,
+      difficulty: collection.difficulty,
       extraText: [collection.headKeyword, collection.parentNiche]
         .filter(Boolean)
         .join(". "),
@@ -468,9 +485,11 @@ async function selectWithAi(
   const picks = new Map<string, AiSelection[]>();
   if (batch.length === 0) return picks;
 
+  const minLinksPerPage = Math.min(3, linksPerPage);
   const userPrompt = JSON.stringify({
     task: "select_internal_links",
     linksPerPage,
+    minLinksPerPage,
     pages: batch.map((item) => ({
       collectionId: item.collectionId,
       currentPage: item.source.title,
@@ -485,7 +504,7 @@ async function selectWithAi(
 
   const systemInstruction = `You are the Autommerce Internal Linking Judge.
 
-For each page you receive a numbered candidate list. Choose up to ${linksPerPage} candidates that genuinely help a shopper move forward, and write the anchor text for each.
+For each page you receive a numbered candidate list. Choose between ${minLinksPerPage} and ${linksPerPage} candidates that genuinely help a shopper move forward, and write the anchor text for each.
 
 Selection rules:
 - Prefer a mix: one broader ("parent") page, one or two "sibling" pages, and a "complement" or "child" page. Never fill the block with one relation type.
@@ -496,7 +515,7 @@ Selection rules:
 Hard constraints:
 - You MUST only reference candidates by their given "index".
 - You MUST NOT write, invent, or guess any URL, path, slug, or handle.
-- If fewer than ${linksPerPage} candidates are worth linking, return fewer.
+- Aim for ${minLinksPerPage} to ${linksPerPage} links. Only return fewer than ${minLinksPerPage} if the candidate list genuinely has nothing else worth linking.
 
 Output strictly valid JSON:
 {
@@ -616,9 +635,9 @@ function assemblePageLinks(params: {
     tryAdd(candidate, undefined, true);
   }
 
-  // Last resort: allow the cap to be exceeded rather than ship an empty block.
+  // Last resort: allow the cap to be exceeded rather than ship a thin block.
   for (const candidate of candidates) {
-    if (chosen.length >= Math.min(2, linksPerPage)) break;
+    if (chosen.length >= Math.min(3, linksPerPage)) break;
     tryAdd(candidate, undefined, false);
   }
 
@@ -631,7 +650,7 @@ function assemblePageLinks(params: {
 export async function buildInternalLinkGraph(
   input: InternalLinkInput
 ): Promise<InternalLinkGraph> {
-  const linksPerPage = Math.max(1, input.linksPerPage ?? 4);
+  const linksPerPage = Math.max(1, input.linksPerPage ?? 5);
   const graph: InternalLinkGraph = {};
 
   if (input.proposed.length === 0) return graph;
@@ -644,7 +663,7 @@ export async function buildInternalLinkGraph(
 
   if (linkable.length === 0) {
     const fallback = safeFallbackLinks(input.provider);
-    for (const collection of input.proposed) {
+    for (const collection of input.sourceCollections ?? input.proposed) {
       graph[collection.id] = fallback;
     }
     return graph;
@@ -666,7 +685,8 @@ export async function buildInternalLinkGraph(
     sparseVectors.set(node.key, tfIdfVector(node.tokens, idf));
   }
 
-  const perSource = input.proposed.map((collection) => {
+  const sourceList = input.sourceCollections ?? input.proposed;
+  const perSource = sourceList.map((collection) => {
     const source = sourceNodeByProposedId.get(collection.id);
     const candidates = source
       ? retrieveCandidates(source, nodes, idf, sparseVectors, useDense)
@@ -691,16 +711,26 @@ export async function buildInternalLinkGraph(
       shortlist: Candidate[];
     }>;
 
+    const batches: Array<typeof eligible> = [];
     for (let i = 0; i < eligible.length; i += SOURCES_PER_AI_CALL) {
-      const batch = eligible.slice(i, i + SOURCES_PER_AI_CALL);
-      const picks = await selectWithAi(
-        batch.map((item) => ({
-          collectionId: item.collectionId,
-          source: item.source,
-          shortlist: item.shortlist,
-        })),
-        linksPerPage
-      );
+      batches.push(eligible.slice(i, i + SOURCES_PER_AI_CALL));
+    }
+
+    const { successes } = await runWithConcurrency(
+      batches,
+      (batch) =>
+        selectWithAi(
+          batch.map((item) => ({
+            collectionId: item.collectionId,
+            source: item.source,
+            shortlist: item.shortlist,
+          })),
+          linksPerPage
+        ),
+      { concurrency: JUDGEMENT_CONCURRENCY }
+    );
+
+    for (const picks of successes) {
       for (const [collectionId, selections] of picks) {
         aiPicksByCollection.set(collectionId, selections);
       }
@@ -793,20 +823,6 @@ export async function buildInternalLinkGraph(
 /** Minimum hybrid relevance before a collection is worth linking from an article. */
 const ARTICLE_LINK_THRESHOLD = 0.12;
 
-/**
- * Every collection gets at least this many inbound article links before the
- * proportional cap kicks in, so a small plan is not spread uselessly thin.
- */
-const MIN_INBOUND_PER_COLLECTION = 5;
-
-/**
- * How far a popular collection may exceed its fair share of inbound links. A
- * broad page like "Cables and Chargers" is the best match for a large slice of
- * the plan, and pretending otherwise would produce worse links — but without a
- * ceiling it absorbs the entire plan and the long tail gets nothing.
- */
-const INBOUND_SLACK = 1.5;
-
 export interface ArticleLinkInput {
   /** The planned articles, keyed so the caller can map results back. */
   articles: Array<{ id: string; title: string; keyword: string }>;
@@ -817,6 +833,16 @@ export interface ArticleLinkInput {
   linksPerArticle?: number;
 }
 
+export interface ArticleLinkResult {
+  linksByArticle: Record<string, ArticleLinkTarget[]>;
+  /**
+   * The proposed-collection ids behind each article's chosen links — the
+   * SKU-link step reuses these to pull products from the same collections,
+   * without redoing the relevance/authority scoring above.
+   */
+  collectionIdsByArticle: Record<string, string[]>;
+}
+
 /**
  * Resolves, for each planned article, the collection pages it should link out
  * to. It reuses the same registry, IDF and embedding machinery as the
@@ -825,24 +851,34 @@ export interface ArticleLinkInput {
  */
 export async function buildArticleLinkTargets(
   input: ArticleLinkInput
-): Promise<Record<string, ArticleLinkTarget[]>> {
+): Promise<ArticleLinkResult> {
   const result: Record<string, ArticleLinkTarget[]> = {};
-  if (input.articles.length === 0) return result;
+  const collectionIdsByArticle: Record<string, string[]> = {};
+  if (input.articles.length === 0) return { linksByArticle: result, collectionIdsByArticle };
 
-  const linksPerArticle = Math.max(1, input.linksPerArticle ?? 4);
+  const linksPerArticle = Math.max(1, input.linksPerArticle ?? 5);
 
-  const { nodes } = buildRegistry({
+  const { nodes, sourceNodeByProposedId } = buildRegistry({
     proposed: input.proposed ?? [],
     storeCollections: input.storeCollections,
     collectionPrefix: input.collectionPrefix,
   });
+
+  // A proposed collection that already matched a live store node (the common
+  // case once collections are pushed) keeps that node's `store:` key, so the
+  // `proposed:` prefix alone cannot recover the collection id. This inverted
+  // map does, for both cases, straight from the registry's own bookkeeping.
+  const proposedIdByNodeKey = new Map<string, string>();
+  for (const [proposedId, node] of sourceNodeByProposedId) {
+    proposedIdByNodeKey.set(node.key, proposedId);
+  }
 
   const linkable = nodes.filter(
     (node) => node.resolved && node.published && node.productCount > 0
   );
   if (linkable.length === 0) {
     for (const article of input.articles) result[article.id] = [];
-    return result;
+    return { linksByArticle: result, collectionIdsByArticle };
   }
 
   const idf = buildIdf(nodes);
@@ -870,6 +906,10 @@ export async function buildArticleLinkTargets(
     10,
     ...linkable.map((node) => node.productCount || 0)
   );
+  const maxOpportunity = Math.max(
+    1,
+    ...linkable.map((node) => opportunityScore(node.volume, node.difficulty))
+  );
 
   // Score every (article, collection) pair once, then allocate globally. Letting
   // each article pick its own top matches independently makes the broadest
@@ -896,40 +936,37 @@ export async function buildArticleLinkTargets(
       const relevance = dense !== null ? 0.7 * dense + 0.3 * lexical : lexical;
       if (relevance < ARTICLE_LINK_THRESHOLD) continue;
 
-      // A small commercial nudge: between two equally relevant pages, send the
-      // reader to the one that can actually fulfil the intent.
+      // Relevance still gates candidacy (an article can only ever link to a
+      // topically fitting page), but among relevant candidates a "golden"
+      // collection — high search volume, low-to-normal difficulty — should win
+      // so it gets reused as the authority target across every article that
+      // fits it, rather than links being spread evenly for their own sake.
+      const opportunity = opportunityScore(node.volume, node.difficulty);
       const score =
-        0.85 * relevance + 0.15 * normalizeLog(node.productCount, maxProducts);
+        0.55 * relevance +
+        0.35 * normalizeLog(opportunity, maxOpportunity) +
+        0.1 * normalizeLog(node.productCount, maxProducts);
       candidates.push({ articleId: article.id, node, score });
     }
   });
 
   candidates.sort((a, b) => b.score - a.score);
 
-  const inboundCap = Math.max(
-    MIN_INBOUND_PER_COLLECTION,
-    Math.ceil(
-      ((input.articles.length * linksPerArticle) / linkable.length) *
-        INBOUND_SLACK
-    )
-  );
-
   const chosen = new Map<string, Array<{ node: LinkNode; score: number }>>();
-  const inbound = new Map<string, number>();
 
   const take = (entry: (typeof candidates)[number]) => {
     const list = chosen.get(entry.articleId) ?? [];
     list.push({ node: entry.node, score: entry.score });
     chosen.set(entry.articleId, list);
-    inbound.set(entry.node.key, (inbound.get(entry.node.key) ?? 0) + 1);
   };
 
-  // Best pairs first, so a collection's quota goes to the articles that fit it
-  // most closely rather than to whichever article happened to be processed first.
+  // Best pairs first, so each article fills its quota with its closest-fitting
+  // collections. There is no inbound cap: a golden collection is meant to be
+  // the link target for every article that fits it, building authority there
+  // rather than spreading links evenly for their own sake.
   for (const entry of candidates) {
     const list = chosen.get(entry.articleId);
     if (list && list.length >= linksPerArticle) continue;
-    if ((inbound.get(entry.node.key) ?? 0) >= inboundCap) continue;
     take(entry);
   }
 
@@ -942,14 +979,18 @@ export async function buildArticleLinkTargets(
 
   for (const article of input.articles) {
     const usedAnchors = new Set<string>();
-    result[article.id] = (chosen.get(article.id) ?? [])
-      .sort((a, b) => b.score - a.score)
-      .map((entry) => ({
-        anchor: sanitizeAnchor(undefined, entry.node, usedAnchors),
-        url: entry.node.href,
-        collectionName: entry.node.title,
-      }));
+    const picks = (chosen.get(article.id) ?? []).sort(
+      (a, b) => b.score - a.score
+    );
+    result[article.id] = picks.map((entry) => ({
+      anchor: sanitizeAnchor(undefined, entry.node, usedAnchors),
+      url: entry.node.href,
+      collectionName: entry.node.title,
+    }));
+    collectionIdsByArticle[article.id] = picks
+      .map((entry) => proposedIdByNodeKey.get(entry.node.key) ?? null)
+      .filter((id): id is string => Boolean(id));
   }
 
-  return result;
+  return { linksByArticle: result, collectionIdsByArticle };
 }

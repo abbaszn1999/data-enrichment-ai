@@ -96,12 +96,24 @@ type StageSeedsPanelProps = {
   probes: Record<string, SeedProbe>;
   probingIds: string[];
   onProbe: (rowIds: string[]) => void;
-  onAddManualSeed: (term: string, canonicalKey: string) => void;
+  /** `collectionId` identifies the exact PLP family to attach the term to
+   * — never the canonical NAME alone, since two different PLPs can share
+   * the same canonical seed name. */
+  onAddManualSeed: (term: string, collectionId: string) => void;
   onConfirmSpend: () => void;
   committed?: boolean;
   walletHref?: string;
   walletBalance?: number | null;
   readOnly?: boolean;
+  /**
+   * Real fetched product counts per collectionId, from the paginated
+   * catalog fetch (Tab 2 -> 3). Falls back to the row's own `productCount`
+   * (the catalog's advertised number) when a fetch hasn't landed yet, so
+   * the column never briefly shows a blank/zero.
+   */
+  productCountByCollectionId?: Record<string, number>;
+  /** Live progress of the paginated product fetch driving alongside seed generation. */
+  productFetchProgress?: { fetched: number; done: boolean } | null;
 };
 
 /** Stage 3 — broad seed variations plus the demand/cost decision surface. */
@@ -123,6 +135,8 @@ export function StageSeedsPanel({
   walletHref,
   walletBalance = null,
   readOnly = false,
+  productCountByCollectionId = {},
+  productFetchProgress = null,
 }: StageSeedsPanelProps) {
   const [view, setView] = useState<"rows" | "grouped">("rows");
   const [query, setQuery] = useState("");
@@ -223,6 +237,11 @@ export function StageSeedsPanel({
               canonical terms plus broad wording only. Follow the chat on the
               left.
             </p>
+            {productFetchProgress && !productFetchProgress.done ? (
+              <p className="text-[11px] tabular-nums text-muted-foreground">
+                Fetching catalog products… {productFetchProgress.fetched.toLocaleString("en-US")} so far
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
@@ -276,9 +295,13 @@ export function StageSeedsPanel({
 
   const submitManualSeed = () => {
     const term = manualTerm.trim();
-    const family = manualFamily || allGroups[0]?.canonicalNicheSeed;
-    if (!term || !family) return;
-    onAddManualSeed(term, family);
+    // Keyed by collectionId, not the canonical NAME — two different PLPs
+    // can legitimately share the same canonical seed name (e.g. two
+    // collections that both distill to "Smartphones"), so the name alone
+    // can't reliably identify which family to attach the term to.
+    const collectionId = manualFamily || allGroups[0]?.collectionId;
+    if (!term || !collectionId) return;
+    onAddManualSeed(term, collectionId);
     setManualTerm("");
   };
 
@@ -517,6 +540,9 @@ export function StageSeedsPanel({
                 <TableHead className="min-w-[160px] text-xs font-semibold whitespace-nowrap">
                   Collection
                 </TableHead>
+                <TableHead className="text-xs whitespace-nowrap text-right">
+                  Products
+                </TableHead>
                 <TableHead className="min-w-[80px] text-xs font-semibold whitespace-nowrap">
                   Scope
                 </TableHead>
@@ -538,7 +564,7 @@ export function StageSeedsPanel({
               {visibleRows.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={9}
+                    colSpan={10}
                     className="text-center text-xs text-muted-foreground py-8"
                   >
                     {rows.length === 0
@@ -601,6 +627,12 @@ export function StageSeedsPanel({
                         <TableCell className="min-w-[160px] text-xs whitespace-nowrap">
                           {row.selectedCollection}
                         </TableCell>
+                        <TableCell className="text-xs tabular-nums text-right whitespace-nowrap text-muted-foreground">
+                          {formatProductCount(
+                            productCountByCollectionId[row.collectionId] ??
+                              row.productCount
+                          )}
+                        </TableCell>
                         <TableCell className="min-w-[80px] whitespace-nowrap">
                           <Badge
                             variant="outline"
@@ -645,7 +677,7 @@ export function StageSeedsPanel({
                       </TableRow>
                       {expanded ? (
                         <TableRow className="hover:bg-transparent">
-                          <TableCell colSpan={9} className="bg-muted/20">
+                          <TableCell colSpan={10} className="bg-muted/20">
                             <SeedDetail
                               row={row}
                               probe={probe}
@@ -801,17 +833,14 @@ export function StageSeedsPanel({
           aria-label="Add a broad seed variation"
         />
         <select
-          value={manualFamily || allGroups[0]?.canonicalNicheSeed || ""}
+          value={manualFamily || allGroups[0]?.collectionId || ""}
           onChange={(e) => setManualFamily(e.target.value)}
-          className="h-8 rounded-lg border border-border/70 bg-background px-2 text-xs outline-none"
+          className="h-8 max-w-[240px] rounded-lg border border-border/70 bg-background px-2 text-xs outline-none"
           aria-label="Canonical seed family"
         >
           {allGroups.map((group) => (
-            <option
-              key={group.canonicalNicheSeed}
-              value={group.canonicalNicheSeed}
-            >
-              {group.canonicalNicheSeed}
+            <option key={group.collectionId} value={group.collectionId}>
+              {group.canonicalNicheSeed} — {group.selectedCollection}
             </option>
           ))}
         </select>
@@ -944,7 +973,11 @@ export function StageSeedsPanel({
                   }
                   setConfirmOpen(true);
                 }}
-                disabled={estimate.rows === 0 || committed}
+                disabled={
+                  estimate.rows === 0 ||
+                  committed ||
+                  unprobedSelected.length > 0
+                }
               >
                 {committed
                   ? "Extracted"
@@ -958,6 +991,16 @@ export function StageSeedsPanel({
               returned. Agent work after this is free. Publishing collections
               is {formatUsd(5)} each.
             </p>
+            {!committed && unprobedSelected.length > 0 ? (
+              <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                {unprobedSelected.length} selected seed
+                {unprobedSelected.length === 1 ? "" : "s"} haven&apos;t been
+                checked yet — run &ldquo;Check demand&rdquo; on{" "}
+                {unprobedSelected.length === 1 ? "it" : "all of them"} before
+                you can extract. Unchecked seeds are never silently skipped.
+              </p>
+            ) : null}
             {walletBalance != null && !canAffordExtract ? (
               <div className="flex items-center justify-between gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
                 <span>

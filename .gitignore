@@ -46,3 +46,15 @@ next-env.d.ts
 
 # local supabase edge functions
 supabase/functions/enrich/
+
+# isolated promo video workspace (separate npm project)
+promo-video/autommerce-60s/node_modules/
+promo-video/_temp-*/
+promo-video/out/*.mp4
+promo-video/out/*.gif
+promo-video/out/*.mp3
+promo-video/.env
+promo-video/.env.local
+
+# agent skills install dir
+.agents/

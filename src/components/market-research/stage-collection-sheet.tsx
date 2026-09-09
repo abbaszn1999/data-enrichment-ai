@@ -54,6 +54,8 @@ export function StageCollectionSheet({
   collections,
   products = [],
   loading,
+  loadingProgress = null,
+  termEmbedProgress = null,
   selectedIds,
   onChangeSelected,
   paid,
@@ -66,6 +68,10 @@ export function StageCollectionSheet({
   collections: ProposedCollection[];
   products?: MarketResearchProduct[];
   loading: boolean;
+  /** Live progress across the Stage 5 cluster cursor job's offset pages. */
+  loadingProgress?: { processed: number; total: number } | null;
+  /** Category-term embedding pass that runs before the cluster job starts. */
+  termEmbedProgress?: { embedded: number; total: number; done: boolean } | null;
   selectedIds: string[];
   onChangeSelected: (ids: string[]) => void;
   paid: boolean;
@@ -259,14 +265,32 @@ export function StageCollectionSheet({
   }, [activeModalProduct, collectionsByProductId, semanticCandidatesByProductId]);
 
   if (loading) {
+    const termsStillEmbedding = termEmbedProgress && !termEmbedProgress.done;
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
         <Loader2 className="h-6 w-6 animate-spin text-primary" />
-        <p className="text-sm font-medium">Clustering and semantic product matching…</p>
-        <p className="max-w-sm text-center text-[11px] text-muted-foreground">
-          Gemini 3.7 Flash is clustering category keywords and calculating cosine
-          similarity with your catalog products.
+        <p className="text-sm font-medium">
+          {termsStillEmbedding
+            ? "Preparing category term index…"
+            : "Clustering and semantic product matching…"}
         </p>
+        <p className="max-w-sm text-center text-[11px] text-muted-foreground">
+          {termsStillEmbedding
+            ? "Embedding surviving category terms with their collection context before matching starts."
+            : "Gemini 3.7 Flash is clustering category keywords and calculating cosine similarity with your catalog products."}
+        </p>
+        {termsStillEmbedding && termEmbedProgress.total > 0 ? (
+          <p className="text-[11px] tabular-nums text-muted-foreground">
+            {termEmbedProgress.embedded.toLocaleString("en-US")} /{" "}
+            {termEmbedProgress.total.toLocaleString("en-US")} terms embedded
+          </p>
+        ) : null}
+        {!termsStillEmbedding && loadingProgress && loadingProgress.total > 0 ? (
+          <p className="text-[11px] tabular-nums text-muted-foreground">
+            {loadingProgress.processed.toLocaleString("en-US")} /{" "}
+            {loadingProgress.total.toLocaleString("en-US")} keywords processed
+          </p>
+        ) : null}
       </div>
     );
   }

@@ -20,9 +20,14 @@ export interface MarketResearchSkill {
 
 const SKILLS_DIR = path.join(process.cwd(), "src", "lib", "market-research", "skills");
 
+/**
+ * Stage 2 (Catalog scope selection) intentionally has no entry here — it is a
+ * deterministic, user-driven UI step (see stage-select-panel.tsx) with no
+ * live LLM call, so there is no skill file for it. Every other stage below
+ * has a real agent that loads and sends its skill file to Gemini.
+ */
 const STAGE_TO_FILE: Record<number, string> = {
   1: "01-niches.md",
-  2: "02-catalog.md",
   3: "03-seeds.md",
   4: "04-extract.md",
   5: "05-collections.md",
@@ -107,8 +112,11 @@ export async function loadSkill(stageOrId: number | string): Promise<MarketResea
 }
 
 export async function getAllSkills(): Promise<MarketResearchSkill[]> {
+  const stages = Object.keys(STAGE_TO_FILE)
+    .map(Number)
+    .sort((a, b) => a - b);
   const skills: MarketResearchSkill[] = [];
-  for (let stage = 1; stage <= 7; stage++) {
+  for (const stage of stages) {
     skills.push(await loadSkill(stage));
   }
   return skills;

@@ -49,6 +49,8 @@ export function StageExtractPanel({
   chargedUsd,
   onAnalyze,
   analyzeLoading,
+  analyzeProgress,
+  productEmbedProgress,
   analyzed,
   onNextCollections,
   clustering = false,
@@ -64,6 +66,14 @@ export function StageExtractPanel({
   chargedUsd: number;
   onAnalyze: () => void;
   analyzeLoading: boolean;
+  /** Live progress across the chunked classification requests (Layer 1). */
+  analyzeProgress?: { done: number; total: number } | null;
+  /**
+   * Product embedding pass (Phase B), driven in parallel with the Apify
+   * extract poll below — surfaced as a second line so the wait doesn't look
+   * idle while it happens in the background.
+   */
+  productEmbedProgress?: { embedded: number; total: number; done: boolean } | null;
   analyzed: boolean;
   onNextCollections: (filteredCategoryKeywords: ExtractedKeyword[]) => void;
   clustering?: boolean;
@@ -121,6 +131,15 @@ export function StageExtractPanel({
           </p>
         </div>
         <Progress value={Math.round(progress * 100)} className="h-1.5" />
+        {productEmbedProgress && !productEmbedProgress.done ? (
+          <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Preparing product index
+            {productEmbedProgress.total > 0
+              ? ` — ${productEmbedProgress.embedded.toLocaleString("en-US")} / ${productEmbedProgress.total.toLocaleString("en-US")}`
+              : "…"}
+          </p>
+        ) : null}
         {onCancelExtract ? (
           <div className="flex justify-end">
             <Button
@@ -448,7 +467,11 @@ export function StageExtractPanel({
               ) : (
                 <Search className="h-3.5 w-3.5" />
               )}
-              {analyzeLoading ? "Classifying with Gemini…" : "Analyze with AI"}
+              {analyzeLoading
+                ? analyzeProgress && analyzeProgress.total > 0
+                  ? `Classifying ${analyzeProgress.done.toLocaleString()} / ${analyzeProgress.total.toLocaleString()}…`
+                  : "Classifying with Gemini…"
+                : "Analyze with AI"}
             </Button>
           </>
         )}
