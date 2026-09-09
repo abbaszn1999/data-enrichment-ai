@@ -83,7 +83,7 @@ function RegisterForm() {
       <div className="text-center space-y-1">
         <h1 className="text-xl font-bold">Create your account</h1>
         <p className="text-sm text-muted-foreground">
-          Get started with Autommerce
+          14-day free trial · 100 AI credits · no card required
         </p>
       </div>
 

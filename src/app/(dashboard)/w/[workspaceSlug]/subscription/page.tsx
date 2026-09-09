@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { useWorkspaceContext } from "../workspace-context";
 import { useSubscription } from "@/hooks/use-subscription";
 import { formatCredits } from "@/lib/format-credits";
+import { isTrialPlanName, trialDaysRemaining } from "@/lib/trial";
 
 const CREDIT_TOPUP_USD_PER_CREDIT = 0.3;
 const CREDIT_TOPUP_MIN_CREDITS = 100;
@@ -108,6 +109,8 @@ export default function SubscriptionPage() {
   }
 
   const currentPlanName = currentPlan?.name;
+  const isTrialing = isTrialPlanName(currentPlanName) && subscription?.status === "trialing" && isActive;
+  const trialDaysLeft = isTrialing ? trialDaysRemaining(subscription?.trialEnd) : 0;
 
   return (
     <div className="autommerce-dashboard flex-1 overflow-auto bg-background [font-family:var(--brand-font)]">
@@ -155,6 +158,7 @@ export default function SubscriptionPage() {
               <div className="text-xs text-muted-foreground">
                 {credits ? `${formatCredits(credits.total)} credits remaining` : "No credits"}
                 {credits?.bonus ? ` (incl. ${formatCredits(credits.bonus)} bonus)` : ""}
+                {isTrialing && ` · ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} left`}
                 {subscription.status === "past_due" && " · Payment failed"}
                 {subscription.cancelAtPeriodEnd && " · Cancels at period end"}
               </div>
@@ -195,7 +199,7 @@ export default function SubscriptionPage() {
           const meta = PLAN_META[plan.name] || PLAN_META.starter;
           const Icon = meta.icon;
           const price = billing === "monthly" ? plan.price_monthly : plan.price_yearly;
-          const isCurrentPlan = currentPlanName === plan.name && isActive;
+          const isCurrentPlan = currentPlanName === plan.name && isActive && !isTrialPlanName(currentPlanName);
           const isPopular = plan.name === "growth";
           const isLoading_ = loadingAction === plan.id;
 
@@ -251,7 +255,7 @@ export default function SubscriptionPage() {
                 ) : isCurrentPlan ? (
                   <><Check className="h-3.5 w-3.5" /> Current Plan</>
                 ) : (
-                  <><ArrowRight className="h-3.5 w-3.5" /> {subscription ? "Switch to" : "Subscribe to"} {plan.display_name}</>
+                  <><ArrowRight className="h-3.5 w-3.5" /> {subscription && !isTrialing ? "Switch to" : "Subscribe to"} {plan.display_name}</>
                 )}
               </Button>
 
@@ -281,7 +285,7 @@ export default function SubscriptionPage() {
       </div>
 
       {/* Extra Credits — buy any amount, priced at a flat $0.30/credit */}
-      {isActive && (
+      {isActive && !isTrialing && (
         <div className="relative overflow-hidden rounded-2xl border-2 border-[#F76D01]/20 bg-gradient-to-br from-[#F76D01]/[0.07] via-background to-[#400095]/[0.06] p-5 sm:p-7">
           <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-[#F76D01]/10 blur-3xl" />
           <div className="pointer-events-none absolute -bottom-20 -left-10 h-48 w-48 rounded-full bg-[#400095]/10 blur-3xl" />

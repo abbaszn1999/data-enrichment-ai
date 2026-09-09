@@ -12,8 +12,12 @@ export function adminCreditBalance(input: {
   creditsUsed: number;
   bonusCredits: number;
   monthlyAiCredits: number;
+  trialEnd?: string | Date | null;
 }): { periodCredits: number; remaining: number } {
-  const active = input.status === "active" || input.status === "trialing";
+  const active =
+    input.status === "active" ||
+    (input.status === "trialing" &&
+      (!input.trialEnd || new Date(input.trialEnd).getTime() > Date.now()));
   const monthly = roundCredits(Number(input.monthlyAiCredits || 0));
   const periodCredits = input.billingCycle === "yearly" ? roundCredits(monthly * 12) : monthly;
   const used = roundCredits(Number(input.creditsUsed || 0));

@@ -66,9 +66,29 @@ const _ownerCache = new Map<string, { ownerId: string; ts: number }>();
 const _subCache = new Map<string, { result: any; ts: number }>();
 const OWNER_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const SUB_CACHE_TTL = 60 * 1000; // 60 seconds
+const PLANS_CACHE_TTL = 15 * 1000;
+
+let _plansCache: { data: unknown[] | null; ts: number } = { data: null, ts: 0 };
+
+/** Active catalog, ordered for the subscription page (Starter → Growth → Pro). */
+export async function getActiveSubscriptionPlans() {
+  if (_plansCache.data && Date.now() - _plansCache.ts < PLANS_CACHE_TTL) {
+    return _plansCache.data;
+  }
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("subscription_plans")
+    .select("*")
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  _plansCache = { data: data || [], ts: Date.now() };
+  return _plansCache.data;
+}
 
 // Call this after credit deductions or subscription changes to force fresh data
 export function invalidateSubscriptionCache(workspaceId?: string) {
+  _plansCache = { data: null, ts: 0 };
   if (workspaceId) {
     _subCache.delete(workspaceId);
   } else {
@@ -143,8 +163,17 @@ export async function getUserSubscription(userId: string) {
 }
 
 // ── Check if subscription is active ──
-export function isSubscriptionActive(status: string | null | undefined): boolean {
-  return status === "active" || status === "trialing";
+export function isSubscriptionActive(
+  status: string | null | undefined,
+  trialEnd?: string | Date | null,
+  now: Date = new Date()
+): boolean {
+  if (status === "active") return true;
+  if (status !== "trialing") return false;
+  if (!trialEnd) return true;
+  const end = trialEnd instanceof Date ? trialEnd : new Date(trialEnd);
+  if (Number.isNaN(end.getTime())) return false;
+  return end.getTime() > now.getTime();
 }
 
 // ── Calculate credit balance ──
@@ -153,6 +182,7 @@ export function calculateCreditBalance(sub: {
   billing_cycle?: string | null;
   credits_used: number;
   bonus_credits: number;
+  trial_end?: string | Date | null;
   subscription_plans?: { monthly_ai_credits: number } | null;
 } | null) {
   if (!sub) {
@@ -168,7 +198,7 @@ export function calculateCreditBalance(sub: {
     };
   }
 
-  const canUseCredits = isSubscriptionActive(sub.status);
+  const canUseCredits = isSubscriptionActive(sub.status, sub.trial_end);
   const planCredits = roundCredits((sub.subscription_plans as any)?.monthly_ai_credits ?? 0);
   const monthlyTotal = sub.billing_cycle === "yearly"
     ? roundCredits(planCredits * 12)

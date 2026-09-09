@@ -84,7 +84,8 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
       stripe_customer_id: customerId, stripe_subscription_id: subId,
       current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
       current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
-      cancel_at_period_end: false, credits_used: 0,
+      cancel_at_period_end: false, credits_used: 0, bonus_credits: 0,
+      trial_end: null, has_used_trial: true,
       credits_reset_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     }, { onConflict: "user_id" });
 
@@ -201,6 +202,7 @@ async function handleSubUpdated(sub: Stripe.Subscription, admin: any) {
     current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
     current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
     ...(shouldResetIncludedCredits ? { credits_used: 0 } : {}),
+    ...(normalizedStatus === "active" ? { trial_end: null, has_used_trial: true } : {}),
     updated_at: new Date().toISOString(),
   }).eq("stripe_subscription_id", sub.id);
 }

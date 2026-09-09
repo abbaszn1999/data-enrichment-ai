@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { getUserSubscription, isSubscriptionActive } from "@/lib/stripe";
 import { DEFAULT_CMS_TYPE, isSupportedCmsType } from "@/lib/cms-types";
+import { ensureOwnerTrial } from "@/lib/trial-server";
 
 export async function POST(req: NextRequest) {
   try {
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
     // For additional workspaces, require an active subscription
     if (currentCount >= 1) {
       const userSub = await getUserSubscription(user.id);
-      if (!userSub || !isSubscriptionActive(userSub.subscription.status)) {
+      if (!userSub || !isSubscriptionActive(userSub.subscription.status, userSub.subscription.trial_end)) {
         return NextResponse.json({ error: "Active subscription required to create additional workspaces" }, { status: 403 });
       }
 
@@ -87,6 +88,12 @@ export async function POST(req: NextRequest) {
       // Rollback workspace creation
       await admin.from("workspaces").delete().eq("id", workspace.id);
       return NextResponse.json({ error: memberError.message }, { status: 500 });
+    }
+
+    try {
+      await ensureOwnerTrial(user.id);
+    } catch (err) {
+      console.error("[trial] ensureOwnerTrial after workspace create failed", err);
     }
 
     return NextResponse.json(workspace);

@@ -46,6 +46,7 @@ import { useSubscription } from "@/hooks/use-subscription";
 import { signOut } from "@/lib/auth";
 import { formatCredits } from "@/lib/format-credits";
 import { formatMoney } from "@/lib/wallet/format";
+import { trialDaysRemaining } from "@/lib/trial";
 import { useWallet } from "@/hooks/use-wallet";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
@@ -76,7 +77,9 @@ export default function WorkspaceLayout({
   const credits = useCredits(workspace?.id ?? null);
   const { wallet } = useWallet(workspace?.id ?? null);
   const walletBalance = wallet?.balance ?? null;
-  const { subscription, isActive, isLoading: subLoading } = useSubscription(workspace?.id ?? null);
+  const { subscription, isActive, isLoading: subLoading, plan: currentPlan } = useSubscription(workspace?.id ?? null);
+  const isTrialing = currentPlan?.name === "trial" && subscription?.status === "trialing" && isActive;
+  const trialDaysLeft = isTrialing ? trialDaysRemaining(subscription?.trialEnd) : 0;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
@@ -478,7 +481,7 @@ export default function WorkspaceLayout({
               )}
 
               {/* Credits Badge */}
-              {!credits.isLoading && credits.total > 0 && (
+              {!credits.isLoading && (credits.total > 0 || isTrialing) && (
                 <Link
                   href={`${basePath}/usage`}
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
@@ -488,8 +491,16 @@ export default function WorkspaceLayout({
                   }`}
                 >
                   <Coins className="h-3.5 w-3.5" />
-                  <span title={`Monthly ${formatCredits(credits.total)} · bonus included in available`}>
-                    {formatCredits(credits.remaining)} available
+                  <span
+                    title={
+                      isTrialing
+                        ? `Free trial · ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} left · ${formatCredits(credits.remaining)} credits remaining`
+                        : `Monthly ${formatCredits(credits.total)} · bonus included in available`
+                    }
+                  >
+                    {isTrialing
+                      ? `${formatCredits(credits.remaining)} · ${trialDaysLeft}d trial`
+                      : `${formatCredits(credits.remaining)} available`}
                   </span>
                 </Link>
               )}

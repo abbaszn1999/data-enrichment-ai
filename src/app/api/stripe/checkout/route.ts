@@ -28,6 +28,9 @@ export async function POST(request: NextRequest) {
       // Get plan details
       const { data: plan } = await admin.from("subscription_plans").select("*").eq("id", planId).single();
       if (!plan) return NextResponse.json({ error: "Plan not found" }, { status: 404 });
+      if (plan.name === "trial" || plan.is_active === false) {
+        return NextResponse.json({ error: "This plan cannot be purchased" }, { status: 400 });
+      }
 
       const priceId = billingCycle === "yearly" ? plan.stripe_price_yearly_id : plan.stripe_price_monthly_id;
       if (!priceId) return NextResponse.json({ error: "Stripe price not configured for this plan" }, { status: 400 });
@@ -72,7 +75,7 @@ export async function POST(request: NextRequest) {
         .eq("user_id", user.id)
         .single();
 
-      if (!sub || !["active", "trialing"].includes(sub.status)) {
+      if (!sub || sub.status !== "active") {
         return NextResponse.json({ error: "Active subscription required to buy extra credits" }, { status: 403 });
       }
 
