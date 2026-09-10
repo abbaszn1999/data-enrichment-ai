@@ -114,6 +114,7 @@ export default function WorkspaceLayout({
   const isSyncPage =
     pathname === `${basePath}/store-assistant` || pathname.startsWith(`${basePath}/store-assistant/`);
   const isMarketResearchPage = pathname.includes("/market-research");
+  const isFreeAssessmentPage = pathname.includes("/free-assessment");
   const isWebsiteRestructurePage = pathname.includes("/website-restructure");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
   const isProductsGalleryProject = isProductsGalleryPage && searchParams.has("project");
@@ -132,7 +133,11 @@ export default function WorkspaceLayout({
   // Lock main content height so tool UIs (Enrich sidebar/table) scroll internally.
   // Growth Sync is a regular scrollable dashboard page, so it's excluded here.
   const lockContentHeight =
-    isEnrichPage || isSyncPage || isMarketResearchPage || isWebsiteRestructurePage;
+    isEnrichPage ||
+    isSyncPage ||
+    isMarketResearchPage ||
+    isFreeAssessmentPage ||
+    isWebsiteRestructurePage;
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage =
     pathname === `${basePath}/subscription` ||
@@ -181,11 +186,20 @@ export default function WorkspaceLayout({
     { href: `${basePath}/analytics/low-hanging-fruits`, label: "Low Hanging Fruits", icon: Apple },
   ];
 
+  const assessmentGrowthChildren = [
+    {
+      href: `${basePath}/free-assessment`,
+      label: "Market research",
+      icon: Search,
+    },
+    { href: `${basePath}/wallet`, label: "Wallet", icon: Wallet },
+  ];
+
   const isMediaActive = mediaChildren.some(
     (child) => pathname === child.href || pathname.startsWith(child.href + "/")
   );
 
-  const isGrowthEngineActive = growthEngineChildren.some(
+  const isGrowthEngineActive = isFreeAssessmentPage || growthEngineChildren.some(
     (child) =>
       !!child.href &&
       (pathname === child.href || pathname.startsWith(child.href + "/"))
@@ -626,6 +640,20 @@ export default function WorkspaceLayout({
             className="relative border-r border-border/70 bg-sidebar text-sidebar-foreground shrink-0 flex flex-col shadow-[1px_0_0_0_rgba(0,0,0,0.02)]"
           >
             <nav className="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto overflow-x-hidden custom-scrollbar">
+              {isFreeAssessmentPage ? (
+                <>
+                  <SectionLabel>Growth engine</SectionLabel>
+                  {renderNavGroup({
+                    label: "Growth engine",
+                    icon: Rocket,
+                    isOpen: true,
+                    setOpen: setGrowthEngineOpen,
+                    isActive: true,
+                    children: assessmentGrowthChildren,
+                  })}
+                </>
+              ) : (
+                <>
               <SectionLabel>Overview</SectionLabel>
               {sidebarLinksBeforeMedia.map((link) => renderNavLink(link))}
 
@@ -670,6 +698,8 @@ export default function WorkspaceLayout({
                 <>
                   <SectionLabel>Account</SectionLabel>
                   {accountLinks.map((link) => renderNavLink(link))}
+                </>
+              )}
                 </>
               )}
             </nav>
