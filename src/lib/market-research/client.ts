@@ -690,6 +690,26 @@ export async function runClusterCollectionsLoop(
   return last;
 }
 
+// ─── Stage 5 Phase 3: duplicate-collection exclusion (runs once, after the
+// cursor loop above is fully done) ─────────────────────────────────────────
+
+export type DedupeCollectionsResponse = {
+  collections: ProposedCollection[];
+  duplicateCount: number;
+};
+
+export async function dedupeCollectionsApi(
+  workspaceId: string,
+  projectId: string
+): Promise<DedupeCollectionsResponse> {
+  const response = await fetch("/api/market-research/agent/dedupe-collections", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, projectId }),
+  });
+  return readJson<DedupeCollectionsResponse>(response);
+}
+
 /**
  * Read-only snapshot of every fetched product for a project (merged across
  * shards). For display only — never fed back through autosave.

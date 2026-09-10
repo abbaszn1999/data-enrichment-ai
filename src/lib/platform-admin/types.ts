@@ -38,7 +38,7 @@ export type AdminWalletModule =
   | "topup"
   | "Billing";
 
-export type AdminJobKind = "catalog" | "gallery" | "visualizer" | "mr_extract";
+export type AdminJobKind = "catalog" | "gallery" | "visualizer" | "mr_extract" | "fa_extract";
 
 export type AdminJobStatus =
   | "queued"
