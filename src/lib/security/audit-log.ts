@@ -9,6 +9,8 @@ export type SecurityAuditAction =
   | "invite.revoke"
   | "integration.credentials_save"
   | "integration.disconnect"
+  | "analytics.connect"
+  | "analytics.disconnect"
   | "workspace.delete"
   | "user.delete";
 
@@ -50,6 +52,7 @@ export async function writeSecurityAuditLog(
 
 function actionModule(action: SecurityAuditAction): string {
   if (action.startsWith("integration.")) return STORE_ASSISTANT.id;
+  if (action.startsWith("analytics.")) return "analytics";
   if (action.startsWith("workspace.")) return "workspace";
   if (action.startsWith("user.")) return "account";
   return "team";

@@ -105,6 +105,7 @@ Copy your secrets into a root `.env` (never commit real keys). Typical variables
 - Optional Gemini / Serper keys still used by Sync and some media paths
 - `STRIPE_SECRET_KEY` / `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` / `STRIPE_WEBHOOK_SECRET`
 - Stripe price IDs for plans and credit packs
+- `GOOGLE_ANALYTICS_CLIENT_ID` / `GOOGLE_ANALYTICS_CLIENT_SECRET` — Google Cloud OAuth client with Search Console and Analytics Data APIs enabled. Redirect URI: `{APP_URL}/api/analytics/oauth/callback` (add both localhost and production).
 
 Configure the same variables on Render for production, and point Stripe webhooks at `/api/webhooks/stripe`.
 

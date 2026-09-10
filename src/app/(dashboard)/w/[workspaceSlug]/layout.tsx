@@ -35,6 +35,8 @@ import {
   LayoutTemplate,
   Wallet,
   Bot,
+  Apple,
+  BarChart3,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useTheme } from "next-themes";
@@ -84,6 +86,7 @@ export default function WorkspaceLayout({
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
   const [growthEngineOpen, setGrowthEngineOpen] = useState(false);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -136,7 +139,9 @@ export default function WorkspaceLayout({
     pathname.startsWith(`${basePath}/subscription/`);
   const isTeamPage = pathname.includes("/team");
   const isSettingsPage = pathname.includes("/settings");
-  const requiresAdminAccess = isTeamPage || isSettingsPage;
+  const isAnalyticsPage =
+    pathname === `${basePath}/analytics` || pathname.startsWith(`${basePath}/analytics/`);
+  const requiresAdminAccess = isTeamPage || isSettingsPage || isAnalyticsPage;
   const canAccessAdminPages = role === "owner" || role === "admin";
 
   const mediaChildren = [
@@ -169,6 +174,13 @@ export default function WorkspaceLayout({
     { href: `${basePath}/wallet`, label: "Wallet", icon: Wallet },
   ];
 
+  const analyticsChildren = [
+    { href: `${basePath}/analytics/overview`, label: "Overview", icon: BarChart3 },
+    { href: `${basePath}/analytics/plp`, label: "PLP Pages", icon: FolderTree },
+    { href: `${basePath}/analytics/products`, label: "Products Pages", icon: Package },
+    { href: `${basePath}/analytics/low-hanging-fruits`, label: "Low Hanging Fruits", icon: Apple },
+  ];
+
   const isMediaActive = mediaChildren.some(
     (child) => pathname === child.href || pathname.startsWith(child.href + "/")
   );
@@ -179,6 +191,10 @@ export default function WorkspaceLayout({
       (pathname === child.href || pathname.startsWith(child.href + "/"))
   );
 
+  const isAnalyticsActive = analyticsChildren.some(
+    (child) => pathname === child.href || pathname.startsWith(child.href + "/")
+  ) || pathname === `${basePath}/analytics` || pathname.startsWith(`${basePath}/analytics/`);
+
   useEffect(() => {
     if (isMediaActive) setMediaOpen(true);
   }, [isMediaActive]);
@@ -186,6 +202,10 @@ export default function WorkspaceLayout({
   useEffect(() => {
     if (isGrowthEngineActive) setGrowthEngineOpen(true);
   }, [isGrowthEngineActive]);
+
+  useEffect(() => {
+    if (isAnalyticsActive) setAnalyticsOpen(true);
+  }, [isAnalyticsActive]);
 
   const sidebarLinksBeforeMedia = [
     { href: `${basePath}`, label: "Dashboard", icon: LayoutDashboard },
@@ -628,6 +648,20 @@ export default function WorkspaceLayout({
                 isActive: isGrowthEngineActive,
                 children: growthEngineChildren,
               })}
+
+              {permissions.canAdmin ? (
+                <>
+                  <SectionLabel>Analytics</SectionLabel>
+                  {renderNavGroup({
+                    label: "Analytics",
+                    icon: BarChart3,
+                    isOpen: analyticsOpen,
+                    setOpen: setAnalyticsOpen,
+                    isActive: isAnalyticsActive,
+                    children: analyticsChildren,
+                  })}
+                </>
+              ) : null}
 
               <SectionLabel>Tools</SectionLabel>
               {toolsLinksAfterGrowthEngine.map((link) => renderNavLink(link))}

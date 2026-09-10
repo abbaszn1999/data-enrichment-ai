@@ -11,6 +11,7 @@ import {
   Wallet,
   LayoutTemplate,
   Bot,
+  BarChart3,
   CreditCard,
   Users,
   Settings,
@@ -21,7 +22,7 @@ import {
 /** How a tool is paid for. Drives the badge shown on its card. */
 export type ToolBilling = "credits" | "wallet" | "free";
 
-export type ToolCategory = "agents" | "visual" | "growth" | "data" | "account";
+export type ToolCategory = "agents" | "visual" | "growth" | "data" | "analytics" | "account";
 
 export interface ToolDefinition {
   /** Path segment appended to /w/[slug] — empty string means the workspace root. */
@@ -51,6 +52,7 @@ export const TOOL_CATEGORIES: {
   { id: "visual", label: "Visual AI" },
   { id: "growth", label: "Growth" },
   { id: "data", label: "Catalog" },
+  { id: "analytics", label: "Analytics" },
   { id: "account", label: "Workspace" },
 ];
 
@@ -86,6 +88,13 @@ export const CATEGORY_STYLE: Record<
     ring: "ring-amber-500/20",
     glow: "rgba(245,158,11,0.16)",
     dot: "bg-amber-500",
+  },
+  analytics: {
+    text: "text-indigo-500",
+    bg: "bg-indigo-500/10",
+    ring: "ring-indigo-500/20",
+    glow: "rgba(99,102,241,0.16)",
+    dot: "bg-indigo-500",
   },
   account: {
     text: "text-slate-500",
@@ -240,6 +249,17 @@ export const TOOLS: ToolDefinition[] = [
     category: "growth",
     billing: "free",
     keywords: ["balance", "top up", "money", "billing", "ledger", "stripe"],
+  },
+  {
+    path: "/analytics/overview",
+    name: "Analytics",
+    blurb:
+      "Search Console and GA4 in one place: clicks, sessions, and the pages that move them.",
+    icon: BarChart3,
+    category: "analytics",
+    billing: "free",
+    requiresRole: "admin",
+    keywords: ["gsc", "ga4", "search console", "traffic", "seo", "overview", "plp"],
   },
   {
     path: "/usage",
