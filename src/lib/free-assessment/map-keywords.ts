@@ -13,7 +13,6 @@ export type DisplayKeyword = {
   isQuestion: boolean;
   sheet: "informational" | "category" | "excluded";
   productMatches: number;
-  weight: number;
   exclusionReason?: string;
   plpConcept?: string;
 };
@@ -43,43 +42,63 @@ export function toExtractedKeyword(
     isQuestion: isQuestionKeyword(row.phrase, row.intents),
     sheet: "category",
     productMatches: 0,
-    weight: 1,
   };
 }
 
-export const SAMPLE_CAP = 1_500;
+/**
+ * Hard safety ceiling on how many rows the client keeps in memory / persists
+ * for a single project's extract. Every real pull (including duplicate
+ * phrases pulled under different seeds — they're real, distinct rows the
+ * merchant paid for) is kept as-is; this only guards against a truly
+ * pathological pull size and should essentially never be hit in practice.
+ */
+export const MAX_DISPLAY_ROWS = 50_000;
 
-export function mergeKeywordSample(
+/** Appends every newly pulled row exactly as returned — no cross-seed dedup. */
+export function appendKeywordRows(
   existing: DisplayKeyword[],
   incoming: DisplayKeyword[]
 ): DisplayKeyword[] {
-  if (incoming.length === 0) return existing;
-  const seen = new Set(existing.map((row) => row.keyword.toLowerCase()));
-  const next = [...existing];
-  for (const row of incoming) {
-    const key = row.keyword.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    next.push(row);
-    if (next.length >= SAMPLE_CAP) break;
+  if (incoming.length === 0 || existing.length >= MAX_DISPLAY_ROWS) {
+    return existing;
   }
-  return next;
+  const room = MAX_DISPLAY_ROWS - existing.length;
+  return room >= incoming.length
+    ? [...existing, ...incoming]
+    : [...existing, ...incoming.slice(0, room)];
 }
 
-export function applySampleWeights(
-  sample: DisplayKeyword[],
-  pulledBySeed: Record<string, number>
-): DisplayKeyword[] {
-  const sampleBySeed = new Map<string, number>();
-  for (const row of sample) {
-    sampleBySeed.set(row.seedId, (sampleBySeed.get(row.seedId) ?? 0) + 1);
+export type KeywordClassificationPatch = {
+  keyword: string;
+  sheet: DisplayKeyword["sheet"];
+  reason?: string;
+  plpConcept?: string;
+};
+
+/** Overlay Stage 4 verdicts onto display rows by keyword text (case-insensitive). */
+export function applyKeywordClassifications<
+  T extends {
+    keyword: string;
+    sheet: DisplayKeyword["sheet"];
+    exclusionReason?: string;
+    plpConcept?: string;
+  },
+>(rows: T[], patches: KeywordClassificationPatch[]): T[] {
+  if (rows.length === 0 || patches.length === 0) return rows;
+  const byText = new Map<string, KeywordClassificationPatch>();
+  for (const patch of patches) {
+    const key = patch.keyword.trim().toLowerCase();
+    if (key) byText.set(key, patch);
   }
-  return sample.map((row) => {
-    const pulled = pulledBySeed[row.seedId] ?? sample.length;
-    const shown = sampleBySeed.get(row.seedId) ?? 1;
+  if (byText.size === 0) return rows;
+  return rows.map((row) => {
+    const match = byText.get(row.keyword.trim().toLowerCase());
+    if (!match) return row;
     return {
       ...row,
-      weight: Math.max(1, Math.round(pulled / Math.max(1, shown))),
+      sheet: match.sheet,
+      exclusionReason: match.reason,
+      plpConcept: match.plpConcept,
     };
   });
 }

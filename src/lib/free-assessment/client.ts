@@ -360,6 +360,12 @@ export type ClassifyArchiveResponse = {
   informationalCount: number;
   excludedCount: number;
   isAiGenerated: boolean;
+  classifications?: Array<{
+    keyword: string;
+    sheet: "category" | "informational" | "excluded";
+    reason?: string;
+    plpConcept?: string;
+  }>;
 };
 
 export async function classifyArchivePageApi(

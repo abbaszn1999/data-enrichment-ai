@@ -12,7 +12,7 @@ import {
   saveProjectSliceAdmin,
 } from "@/lib/market-research/storage-admin";
 import {
-  SAMPLE_CAP,
+  MAX_DISPLAY_ROWS,
   toExtractedKeyword,
   type DisplayKeyword,
 } from "@/lib/market-research/map-keywords";
@@ -323,11 +323,15 @@ export async function persistExtractKeywordSample(
     runs: Array<{ seed_id: string; seed_term: string }>;
   }
 ): Promise<DisplayKeyword[]> {
+  // Undeduped: every raw pulled row, including exact-text duplicates that
+  // surfaced under different seeds — the merchant paid for and should see
+  // all of them, not a collapsed/sampled subset.
   const rows = await loadExtractRowsAdmin(
     admin,
     params.workspaceId,
     params.projectId,
-    params.extractId
+    params.extractId,
+    { dedupe: false }
   );
   const seedIdByTerm = new Map(
     params.runs.map((run) => [run.seed_term.trim().toLowerCase(), run.seed_id])
@@ -338,7 +342,7 @@ export async function persistExtractKeywordSample(
     const seedId =
       seedIdByTerm.get(row.seed.trim().toLowerCase()) ?? row.seed ?? "seed";
     sample.push(toExtractedKeyword(row, seedId, index));
-    if (sample.length >= SAMPLE_CAP) break;
+    if (sample.length >= MAX_DISPLAY_ROWS) break;
   }
   await saveProjectSliceAdmin(
     admin,

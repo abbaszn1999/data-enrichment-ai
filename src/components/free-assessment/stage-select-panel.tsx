@@ -27,7 +27,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  MOCK_NICHES,
   countProductsForCollections,
   formatProductCount,
   sumProductsForCollections,
@@ -97,7 +96,7 @@ export function StageSelectPanel({
   // Remove this state + the "TEST" control in the header once QA is done.
   const [skuFloor, setSkuFloor] = useState(MIN_SCOPE_SKUS);
   const activeNiches = useMemo(
-    () => (Array.isArray(niches) ? niches : MOCK_NICHES),
+    () => (Array.isArray(niches) ? niches : []),
     [niches]
   );
   const selected = useMemo(

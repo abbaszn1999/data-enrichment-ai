@@ -86,7 +86,8 @@ export async function GET(request: NextRequest) {
       auth.admin,
       parsed.data.workspaceId,
       parsed.data.projectId,
-      parsed.data.extractId
+      parsed.data.extractId,
+      { dedupe: false }
     );
     if (rows.length === 0) {
       return jsonError("No archived keywords found for this project", 404);

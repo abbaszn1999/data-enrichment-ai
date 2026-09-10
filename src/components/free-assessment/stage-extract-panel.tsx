@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Loader2,
   Search,
@@ -8,8 +8,9 @@ import {
   HelpCircle,
   XCircle,
   Download,
-  Lock,
+  FileText,
 } from "lucide-react";
+import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +28,6 @@ import {
   EXTRACT_CAP_PER_SEED,
   filterKeywords,
   pulledCountForSeed,
-  weightedCount,
   type ExtractedKeyword,
   type KeywordFilters,
   type KeywordSheet,
@@ -36,8 +36,10 @@ import {
 import type { MockSeedRow, SeedProbe } from "./mock-data";
 import { formatUsd } from "./mock-data";
 import { cn } from "@/lib/utils";
+import { AssessmentProposalDialog } from "./assessment-proposal-dialog";
 
 type ExtractSheet = "all" | KeywordSheet;
+const EXTRACT_PAGE_SIZE = 50;
 
 export function StageExtractPanel({
   seeds,
@@ -52,8 +54,7 @@ export function StageExtractPanel({
   analyzeProgress,
   productEmbedProgress,
   analyzed,
-  onNextCollections,
-  clustering = false,
+  growthEngineHref,
   onCancelExtract,
   csvHref,
 }: {
@@ -75,14 +76,16 @@ export function StageExtractPanel({
    */
   productEmbedProgress?: { embedded: number; total: number; done: boolean } | null;
   analyzed: boolean;
-  onNextCollections: (filteredCategoryKeywords: ExtractedKeyword[]) => void;
-  clustering?: boolean;
+  growthEngineHref?: string;
   onCancelExtract?: () => void;
-  /** Export of every archived row, not just the on-screen sample. */
+  /** Export of every pulled keyword. */
   csvHref?: string;
 }) {
   const [filters, setFilters] = useState<KeywordFilters>(DEFAULT_FILTERS);
   const [sheet, setSheet] = useState<ExtractSheet>("all");
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(EXTRACT_PAGE_SIZE);
+  const [proposalOpen, setProposalOpen] = useState(false);
   const classified = analyzed || analyzeLoading;
   const activeSheet: ExtractSheet =
     classified && sheet === "all" && analyzeLoading ? "category" : sheet;
@@ -93,21 +96,35 @@ export function StageExtractPanel({
     return filtered.filter((row) => row.sheet === activeSheet);
   }, [keywords, filters, activeSheet, classified]);
 
-  const filteredCategoryKeywords = useMemo(() => {
-    const filtered = filterKeywords(keywords, filters);
-    return filtered.filter((row) => row.sheet === "category");
-  }, [keywords, filters]);
+  useEffect(() => {
+    setPageIndex(0);
+  }, [filters, activeSheet, pageSize]);
 
-  const totalPulled = seeds.reduce(
-    (sum, seed) => sum + pulledCountForSeed(seed, probes),
-    0
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize) || 1);
+  const safePageIndex = Math.min(pageIndex, pageCount - 1);
+  const paged = visible.slice(
+    safePageIndex * pageSize,
+    (safePageIndex + 1) * pageSize
   );
-  const shownWeight = weightedCount(visible);
+  const tableColCount = !classified
+    ? 4
+    : activeSheet === "excluded"
+      ? 5
+      : 6;
 
-  const categoryCount = useMemo(
-    () => keywords.filter((k) => k.sheet === "category").length,
+  const categoryKeywords = useMemo(
+    () => keywords.filter((row) => row.sheet === "category"),
     [keywords]
   );
+
+  const totalPulled = keywords.length > 0
+    ? keywords.length
+    : seeds.reduce(
+        (sum, seed) => sum + pulledCountForSeed(seed, probes),
+        0
+      );
+
+  const categoryCount = categoryKeywords.length;
   const informationalCount = useMemo(
     () => keywords.filter((k) => k.sheet === "informational").length,
     [keywords]
@@ -184,8 +201,8 @@ export function StageExtractPanel({
           <h2 className="text-base font-semibold tracking-tight">Extract</h2>
           <p className="text-[11px] text-muted-foreground">
             {totalPulled.toLocaleString("en-US")} keywords pulled ·{" "}
-            {formatUsd(chargedUsd)} charged from wallet. Filters below are free
-            and do not change that bill.
+            {formatUsd(chargedUsd)} charged from wallet. Filters below are
+            optional and do not change that bill.
           </p>
           {csvHref && keywords.length > 0 ? (
             <a
@@ -193,7 +210,7 @@ export function StageExtractPanel({
               className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
             >
               <Download className="h-3 w-3" />
-              Download every pulled keyword (CSV)
+              Download all keywords (CSV)
             </a>
           ) : null}
         </div>
@@ -284,13 +301,10 @@ export function StageExtractPanel({
         >
           Questions
         </button>
-        <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
-          Showing {visible.length.toLocaleString("en-US")} sample rows · ~
-          {shownWeight.toLocaleString("en-US")} after filters
-        </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/70">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70">
+        <div className="min-h-0 flex-1 overflow-auto">
         {analyzeLoading && activeSheet !== "all" ? (
           <div className="divide-y divide-border/60">
             <div className="grid grid-cols-5 gap-3 px-4 py-2.5 text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -342,21 +356,15 @@ export function StageExtractPanel({
               {visible.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={
-                      !classified
-                        ? 4
-                        : activeSheet === "excluded"
-                          ? 5
-                          : 6
-                    }
+                    colSpan={tableColCount}
                     className="py-10 text-center text-xs text-muted-foreground"
                   >
                     No keywords match these filters.
                   </TableCell>
                 </TableRow>
               ) : (
-                visible.map((row) => (
-                  <TableRow key={row.id}>
+                paged.map((row, index) => (
+                  <TableRow key={`${row.id}-${safePageIndex}-${index}`}>
                     <TableCell className="text-sm font-medium">{row.keyword}</TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {row.seed}
@@ -424,28 +432,38 @@ export function StageExtractPanel({
             </TableBody>
           </Table>
         )}
+        </div>
+        <WorksheetPaginationBar
+          pageIndex={safePageIndex}
+          pageSize={pageSize}
+          totalRows={visible.length}
+          readyCount={0}
+          colCount={tableColCount}
+          itemLabel="keywords"
+          onPageChange={setPageIndex}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPageIndex(0);
+          }}
+        />
       </div>
 
       <div className="flex items-center justify-between gap-2 shrink-0">
         {analyzed ? (
           <>
             <p className="text-[11px] text-muted-foreground">
-              Informational queries and exclusions stay out. Next clusters the {filteredCategoryKeywords.length} active filtered category keywords into collection candidates.
+              {categoryKeywords.length.toLocaleString("en-US")} suitable category
+              terms. Open the proposal for 20 / 40 / 60% capture scenarios — catalog
+              matching needs a live store in Growth Engine.
             </p>
             <Button
               size="sm"
-              className="h-8 text-xs font-medium gap-1.5 transition-all"
-              onClick={() => onNextCollections(filteredCategoryKeywords)}
-              disabled={filteredCategoryKeywords.length === 0 || clustering}
+              className="h-8 gap-1.5 text-xs font-medium"
+              onClick={() => setProposalOpen(true)}
+              disabled={categoryKeywords.length === 0}
             >
-              {clustering ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Clustering Collections…</span>
-                </>
-              ) : (
-                <span>Next · Collections ({filteredCategoryKeywords.length})</span>
-              )}
+              <FileText className="h-3.5 w-3.5" />
+              Proposal ({categoryKeywords.length.toLocaleString("en-US")})
             </Button>
           </>
         ) : (
@@ -476,6 +494,13 @@ export function StageExtractPanel({
           </>
         )}
       </div>
+
+      <AssessmentProposalDialog
+        open={proposalOpen}
+        onOpenChange={setProposalOpen}
+        keywords={categoryKeywords}
+        growthEngineHref={growthEngineHref}
+      />
     </div>
   );
 }

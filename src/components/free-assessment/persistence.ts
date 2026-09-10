@@ -8,6 +8,7 @@ import type {
 } from "./mock-data";
 import type { Stage1ChatMessage } from "./agent-panel";
 import {
+  clampWorkspaceTab,
   normalizeOnPageInstructions,
   type CollectionContent,
   type ExtractedKeyword,
@@ -173,8 +174,8 @@ export function loadMarketResearchState(
       committedProjectIds: Array.isArray(parsed.committedProjectIds)
         ? parsed.committedProjectIds
         : [],
-      workspaceTabByProject: parsed.workspaceTabByProject ?? {},
-      openedWorkspaceByProject: parsed.openedWorkspaceByProject ?? {},
+      workspaceTabByProject: clampTabMap(parsed.workspaceTabByProject),
+      openedWorkspaceByProject: clampTabMap(parsed.openedWorkspaceByProject),
       clusterSelectionByProject: parsed.clusterSelectionByProject ?? {},
       proposedCollectionsByProject: parsed.proposedCollectionsByProject ?? {},
       contentByIdByProject: parsed.contentByIdByProject ?? {},
@@ -194,7 +195,7 @@ export function loadMarketResearchState(
             ? parsed.analyzedProjectIds
             : []),
           ...Object.entries(parsed.openedWorkspaceByProject ?? {})
-            .filter(([, tab]) => tab === "collections")
+            .filter(([, tab]) => String(tab) === "collections")
             .map(([id]) => id),
         ])
       ),
@@ -233,6 +234,15 @@ export function clampOpenedStage(
   fallback: MarketResearchStage = 1
 ): MarketResearchStage {
   return asStage(value) ?? fallback;
+}
+
+function clampTabMap(raw: unknown): Record<string, WorkspaceTab> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, WorkspaceTab> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    out[id] = clampWorkspaceTab(value);
+  }
+  return out;
 }
 
 function migrateInstructionMap(

@@ -13,6 +13,7 @@ import {
 } from "@/components/free-assessment/persistence";
 import {
   normalizeOnPageInstructions,
+  clampWorkspaceTab,
   type CollectionContent,
   type ExtractedKeyword,
   type GeneratedArticle,
@@ -145,9 +146,13 @@ export function rowsToPersisted(
       next.manualSeedsByProject[id] = state.manualSeeds;
     }
     if (state.committed) next.committedProjectIds.push(id);
-    if (state.workspaceTab) next.workspaceTabByProject[id] = state.workspaceTab;
+    if (state.workspaceTab) {
+      next.workspaceTabByProject[id] = clampWorkspaceTab(state.workspaceTab);
+    }
     if (state.openedWorkspace) {
-      next.openedWorkspaceByProject[id] = state.openedWorkspace;
+      next.openedWorkspaceByProject[id] = clampWorkspaceTab(
+        state.openedWorkspace
+      );
     }
     if (Array.isArray(state.clusterSelection)) {
       next.clusterSelectionByProject[id] = state.clusterSelection;
@@ -218,8 +223,12 @@ export function projectStateSlice(
     probes: persisted.probesByProject[projectId] ?? {},
     manualSeeds: persisted.manualSeedsByProject[projectId] ?? [],
     committed: persisted.committedProjectIds.includes(projectId),
-    workspaceTab: persisted.workspaceTabByProject[projectId],
-    openedWorkspace: persisted.openedWorkspaceByProject[projectId],
+    workspaceTab: clampWorkspaceTab(
+      persisted.workspaceTabByProject[projectId] ?? "extract"
+    ),
+    openedWorkspace: clampWorkspaceTab(
+      persisted.openedWorkspaceByProject[projectId] ?? "extract"
+    ),
     clusterSelection: persisted.clusterSelectionByProject[projectId] ?? [],
     proposedCollections: persisted.proposedCollectionsByProject[projectId] ?? [],
     contentById: persisted.contentByIdByProject[projectId] ?? {},

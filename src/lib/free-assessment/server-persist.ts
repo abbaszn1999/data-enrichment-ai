@@ -351,11 +351,9 @@ export async function saveFaPersistedState(
           (persisted.seedRowsByProject[projectId] ?? []).length === 0 &&
           (persisted.manualSeedsByProject[projectId] ?? []).length === 0,
       },
-      {
-        name: "keywords",
-        payload: persisted.keywordsByProject[projectId] ?? [],
-        empty: (persisted.keywordsByProject[projectId] ?? []).length === 0,
-      },
+      // Keywords are owned by extract persist + Stage 4 overlay — never the
+      // client autosave. Uploading the in-memory default (every row tagged
+      // "category") clobbers Gemini's informational/excluded verdicts.
       {
         name: "collections",
         payload: persisted.proposedCollectionsByProject[projectId] ?? [],

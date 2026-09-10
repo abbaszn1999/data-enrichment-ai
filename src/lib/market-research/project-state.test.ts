@@ -37,7 +37,6 @@ describe("market-research project state", () => {
         isQuestion: false,
         sheet: "category",
         productMatches: 0,
-        weight: 1,
       },
     ];
 

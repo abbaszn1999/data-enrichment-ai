@@ -14,6 +14,7 @@ export function WorksheetPaginationBar({
   readyCount,
   readyLabel = "ready",
   colCount,
+  itemLabel = "rows",
   onPageChange,
   onPageSizeChange,
 }: {
@@ -23,6 +24,7 @@ export function WorksheetPaginationBar({
   readyCount: number;
   readyLabel?: string;
   colCount: number;
+  itemLabel?: string;
   onPageChange: (index: number) => void;
   onPageSizeChange: (size: number) => void;
 }) {
@@ -61,7 +63,7 @@ export function WorksheetPaginationBar({
           <span className="font-semibold text-foreground">
             {totalRows.toLocaleString()}
           </span>{" "}
-          rows
+          {itemLabel}
         </span>
         {readyCount > 0 && (
           <span className="text-green-600">

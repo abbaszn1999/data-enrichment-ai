@@ -21,7 +21,6 @@ function keyword(
     isQuestion: false,
     sheet: "informational",
     productMatches: 0,
-    weight: 1,
   };
 }
 
