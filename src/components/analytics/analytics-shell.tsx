@@ -6,6 +6,16 @@ import { motion } from "motion/react";
 import { AlertCircle, BarChart3, RefreshCw, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { PageLoader } from "@/components/brand/page-loader";
 import { AnalyticsConnectionCards } from "@/components/analytics/connection-cards";
 import { AnalyticsPropertyPicker } from "@/components/analytics/property-picker";
@@ -40,6 +50,11 @@ const PAGE_COPY = {
   },
 } as const;
 
+const CONNECTION_LABEL: Record<AnalyticsConnectionType, string> = {
+  "search-console": "Search Console",
+  "google-analytics": "Analytics 4",
+};
+
 export function AnalyticsShell({
   page,
   pageType,
@@ -65,6 +80,7 @@ export function AnalyticsShell({
   const permissions = useRole(role);
   const [range, setRange] = useState<AnalyticsDateRange>("28");
   const [busyType, setBusyType] = useState<AnalyticsConnectionType | null>(null);
+  const [disconnectType, setDisconnectType] = useState<AnalyticsConnectionType | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
   const analytics = useAnalytics(workspace?.id ?? null, range, pageType);
   const copy = PAGE_COPY[page];
@@ -166,18 +182,6 @@ export function AnalyticsShell({
       </section>
 
       <div className="mx-auto max-w-7xl space-y-5 px-6 py-6">
-        {!analytics.status.configured && (
-          <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Set <code className="font-mono">GOOGLE_ANALYTICS_CLIENT_ID</code> and{" "}
-              <code className="font-mono">GOOGLE_ANALYTICS_CLIENT_SECRET</code>, then add this
-              redirect URI in Google Cloud:{" "}
-              <code className="font-mono">/api/analytics/oauth/callback</code>.
-            </p>
-          </div>
-        )}
-
         <AnalyticsConnectionCards
           status={analytics.status}
           loading={analytics.statusLoading}
@@ -185,19 +189,7 @@ export function AnalyticsShell({
           workspaceId={workspace.id}
           slug={slug}
           busyType={busyType}
-          onDisconnect={async (type) => {
-            if (!confirm("Disconnect this Google account from the workspace?")) return;
-            setBusyType(type);
-            try {
-              await disconnectAnalytics(workspace.id, type);
-              toast.success("Disconnected");
-              await analytics.refresh();
-            } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Disconnect failed");
-            } finally {
-              setBusyType(null);
-            }
-          }}
+          onDisconnect={(type) => setDisconnectType(type)}
         />
 
         {analytics.status.gsc.needsProperty && (
@@ -233,6 +225,47 @@ export function AnalyticsShell({
           openRules: () => setRulesOpen(true),
         })}
       </div>
+      <AlertDialog
+        open={!!disconnectType}
+        onOpenChange={(open) => {
+          if (!open && !busyType) setDisconnectType(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Disconnect {disconnectType ? CONNECTION_LABEL[disconnectType] : "Google"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This workspace will stop pulling data from this Google account until you connect
+              again. You can reconnect at any time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={!!busyType}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              disabled={!!busyType}
+              onClick={async () => {
+                if (!disconnectType) return;
+                setBusyType(disconnectType);
+                try {
+                  await disconnectAnalytics(workspace.id, disconnectType);
+                  toast.success("Disconnected");
+                  setDisconnectType(null);
+                  await analytics.refresh();
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Disconnect failed");
+                } finally {
+                  setBusyType(null);
+                }
+              }}
+            >
+              Disconnect
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {pageType ? (
         <AnalyticsRulesDialog
           open={rulesOpen}
