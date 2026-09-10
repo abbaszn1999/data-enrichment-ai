@@ -351,15 +351,26 @@ const CHUNK_READ_CONCURRENCY = 6;
 export type ArchiveKeywordRow = KeywordRow & { seedId: string };
 
 /**
- * Rebuilds the complete paid keyword set from the chunk archive. `keywords.json`
- * only carries a capped display sample, so this is the single source for exports
- * and for full-scale Stage 4/5 processing.
+ * Rebuilds the complete paid keyword set from the chunk archive — every raw
+ * row exactly as pulled, per seed, with no cross-seed merging.
+ *
+ * `keywords.json` only carries a display cache, so this archive is the
+ * single source of truth for exports and for full-scale Stage 4/5
+ * processing.
+ *
+ * `opts.dedupe` (default `true`) collapses rows that share the exact same
+ * phrase across different seeds down to one entry, kept for the classify
+ * (`agent/intent`) and cluster (`agent/cluster`) routes so the AI stages
+ * aren't billed/run twice for identical text. Pass `{ dedupe: false }` for
+ * anything the merchant actually sees (CSV export, the Extract tab's
+ * persisted sample) so what's shown always matches what was really pulled.
  */
 export async function loadExtractRowsAdmin(
   admin: SupabaseClient,
   workspaceId: string,
   projectId: string,
-  extractId?: string
+  extractId?: string,
+  opts?: { dedupe?: boolean }
 ): Promise<ArchiveKeywordRow[]> {
   const paths = await listExtractChunkPathsAdmin(
     admin,
@@ -369,7 +380,7 @@ export async function loadExtractRowsAdmin(
   );
   if (paths.length === 0) return [];
 
-  const byPhrase = new Map<string, ArchiveKeywordRow>();
+  const allRows: ArchiveKeywordRow[] = [];
   for (let i = 0; i < paths.length; i += CHUNK_READ_CONCURRENCY) {
     const batch = paths.slice(i, i + CHUNK_READ_CONCURRENCY);
     const chunks = await Promise.all(
@@ -381,13 +392,24 @@ export async function loadExtractRowsAdmin(
       if (!chunk || !Array.isArray(chunk.rows)) continue;
       for (const row of chunk.rows) {
         if (!row?.phrase) continue;
-        const key = row.phrase.trim().toLowerCase();
-        const existing = byPhrase.get(key);
-        // Same phrase can surface under several seeds; keep the richer metric.
-        if (!existing || (row.volume ?? 0) > (existing.volume ?? 0)) {
-          byPhrase.set(key, { ...row, seedId: chunk.seedId });
-        }
+        allRows.push({ ...row, seedId: chunk.seedId });
       }
+    }
+  }
+
+  if (opts?.dedupe === false) {
+    return allRows.sort(
+      (a, b) => (b.volume ?? 0) - (a.volume ?? 0) || a.phrase.localeCompare(b.phrase)
+    );
+  }
+
+  const byPhrase = new Map<string, ArchiveKeywordRow>();
+  for (const row of allRows) {
+    const key = row.phrase.trim().toLowerCase();
+    const existing = byPhrase.get(key);
+    // Same phrase can surface under several seeds; keep the richer metric.
+    if (!existing || (row.volume ?? 0) > (existing.volume ?? 0)) {
+      byPhrase.set(key, row);
     }
   }
 

@@ -67,8 +67,6 @@ export type ExtractedKeyword = {
   isQuestion: boolean;
   sheet: KeywordSheet;
   productMatches: number;
-  /** How many raw keywords this row stands in for (for the “of N” counter). */
-  weight: number;
   exclusionReason?: string;
   plpConcept?: string;
 };
@@ -333,8 +331,9 @@ function fill(pattern: string, seed: string): string {
 }
 
 /**
- * Display sample for the extracted set. The UI reports the real pulled cap
- * (min of probe raw and 10k) while the table stays browser-friendly.
+ * Placeholder rows for the extracted set, shown only until the real pulled
+ * keywords load in. Every seed's real total is reported separately via
+ * `pulledCountForSeed`.
  */
 export function buildExtractedKeywords(
   seeds: MockSeedRow[],
@@ -342,11 +341,6 @@ export function buildExtractedKeywords(
 ): ExtractedKeyword[] {
   const rows: ExtractedKeyword[] = [];
   for (const seed of seeds) {
-    const probe = probes[seed.id];
-    const pulled = Math.min(
-      EXTRACT_CAP_PER_SEED,
-      probe && !probe.failed ? probe.rawKeywords : 400
-    );
     const seedTerm = seed.broadSeedVariation;
     const products = seed.productCount;
 
@@ -367,7 +361,6 @@ export function buildExtractedKeywords(
           4,
           Math.round(products * (0.04 + (h % 40) / 100))
         ),
-        weight: Math.max(1, Math.round(pulled / 28)),
       });
     });
 
@@ -385,7 +378,6 @@ export function buildExtractedKeywords(
         isQuestion: /^(how|what|why|are)\b/.test(keyword),
         sheet: "informational",
         productMatches: Math.max(0, Math.round(products * 0.01)),
-        weight: Math.max(1, Math.round(pulled / 40)),
       });
     });
   }
@@ -418,10 +410,6 @@ export function filterKeywords(
       row.seed.toLowerCase().includes(q)
     );
   });
-}
-
-export function weightedCount(rows: ExtractedKeyword[]): number {
-  return rows.reduce((sum, row) => sum + row.weight, 0);
 }
 
 export function buildProposedCollections(

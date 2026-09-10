@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import { PageLoader } from "@/components/brand/page-loader";
@@ -19,6 +19,7 @@ import { StagePlpUploadPanel } from "./stage-plp-upload-panel";
 import { StageScopePanel } from "./stage-scope-panel";
 import { StageSelectPanel } from "./stage-select-panel";
 import { StageSeedsPanel } from "./stage-seeds-panel";
+import { WorkspaceStepper } from "./workspace-stepper";
 import {
   RunTimeline,
   StageStepper,
@@ -48,9 +49,12 @@ import {
   type SeedProbe,
 } from "./mock-data";
 import {
+  briefStageFromFlow,
+  clampWorkspaceTab,
   isWorkspaceTab,
   pulledCountForSeed,
   type ExtractedKeyword,
+  type FlowTab,
   type ProposedCollection,
   type SeedExtractProgress,
   type WorkspaceTab,
@@ -66,18 +70,16 @@ import {
   generateSeedsApi,
   loadFaStateApi,
   pollExtractApi,
-  dedupeCollectionsApi,
   probeSeedsApi,
   runClassifyArchiveLoop,
-  runClusterCollectionsLoop,
   saveFaStateApi,
   startExtractApi,
 } from "@/lib/free-assessment/client";
 import { previewBalance } from "@/lib/free-assessment/billing";
 import { actualExtractCostUsd, estimateProbeCostUsd } from "@/lib/free-assessment/cost";
 import {
-  applySampleWeights,
-  mergeKeywordSample,
+  appendKeywordRows,
+  applyKeywordClassifications,
   toExtractedKeyword,
 } from "@/lib/free-assessment/map-keywords";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -175,7 +177,6 @@ export function FreeAssessmentShell() {
     total: number;
   } | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
-  const [clustering, setClustering] = useState(false);
   const [preparingStage2, setPreparingStage2] = useState(false);
   const [preparingStage3, setPreparingStage3] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
@@ -192,7 +193,6 @@ export function FreeAssessmentShell() {
   const probeGen = useRef(0);
   const extractGen = useRef(0);
   const analyzeGen = useRef(0);
-  const clusterGen = useRef(0);
   const persistReady = useRef(false);
   const persistRemote = useRef(false);
   const skipPersistSave = useRef(true);
@@ -217,12 +217,44 @@ export function FreeAssessmentShell() {
     activeProject && committedProjectIds.has(activeProject.id)
   );
   const inWorkspace = committedForActive;
+  const [reviewFlow, setReviewFlow] = useState<FlowTab | null>(null);
+  const reviewingBrief = Boolean(
+    inWorkspace && reviewFlow && !isWorkspaceTab(reviewFlow)
+  );
+  const showWorkspace = inWorkspace && !reviewingBrief;
+  const [workspaceScene, setWorkspaceScene] = useState(showWorkspace);
+  const skipWorkspaceAnim = useRef(true);
   const workspaceTab: WorkspaceTab = activeProject
-    ? (workspaceTabByProject[activeProject.id] ?? "extract")
+    ? clampWorkspaceTab(workspaceTabByProject[activeProject.id] ?? "extract")
     : "extract";
   const openedWorkspace: WorkspaceTab = activeProject
-    ? (openedWorkspaceByProject[activeProject.id] ?? "extract")
+    ? clampWorkspaceTab(openedWorkspaceByProject[activeProject.id] ?? "extract")
     : "extract";
+
+  useLayoutEffect(() => {
+    if (!hydrated) {
+      setWorkspaceScene(showWorkspace);
+      return;
+    }
+    if (skipWorkspaceAnim.current) {
+      skipWorkspaceAnim.current = false;
+      setWorkspaceScene(showWorkspace);
+      return;
+    }
+    if (!showWorkspace) {
+      setWorkspaceScene(false);
+      return;
+    }
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setWorkspaceScene(true));
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [hydrated, showWorkspace]);
+
   const analyzed = Boolean(
     activeProject && analyzedProjectIds.has(activeProject.id)
   );
@@ -429,12 +461,6 @@ export function FreeAssessmentShell() {
   const extractedKeywords = activeProject
     ? (keywordsByProject[activeProject.id] ?? [])
     : [];
-  const proposedCollections = activeProject
-    ? (proposedCollectionsByProject[activeProject.id] ?? [])
-    : [];
-  const clusterSelection = activeProject
-    ? (clusterSelectionByProject[activeProject.id] ?? [])
-    : [];
 
   const stage3Rows = useMemo(() => {
     const generated = getSeedRowsForCollections(
@@ -467,10 +493,26 @@ export function FreeAssessmentShell() {
     if (!activeProjectId) return;
   };
 
+  const handleFlowTab = (next: FlowTab) => {
+    if (!activeProject) return;
+    if (isWorkspaceTab(next)) {
+      setReviewFlow(null);
+      setWorkspaceTabByProject((prev) => ({
+        ...prev,
+        [activeProject.id]: next,
+      }));
+      return;
+    }
+    setReviewFlow(next);
+    const briefStage = briefStageFromFlow(next);
+    if (briefStage) setViewStage(briefStage);
+  };
+
   const handleSelectProject = (id: string) => {
+    setReviewFlow(null);
     setActiveProjectId(id);
     const opened = clampOpenedStage(openedMaxByProject[id], 1);
-    setStage(Math.min(opened, 5) as MarketResearchStage);
+    setStage(Math.min(opened, 4) as MarketResearchStage);
   };
 
   const handleCreateProject = async (name: string) => {
@@ -852,7 +894,6 @@ export function FreeAssessmentShell() {
       status: "running" as "running" | "succeeded" | "failed" | "aborted",
       pulled: 0,
     }));
-    const pulledBySeed: Record<string, number> = {};
     let sample: ExtractedKeyword[] = input.initialSample ?? [];
 
     const tick = async () => {
@@ -882,12 +923,11 @@ export function FreeAssessmentShell() {
             const mapped = row.rows.map((keyword, index) =>
               toExtractedKeyword(keyword, row.seedId, local.pulled + index)
             );
-            sample = mergeKeywordSample(sample, mapped);
+            sample = appendKeywordRows(sample, mapped);
             local.pulled = Math.max(local.pulled + row.rows.length, returned);
           } else {
             local.pulled = Math.max(local.pulled, returned);
           }
-          pulledBySeed[row.seedId] = local.pulled;
         }
 
         const caps = pollState.reduce((sum, seed) => sum + seed.cap, 0);
@@ -904,7 +944,7 @@ export function FreeAssessmentShell() {
         if (sample.length > 0) {
           setKeywordsByProject((prev) => ({
             ...prev,
-            [input.projectId]: applySampleWeights(sample, pulledBySeed),
+            [input.projectId]: sample,
           }));
         }
 
@@ -927,7 +967,7 @@ export function FreeAssessmentShell() {
           if (finalSample.length > 0) {
             setKeywordsByProject((prev) => ({
               ...prev,
-              [input.projectId]: applySampleWeights(finalSample, pulledBySeed),
+              [input.projectId]: finalSample,
             }));
           }
           setExtracting(false);
@@ -1097,7 +1137,10 @@ export function FreeAssessmentShell() {
           status.extract.billingStatus === "held";
         if (!active) {
           resumedExtract.current.add(projectId);
-          if (status.sample?.length && !keywordsByProject[projectId]?.length) {
+          if (
+            status.sample?.length &&
+            status.sample.length > (keywordsByProject[projectId]?.length ?? 0)
+          ) {
             setKeywordsByProject((prev) => ({
               ...prev,
               [projectId]: status.sample as unknown as ExtractedKeyword[],
@@ -1184,6 +1227,15 @@ export function FreeAssessmentShell() {
         (state) => {
           if (analyzeGen.current !== gen) return;
           setAnalyzeProgress({ done: state.nextOffset, total: state.total });
+          if (state.classifications?.length) {
+            setKeywordsByProject((prev) => ({
+              ...prev,
+              [projectId]: applyKeywordClassifications(
+                prev[projectId] ?? [],
+                state.classifications ?? []
+              ),
+            }));
+          }
         },
         () => analyzeGen.current !== gen
       );
@@ -1226,86 +1278,6 @@ export function FreeAssessmentShell() {
     }
   };
 
-  const handleNextCollections = async (filtered?: ExtractedKeyword[]) => {
-    if (!activeProject) return;
-    if (!workspaceId) {
-      toast.error("Workspace is still loading");
-      return;
-    }
-    const projectId = activeProject.id;
-    const source =
-      filtered && filtered.length > 0
-        ? filtered
-        : (keywordsByProject[projectId] ?? []).filter(
-            (row) => row.sheet === "category"
-          );
-    if (source.length === 0) {
-      toast.error("No suitable category keywords to cluster");
-      return;
-    }
-
-    const gen = ++clusterGen.current;
-    setClustering(true);
-    setWorkspaceTabByProject((prev) => ({ ...prev, [projectId]: "collections" }));
-    setOpenedWorkspaceByProject((prev) => ({ ...prev, [projectId]: "collections" }));
-
-    try {
-      const result = await runClusterCollectionsLoop(
-        workspaceId,
-        projectId,
-        (state) => {
-          if (clusterGen.current !== gen) return;
-          setProposedCollectionsByProject((prev) => ({
-            ...prev,
-            [projectId]: state.collections,
-          }));
-        },
-        () => clusterGen.current !== gen
-      );
-      if (clusterGen.current !== gen) return;
-
-      if (!result) {
-        throw new Error("Clustering did not return a result");
-      }
-
-      setClusterSelectionByProject((prev) => ({
-        ...prev,
-        [projectId]: result.collections.map((c) => c.id),
-      }));
-      setOpenedMaxByProject((prev) => ({
-        ...prev,
-        [projectId]: Math.max(prev[projectId] ?? 1, 5) as MarketResearchStage,
-      }));
-
-      // Stage 5 Phase 3 — one extra pass, still inside the same loading
-      // state, that flags any of the collections just proposed above whose
-      // shopper-intent coverage duplicates something already on the
-      // merchant's uploaded PLP sheet. Never blocks or fails the tab: a
-      // failure here just leaves every collection tagged "new", same as
-      // before this step existed.
-      try {
-        const dedupeResult = await dedupeCollectionsApi(workspaceId, projectId);
-        if (clusterGen.current !== gen) return;
-        if (dedupeResult.collections.length > 0) {
-          setProposedCollectionsByProject((prev) => ({
-            ...prev,
-            [projectId]: dedupeResult.collections,
-          }));
-        }
-      } catch (dedupeErr) {
-        console.error("[handleNextCollections] Duplicate-collection check failed:", dedupeErr);
-      }
-    } catch (err) {
-      if (clusterGen.current !== gen) return;
-      console.error("[handleNextCollections] Error:", err);
-      toast.error("Clustering failed", {
-        description: err instanceof Error ? err.message : "Please try again.",
-      });
-    } finally {
-      if (clusterGen.current === gen) setClustering(false);
-    }
-  };
-
   const timelineSteps = useMemo<StageStep[]>(() => {
     const s1: StageStepStatus = stage1DoneForActive ? "done" : "pending";
     const s2: StageStepStatus = preparingStage2
@@ -1329,19 +1301,11 @@ export function FreeAssessmentShell() {
         : openedMax >= 4
           ? "pending"
           : "locked";
-    const s5: StageStepStatus = clustering
-      ? "running"
-      : proposedCollections.length > 0
-        ? "done"
-        : openedMax >= 5
-          ? "pending"
-          : "locked";
     return [
       { stage: 1, status: s1, detail: STAGE_META[1].agentDetail },
       { stage: 2, status: s2, detail: STAGE_META[2].agentDetail },
       { stage: 3, status: s3, detail: STAGE_META[3].agentDetail },
       { stage: 4, status: s4, detail: STAGE_META[4].agentDetail },
-      { stage: 5, status: s5, detail: STAGE_META[5].agentDetail },
     ];
   }, [
     stage1DoneForActive,
@@ -1354,8 +1318,6 @@ export function FreeAssessmentShell() {
     analyzeLoading,
     extractedKeywords.length,
     committedForActive,
-    clustering,
-    proposedCollections.length,
   ]);
 
   const timelineReceipts = useMemo<StageReceipt[]>(() => {
@@ -1373,15 +1335,7 @@ export function FreeAssessmentShell() {
         id: "r4",
         stage: 4,
         title: `Keywords ready · ${extractedKeywords.length} terms`,
-        detail: analyzed ? "Classified" : "Awaiting Analyze with AI",
-      });
-    }
-    if (proposedCollections.length > 0) {
-      list.push({
-        id: "r5",
-        stage: 5,
-        title: `Collections · ${proposedCollections.length}`,
-        detail: "Assessment stops here — no push or on-page.",
+        detail: analyzed ? "Classified — proposal ready" : "Awaiting Analyze with AI",
       });
     }
     return list;
@@ -1391,7 +1345,6 @@ export function FreeAssessmentShell() {
     activeNiches.length,
     extractedKeywords.length,
     analyzed,
-    proposedCollections.length,
   ]);
 
   const handleSendMessage = (text: string) => {
@@ -1468,7 +1421,9 @@ export function FreeAssessmentShell() {
     return <PageLoader />;
   }
 
-  const lockedViewStage = (Math.min(stage, 3) as MarketResearchStage);
+  const lockedViewStage: MarketResearchStage = reviewFlow
+    ? (briefStageFromFlow(reviewFlow) ?? (Math.min(stage, 3) as MarketResearchStage))
+    : (Math.min(stage, 3) as MarketResearchStage);
   const messages = activeProject
     ? (chatByProject[activeProject.id] ?? [])
     : [];
@@ -1486,8 +1441,8 @@ export function FreeAssessmentShell() {
           />
 
           {activeProject ? (
-            <div className={`mr-stage-frame${inWorkspace ? " is-workspace" : ""}`}>
-              <div className="mr-agent-cell" aria-hidden={inWorkspace}>
+            <div className={`mr-stage-frame${workspaceScene ? " is-workspace" : ""}`}>
+              <div className="mr-agent-cell" aria-hidden={workspaceScene}>
                 <div className="mr-agent-inner">
                   <AgentPanel
                     stage={lockedViewStage}
@@ -1501,7 +1456,7 @@ export function FreeAssessmentShell() {
                     messages={messages}
                     onSendMessage={handleSendMessage}
                     chatBusy={chatBusy}
-                    readOnly={!canEdit}
+                    readOnly={reviewingBrief || !canEdit}
                     timeline={
                       <RunTimeline
                         steps={timelineSteps}
@@ -1516,6 +1471,15 @@ export function FreeAssessmentShell() {
               <div className="mr-pane-cell">
                 <section className="mr-pane mr-pane-brief">
                   <div className="flex items-center gap-1 border-b border-border/60 px-3 py-2 shrink-0">
+                    {reviewingBrief ? (
+                      <div className="min-w-0 flex-1 overflow-x-auto">
+                        <WorkspaceStepper
+                          current={reviewFlow ?? "niches"}
+                          opened={openedWorkspace}
+                          onChange={handleFlowTab}
+                        />
+                      </div>
+                    ) : (
                     <div
                       role="tablist"
                       aria-label="Free assessment stages"
@@ -1548,6 +1512,8 @@ export function FreeAssessmentShell() {
                         );
                       })}
                     </div>
+                    )}
+                    {reviewingBrief ? null : (
                     <div className="ml-auto flex items-center gap-3 px-1">
                       <StageStepper
                         current={Math.min(stage, 5) as MarketResearchStage}
@@ -1555,6 +1521,7 @@ export function FreeAssessmentShell() {
                         totalStages={5}
                       />
                     </div>
+                    )}
                   </div>
 
                   <div className="flex-1 min-h-0 overflow-hidden p-4 sm:p-5 flex flex-col">
@@ -1603,14 +1570,14 @@ export function FreeAssessmentShell() {
                             }));
                           }}
                           onMergeNiche={() => undefined}
-                          readOnly={!canEdit}
+                          readOnly={reviewingBrief || !canEdit}
                         />
                       ) : (
                         <StagePlpUploadPanel
                           onRows={handleUploadRows}
                           busy={uploadBusy}
                           error={uploadError}
-                          readOnly={!canEdit}
+                          readOnly={reviewingBrief || !canEdit}
                         />
                       )
                     )}
@@ -1619,7 +1586,9 @@ export function FreeAssessmentShell() {
                         project={activeProject}
                         niches={activeStructuredNiches}
                         preparing={preparingStage2 || !stage2ReadyForActive}
-                        showNext={stage2ReadyForActive && !preparingStage2}
+                        showNext={
+                          stage2ReadyForActive && !preparingStage2 && !reviewingBrief
+                        }
                         nextLabel={
                           openedMax >= 3 ? "Open Stage 3" : "Next · Seed variations"
                         }
@@ -1633,7 +1602,7 @@ export function FreeAssessmentShell() {
                             )
                           );
                         }}
-                        readOnly={!canEdit}
+                        readOnly={reviewingBrief || !canEdit}
                       />
                     )}
                     {lockedViewStage === 3 && openedMax >= 3 && (
@@ -1682,7 +1651,7 @@ export function FreeAssessmentShell() {
                         committed={committedForActive}
                         walletHref={`/w/${slug}/free-assessment/wallet`}
                         walletBalance={wallet?.balance ?? null}
-                        readOnly={!canEdit}
+                        readOnly={reviewingBrief || !canEdit}
                       />
                     )}
                   </div>
@@ -1696,14 +1665,7 @@ export function FreeAssessmentShell() {
                         isWorkspaceTab(workspaceTab) ? workspaceTab : "extract"
                       }
                       opened={openedWorkspace}
-                      onTab={(next) => {
-                        if (isWorkspaceTab(next)) {
-                          setWorkspaceTabByProject((prev) => ({
-                            ...prev,
-                            [activeProject.id]: next,
-                          }));
-                        }
-                      }}
+                      onTab={handleFlowTab}
                       seeds={selectedSeedRows}
                       probes={activeProbes}
                       keywords={extractedKeywords}
@@ -1719,33 +1681,12 @@ export function FreeAssessmentShell() {
                       analyzeProgress={analyzeProgress}
                       analyzed={analyzed}
                       onCancelExtract={handleCancelExtract}
-                      onNextCollections={handleNextCollections}
-                      collections={proposedCollections}
-                      clustering={clustering}
-                      selectedCollectionIds={clusterSelection}
-                      onChangeSelected={(ids) =>
-                        setClusterSelectionByProject((prev) => ({
-                          ...prev,
-                          [activeProject.id]: ids,
-                        }))
+                      keywordsCsvHref={
+                        workspaceId && committedForActive
+                          ? `/api/free-assessment/extract/download?workspaceId=${workspaceId}&projectId=${activeProject.id}`
+                          : undefined
                       }
-                      onRemoveDuplicates={(ids) => {
-                        const idSet = new Set(ids);
-                        const projectId = activeProject.id;
-                        setProposedCollectionsByProject((prev) => ({
-                          ...prev,
-                          [projectId]: (prev[projectId] ?? []).filter(
-                            (c) => !idSet.has(c.id)
-                          ),
-                        }));
-                        setClusterSelectionByProject((prev) => ({
-                          ...prev,
-                          [projectId]: (prev[projectId] ?? []).filter(
-                            (id) => !idSet.has(id)
-                          ),
-                        }));
-                      }}
-                      walletHref={`/w/${slug}/free-assessment/wallet`}
+                      growthEngineHref={`/w/${slug}/market-research`}
                     />
                   </div>
                 ) : null}

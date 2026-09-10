@@ -14,6 +14,7 @@ import {
   type ClassifiedShardItem,
 } from "@/lib/market-research/storage-admin";
 import type { ExtractedKeyword } from "@/components/market-research/workspace-data";
+import { applyKeywordClassifications } from "@/lib/market-research/map-keywords";
 
 export const maxDuration = 60;
 
@@ -56,9 +57,12 @@ export async function POST(request: NextRequest) {
     const done = nextOffset >= total;
 
     let isAiGenerated = false;
+    let classifications: ClassifiedShardItem[] = [];
 
     if (batchRows.length > 0) {
-      const byPhrase = new Map(batchRows.map((r) => [r.phrase, r]));
+      const byPhrase = new Map(
+        batchRows.map((r) => [r.phrase.trim().toLowerCase(), r])
+      );
 
       const result = await runStage4IntentClassification({
         keywords: batchRows.map((r) => ({ id: r.phrase, keyword: r.phrase })),
@@ -68,11 +72,12 @@ export async function POST(request: NextRequest) {
       const items: ClassifiedShardItem[] = result.classified.map((c) => ({
         id: c.id,
         keyword: c.keyword,
-        seedId: byPhrase.get(c.id)?.seedId ?? "",
+        seedId: byPhrase.get(c.keyword.trim().toLowerCase())?.seedId ?? "",
         sheet: c.sheet,
         reason: c.reason,
         plpConcept: c.plpConcept,
       }));
+      classifications = items;
 
       await appendClassifiedShardAdmin(
         auth.admin,
@@ -94,31 +99,14 @@ export async function POST(request: NextRequest) {
       ).catch(() => null);
 
       if (Array.isArray(stored) && stored.length > 0) {
-        const byKeywordText = new Map(
-          items.map((i) => [i.keyword.trim().toLowerCase(), i])
-        );
-        let touched = false;
-        const updated = stored.map((row) => {
-          const match = byKeywordText.get(row.keyword.trim().toLowerCase());
-          if (!match) return row;
-          touched = true;
-          return {
-            ...row,
-            sheet: match.sheet,
-            isQuestion: match.sheet === "informational",
-            exclusionReason: match.reason,
-            plpConcept: match.plpConcept,
-          };
-        });
-        if (touched) {
-          await saveProjectSliceAdmin(
-            auth.admin,
-            parsed.data.workspaceId,
-            parsed.data.projectId,
-            "keywords",
-            updated
-          ).catch((err) => console.error("[intent] Error saving keywords slice:", err));
-        }
+        const updated = applyKeywordClassifications(stored, items);
+        await saveProjectSliceAdmin(
+          auth.admin,
+          parsed.data.workspaceId,
+          parsed.data.projectId,
+          "keywords",
+          updated
+        ).catch((err) => console.error("[intent] Error saving keywords slice:", err));
       }
     }
 
@@ -139,6 +127,7 @@ export async function POST(request: NextRequest) {
         informationalCount: manifest?.informationalCount ?? 0,
         excludedCount: manifest?.excludedCount ?? 0,
         isAiGenerated,
+        classifications,
       },
       { headers: auth.headers }
     );

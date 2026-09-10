@@ -47,10 +47,11 @@ output: NichesOutput
 });
 
 describe("Market Research Agent - Store Catalog", () => {
-  it("provides fallback catalog when no store is connected", () => {
+  it("provides an empty catalog when no store is connected", () => {
     const catalog = getFallbackStoreCatalog("Sample Store");
     expect(catalog.storeName).toBe("Sample Store");
-    expect(catalog.collections.length).toBeGreaterThan(0);
+    expect(catalog.collections).toEqual([]);
+    expect(catalog.storeBrands).toEqual([]);
     expect(catalog.isMock).toBe(true);
   });
 });

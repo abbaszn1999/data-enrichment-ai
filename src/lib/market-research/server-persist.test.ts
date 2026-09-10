@@ -105,7 +105,6 @@ function stateWithKeywords() {
       isQuestion: false,
       sheet: "category",
       productMatches: 0,
-      weight: 1,
     },
   ];
   persisted.probesByProject[projectId] = {
