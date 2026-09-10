@@ -28,7 +28,7 @@ export function InsufficientFundsDialog({
   requiredAmount,
   currentBalance,
   actionName = "Metered operation",
-  walletHref = "/wallet",
+  walletHref = "/free-assessment/wallet",
 }: InsufficientFundsDialogProps) {
   const balance = currentBalance ?? 0;
   const shortfall = Math.max(0, requiredAmount - balance);

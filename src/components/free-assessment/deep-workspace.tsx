@@ -40,6 +40,8 @@ export function DeepWorkspace({
   clusterProgress,
   selectedCollectionIds,
   onChangeSelected,
+  onRemoveDuplicates,
+  walletHref,
 }: {
   projectName: string;
   storeLabel: string;
@@ -65,6 +67,8 @@ export function DeepWorkspace({
   clusterProgress?: { processed: number; total: number } | null;
   selectedCollectionIds: string[];
   onChangeSelected: (ids: string[]) => void;
+  onRemoveDuplicates?: (ids: string[]) => void;
+  walletHref?: string;
 }) {
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
@@ -125,6 +129,8 @@ export function DeepWorkspace({
               paid={false}
               onStart={() => undefined}
               showStoreActions={false}
+              onRemoveDuplicates={onRemoveDuplicates}
+              walletHref={walletHref}
             />
           ) : null}
         </div>

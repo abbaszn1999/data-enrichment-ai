@@ -57,6 +57,7 @@ export function DeepWorkspace({
   collectionsPaid,
   onStartWorking,
   onPushToStore,
+  onRemoveDuplicates,
   pushingCollections = false,
   walletBalance = null,
   walletHref,
@@ -127,6 +128,7 @@ export function DeepWorkspace({
   collectionsPaid: boolean;
   onStartWorking: () => void;
   onPushToStore?: (selectedIds: string[]) => Promise<void> | void;
+  onRemoveDuplicates?: (ids: string[]) => void;
   pushingCollections?: boolean;
   walletBalance?: number | null;
   walletHref?: string;
@@ -227,6 +229,7 @@ export function DeepWorkspace({
             paid={collectionsPaid}
             onStart={onStartWorking}
             onPushToStore={onPushToStore}
+            onRemoveDuplicates={onRemoveDuplicates}
             pushing={pushingCollections}
             walletBalance={walletBalance}
             walletHref={walletHref}

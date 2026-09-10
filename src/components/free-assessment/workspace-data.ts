@@ -120,7 +120,7 @@ export type ProposedCollection = {
   difficulty: number;
   productCount: number;
   keywordCount: number;
-  status: "new" | "existing" | "merge";
+  status: "new" | "existing" | "merge" | "duplicate";
   existingName?: string;
   matchedProductIds?: string[];
   productMatches?: CollectionProductMatch[];

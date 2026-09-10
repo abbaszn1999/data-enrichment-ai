@@ -6,6 +6,7 @@ const KIND_LABEL: Record<JobKind, string> = {
   gallery: "Products Gallery",
   visualizer: "Products Visualizer",
   mr_extract: "Market Research",
+  fa_extract: "Free Assessment",
 };
 
 export function jobKindLabel(kind: JobKind): string {
@@ -26,6 +27,9 @@ export function jobHref(params: {
   }
   if (params.kind === "mr_extract") {
     return `/w/${slug}/market-research`;
+  }
+  if (params.kind === "fa_extract") {
+    return `/w/${slug}/free-assessment`;
   }
   return `/w/${slug}/products-visualizer?project=${encodeURIComponent(params.sessionId)}`;
 }

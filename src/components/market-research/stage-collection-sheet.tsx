@@ -19,6 +19,7 @@ import {
   Sparkles,
   Store,
   Tag,
+  Trash2,
   Wallet,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -64,6 +65,7 @@ export function StageCollectionSheet({
   walletBalance = null,
   walletHref,
   pushing = false,
+  onRemoveDuplicates,
 }: {
   collections: ProposedCollection[];
   products?: MarketResearchProduct[];
@@ -80,6 +82,14 @@ export function StageCollectionSheet({
   walletBalance?: number | null;
   walletHref?: string;
   pushing?: boolean;
+  /**
+   * Stage 5 Phase 3 flagged these ids' shopper-intent as already covered by
+   * an existing store PLP (`status === "duplicate"`). Passing this permanently
+   * removes them from the collections list and from the current selection —
+   * a one-time bulk action, not a toggle/filter, triggered manually by the
+   * merchant via the "Remove Duplicates" button.
+   */
+  onRemoveDuplicates?: (ids: string[]) => void;
 }) {
   const [activeTab, setActiveTab] = useState<"collections" | "products">("collections");
   const [activeModalCollection, setActiveModalCollection] = useState<ProposedCollection | null>(null);
@@ -95,6 +105,10 @@ export function StageCollectionSheet({
   const [minVolume, setMinVolume] = useState(0);
   const [maxKd, setMaxKd] = useState(100);
   const [minProducts, setMinProducts] = useState(0);
+  /** Header filter: view every collection, only "new" ones, or only Stage 5 Phase 3's flagged "duplicate" ones. */
+  const [statusFilter, setStatusFilter] = useState<"all" | "new" | "duplicate">("all");
+  /** Which flagged duplicates the merchant has individually checked for removal — distinct from `selectedIds` (push selection). */
+  const [duplicateSelection, setDuplicateSelection] = useState<Set<string>>(new Set());
 
   // Products sheet filters
   const [productSearch, setProductSearch] = useState("");
@@ -169,6 +183,8 @@ export function StageCollectionSheet({
   const visibleCollections = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return collections.filter((row) => {
+      if (statusFilter === "duplicate" && row.status !== "duplicate") return false;
+      if (statusFilter === "new" && row.status === "duplicate") return false;
       if (row.volume < minVolume) return false;
       if (row.difficulty > maxKd) return false;
       if (row.productCount < minProducts) return false;
@@ -180,7 +196,32 @@ export function StageCollectionSheet({
       }
       return true;
     });
-  }, [collections, minVolume, maxKd, minProducts, searchQuery]);
+  }, [collections, minVolume, maxKd, minProducts, searchQuery, statusFilter]);
+
+  // Stage 5 Phase 3 flagged these — same-shopper-intent duplicates of a PLP
+  // the merchant already has. Drives the header filter tab, the per-row
+  // checkbox in the "Duplicate Check" column, and the Remove Selected/All
+  // actions — nothing here removes anything on its own.
+  const duplicateIds = useMemo(
+    () => collections.filter((c) => c.status === "duplicate").map((c) => c.id),
+    [collections]
+  );
+
+  const toggleDuplicateSelected = (id: string) => {
+    setDuplicateSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const removeDuplicates = (ids: string[]) => {
+    if (!onRemoveDuplicates || ids.length === 0) return;
+    onRemoveDuplicates(ids);
+    const removed = new Set(ids);
+    setDuplicateSelection((prev) => new Set([...prev].filter((id) => !removed.has(id))));
+  };
 
   const visibleProducts = useMemo(() => {
     const q = productSearch.trim().toLowerCase();
@@ -413,6 +454,59 @@ export function StageCollectionSheet({
                 className="h-8 w-[72px] text-xs"
               />
             </label>
+            {onRemoveDuplicates ? (
+              <>
+                {/* Header filter: All / New / Duplicate */}
+                <div className="flex items-center rounded-lg border border-border/70 bg-muted/30 p-0.5">
+                  {(["all", "new", "duplicate"] as const).map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setStatusFilter(f)}
+                      className={cn(
+                        "h-7 rounded-md px-2.5 text-[11px] font-medium capitalize transition-colors",
+                        statusFilter === f
+                          ? "bg-background shadow-2xs text-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {f === "all"
+                        ? "All"
+                        : f === "new"
+                        ? "New"
+                        : `Duplicate${duplicateIds.length > 0 ? ` (${duplicateIds.length})` : ""}`}
+                    </button>
+                  ))}
+                </div>
+                {duplicateSelection.size > 0 ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={paid}
+                    onClick={() => removeDuplicates([...duplicateSelection])}
+                    className="h-8 gap-1.5 px-3 text-xs font-medium rounded-lg border-rose-500/30 bg-rose-500/5 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300 shadow-2xs"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                    Remove Selected ({duplicateSelection.size})
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={paid || duplicateIds.length === 0}
+                  onClick={() => removeDuplicates(duplicateIds)}
+                  className={cn(
+                    "h-8 gap-1.5 px-3 text-xs font-medium rounded-lg shadow-2xs",
+                    duplicateIds.length > 0
+                      ? "border-rose-500/30 bg-rose-500/5 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300"
+                      : "text-muted-foreground"
+                  )}
+                >
+                  <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                  Remove All Duplicates {duplicateIds.length > 0 ? `(${duplicateIds.length})` : ""}
+                </Button>
+              </>
+            ) : null}
           </div>
 
           {/* Collections Table */}
@@ -444,13 +538,14 @@ export function StageCollectionSheet({
                   <TableHead className="text-xs font-semibold text-right py-3 px-4 w-32">Search Volume</TableHead>
                   <TableHead className="text-xs font-semibold text-right py-3 px-4 w-28">KD</TableHead>
                   <TableHead className="text-xs font-semibold text-center py-3 px-4 w-40">Matched Products</TableHead>
+                  <TableHead className="text-xs font-semibold text-center py-3 px-4 w-28">Duplicate Check</TableHead>
                   <TableHead className="text-xs font-semibold text-center py-3 px-4 w-28">Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {visibleCollections.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-36 text-center text-xs text-muted-foreground">
+                    <TableCell colSpan={7} className="h-36 text-center text-xs text-muted-foreground">
                       No collections match the current filters.
                     </TableCell>
                   </TableRow>
@@ -523,6 +618,43 @@ export function StageCollectionSheet({
                             <Package className="h-3.5 w-3.5 shrink-0" />
                             <span>{row.productCount} Products</span>
                           </Button>
+                        </TableCell>
+                        <TableCell className="text-center py-3.5 px-4" onClick={(e) => e.stopPropagation()}>
+                          {row.status === "duplicate" ? (
+                            <button
+                              type="button"
+                              disabled={paid}
+                              onClick={() => toggleDuplicateSelected(row.id)}
+                              className={cn(
+                                "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 text-[11px] font-semibold transition-colors",
+                                paid ? "cursor-not-allowed opacity-75" : "",
+                                duplicateSelection.has(row.id)
+                                  ? "bg-rose-500/25 text-rose-800 border-rose-500/50 dark:text-rose-200"
+                                  : "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 hover:bg-rose-500/25"
+                              )}
+                            >
+                              <span
+                                className={cn(
+                                  "flex h-3.5 w-3.5 items-center justify-center rounded border",
+                                  duplicateSelection.has(row.id)
+                                    ? "border-rose-700 bg-rose-600 text-white"
+                                    : "border-rose-400"
+                                )}
+                              >
+                                {duplicateSelection.has(row.id) ? (
+                                  <Check className="h-2.5 w-2.5 stroke-[3]" />
+                                ) : null}
+                              </span>
+                              Duplicate
+                            </button>
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="text-[11px] font-semibold px-2.5 py-0.5 rounded-md bg-muted text-muted-foreground border-border/60"
+                            >
+                              New
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell className="text-center py-3.5 px-4">
                           <Badge

@@ -1006,7 +1006,7 @@ export function StageSeedsPanel({
                 <span>
                   Wallet balance {formatUsd(walletBalance)} is below the estimate ({formatUsd(estimate.usd)}).
                 </span>
-                <Link href={walletHref || "/wallet"} target="_blank">
+                <Link href={walletHref || "/free-assessment/wallet"} target="_blank">
                   <Button
                     size="sm"
                     variant="outline"
@@ -1078,7 +1078,7 @@ export function StageSeedsPanel({
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>Wallet balance is below the estimate</span>
               </div>
-              <Link href={walletHref || "/wallet"} target="_blank">
+              <Link href={walletHref || "/free-assessment/wallet"} target="_blank">
                 <Button
                   size="sm"
                   variant="outline"

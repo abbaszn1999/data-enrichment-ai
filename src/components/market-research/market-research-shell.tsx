@@ -34,6 +34,7 @@ import {
   pollExtractApi,
   extractStatusApi,
   probeSeedsApi,
+  dedupeCollectionsApi,
   pushCollectionsApi,
   runBuildInternalLinksLoop,
   runClassifyArchiveLoop,
@@ -2578,6 +2579,25 @@ export function MarketResearchShell() {
         ...prev,
         [projectId]: result.collections.map((c) => c.id),
       }));
+
+      // Stage 5 Phase 3 — one extra pass, still inside the same loading
+      // state, that flags any of the collections just proposed above whose
+      // shopper-intent coverage duplicates something already live in the
+      // merchant's store. Never blocks or fails the tab: a failure here
+      // just leaves every collection tagged "new", same as before this
+      // step existed.
+      try {
+        const dedupeResult = await dedupeCollectionsApi(workspaceId, projectId);
+        if (clusterGen.current !== gen) return;
+        if (dedupeResult.collections.length > 0) {
+          setProposedCollectionsByProject((prev) => ({
+            ...prev,
+            [projectId]: dedupeResult.collections,
+          }));
+        }
+      } catch (dedupeErr) {
+        console.error("[handleNextCollections] Duplicate-collection check failed:", dedupeErr);
+      }
     } catch (err) {
       if (clusterGen.current !== gen) return;
       console.error("[handleNextCollections] Error:", err);
@@ -4104,6 +4124,22 @@ export function MarketResearchShell() {
                     collectionsPaid={collectionsPaid}
                     onStartWorking={handleStartWorking}
                     onPushToStore={handlePushToStore}
+                    onRemoveDuplicates={(ids) => {
+                      const idSet = new Set(ids);
+                      const projectId = activeProject.id;
+                      setProposedCollectionsByProject((prev) => ({
+                        ...prev,
+                        [projectId]: (prev[projectId] ?? []).filter(
+                          (c) => !idSet.has(c.id)
+                        ),
+                      }));
+                      setClusterSelectionByProject((prev) => ({
+                        ...prev,
+                        [projectId]: (prev[projectId] ?? []).filter(
+                          (id) => !idSet.has(id)
+                        ),
+                      }));
+                    }}
                     pushingCollections={Boolean(
                       pushingCollectionsByProject[activeProject.id]
                     )}

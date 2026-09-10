@@ -7,7 +7,7 @@ import type {
   WritingTone,
 } from "@/types";
 
-export type JobKind = "catalog" | "gallery" | "visualizer" | "mr_extract";
+export type JobKind = "catalog" | "gallery" | "visualizer" | "mr_extract" | "fa_extract";
 
 export type JobRunStatus =
   | "queued"

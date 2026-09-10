@@ -1,0 +1,244 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { walletDevTopupEnabled } from "@/lib/wallet/dev-topup";
+import { round2, round4 } from "@/lib/wallet/format";
+import type {
+  WalletAutoReload,
+  WalletRpcResult,
+  WalletState,
+  WalletTx,
+  WalletTxKind,
+  WalletTxStatus,
+} from "@/lib/wallet/types";
+
+type RpcPayload = {
+  success?: boolean;
+  duplicate?: boolean;
+  remaining?: number | string | null;
+  tx_id?: string;
+  error?: string;
+};
+
+function parseRpc(data: unknown): RpcPayload {
+  if (!data || typeof data !== "object") return {};
+  return data as RpcPayload;
+}
+
+function remainingOf(payload: RpcPayload, fallback = 0): number {
+  const value = Number(payload.remaining);
+  return Number.isFinite(value) ? round4(value) : fallback;
+}
+
+function toResult(data: unknown): WalletRpcResult {
+  const payload = parseRpc(data);
+  if (payload.success) {
+    return {
+      ok: true,
+      duplicate: payload.duplicate === true,
+      remaining: remainingOf(payload),
+      txId: payload.tx_id,
+    };
+  }
+  const error = payload.error || "Wallet charge failed";
+  if (/insufficient/i.test(error)) {
+    return {
+      ok: false,
+      reason: "insufficient_funds",
+      message: error,
+      remaining: remainingOf(payload),
+    };
+  }
+  if (/not allowed/i.test(error)) {
+    return { ok: false, reason: "forbidden", message: error };
+  }
+  return { ok: false, reason: "error", message: error };
+}
+
+export async function chargeFaWallet(
+  admin: SupabaseClient,
+  input: {
+    workspaceId: string;
+    userId: string;
+    amountUsd: number;
+    description: string;
+    module: string;
+    idempotencyKey: string;
+    details?: Record<string, unknown>;
+  }
+): Promise<WalletRpcResult> {
+  const { data, error } = await admin.rpc("charge_fa_wallet", {
+    p_workspace_id: input.workspaceId,
+    p_user_id: input.userId,
+    p_amount: round4(input.amountUsd),
+    p_description: input.description,
+    p_module: input.module,
+    p_idempotency_key: input.idempotencyKey,
+    p_details: input.details ?? {},
+  });
+  if (error) {
+    return { ok: false, reason: "error", message: error.message };
+  }
+  return toResult(data);
+}
+
+export async function creditFaWallet(
+  admin: SupabaseClient,
+  input: {
+    workspaceId: string;
+    userId: string;
+    amountUsd: number;
+    kind: "topup" | "refund";
+    description: string;
+    module: string;
+    method?: string;
+    idempotencyKey?: string;
+    details?: Record<string, unknown>;
+  }
+): Promise<WalletRpcResult> {
+  const { data, error } = await admin.rpc("credit_fa_wallet", {
+    p_workspace_id: input.workspaceId,
+    p_user_id: input.userId,
+    p_amount: round4(input.amountUsd),
+    p_kind: input.kind,
+    p_description: input.description,
+    p_module: input.module,
+    p_method: input.method ?? null,
+    p_idempotency_key: input.idempotencyKey ?? null,
+    p_details: input.details ?? {},
+  });
+  if (error) {
+    return { ok: false, reason: "error", message: error.message };
+  }
+  return toResult(data);
+}
+
+function mapTx(row: {
+  id: string;
+  kind: string;
+  amount_usd: number | string;
+  description: string | null;
+  module: string | null;
+  method: string | null;
+  status: string;
+  created_at: string;
+  details?: Record<string, unknown> | null;
+}): WalletTx {
+  return {
+    id: row.id,
+    kind: row.kind as WalletTxKind,
+    amount: Number(row.amount_usd) || 0,
+    description: row.description ?? "",
+    module: row.module ?? "",
+    method: row.method ?? undefined,
+    status: row.status as WalletTxStatus,
+    createdAt: new Date(row.created_at).getTime(),
+    details: row.details ?? undefined,
+  };
+}
+
+export async function readFaWallet(
+  admin: SupabaseClient,
+  workspaceId: string
+): Promise<WalletState> {
+  const [{ data: wallet }, { data: topupRows }, { data: summary }] = await Promise.all([
+    admin
+      .from("fa_wallets")
+      .select(
+        "balance_usd, currency, auto_reload_enabled, auto_reload_threshold, auto_reload_amount"
+      )
+      .eq("workspace_id", workspaceId)
+      .maybeSingle(),
+    admin
+      .from("fa_wallet_transactions")
+      .select(
+        "id, kind, amount_usd, description, module, method, status, created_at, details"
+      )
+      .eq("workspace_id", workspaceId)
+      .eq("kind", "topup")
+      .order("created_at", { ascending: false })
+      .limit(1),
+    admin.rpc("fa_wallet_spend_summaries", { p_workspace_id: workspaceId }),
+  ]);
+
+  const autoReload: WalletAutoReload = {
+    enabled: Boolean(wallet?.auto_reload_enabled),
+    threshold: Number(wallet?.auto_reload_threshold ?? 25),
+    amount: Number(wallet?.auto_reload_amount ?? 100),
+  };
+
+  const parsed =
+    summary && typeof summary === "object" ? (summary as Record<string, unknown>) : {};
+  const byModuleRaw = Array.isArray(parsed.by_module) ? parsed.by_module : [];
+  const lastTopupRow = (topupRows ?? [])[0];
+  const lastTopup = lastTopupRow ? mapTx(lastTopupRow) : null;
+
+  return {
+    balance: round4(Number(wallet?.balance_usd ?? 0)),
+    currency: "USD",
+    transactions: lastTopup ? [lastTopup] : [],
+    autoReload,
+    allowDevTopup: walletDevTopupEnabled(),
+    summaries: {
+      spent7: round2(Number(parsed.spent7 ?? 0)),
+      spent30: round2(Number(parsed.spent30 ?? 0)),
+      byModule: byModuleRaw.map((row) => {
+        const item = row as { module?: string; amount?: number };
+        return { module: item.module ?? "", amount: round2(Number(item.amount ?? 0)) };
+      }),
+      lastTopup,
+    },
+  };
+}
+
+export async function listFaWalletTransactions(
+  admin: SupabaseClient,
+  input: {
+    workspaceId: string;
+    module?: string | null;
+    query?: string | null;
+    cursor?: string | null;
+    limit: number;
+  }
+): Promise<{ items: WalletTx[]; nextCursor: string | null }> {
+  const limit = Math.min(Math.max(input.limit, 1), 100);
+  let query = admin
+    .from("fa_wallet_transactions")
+    .select(
+      "id, kind, amount_usd, description, module, method, status, created_at, details"
+    )
+    .eq("workspace_id", input.workspaceId)
+    .order("created_at", { ascending: false })
+    .limit(limit + 1);
+  if (input.module?.trim()) {
+    query = query.eq("module", input.module.trim());
+  }
+  if (input.query?.trim()) {
+    query = query.ilike("description", `%${input.query.trim()}%`);
+  }
+  if (input.cursor?.trim()) {
+    query = query.lt("created_at", input.cursor.trim());
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []).map(mapTx);
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor =
+    hasMore && items.length > 0
+      ? new Date(items[items.length - 1]!.createdAt).toISOString()
+      : null;
+  return { items, nextCursor };
+}
+
+export async function updateFaWalletAutoReload(
+  admin: SupabaseClient,
+  workspaceId: string,
+  autoReload: WalletAutoReload
+): Promise<void> {
+  const { error } = await admin.from("fa_wallets").upsert({
+    workspace_id: workspaceId,
+    auto_reload_enabled: autoReload.enabled,
+    auto_reload_threshold: round2(autoReload.threshold),
+    auto_reload_amount: round2(autoReload.amount),
+  });
+  if (error) throw error;
+}

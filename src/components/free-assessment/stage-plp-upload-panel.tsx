@@ -5,40 +5,45 @@ import { Download, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  catalogFromAssessmentRows,
   downloadAssessmentTemplate,
   parseAssessmentCsv,
-  type AssessmentCatalog,
+  type AssessmentPlpRow,
 } from "./assessment-csv";
 
 type StagePlpUploadPanelProps = {
-  onCatalog: (catalog: AssessmentCatalog) => void;
+  onRows: (rows: AssessmentPlpRow[], fileName: string) => void | Promise<void>;
   readOnly?: boolean;
+  busy?: boolean;
+  error?: string | null;
 };
 
 export function StagePlpUploadPanel({
-  onCatalog,
+  onRows,
   readOnly = false,
+  busy: busyProp = false,
+  error: errorProp = null,
 }: StagePlpUploadPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [parsing, setParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
 
+  const busy = busyProp || parsing;
+  const error = errorProp ?? parseError;
+
   const ingestFile = async (file: File) => {
-    setError(null);
-    setBusy(true);
+    setParseError(null);
+    setParsing(true);
     try {
       const text = await file.text();
       const rows = parseAssessmentCsv(text);
-      const catalog = catalogFromAssessmentRows(rows);
       setFileName(file.name);
-      onCatalog(catalog);
+      await onRows(rows, file.name);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not read that sheet.");
+      setParseError(err instanceof Error ? err.message : "Could not read that sheet.");
     } finally {
-      setBusy(false);
+      setParsing(false);
     }
   };
 
@@ -70,7 +75,6 @@ export function StagePlpUploadPanel({
           Columns: <span className="font-medium text-foreground/80">plp_name</span>,{" "}
           <span className="font-medium text-foreground/80">page_type</span>,{" "}
           <span className="font-medium text-foreground/80">sku_count</span>,{" "}
-          <span className="font-medium text-foreground/80">niche</span>,{" "}
           <span className="font-medium text-foreground/80">description</span>
         </p>
       </div>
@@ -120,7 +124,11 @@ export function StagePlpUploadPanel({
         </div>
         <div className="space-y-1">
           <p className="text-sm font-medium">
-            {busy ? "Reading sheet…" : "Drop a CSV here, or click to upload"}
+            {parsing
+              ? "Reading sheet…"
+              : busyProp
+                ? "Analyzing catalog with AI…"
+                : "Drop a CSV here, or click to upload"}
           </p>
           <p className="text-[11px] text-muted-foreground">
             {fileName ?? "CSV only · one row per PLP"}
@@ -136,8 +144,8 @@ export function StagePlpUploadPanel({
         <p className="text-xs text-destructive">{error}</p>
       ) : (
         <p className="text-[11px] text-muted-foreground">
-          After upload, Stage 1 shows the parent niches grouped from your sheet.
-          Push to store and product preview stay off in this assessment.
+          After upload, the agent analyzes your sheet and groups every PLP into parent
+          niches. Push to store and product preview stay off in this assessment.
         </p>
       )}
     </div>
