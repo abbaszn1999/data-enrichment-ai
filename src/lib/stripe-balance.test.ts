@@ -40,10 +40,10 @@ describe("calculateCreditBalance", () => {
       billing_cycle: "yearly",
       credits_used: 0,
       bonus_credits: 0,
-      subscription_plans: { monthly_ai_credits: 1600 },
+      subscription_plans: { monthly_ai_credits: 3200 },
     });
-    expect(bal.monthlyTotal).toBe(19200);
-    expect(bal.total).toBe(19200);
+    expect(bal.monthlyTotal).toBe(38400);
+    expect(bal.total).toBe(38400);
   });
 
   it("caps a live trial at 100 credits minus usage", () => {

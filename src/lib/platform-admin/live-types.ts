@@ -117,6 +117,7 @@ export type LiveSubscriptionRow = {
   periodCredits: number;
   remaining: number;
   mrr: number;
+  legacyPlan: boolean;
 };
 
 export type LiveCreditTxRow = {

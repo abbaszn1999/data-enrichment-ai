@@ -63,7 +63,7 @@ async function main() {
   const { data: plans, error } = await admin
     .from("subscription_plans")
     .select("id, name, display_name, price_monthly, price_yearly")
-    .eq("is_active", true)
+    .in("name", ["growth", "pro"])
     .order("sort_order", { ascending: true });
 
   if (error || !plans?.length) {
@@ -90,6 +90,11 @@ async function main() {
         name: productName,
         metadata: { local_plan: plan.name, plan_id: plan.id },
       });
+    }
+
+    if (Number(plan.price_monthly ?? 0) <= 0) {
+      console.log(`Skipping ${plan.name}: not a self-serve Stripe plan`);
+      continue;
     }
 
     const monthlyAmount = Math.round(Number(plan.price_monthly ?? 0) * 100);

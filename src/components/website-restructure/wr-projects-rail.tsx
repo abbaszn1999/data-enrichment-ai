@@ -35,7 +35,7 @@ type WrProjectsRailProps = {
   onDeleteProject: (id: string) => void;
   onToggleComplete: (id: string, completed: boolean) => void;
   atProjectCap: boolean;
-  projectLimit: number;
+  projectLimit: number | null;
   canEdit: boolean;
   canAdmin: boolean;
 };
@@ -241,7 +241,7 @@ export function WrProjectsRail({
               <span className="flex h-6 w-6 items-center justify-center rounded-full border border-border/80">
                 <Plus className="h-3.5 w-3.5" />
               </span>
-              {atProjectCap ? `Limit ${projectLimit}/${projectLimit}` : "New project"}
+              {atProjectCap && projectLimit != null ? `Limit ${projectLimit}/${projectLimit}` : "New project"}
             </button>
           ) : null}
 

@@ -15,6 +15,16 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       {
+        source: "/register",
+        destination: "/signup",
+        permanent: false,
+      },
+      {
+        source: "/sign-up",
+        destination: "/signup",
+        permanent: false,
+      },
+      {
         source: "/w/:slug/import/:id/enrich",
         destination: "/w/:slug/catalog-intelligence/:id",
         permanent: false,

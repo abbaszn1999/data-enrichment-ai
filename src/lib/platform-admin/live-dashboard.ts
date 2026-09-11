@@ -190,6 +190,7 @@ function mapSubscription(row: SubscriptionRow, nameById: Map<string, string>, em
     periodCredits: balance.periodCredits,
     remaining: balance.remaining,
     mrr: subscriptionMrr(status, billingCycle, Number(plan.price_monthly ?? 0), Number(plan.price_yearly ?? 0)),
+    legacyPlan: plan.name === "starter",
   };
 }
 

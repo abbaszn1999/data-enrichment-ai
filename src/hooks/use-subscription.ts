@@ -120,6 +120,7 @@ export function useSubscription(workspaceId: string | null) {
   const isStarter = state.plan?.name === "starter";
   const isGrowth = state.plan?.name === "growth";
   const isPro = state.plan?.name === "pro";
+  const isEnterprise = state.plan?.name === "enterprise";
 
-  return { ...state, refresh: () => refresh(true), planName, isStarter, isGrowth, isPro };
+  return { ...state, refresh: () => refresh(true), planName, isStarter, isGrowth, isPro, isEnterprise };
 }

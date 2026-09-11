@@ -9,17 +9,19 @@ import {
 describe("getWrProjectLimit", () => {
   it("maps each known plan to its limit", () => {
     expect(getWrProjectLimit("starter")).toBe(2);
-    expect(getWrProjectLimit("growth")).toBe(3);
-    expect(getWrProjectLimit("pro")).toBe(5);
+    expect(getWrProjectLimit("trial")).toBe(2);
+    expect(getWrProjectLimit("growth")).toBeNull();
+    expect(getWrProjectLimit("pro")).toBeNull();
+    expect(getWrProjectLimit("enterprise")).toBeNull();
   });
 
   it("is case-insensitive", () => {
-    expect(getWrProjectLimit("Growth")).toBe(3);
+    expect(getWrProjectLimit("Growth")).toBeNull();
   });
 
   it("falls back to the default for an unknown or missing plan", () => {
     expect(getWrProjectLimit(null)).toBe(WR_DEFAULT_PROJECT_LIMIT);
-    expect(getWrProjectLimit("enterprise")).toBe(WR_DEFAULT_PROJECT_LIMIT);
+    expect(getWrProjectLimit("hobby")).toBe(WR_DEFAULT_PROJECT_LIMIT);
   });
 });
 

@@ -9,8 +9,8 @@ export type TrialEligibilityRow = {
 };
 
 export function isEligibleForTrial(sub: TrialEligibilityRow | null): boolean {
-  // One lifetime grant: only owners who have never had a billing row.
-  // A trial, paid plan, cancel, or expiry all leave a row, so they never get another.
+  // One lifetime grant per auth account (email). A trial, paid plan, cancel,
+  // or expiry all leave a row, so the same user never gets another 100 credits.
   return !sub;
 }
 

@@ -14,7 +14,7 @@ async function asJson<T>(res: Response): Promise<T> {
 
 export type WrProjectsResponse = {
   projects: WrProjectRowWithUrls[];
-  projectLimit: number;
+  projectLimit: number | null;
   projectsCreatedTotal: number;
 };
 

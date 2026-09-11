@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { stripe, getOrCreateStripeCustomer, creditsToUsd, CREDIT_TOPUP_MIN_CREDITS } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { checkoutBlockedReason, isSelfServePlanName } from "@/lib/billing/plans";
 import { stripeCheckoutBlockedReason } from "@/lib/stripe-mode";
 
 export async function POST(request: NextRequest) {
@@ -25,15 +26,25 @@ export async function POST(request: NextRequest) {
     const cancelUrl = `${process.env.NEXT_PUBLIC_APP_URL}/w/${workspaceSlug}/subscription?cancelled=true`;
 
     if (type === "subscription") {
-      // Get plan details
+      if (typeof planId !== "string" || planId.startsWith("catalog:")) {
+        return NextResponse.json({ error: "This plan cannot be purchased" }, { status: 400 });
+      }
+
       const { data: plan } = await admin.from("subscription_plans").select("*").eq("id", planId).single();
       if (!plan) return NextResponse.json({ error: "Plan not found" }, { status: 404 });
-      if (plan.name === "trial" || plan.is_active === false) {
+
+      const blocked = checkoutBlockedReason(plan, billingCycle === "yearly" ? "yearly" : "monthly");
+      if (blocked) {
+        return NextResponse.json({ error: blocked }, { status: 400 });
+      }
+      if (!isSelfServePlanName(plan.name)) {
         return NextResponse.json({ error: "This plan cannot be purchased" }, { status: 400 });
       }
 
       const priceId = billingCycle === "yearly" ? plan.stripe_price_yearly_id : plan.stripe_price_monthly_id;
-      if (!priceId) return NextResponse.json({ error: "Stripe price not configured for this plan" }, { status: 400 });
+      if (!priceId) {
+        return NextResponse.json({ error: "Stripe price not configured for this plan" }, { status: 400 });
+      }
 
       // Check if user already has an active Stripe subscription
       const { data: existingSub } = await admin

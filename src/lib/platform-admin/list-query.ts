@@ -20,9 +20,10 @@ export const DATE_WINDOW_OPTIONS = [
 export const PLAN_FILTER_OPTIONS = [
   { value: "all", label: "All plans" },
   { value: "free", label: "Free" },
-  { value: "starter", label: "Starter" },
+  { value: "starter", label: "Starter (legacy)" },
   { value: "growth", label: "Growth" },
   { value: "pro", label: "Pro" },
+  { value: "enterprise", label: "Enterprise" },
 ];
 
 export function inDateWindow(iso: string | null | undefined, window: DateWindow): boolean {

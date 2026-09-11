@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { buildPublicCheckoutPlans } from "@/lib/billing/plans";
 import { roundCredits } from "@/lib/format-credits";
 import { assertStripeKeyAllowed, getStripeKeyMode } from "@/lib/stripe-mode";
 
@@ -70,7 +71,7 @@ const PLANS_CACHE_TTL = 15 * 1000;
 
 let _plansCache: { data: unknown[] | null; ts: number } = { data: null, ts: 0 };
 
-/** Active catalog, ordered for the subscription page (Starter → Growth → Pro). */
+/** Public checkout catalog: Growth, Pro, Enterprise. Starter is never returned. */
 export async function getActiveSubscriptionPlans() {
   if (_plansCache.data && Date.now() - _plansCache.ts < PLANS_CACHE_TTL) {
     return _plansCache.data;
@@ -79,10 +80,10 @@ export async function getActiveSubscriptionPlans() {
   const { data, error } = await admin
     .from("subscription_plans")
     .select("*")
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
+    .in("name", ["growth", "pro", "enterprise"]);
   if (error) throw new Error(error.message);
-  _plansCache = { data: data || [], ts: Date.now() };
+  const catalog = buildPublicCheckoutPlans(data || []);
+  _plansCache = { data: catalog, ts: Date.now() };
   return _plansCache.data;
 }
 

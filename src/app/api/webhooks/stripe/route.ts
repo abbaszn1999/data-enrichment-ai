@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe, findPlanByStripePriceId, invalidateSubscriptionCache } from "@/lib/stripe";
+import { isSelfServePlanName } from "@/lib/billing/plans";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { creditWorkspaceWallet } from "@/lib/wallet/server";
 import { creditFaWallet } from "@/lib/free-assessment/wallet-server";
@@ -78,6 +79,16 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
     const customerId = session.customer as string;
     const planId = session.metadata?.planId;
     if (!planId) return;
+
+    const { data: purchasedPlan } = await admin
+      .from("subscription_plans")
+      .select("name")
+      .eq("id", planId)
+      .maybeSingle();
+    if (!isSelfServePlanName(purchasedPlan?.name)) {
+      console.error("[Stripe Webhook] Refusing to create a non-self-serve plan from checkout", purchasedPlan?.name);
+      return;
+    }
 
     const stripeSub = await stripe.subscriptions.retrieve(subId);
     const item = stripeSub.items.data[0];

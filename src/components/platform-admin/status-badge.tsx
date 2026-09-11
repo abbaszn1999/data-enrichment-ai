@@ -64,6 +64,14 @@ export function IntegrationStatusBadge({ status }: { status: AdminIntegrationSta
   return pill(status, tone);
 }
 
-export function PlanBadge({ name }: { name: string }) {
+export function PlanBadge({ name, legacy = false }: { name: string; legacy?: boolean }) {
+  if (legacy || /^starter$/i.test(name) || name.toLowerCase().includes("starter")) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        {pill(name, "warn")}
+        {pill("Legacy — migrate", "warn")}
+      </span>
+    );
+  }
   return pill(name, "info");
 }

@@ -41,17 +41,16 @@ export async function POST(request: NextRequest) {
   const planName = (auth.ctx.plan?.name as string | undefined) ?? null;
   const limit = getWrProjectLimit(planName);
 
-  // Reserve the lifetime slot atomically before creating the row: this counts
-  // every project the workspace has ever created, so deleting old ones never
-  // frees up a new slot (see `wr_try_reserve_project_slot`).
-  const reserved = await reserveWrProjectSlot(auth.admin, parsed.data.workspaceId, limit);
-  if (!reserved) {
-    return NextResponse.json(
-      {
-        error: `Your plan allows up to ${limit} Website Restructure project${limit === 1 ? "" : "s"} in total. Deleting an existing project won't free up a new slot — upgrade your plan to create more.`,
-      },
-      { status: 409, headers: auth.headers }
-    );
+  if (limit != null) {
+    const reserved = await reserveWrProjectSlot(auth.admin, parsed.data.workspaceId, limit);
+    if (!reserved) {
+      return NextResponse.json(
+        {
+          error: `Your plan allows up to ${limit} Website Restructure project${limit === 1 ? "" : "s"} in total. Deleting an existing project won't free up a new slot — upgrade your plan to create more.`,
+        },
+        { status: 409, headers: auth.headers }
+      );
+    }
   }
 
   try {
@@ -64,7 +63,9 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ project }, { status: 201, headers: auth.headers });
   } catch (error) {
-    await releaseWrProjectSlot(auth.admin, parsed.data.workspaceId);
+    if (limit != null) {
+      await releaseWrProjectSlot(auth.admin, parsed.data.workspaceId);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to create project" },
       { status: 500, headers: auth.headers }

@@ -4,6 +4,11 @@ import { isAdminInternalPath, isAdminPublicPath } from "@/lib/platform-admin/pat
 import { jwtSecretFromEnv, verifySupabaseAccessToken } from "@/lib/auth/verify-jwt";
 import { publicOriginFromRequest } from "@/lib/app-origin";
 import { applySignedInPresenceCookie, SIGNED_IN_PRESENCE_COOKIE } from "@/lib/auth/signed-in-presence";
+import {
+  isAuthEntryPath,
+  isSignupAliasPath,
+  signedInAuthEntryDestination,
+} from "@/lib/auth/auth-entry";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -35,9 +40,10 @@ export async function updateSession(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  // Public routes that don't need auth — skip everything early
   const publicRoutes = [
     "/login",
+    "/signup",
+    "/sign-up",
     "/register",
     "/reset-password",
     "/auth/callback",
@@ -57,6 +63,24 @@ export async function updateSession(request: NextRequest) {
   const presenceHost = { hostname: presenceOrigin.hostname, secure: presenceOrigin.protocol === "https:" };
   const withPresence = (response: NextResponse, signedIn: boolean) =>
     applySignedInPresenceCookie(response, { ...presenceHost, signedIn });
+
+  if (isAuthEntryPath(pathname) || isSignupAliasPath(pathname)) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      const dest = signedInAuthEntryDestination(
+        pathname,
+        request.nextUrl.searchParams.get("redirect")
+      );
+      if (dest) {
+        const url = request.nextUrl.clone();
+        url.pathname = dest;
+        url.search = "";
+        return withPresence(NextResponse.redirect(url), true);
+      }
+    }
+  }
 
   if (isPublicRoute || isDemoRoute || isAdminRoute || isApiRoute) {
     if (isPublicRoute && !isDemoRoute && !isAdminRoute && !isApiRoute) {

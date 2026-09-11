@@ -1,5 +1,9 @@
 import { createClient } from "@/lib/supabase-browser";
 import {
+  AccountExistsError,
+  signupIndicatesExistingAccount,
+} from "@/lib/auth/auth-entry";
+import {
   clearSignedInPresenceCookieBrowser,
   writeSignedInPresenceCookieBrowser,
 } from "@/lib/auth/signed-in-presence";
@@ -21,6 +25,15 @@ export async function signUp(email: string, password: string, fullName: string, 
       emailRedirectTo: callbackUrl,
     },
   });
+  if (
+    signupIndicatesExistingAccount({
+      error,
+      user: data.user,
+      session: data.session,
+    })
+  ) {
+    throw new AccountExistsError(email);
+  }
   if (error) throw error;
   if (data.session) writeSignedInPresenceCookieBrowser();
   return data;

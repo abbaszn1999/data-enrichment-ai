@@ -24,8 +24,12 @@ function LoginForm() {
   // Detect auth errors from callback redirect (query string takes priority;
   // older links may only carry the error in the hash fragment).
   const urlError = searchParams.get("error");
+  const existingAccount = searchParams.get("existing") === "1";
   const isInviteRedirect = redirect.startsWith("/invite/");
   const [error, setError] = useState(() => {
+    if (existingAccount) {
+      return "This email already has an account. Sign in to continue.";
+    }
     if (urlError !== "auth_callback_error") return "";
 
     let errorCode = searchParams.get("error_code") || "";
@@ -178,8 +182,8 @@ function LoginForm() {
 
       <p className="text-center text-sm text-muted-foreground">
         Don&apos;t have an account?{" "}
-        <Link href={`/register${redirect !== "/workspaces" ? `?redirect=${encodeURIComponent(redirect)}` : ""}`} className="text-primary font-medium hover:underline">
-          Create account
+        <Link href={`/signup${redirect !== "/workspaces" ? `?redirect=${encodeURIComponent(redirect)}` : ""}`} className="text-primary font-medium hover:underline">
+          Start for Free
         </Link>
       </p>
     </Card>
