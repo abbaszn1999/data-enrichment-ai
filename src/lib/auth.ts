@@ -1,4 +1,8 @@
 import { createClient } from "@/lib/supabase-browser";
+import {
+  clearSignedInPresenceCookieBrowser,
+  writeSignedInPresenceCookieBrowser,
+} from "@/lib/auth/signed-in-presence";
 
 export async function signUp(email: string, password: string, fullName: string, redirectTo?: string) {
   const supabase = createClient();
@@ -18,6 +22,7 @@ export async function signUp(email: string, password: string, fullName: string, 
     },
   });
   if (error) throw error;
+  if (data.session) writeSignedInPresenceCookieBrowser();
   return data;
 }
 
@@ -28,6 +33,7 @@ export async function signIn(email: string, password: string) {
     password,
   });
   if (error) throw error;
+  writeSignedInPresenceCookieBrowser();
   return data;
 }
 
@@ -50,8 +56,12 @@ export async function signInWithGoogle(redirectTo?: string) {
 
 export async function signOut() {
   const supabase = createClient();
-  const { error } = await supabase.auth.signOut();
-  if (error) throw error;
+  try {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+  } finally {
+    clearSignedInPresenceCookieBrowser();
+  }
 }
 
 export async function resetPassword(email: string) {
