@@ -40,6 +40,7 @@
     "node_modules",
     "supabase/functions",
     ".next",
-    "newxx"
+    "newxx",
+    "low-hanging-fruits"
   ]
 }
