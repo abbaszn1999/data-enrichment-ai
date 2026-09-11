@@ -71,6 +71,26 @@ describe("parseGalleryJobRuntimeSettings", () => {
     expect(parsed?.scraping.imagesPerRow).toBe(2);
   });
 
+  it("pins AI Main to 1 without touching Scraping Main count", () => {
+    const parsed = parseGalleryJobRuntimeSettings({
+      ...projectSettings(2),
+      provider: "ai",
+      ai: {
+        ...DEFAULT_AI_SETTINGS,
+        main: { imagesPerRow: 4, instructions: "legacy" },
+      },
+      scraping: {
+        ...DEFAULT_SCRAPING_SETTINGS,
+        main: { imagesPerRow: 3, instructions: "packshots" },
+      },
+    });
+    expect(parsed?.ai.main).toEqual({ imagesPerRow: 1, instructions: "" });
+    expect(parsed?.scraping.main).toEqual({
+      imagesPerRow: 3,
+      instructions: "packshots",
+    });
+  });
+
   it("rejects missing snapshots", () => {
     expect(parseGalleryJobRuntimeSettings(undefined)).toBeNull();
     expect(parseGalleryJobRuntimeSettings("nope")).toBeNull();

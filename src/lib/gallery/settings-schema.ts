@@ -83,6 +83,12 @@ export function parseAiSettings(input: unknown) {
   return {
     ...parsed,
     brandGuideMode,
+    // AI Generate always shoots exactly one identity Main. Feature direction
+    // lives in Gallery custom instructions for the planner.
+    main: {
+      imagesPerRow: 1,
+      instructions: "",
+    },
   };
 }
 

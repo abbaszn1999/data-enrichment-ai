@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { WrDesignBrief, WrTaxonomyTree, WrVersion } from "./types";
+import type { WrDesignBrief, WrNavPlan, WrTaxonomyTree, WrVersion } from "./types";
 
 export const WR_STORAGE_BUCKET = "workspace-files";
 
@@ -85,6 +85,10 @@ export function wrTaxonomyPath(workspaceId: string, projectId: string): string {
   return `${wrProjectPath(workspaceId, projectId)}/taxonomy.json`;
 }
 
+export function wrNavPlanPath(workspaceId: string, projectId: string): string {
+  return `${wrProjectPath(workspaceId, projectId)}/nav-plan.json`;
+}
+
 export function wrCompetitorsPath(workspaceId: string, projectId: string): string {
   return `${wrProjectPath(workspaceId, projectId)}/competitors.json`;
 }
@@ -161,6 +165,25 @@ export async function loadWrTaxonomyAdmin(
   projectId: string
 ): Promise<WrTaxonomyTree | null> {
   return loadWrJsonAdmin<WrTaxonomyTree>(admin, wrTaxonomyPath(workspaceId, projectId));
+}
+
+/** The IA planner's elected nav tree — generated once per full build,
+ *  reused on every edit after that (same treatment as the brief/taxonomy). */
+export async function saveWrNavPlanAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  plan: WrNavPlan
+): Promise<void> {
+  await saveWrJsonAdmin(admin, wrNavPlanPath(workspaceId, projectId), plan);
+}
+
+export async function loadWrNavPlanAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<WrNavPlan | null> {
+  return loadWrJsonAdmin<WrNavPlan>(admin, wrNavPlanPath(workspaceId, projectId));
 }
 
 export async function saveWrVersionAdmin(

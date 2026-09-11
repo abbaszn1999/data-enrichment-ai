@@ -2,6 +2,7 @@ import {
   costToCredits,
   calculateGroundedCallCost,
   getImageOutputCost,
+  getModelPricing,
 } from "@/lib/ai-pricing";
 import { resolveScrapingModel } from "@/lib/gallery/agents/scraping-shared";
 import type {
@@ -105,6 +106,23 @@ export function estimateScrapingCredits(
   }).max;
 }
 
+const PLANNER_ESTIMATE_INPUT_TOKENS = 4_500;
+const PLANNER_ESTIMATE_OUTPUT_TOKENS = 1_800;
+
+export function estimatePlannerCredits(options: {
+  rowCount: number;
+  tier?: GalleryAiSettings["tier"];
+}): number {
+  const rowCount = Math.max(0, options.rowCount);
+  if (rowCount === 0) return 0;
+  const model = resolveScrapingModel(options.tier);
+  const pricing = getModelPricing(model);
+  const perRow =
+    (PLANNER_ESTIMATE_INPUT_TOKENS / 1_000_000) * pricing.inputPerMillion +
+    (PLANNER_ESTIMATE_OUTPUT_TOKENS / 1_000_000) * pricing.outputPerMillion;
+  return Math.round(costToCredits(perRow * rowCount * 1.4) * 1000) / 1000;
+}
+
 /** @deprecated Use estimateScrapingCredits */
 export function estimateGoogleCredits(rowCount: number): number {
   return estimateScrapingCredits(rowCount, "medium");
@@ -116,6 +134,7 @@ export function estimateGalleryCredits(
   aiSettings?: GalleryAiSettings,
   options?: {
     generateMainPerRow?: boolean;
+    generateMainCount?: number;
     searchDepth?: GallerySearchDepth;
     rowsWithOriginal?: number;
     tier?: GalleryScrapingSettings["tier"];
@@ -133,22 +152,28 @@ export function estimateGalleryCredits(
       Math.max(settings?.imagesPerRow || 4, 1),
       8
     );
-    const mainImages = options?.generateMainPerRow
-      ? Math.min(Math.max(settings?.main?.imagesPerRow || 1, 1), 6)
-      : 0;
-    const imagesPerRow = galleryImages + mainImages;
+    const mainImages =
+      typeof options?.generateMainCount === "number"
+        ? Math.max(0, options.generateMainCount)
+        : options?.generateMainPerRow
+          ? rowCount
+          : 0;
     const imageOutput =
-      getImageOutputCost(model, resolution) * imagesPerRow * rowCount;
+      getImageOutputCost(model, resolution) *
+      (galleryImages * rowCount + mainImages);
+    const imageCalls = galleryImages * rowCount + mainImages;
     const perCallOverhead =
       (model === "gemini-3-pro-image" ? 0.012 : 0.004) +
       (settings?.groundWithSearch ? 0.014 : 0);
-    return (
+    const imageCredits =
       Math.ceil(
-        costToCredits(imageOutput + perCallOverhead * imagesPerRow * rowCount) *
-          1.1 *
-          1000
-      ) / 1000
-    );
+        costToCredits(imageOutput + perCallOverhead * imageCalls) * 1.1 * 1000
+      ) / 1000;
+    const plannerCredits = estimatePlannerCredits({
+      rowCount,
+      tier: settings?.tier,
+    });
+    return Math.round((imageCredits + plannerCredits) * 1000) / 1000;
   }
 
   return estimateScrapingCredits(

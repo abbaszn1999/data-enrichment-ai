@@ -27,6 +27,10 @@ import {
   type AiImageModel,
   type AiReferenceImage,
 } from "@/lib/gallery/agents/ai-shared";
+import {
+  planGalleryImages,
+  type GalleryPlannerPlan,
+} from "@/lib/gallery/agents/ai-planner-agent";
 import { generateAiMainImage } from "@/lib/gallery/agents/ai-main-agent";
 import { generateAiGalleryImage } from "@/lib/gallery/agents/ai-gallery-agent";
 
@@ -73,8 +77,9 @@ export async function processAiRow(params: {
     originalImageColumn: worksheet.originalImageColumn,
     row,
     requested: params.runPhase ?? null,
+    provider: "ai",
   });
-  const runMain = runPhase === "main" || runPhase === "full";
+  const generateMain = runPhase === "full";
   const runGallery = runPhase === "gallery" || runPhase === "full";
   const model: AiImageModel =
     settings.tier === "premium"
@@ -105,6 +110,22 @@ export async function processAiRow(params: {
   let mainPath: string | null = null;
   let canonicalProduct: AiReferenceImage | null = null;
   const mainProductReferences: AiReferenceImage[] = [];
+  let plan: GalleryPlannerPlan | null = null;
+
+  const fail = (error: string, status: GalleryRow["status"] = "failed") => ({
+    row: {
+      ...row,
+      status: row.status === "ready" && status === "failed" ? "ready" : status,
+      generationStage: undefined,
+      errorMessage: error,
+      mainImagePaths: oldMainPaths,
+      mainImagePath: oldMainPaths[0] ?? null,
+      galleryImagePaths: oldGalleryPaths,
+    },
+    creditsUsed: 0,
+    cost: sumCosts(costs).totalCost,
+    error,
+  });
 
   galleryLog("ai-image:row", `Processing row ${row.id} via AI`, { runPhase });
 
@@ -112,8 +133,6 @@ export async function processAiRow(params: {
     path: string,
     label: string
   ): Promise<AiReferenceImage | null> => {
-    // Scraped / external mains: pass the public HTTPS URL to Gemini
-    // (Interactions ImageContent.uri) so we do not re-download here.
     if (/^https?:\/\//i.test(path)) {
       return {
         label,
@@ -134,8 +153,7 @@ export async function processAiRow(params: {
     }
   };
 
-  if (runMain) {
-    await params.onCheckpoint?.({ generationStage: "main" });
+  const copyOriginalsAsMain = async () => {
     const originalUrls = worksheet.originalImageColumn
       ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
       : [];
@@ -183,25 +201,11 @@ export async function processAiRow(params: {
         generationStage: runGallery ? "gallery" : "finalizing",
       });
     }
-  } else {
+  };
+
+  if (oldMainPaths.length > 0) {
     mainPaths.push(...oldMainPaths);
     mainPath = mainPaths[0] ?? null;
-    if (!mainPath) {
-      return {
-        row: {
-          ...row,
-          status: row.status === "ready" ? "ready" : "failed",
-          generationStage: undefined,
-          errorMessage: "Find main images first before generating the gallery",
-          mainImagePaths: oldMainPaths,
-          mainImagePath: oldMainPaths[0] ?? null,
-          galleryImagePaths: oldGalleryPaths,
-        },
-        creditsUsed: 0,
-        cost: 0,
-        error: "Find main images first before generating the gallery",
-      };
-    }
     for (const path of mainPaths) {
       const loaded = await loadCanonicalFromPath(
         path,
@@ -213,20 +217,13 @@ export async function processAiRow(params: {
     }
     canonicalProduct = mainProductReferences[0] ?? null;
     if (!canonicalProduct) {
-      return {
-        row: {
-          ...row,
-          status: row.status === "ready" ? "ready" : "failed",
-          generationStage: undefined,
-          errorMessage: "Could not load the existing main image for gallery generation",
-          mainImagePaths: oldMainPaths,
-          mainImagePath: oldMainPaths[0] ?? null,
-          galleryImagePaths: oldGalleryPaths,
-        },
-        creditsUsed: 0,
-        cost: 0,
-        error: "Could not load the existing main image for gallery generation",
-      };
+      return fail("Could not load the existing main image for gallery generation");
+    }
+  } else if (!generateMain) {
+    await copyOriginalsAsMain();
+    if (!canonicalProduct) {
+      await removeGalleryPathsAdmin(newlyStoredPaths);
+      return fail("Find main images first before generating the gallery");
     }
   }
 
@@ -279,8 +276,7 @@ export async function processAiRow(params: {
   const galleryTarget = runGallery
     ? Math.min(Math.max(settings.imagesPerRow || 4, 1), 8)
     : 0;
-  const mainTarget = Math.min(Math.max(settings.main?.imagesPerRow || 1, 1), 6);
-  const needGeneratedMain = runMain && !canonicalProduct;
+  const needGeneratedMain = generateMain && !canonicalProduct;
   const originalUrls = worksheet.originalImageColumn
     ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
     : [];
@@ -289,8 +285,6 @@ export async function processAiRow(params: {
     runPhase,
     imagesPerRow: settings.imagesPerRow,
     galleryTarget,
-    mainImagesPerRow: settings.main?.imagesPerRow,
-    mainTarget: needGeneratedMain ? mainTarget : mainPaths.length || 1,
     needGeneratedMain,
     hasOriginalColumn: !!worksheet.originalImageColumn,
     originalImageCount: originalUrls.length,
@@ -301,73 +295,115 @@ export async function processAiRow(params: {
     brandingEnabled: settings.brandingEnabled,
   });
 
+  await params.onCheckpoint?.({ generationStage: "planning" });
+  try {
+    const planned = await planGalleryImages({
+      worksheet,
+      row,
+      galleryCount: Math.max(galleryTarget, 1),
+      needMain: needGeneratedMain,
+      productImage: canonicalProduct,
+      hasSceneReference: !!sceneReference,
+      hasLogo: !!logoReference,
+      hasBrandGuide: !!brandGuideReference,
+    });
+    plan = planned.plan;
+    if (planned.cost) costs.push(planned.cost);
+  } catch (error) {
+    galleryError("ai-image:row", "Gallery planner failed", error);
+    await removeGalleryPathsAdmin(newlyStoredPaths);
+    return fail(
+      error instanceof Error ? error.message : "Gallery planner failed"
+    );
+  }
+  if (!plan) {
+    await removeGalleryPathsAdmin(newlyStoredPaths);
+    return fail("Gallery planner failed");
+  }
+
   if (needGeneratedMain) {
-    await params.onCheckpoint?.({ generationStage: "main" });
-    for (let mainIndex = 0; mainIndex < mainTarget; mainIndex += 1) {
-      ensureTime(35_000);
-      try {
-        const references = [
-          ...mainProductReferences,
-          ...supportingReferences,
-        ].slice(0, model === "gemini-3-pro-image" ? 6 : 10);
-        const generated = await generateAiMainImage({
-          ai,
-          model,
-          worksheet,
-          row,
-          references,
-          mainIndex,
-          mainTotal: mainTarget,
-        });
-        costs.push(generated.cost);
-        const ext = extensionForMime(generated.contentType);
-        const path = getGalleryRowImagePath(
-          workspaceId,
-          sessionId,
-          row.id,
-          "main",
-          ext
-        );
-        await uploadGalleryBytesAdmin(path, generated.buffer, generated.contentType);
-        newlyStoredPaths.push(path);
-        aiGeneratedPaths.push(path);
-        mainPaths.push(path);
-        mainPath = mainPaths[0];
-        const generatedReference: AiReferenceImage = {
-          label:
-            mainProductReferences.length === 0
-              ? "canonical generated main product image; preserve this exact product identity"
-              : `additional generated main product image ${mainProductReferences.length + 1}; preserve this exact product identity`,
-          buffer: generated.buffer,
-          contentType: generated.contentType,
-        };
-        mainProductReferences.push(generatedReference);
-        if (!canonicalProduct) canonicalProduct = generatedReference;
-      } catch (error) {
-        galleryError("ai-image:row", "Main image generation failed", error);
-        break;
-      }
+    if (!plan.main?.visualBrief) {
+      await removeGalleryPathsAdmin(newlyStoredPaths);
+      return fail("Gallery planner did not return a Main brief");
     }
-    if (mainPaths.length > 0) {
+    await params.onCheckpoint?.({ generationStage: "main" });
+    ensureTime(35_000);
+    try {
+      const references = [
+        ...mainProductReferences,
+        ...supportingReferences,
+      ].slice(0, model === "gemini-3-pro-image" ? 6 : 10);
+      const generated = await generateAiMainImage({
+        ai,
+        model,
+        worksheet,
+        row,
+        references,
+        brief: plan.main,
+      });
+      costs.push(generated.cost);
+      const ext = extensionForMime(generated.contentType);
+      const path = getGalleryRowImagePath(
+        workspaceId,
+        sessionId,
+        row.id,
+        "main",
+        ext
+      );
+      await uploadGalleryBytesAdmin(path, generated.buffer, generated.contentType);
+      newlyStoredPaths.push(path);
+      aiGeneratedPaths.push(path);
+      mainPaths.push(path);
+      mainPath = mainPaths[0];
+      const generatedReference: AiReferenceImage = {
+        label:
+          "canonical generated main product image; preserve this exact product identity",
+        buffer: generated.buffer,
+        contentType: generated.contentType,
+      };
+      mainProductReferences.push(generatedReference);
+      canonicalProduct = generatedReference;
       await params.onCheckpoint?.({
         mainImagePaths: [...mainPaths],
         mainImagePath: mainPath,
         galleryImagePaths: runGallery ? [] : oldGalleryPaths,
         generationStage: runGallery ? "gallery" : "finalizing",
+        sourceMeta: {
+          ...row.sourceMeta,
+          provider: "ai",
+          plan,
+        },
       });
+    } catch (error) {
+      galleryError("ai-image:row", "Main image generation failed", error);
+      await removeGalleryPathsAdmin(newlyStoredPaths);
+      return fail(
+        error instanceof Error
+          ? error.message
+          : "AI could not create the main product image"
+      );
     }
   }
 
   if (runGallery) {
-    // Clear previous Gallery paths while this stage runs so the UI stays in
-    // skeleton mode for the whole field (no one-by-one / stale reveals).
+    if (!canonicalProduct || mainProductReferences.length === 0) {
+      await removeGalleryPathsAdmin(newlyStoredPaths);
+      return fail("AI could not create the main product image");
+    }
     await params.onCheckpoint?.({
       generationStage: "gallery",
       galleryImagePaths: [],
     });
     for (let galleryIndex = 0; galleryIndex < galleryTarget; galleryIndex += 1) {
       ensureTime(35_000);
-      if (mainProductReferences.length === 0) break;
+      const brief = plan.gallery[galleryIndex];
+      if (!brief?.visualBrief) {
+        galleryWarn("ai-image:row", "Missing planner brief for gallery slot", {
+          rowId: row.id,
+          galleryIndex,
+        });
+        break;
+      }
       try {
         const references = [
           ...mainProductReferences,
@@ -379,6 +415,7 @@ export async function processAiRow(params: {
           worksheet,
           row,
           references,
+          brief,
           galleryIndex,
         });
         costs.push(generated.cost);
@@ -414,29 +451,20 @@ export async function processAiRow(params: {
 
   if (!mainPath) {
     await removeGalleryPathsAdmin(newlyStoredPaths);
-    return {
-      row: {
-        ...row,
-        status: "failed",
-        generationStage: undefined,
-        errorMessage: "AI could not create the main product image",
-        mainImagePaths: oldMainPaths,
-        mainImagePath: oldMainPaths[0] ?? null,
-        galleryImagePaths: oldGalleryPaths,
-      },
-      creditsUsed: 0,
-      cost: sumCosts(costs).totalCost,
-      error: "AI could not create the main product image",
-    };
+    return fail("AI could not create the main product image");
   }
 
-  const finalMainPaths = runMain ? mainPaths : oldMainPaths;
+  const finalMainPaths = generateMain || newlyStoredPaths.length > 0
+    ? mainPaths
+    : oldMainPaths.length > 0
+      ? oldMainPaths
+      : mainPaths;
   const finalMainPath = finalMainPaths[0] ?? null;
   const finalGalleryPaths = runGallery ? galleryPaths : oldGalleryPaths;
 
   const totals = sumCosts(costs);
   let creditsUsed = 0;
-  if (aiGeneratedPaths.length > 0) {
+  if (aiGeneratedPaths.length > 0 || costs.length > 0) {
     const deduct = await deductGalleryCredits({
       admin: createAdminClient(),
       ownerUserId: params.ownerUserId,
@@ -461,6 +489,7 @@ export async function processAiRow(params: {
         usedSceneReference: !!sceneReference,
         brandingEnabled: settings.brandingEnabled,
         dollarCost: totals.totalCost,
+        plannerModel: plan ? "openai" : undefined,
       },
     });
     if (!deduct.success) {
@@ -485,7 +514,7 @@ export async function processAiRow(params: {
 
   try {
     await removeGalleryPathsAdmin([
-      ...(runMain
+      ...(generateMain
         ? oldMainPaths.filter((path) => !finalMainPaths.includes(path))
         : []),
       ...(runGallery
@@ -498,16 +527,10 @@ export async function processAiRow(params: {
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  const partialWarning = [
-    needGeneratedMain && mainPaths.length < mainTarget
-      ? `Created ${mainPaths.length} of ${mainTarget} requested main images`
-      : undefined,
+  const partialWarning =
     runGallery && galleryPaths.length < galleryTarget
       ? `Created ${galleryPaths.length} of ${galleryTarget} requested gallery images`
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join(". ") || undefined;
+      : undefined;
   galleryLog("ai-image:done", "AI product images completed", {
     rowId: row.id,
     model,
@@ -535,6 +558,7 @@ export async function processAiRow(params: {
         usedSceneReference: !!sceneReference,
         brandingEnabled: settings.brandingEnabled,
         partialWarning,
+        plan,
       },
       creditsUsed: creditsUsed || row.creditsUsed || 0,
     },

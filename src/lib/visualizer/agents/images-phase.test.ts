@@ -40,11 +40,13 @@ describe("visualizer images phase helpers", () => {
     expect(resolved).toContain('src="https://cdn.example/a.jpg?sig=1"');
   });
 
-  it("builds an image prompt that keeps product identity", () => {
+  it("builds an image prompt that keeps product identity and proves specClaim", () => {
     const prompt = buildVisualizerImagePrompt({
       product: { productName: "Ceramic mug" },
       visualBrief: "Morning lifestyle scene with soft daylight",
       placeholderIndex: 2,
+      specClaim: "dishwasher-safe glaze",
+      skillInstructions: "Identity lock: shoot the attached product only.",
       brand: DEFAULT_VISUALIZER_SETTINGS.brand,
       images: DEFAULT_VISUALIZER_SETTINGS.images,
       hasLogo: false,
@@ -54,6 +56,9 @@ describe("visualizer images phase helpers", () => {
     expect(prompt).toContain("Ceramic mug");
     expect(prompt).toContain("Morning lifestyle scene");
     expect(prompt).toContain("placeholder 2");
+    expect(prompt).toContain("visually prove: dishwasher-safe glaze");
+    expect(prompt).toMatch(/Identity lock/i);
+    expect(prompt).not.toContain("8K");
   });
 
   it("omits hex palette from image prompt when brand guide is upload-image mode", () => {

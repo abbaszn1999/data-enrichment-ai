@@ -10,9 +10,9 @@ import {
   buildDescriptionProductImageIntro,
   buildDescriptionResponseSchema,
   buildDescriptionUserPrompt,
-  DEFAULT_DESCRIPTION_SYSTEM_PROMPT,
 } from "@/lib/visualizer/agents/prompts";
 import { visualizerLog, visualizerWarn } from "@/lib/visualizer/log";
+import { loadVisualizerSkill } from "@/lib/visualizer/skill-loader";
 import {
   resolveVisualizerDescriptionModel,
   type VisualizerBrandSettings,
@@ -108,12 +108,14 @@ function normalizePlaceholders(
     if (!Number.isInteger(index) || index < 1 || index > maxItems) continue;
     if (seen.has(index)) continue;
     const visualBrief = String(record.visualBrief || "").trim();
+    const specClaim = String(record.specClaim || "").trim();
     const alt = String(record.alt || "").trim();
     if (!visualBrief) continue;
     seen.add(index);
     placeholders.push({
       index,
       visualBrief: visualBrief.slice(0, 4_000),
+      specClaim: specClaim ? specClaim.slice(0, 300) : undefined,
       alt: (alt || `Product visual ${index}`).slice(0, 300),
       storagePath: null,
     });
@@ -185,10 +187,7 @@ export function buildDescriptionInputContent(params: {
 }): Array<Record<string, unknown>> {
   const content: Array<Record<string, unknown>> = [];
 
-  pushText(
-    content,
-    `${DEFAULT_DESCRIPTION_SYSTEM_PROMPT}\n\n${params.prompt}`
-  );
+  pushText(content, params.prompt);
 
   if (params.productImage) {
     pushText(content, buildDescriptionProductImageIntro());
@@ -252,6 +251,7 @@ export async function generateProductDescription(params: {
       ? params.brandGuideImage || null
       : null;
 
+  const skill = await loadVisualizerSkill("description");
   const prompt = buildDescriptionUserPrompt({
     product: params.product,
     layoutId: params.layoutId,
@@ -287,6 +287,7 @@ export async function generateProductDescription(params: {
     contentParts: content.length,
     layoutId: params.layoutId,
     imageCount,
+    thinking: skill.frontmatter.thinking,
   });
 
   const response = await fetch(OPENAI_RESPONSES_URL, {
@@ -297,7 +298,8 @@ export async function generateProductDescription(params: {
     },
     body: JSON.stringify({
       model,
-      reasoning: { effort: "medium" },
+      instructions: skill.instructions,
+      reasoning: { effort: skill.frontmatter.thinking },
       input: [{ role: "user", content }],
       text: {
         format: {

@@ -1,12 +1,16 @@
 import type { NavigationMenu, TaxonomySummary } from "@/lib/sync/core/types";
 import type { WrStoreLinks, WrTaxonomyTree, WrTaxonomyTreeNode } from "./types";
 
-// `taxonomy.list()` can return up to 5000 groups — too much for a prompt and
-// useless for a header, which realistically shows a handful of top-level
-// links plus a couple of dropdown columns. Keeping the top N by product count
-// and folding the rest behind a count lets the agent reason about scale
-// ("this store has 40 more categories under X") without paying for every row.
+// `taxonomy.list()` can return up to 5000 groups. `topTaxonomies` below stays
+// capped small — it only feeds the vision call's "how big is this menu"
+// context and the merchant-facing overflow message, so a handful of
+// top-level links plus a couple of dropdown columns is plenty. The IA
+// planner reasons over the FULL, uncapped list instead (`allTaxonomies`),
+// via `plp-clustering.ts`'s aggregation — never this truncated slice.
 const MAX_TOP_TAXONOMIES = 150;
+// Safety ceiling only — protects against a truly pathological catalog, not a
+// meaningful compression step like `MAX_TOP_TAXONOMIES` is.
+const MAX_ALL_TAXONOMIES = 6000;
 
 type FlatNavItem = { title: string; url: string; children?: FlatNavItem[] };
 
@@ -65,6 +69,55 @@ export function navigationMenusToTree(menus: NavigationMenu[], baseUrl: string):
  * hierarchy (Shopify collections). Keeps only the top `MAX_TOP_TAXONOMIES` by
  * product count; the rest are summarized as `overflowCount`.
  */
+function taxonomyToNode(
+  t: TaxonomySummary,
+  storeLinks: WrStoreLinks,
+  source: "store" | "growth-engine"
+): WrTaxonomyTreeNode {
+  const kind = t.kind === "brand" ? "brand" : "collection";
+  return {
+    id: t.id,
+    title: t.title,
+    productCount: t.productCount,
+    // A brand/vendor archive does NOT live at the collection/category URL
+    // pattern (Shopify vendor pages are a search filter, WooCommerce brand
+    // routes depend on the plugin), so a brand gets no link rather than a
+    // confidently wrong one — same rule as a group with no handle at all.
+    url: kind === "brand" ? undefined : resolveTaxonomyUrl(t, storeLinks),
+    children: [],
+    source,
+    kind,
+  };
+}
+
+/** Builds a parent/child tree (or a flat list, when nothing carries `parent`)
+ *  from an already-selected slice of taxonomies, tagging each node's
+ *  generated/store origin. Shared by both the capped `topTaxonomies` build
+ *  and the uncapped `allTaxonomies` build below. */
+function taxonomiesToTree(
+  taxonomies: TaxonomySummary[],
+  storeLinks: WrStoreLinks,
+  isGenerated: (t: TaxonomySummary) => boolean
+): WrTaxonomyTreeNode[] {
+  const hasHierarchy = taxonomies.some((t) => t.parent);
+  if (!hasHierarchy) {
+    return taxonomies.map((t) => taxonomyToNode(t, storeLinks, isGenerated(t) ? "growth-engine" : "store"));
+  }
+
+  const nodeById = new Map<string, WrTaxonomyTreeNode>();
+  for (const t of taxonomies) {
+    nodeById.set(t.id, taxonomyToNode(t, storeLinks, isGenerated(t) ? "growth-engine" : "store"));
+  }
+  const roots: WrTaxonomyTreeNode[] = [];
+  for (const t of taxonomies) {
+    const node = nodeById.get(t.id)!;
+    const parent = t.parent ? nodeById.get(t.parent) : undefined;
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+  }
+  return roots;
+}
+
 export function compressTaxonomyTree(
   taxonomies: TaxonomySummary[],
   storeLinks: WrStoreLinks,
@@ -73,39 +126,7 @@ export function compressTaxonomyTree(
   const sorted = [...taxonomies].sort((a, b) => b.productCount - a.productCount);
   const kept = sorted.slice(0, maxTop);
   const overflowCount = Math.max(sorted.length - kept.length, 0);
-
-  const hasHierarchy = kept.some((t) => t.parent);
-  if (!hasHierarchy) {
-    return {
-      topTaxonomies: kept.map((t) => ({
-        id: t.id,
-        title: t.title,
-        productCount: t.productCount,
-        url: resolveTaxonomyUrl(t, storeLinks),
-        children: [],
-      })),
-      overflowCount,
-    };
-  }
-
-  const nodeById = new Map<string, WrTaxonomyTreeNode>();
-  for (const t of kept) {
-    nodeById.set(t.id, {
-      id: t.id,
-      title: t.title,
-      productCount: t.productCount,
-      url: resolveTaxonomyUrl(t, storeLinks),
-      children: [],
-    });
-  }
-  const roots: WrTaxonomyTreeNode[] = [];
-  for (const t of kept) {
-    const node = nodeById.get(t.id)!;
-    const parent = t.parent ? nodeById.get(t.parent) : undefined;
-    if (parent) parent.children.push(node);
-    else roots.push(node);
-  }
-  return { topTaxonomies: roots, overflowCount };
+  return { topTaxonomies: taxonomiesToTree(kept, storeLinks, () => false), overflowCount };
 }
 
 function escapeRegex(value: string): string {
@@ -115,11 +136,13 @@ function escapeRegex(value: string): string {
 /**
  * Market Research pushes the collections it generates to the store titled
  * `${prefix} - ${name}` ("AI - Electronics Smartphones"). They exist to catch
- * search traffic, not to be storefront navigation, and because they hold a
- * whole niche's products they dominate a product-count sort — burying the
- * merchant's own real categories. A header built from them would name the
- * same thing six slightly different ways, so they are dropped before the
- * agent ever sees the list.
+ * search traffic, not hand-curated storefront navigation, and because they
+ * hold a whole niche's products they dominate a product-count sort — burying
+ * the merchant's own real categories. They are tagged `source:
+ * "growth-engine"` (see `taxonomiesToTree`) rather than dropped outright, so
+ * the IA planner can still elect one as a header entry point when it carries
+ * real catalog weight — it just never gets to bury the merchant's own
+ * categories in the small, capped `topTaxonomies` vision-context list below.
  */
 export function isGeneratedCollectionTitle(title: string, prefix: string | undefined): boolean {
   const p = (prefix || "").trim();
@@ -137,16 +160,29 @@ export function buildWrTaxonomyTree(input: {
   navigationMenus: NavigationMenu[] | null;
   navigationUnavailableReason?: string;
   storeLinks: WrStoreLinks;
-  /** The workspace's Market Research naming prefix, whose collections are
-   *  excluded from the header's category list. */
+  /** The workspace's Market Research naming prefix. Its collections are kept
+   *  (tagged `source: "growth-engine"`) in `allTaxonomies` for the IA
+   *  planner, but excluded from the small `topTaxonomies` vision-context
+   *  list so they can't bury the merchant's own real categories there. */
   generatedCollectionPrefix?: string;
 }): WrTaxonomyTree {
-  const ownTaxonomies = input.generatedCollectionPrefix
-    ? input.taxonomies.filter(
-        (t) => !isGeneratedCollectionTitle(t.title, input.generatedCollectionPrefix)
-      )
-    : input.taxonomies;
+  const isGenerated = (t: TaxonomySummary) =>
+    Boolean(input.generatedCollectionPrefix) &&
+    isGeneratedCollectionTitle(t.title, input.generatedCollectionPrefix);
+
+  // Vision only needs a compact sense of the store's own categories. Brand
+  // PLPs and Growth Engine collections belong in `allTaxonomies` (the IA
+  // planner's input) but would bury real categories if they filled the
+  // product-count-sorted vision slice.
+  const ownTaxonomies = input.taxonomies.filter((t) => !isGenerated(t) && t.kind !== "brand");
   const { topTaxonomies, overflowCount } = compressTaxonomyTree(ownTaxonomies, input.storeLinks);
+
+  const allTaxonomies = taxonomiesToTree(
+    input.taxonomies.slice(0, MAX_ALL_TAXONOMIES),
+    input.storeLinks,
+    isGenerated
+  );
+
   return {
     navigation: input.navigationMenus
       ? navigationMenusToTree(input.navigationMenus, input.storeLinks.baseUrl)
@@ -154,6 +190,7 @@ export function buildWrTaxonomyTree(input: {
     topTaxonomies,
     overflowCount,
     navigationUnavailableReason: input.navigationUnavailableReason,
+    allTaxonomies,
   };
 }
 
@@ -161,7 +198,7 @@ export function buildWrTaxonomyTree(input: {
  *  the model to skim than deeply nested objects.
  *
  *  Deliberately never prints `node.url`: every header link is required to be
- *  a bare "#" (see WR_SKILL_INSTRUCTIONS), so handing the agent a real,
+ *  a bare "#" (see `skills/04-header-builder.md`), so handing the agent a real,
  *  copy-pasteable URL here would just contradict that rule and invite it to
  *  use one anyway. Only the name/hierarchy/count — what the agent actually
  *  needs to write realistic nav labels — is included. */

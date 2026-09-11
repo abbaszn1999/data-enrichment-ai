@@ -152,7 +152,7 @@ export async function processDescriptionRow(params: {
           phase: "description",
           cost: result.cost.totalCost,
           placeholderCount: result.imagePlaceholders.length,
-          thinkingLevel: "medium",
+          thinkingLevel: "high",
         },
       });
       if (!deduct.success) {

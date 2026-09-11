@@ -121,6 +121,12 @@ export type TaxonomySummary = {
   parent?: string;
   /** Customer-facing URL, when the provider exposes one directly. */
   url?: string;
+  /** "brand" marks a brand/vendor PLP (Shopify `vendor` filter page, or a
+   *  WooCommerce brand taxonomy/attribute archive) synthesized alongside the
+   *  real taxonomy list, rather than a real category/collection. Omitted
+   *  means "collection" — every consumer treats a brand item exactly like
+   *  any other taxonomy group except for what its name is allowed to become. */
+  kind?: "collection" | "brand";
 };
 
 /** One entry in a store's public navigation menu, with nested children. */

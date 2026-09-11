@@ -15,10 +15,16 @@ import {
   downloadWrImageAsInline,
   loadWrTaxonomyAdmin,
   saveWrGenerationContextAdmin,
+  saveWrNavPlanAdmin,
   saveWrVersionAdmin,
   WR_STORAGE_BUCKET,
 } from "@/lib/website-restructure/storage";
-import { runCompetitorResearch, runGeneration, runVisionBrief } from "@/lib/website-restructure/agent";
+import {
+  runCompetitorResearch,
+  runGeneration,
+  runIaPlan,
+  runVisionBrief,
+} from "@/lib/website-restructure/agent";
 import type { WrCompetitorNote, WrVersion } from "@/lib/website-restructure/types";
 
 export const maxDuration = 300;
@@ -133,10 +139,21 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      push({ type: "status", message: "Planning your navigation structure" });
+      const { plan } = await runIaPlan({ taxonomyTree: tree, brief, competitorNotes });
+
       push({ type: "status", message: "Building your header" });
-      const { result } = await runGeneration({ brief, competitorNotes, taxonomyTree: tree });
+      const { result } = await runGeneration({
+        brief,
+        competitorNotes,
+        taxonomyTree: tree,
+        navPlan: plan,
+        headerScreenshots: images,
+        logoImage,
+      });
 
       await saveWrGenerationContextAdmin(auth.admin, workspaceId, projectId, { brief, competitorNotes });
+      await saveWrNavPlanAdmin(auth.admin, workspaceId, projectId, plan);
       const version: WrVersion = {
         version: 1,
         createdAt: new Date().toISOString(),

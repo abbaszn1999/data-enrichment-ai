@@ -188,6 +188,7 @@ export async function processImagesRow(params: {
               product,
               visualBrief: placeholder.visualBrief,
               placeholderIndex: placeholder.index,
+              specClaim: placeholder.specClaim,
               productReference,
               supportingReferences,
             })

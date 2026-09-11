@@ -197,6 +197,25 @@ describe("buildWrTaxonomyTree / taxonomyTreeToPromptText", () => {
     });
     expect(tree.topTaxonomies.map((n) => n.title)).toEqual(["Smartphones"]);
     expect(taxonomyTreeToPromptText(tree)).not.toContain("AI - ");
+    const generated = tree.allTaxonomies.find((n) => n.id === "g1");
+    expect(generated?.source).toBe("growth-engine");
+    expect(tree.allTaxonomies.find((n) => n.id === "real")?.source).toBe("store");
+  });
+
+  it("keeps brand/vendor PLPs in allTaxonomies without a fabricated collection URL, and out of the vision slice", () => {
+    const tree = buildWrTaxonomyTree({
+      taxonomies: [
+        tax("brand-gucci", 4000, { handle: "gucci", kind: "brand", title: "Gucci" }),
+        tax("real", 6, { handle: "smartphones", title: "Smartphones" }),
+      ],
+      navigationMenus: null,
+      storeLinks: SHOPIFY_LINKS,
+    });
+    expect(tree.topTaxonomies.map((n) => n.title)).toEqual(["Smartphones"]);
+    const brand = tree.allTaxonomies.find((n) => n.id === "brand-gucci");
+    expect(brand?.kind).toBe("brand");
+    expect(brand?.url).toBeUndefined();
+    expect(brand?.title).toBe("Gucci");
   });
 
   it("keeps every category when the workspace has no naming prefix configured", () => {

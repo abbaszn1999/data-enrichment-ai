@@ -1,217 +1,57 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { IntegrationRecord, ShopifyGraphQLResult } from "@/lib/sync/core/types";
+import type { IntegrationRecord } from "@/lib/sync/core/types";
 import { fetchAllShopifyCollections } from "@/lib/sync/providers/shopify/collections";
 import { shopifyGraphQL } from "@/lib/sync/providers/shopify/graphql-client";
 import { fetchWooCommerceCategories } from "@/lib/sync/providers/woocommerce/categories";
 import { createWooClient } from "@/lib/sync/providers/woocommerce/client";
+import { fetchShopifyVendorBrands, fetchWooBrandTaxonomy } from "@/lib/sync/brand-taxonomy";
 import type { MarketResearchProduct } from "@/components/market-research/workspace-data";
 
 // ─── Brand / vendor discovery ──────────────────────────────────────────────
-
-const SHOPIFY_VENDORS_QUERY = /* GraphQL */ `
-  query ProductVendorsPage($first: Int!, $after: String) {
-    products(first: $first, after: $after) {
-      edges {
-        cursor
-        node {
-          vendor
-        }
-      }
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-    }
-  }
-`;
-
-/** URL-safe id fragment for a brand/vendor pseudo-collection, e.g. "Ray-Ban" -> "ray-ban". */
-function slugifyBrandName(name: string): string {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "") || "brand"
-  );
-}
-
-/**
- * Walks every product in the store (paginated, uncapped) and tallies a real
- * product count per vendor in the same pass — no extra per-brand requests.
- * Each vendor becomes its own PLP-shaped item (`kind: "brand"`), treated by
- * every downstream stage exactly like a normal collection/category. This is
- * the store's complete brand roster; sampling or truncating it would
- * silently hide real, selectable brand pages from the merchant.
- */
-type ShopifyVendorsResponse = {
-  products: {
-    edges: Array<{ cursor: string; node: { vendor?: string | null } }>;
-    pageInfo: { hasNextPage: boolean; endCursor: string | null };
-  };
-};
+//
+// The actual Shopify/WooCommerce fetch logic lives in
+// `@/lib/sync/brand-taxonomy` (shared with Website Restructure, which needs
+// the identical brand roster to elect brand pillars like "Gucci" for the
+// header). Each vendor/brand becomes its own PLP-shaped item (`kind:
+// "brand"`), treated by every downstream stage exactly like a normal
+// collection/category.
 
 async function fetchShopifyVendors(
   integration: IntegrationRecord
 ): Promise<StoreCollectionItem[]> {
-  const counts = new Map<string, number>();
-  let after: string | null = null;
-  let hasNextPage = true;
-  let pages = 0;
-  const MAX_PAGES = 80; // safety cap: 80 * 250 = 20,000 products
-
-  while (hasNextPage && pages < MAX_PAGES) {
-    const res: ShopifyGraphQLResult<ShopifyVendorsResponse> = await shopifyGraphQL<ShopifyVendorsResponse>({
-      integration,
-      query: SHOPIFY_VENDORS_QUERY,
-      variables: { first: 250, after },
-      options: { estimatedCost: 30, tag: "productVendors" },
-    });
-
-    const edges = res.data?.products?.edges ?? [];
-    for (const edge of edges) {
-      const vendor = edge.node?.vendor?.trim();
-      if (vendor) counts.set(vendor, (counts.get(vendor) ?? 0) + 1);
-    }
-
-    if (edges.length === 0) break;
-
-    hasNextPage = res.data?.products?.pageInfo?.hasNextPage ?? false;
-    after = res.data?.products?.pageInfo?.endCursor ?? null;
-    pages += 1;
-  }
-
-  return Array.from(counts.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([name, productCount]) => {
-      const handle = slugifyBrandName(name);
-      return {
-        id: `brand-${handle}`,
-        name,
-        handle,
-        description: "",
-        productCount,
-        plpPath: "",
-        published: true,
-        kind: "brand" as const,
-      };
-    });
-}
-
-type WooAttribute = { id?: number; name?: string; slug?: string };
-type WooAttributeTerm = { id?: number; name?: string; slug?: string; count?: number };
-type WooBrandTerm = { id?: number; name?: string; slug?: string; count?: number };
-
-/** Attribute names commonly used for the "Brand" field across WooCommerce stores. */
-const BRAND_ATTRIBUTE_NAMES = [
-  "brand",
-  "brands",
-  "vendor",
-  "vendors",
-  "manufacturer",
-  "marque",
-];
-
-function wooBrandTermToItem(term: WooBrandTerm | WooAttributeTerm): StoreCollectionItem | null {
-  const name = (term.name ?? "").trim();
-  if (!name) return null;
-  const handle = (term.slug ?? "").trim() || slugifyBrandName(name);
-  return {
-    id: `brand-${handle}`,
-    name,
-    handle,
+  const brands = await fetchShopifyVendorBrands(integration);
+  return brands.map((b) => ({
+    id: b.id,
+    name: b.name,
+    handle: b.handle,
     description: "",
-    // WooCommerce term endpoints (both the brand taxonomy and attribute
-    // terms) return a real `count` of products carrying that term — this is
-    // the brand's true product count, not an estimate.
-    productCount: Number(term.count) || 0,
-    // Most brand-taxonomy plugins rewrite to /brand/<slug>/; left blank for
-    // the plain-attribute fallback since there is no standard archive route.
+    productCount: b.productCount,
     plpPath: "",
     published: true,
-    kind: "brand",
-  };
+    kind: "brand" as const,
+  }));
 }
 
 /**
- * WooCommerce has no single standard for brands. Most stores expose them one
- * of two ways:
- *   1. A dedicated brand taxonomy registered by a plugin (YITH / Perfect
- *      Brands / etc.), which mirrors the categories REST shape at
- *      `/products/brands` — including a real per-term `count`.
- *   2. A plain product attribute named "Brand" (`pa_brand`), whose terms live
- *      at `/products/attributes/{id}/terms` — the standard WP term shape,
- *      which also carries a real `count`.
- * Tries (1) first since it is purpose-built, falls back to (2), and returns
- * an empty list — never a thrown error — if the store has neither. Every
- * returned item is a full PLP-shaped `StoreCollectionItem` with a real
+ * Every returned item is a full PLP-shaped `StoreCollectionItem` with a real
  * product count, treated identically to a category by every later stage.
+ * Most brand-taxonomy plugins rewrite to /brand/<slug>/; `plpPath` is left
+ * blank since there is no single standard archive route across stores.
  */
 async function fetchWooBrands(
   integration: IntegrationRecord
 ): Promise<StoreCollectionItem[]> {
-  const client = createWooClient(integration);
-
-  // 1. Dedicated brand taxonomy endpoint, if a brands plugin is active.
-  try {
-    const brands: StoreCollectionItem[] = [];
-    let page = 1;
-    while (true) {
-      const terms = await client.get<WooBrandTerm[]>("/products/brands", {
-        per_page: 100,
-        page,
-      });
-      if (!Array.isArray(terms) || terms.length === 0) break;
-      for (const term of terms) {
-        const item = wooBrandTermToItem(term);
-        if (item) brands.push(item);
-      }
-      if (terms.length < 100) break;
-      page += 1;
-      if (page > 30) break; // safety cap
-    }
-    if (brands.length > 0) {
-      return brands.sort((a, b) => a.name.localeCompare(b.name));
-    }
-  } catch {
-    // No brands plugin registered on this store — fall through to attributes.
-  }
-
-  // 2. Plain "Brand" product attribute.
-  try {
-    const attributes = await client.get<WooAttribute[]>("/products/attributes", {
-      per_page: 100,
-    });
-    if (!Array.isArray(attributes)) return [];
-
-    const brandAttr = attributes.find((attr) => {
-      const name = (attr.name ?? "").toLowerCase().trim();
-      return BRAND_ATTRIBUTE_NAMES.some(
-        (candidate) => name === candidate || name.includes(candidate)
-      );
-    });
-    if (!brandAttr?.id) return [];
-
-    const brands: StoreCollectionItem[] = [];
-    let page = 1;
-    while (true) {
-      const terms = await client.get<WooAttributeTerm[]>(
-        `/products/attributes/${brandAttr.id}/terms`,
-        { per_page: 100, page }
-      );
-      if (!Array.isArray(terms) || terms.length === 0) break;
-      for (const term of terms) {
-        const item = wooBrandTermToItem(term);
-        if (item) brands.push(item);
-      }
-      if (terms.length < 100) break;
-      page += 1;
-      if (page > 30) break; // safety cap
-    }
-    return brands.sort((a, b) => a.name.localeCompare(b.name));
-  } catch (error) {
-    console.error("[fetchWooBrands] Failed to fetch brand attribute terms:", error);
-    return [];
-  }
+  const brands = await fetchWooBrandTaxonomy(integration);
+  return brands.map((b) => ({
+    id: b.id,
+    name: b.name,
+    handle: b.handle,
+    description: "",
+    productCount: b.productCount,
+    plpPath: "",
+    published: true,
+    kind: "brand" as const,
+  }));
 }
 
 /**

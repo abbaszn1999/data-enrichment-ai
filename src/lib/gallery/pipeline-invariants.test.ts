@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  estimateGalleryCredits,
   estimateScrapingCreditRange,
   shouldChargeGalleryCredits,
 } from "@/lib/gallery/pricing";
+import { DEFAULT_AI_SETTINGS } from "@/lib/gallery/types";
 import { getGalleryRowImagePath } from "@/lib/gallery/storage-paths";
 import {
   getGalleryWarning,
@@ -61,5 +63,16 @@ describe("gallery pipeline invariants", () => {
     });
     expect(withoutOriginal.max).toBeGreaterThan(withOriginal.max);
     expect(costlyHistory.max).toBeGreaterThan(withOriginal.max);
+  });
+
+  it("AI estimate includes one planner call plus Main only for full rows", () => {
+    const galleryOnly = estimateGalleryCredits("ai", 10, DEFAULT_AI_SETTINGS, {
+      generateMainCount: 0,
+    });
+    const withMain = estimateGalleryCredits("ai", 10, DEFAULT_AI_SETTINGS, {
+      generateMainCount: 10,
+    });
+    expect(withMain).toBeGreaterThan(galleryOnly);
+    expect(galleryOnly).toBeGreaterThan(0);
   });
 });

@@ -3,7 +3,9 @@ import {
   createImageGenerationCost,
   type AiCallCost,
 } from "@/lib/ai-pricing";
+import type { GalleryShotBrief } from "@/lib/gallery/agents/ai-planner-agent";
 import { galleryLog } from "@/lib/gallery/log";
+import { loadGallerySkill } from "@/lib/gallery/skill-loader";
 import type { GalleryRow, GalleryWorksheetJson } from "@/lib/gallery/types";
 import {
   brandingInstruction,
@@ -18,16 +20,6 @@ import {
   type AiReferenceImage,
 } from "@/lib/gallery/agents/ai-shared";
 
-const GALLERY_ANGLES = [
-  "three-quarter front view",
-  "side profile highlighting construction and proportions",
-  "rear or opposite-side view",
-  "close-up detail of materials, texture, and important features",
-  "natural lifestyle scene showing realistic use",
-  "premium editorial composition",
-  "packaging or complete product presentation",
-];
-
 /**
  * Output schema for the AI Gallery image agent (Gemini image response format).
  * Kept separate from the Main agent on purpose.
@@ -41,21 +33,22 @@ export function buildAiGalleryPrompt(params: {
   worksheet: GalleryWorksheetJson;
   row: GalleryRow;
   referenceImages: AiReferenceImage[];
+  brief: GalleryShotBrief;
   galleryIndex: number;
+  skillInstructions?: string;
 }): string {
   const settings = params.worksheet.settings.ai;
   const { hasSceneReference, hasLogo, hasBrandGuide, referenceList } =
     referenceFlags(params.referenceImages);
-  const galleryCustom = settings.instructions?.trim() || "";
-  const angle = GALLERY_ANGLES[params.galleryIndex % GALLERY_ANGLES.length];
 
-  const shot = `Create one new and clearly distinct Gallery image from a ${angle}${
+  const shot = `Create one new and clearly distinct Gallery image for slot ${params.galleryIndex + 1}${
     hasSceneReference
       ? ", still including the same referenced person/scene with the product"
       : ""
   }.`;
 
   return [
+    params.skillInstructions || "",
     "Create exactly one production-ready Gallery ecommerce image.",
     sceneInstruction(hasSceneReference),
     brandingInstruction({
@@ -67,13 +60,15 @@ export function buildAiGalleryPrompt(params: {
         settings.brandingEnabled && settings.brandGuideMode === "colors",
     }),
     shot,
+    params.brief.specClaim
+      ? `This image must visually prove: ${params.brief.specClaim}`
+      : "",
+    "Follow the visual brief closely while keeping the real product as the hero subject.",
+    `Visual brief:\n${params.brief.visualBrief}`,
     "Match the attached Main / canonical product exactly: preserve shape, construction, color, materials, markings, proportions, and distinctive details.",
-    "This Gallery image must be meaningfully different from Main and from other Gallery shots (angle, crop, packaging, detail, or lifestyle).",
+    "This Gallery image must be meaningfully different from Main and from other Gallery shots.",
     styleInstruction(settings.style, hasSceneReference),
     "Use realistic lighting, physically plausible geometry, clean edges, and commercially useful framing. Do not add unrelated products, watermarks, captions, or invented text.",
-    galleryCustom
-      ? `GALLERY CUSTOM INSTRUCTIONS — treat as mandatory unless unsafe: ${galleryCustom}`
-      : "",
     referenceList,
     `Worksheet product data:\n${buildProductDescription(params.worksheet, params.row)}`,
   ]
@@ -82,8 +77,7 @@ export function buildAiGalleryPrompt(params: {
 }
 
 /**
- * AI Gallery agent: generates one diversified Gallery image from a trusted Main.
- * Settings used: instructions, style, branding, aspect/resolution/format.
+ * AI Gallery agent: generates one Gallery image from a planner brief + Main identity.
  */
 export async function generateAiGalleryImage(params: {
   ai: GoogleGenAI;
@@ -91,6 +85,7 @@ export async function generateAiGalleryImage(params: {
   worksheet: GalleryWorksheetJson;
   row: GalleryRow;
   references: AiReferenceImage[];
+  brief: GalleryShotBrief;
   galleryIndex: number;
 }): Promise<{
   buffer: Buffer;
@@ -100,11 +95,14 @@ export async function generateAiGalleryImage(params: {
   prompt: string;
 }> {
   const settings = params.worksheet.settings.ai;
+  const skill = await loadGallerySkill("image");
   const prompt = buildAiGalleryPrompt({
     worksheet: params.worksheet,
     row: params.row,
     referenceImages: params.references,
+    brief: params.brief,
     galleryIndex: params.galleryIndex,
+    skillInstructions: skill.instructions,
   });
   const responseFormat = buildAiImageResponseFormat(settings);
   const input: Array<Record<string, unknown>> = [
@@ -118,6 +116,7 @@ export async function generateAiGalleryImage(params: {
     rowId: params.row.id,
     model: params.model,
     galleryIndex: params.galleryIndex,
+    specClaim: params.brief.specClaim,
     referenceCount: params.references.length,
     aspectRatio: settings.aspectRatio,
     resolution: settings.resolution,

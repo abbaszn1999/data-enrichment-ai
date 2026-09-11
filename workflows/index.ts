@@ -23,6 +23,7 @@ import { runMrExtractSession } from "../src/lib/jobs/mr-extract-session";
 import { runFaExtractSession } from "../src/lib/jobs/fa-extract-session";
 import {
   ENRICH_ROW_TIMEOUT_SECONDS,
+  GALLERY_ROW_TIMEOUT_SECONDS,
   SESSION_TIMEOUT_SECONDS,
   JOB_TASK_PLAN,
 } from "../src/lib/jobs/config";
@@ -54,7 +55,7 @@ export const enrichRow = task(
 export const galleryRow = task(
   {
     name: "galleryRow",
-    timeoutSeconds: ENRICH_ROW_TIMEOUT_SECONDS,
+    timeoutSeconds: GALLERY_ROW_TIMEOUT_SECONDS,
     plan: JOB_TASK_PLAN,
     retry: rowRetry,
   },

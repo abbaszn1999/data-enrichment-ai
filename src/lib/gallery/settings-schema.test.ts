@@ -94,4 +94,12 @@ describe("gallery settings", () => {
     });
     expect(parsed.brandGuideMode).toBe("colors");
   });
+
+  it("pins AI Main to a single identity shot and clears Main instructions", () => {
+    const parsed = parseAiSettings({
+      ...DEFAULT_AI_SETTINGS,
+      main: { imagesPerRow: 4, instructions: "White packshot only" },
+    });
+    expect(parsed.main).toEqual({ imagesPerRow: 1, instructions: "" });
+  });
 });

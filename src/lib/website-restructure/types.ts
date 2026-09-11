@@ -132,6 +132,13 @@ export type WrCompetitorNote = {
   input: string;
   resolvedName: string;
   summary: string;
+  /** How they group their top nav — gender/brand/use-case/etc. — read from
+   *  the structured research reply. Empty string when it couldn't be parsed. */
+  groupingModel?: string;
+  /** Short note on their mega-menu shape (column count, images, etc.). */
+  columnNotes?: string;
+  /** What they deliberately keep out of the header (facets, long-tail, etc.). */
+  excludedFromNav?: string;
 };
 
 /** The agent's structured output for both the initial build and every edit. */
@@ -157,17 +164,70 @@ export type WrTaxonomyTreeNode = {
   productCount: number;
   url?: string;
   children: WrTaxonomyTreeNode[];
+  /** "growth-engine" marks a collection Market Research generated
+   *  (`${prefix} - <name>`) — previously dropped outright, now tagged so the
+   *  IA planner can still elect it as an entry point when it carries real
+   *  catalog weight. Omitted/"store" means it's one of the merchant's own. */
+  source?: "store" | "growth-engine";
+  /** "brand" marks a synthesized brand/vendor PLP (Shopify vendor page, or a
+   *  WooCommerce brand taxonomy/attribute archive). Omitted means a normal
+   *  category/collection. */
+  kind?: "collection" | "brand";
 };
 
 export type WrTaxonomyTree = {
   /** Real navigation menu, when the provider exposed one. */
   navigation: WrTaxonomyTreeNode[] | null;
-  /** Top taxonomy groups by product count — always present, used when there
-   *  is no navigation or to fill in groups navigation omitted. */
+  /** Top taxonomy groups by product count, capped small — always present,
+   *  used for the vision call's "how big is this menu" context and for the
+   *  overflow message. NOT what the IA planner reasons over — see
+   *  `allTaxonomies` for the complete, uncapped catalog. */
   topTaxonomies: WrTaxonomyTreeNode[];
-  /** Count of taxonomy groups folded into "all categories" rather than named. */
+  /** Count of taxonomy groups folded into "all categories" rather than named
+   *  in `topTaxonomies` (unrelated to `allTaxonomies`, which is uncapped). */
   overflowCount: number;
   navigationUnavailableReason?: string;
+  /** The complete PLP catalog (categories, collections, and brand pages),
+   *  tagged with `source`/`kind`, capped only by a generous safety ceiling —
+   *  never truncated by product-count ranking like `topTaxonomies` is. This
+   *  is what `plp-clustering.ts` aggregates for the IA planner. */
+  allTaxonomies: WrTaxonomyTreeNode[];
+};
+
+// ─── IA Planner (nav plan) ─────────────────────────────────────────────────
+
+/** Hard rule the IA planner must satisfy: Home(0) -> header entry(1) ->
+ *  hub(2) -> subhub/leaf(3). Depth/breadth beyond "how many levels are
+ *  needed to stay within this budget" is never capped or hardcoded. */
+export const WR_MAX_NAV_CLICK_DEPTH = 3;
+
+export type WrNavLevel = "department" | "category" | "subcategory";
+
+/** One elected header entry point. `clusterRefs` point at the digest
+ *  clusters (see `plp-clustering.ts`) this node represents — never raw PLP
+ *  ids one by one, since a catalog can have thousands of them. */
+export type WrNavNode = {
+  id: string;
+  label: string;
+  level: WrNavLevel;
+  clusterRefs: string[];
+  plpCount: number;
+  productCount: number;
+  children: WrNavNode[];
+};
+
+export type WrNavPlan = {
+  nodes: WrNavNode[];
+  /** Deepest node level actually used (1-3) — informational, never a target. */
+  maxDepth: number;
+  coverage: {
+    totalClusters: number;
+    coveredClusters: number;
+    /** Cluster tokens no node referenced — repaired deterministically into a
+     *  generated overflow leaf before the plan is persisted, never dropped. */
+    orphanedClusterRefs: string[];
+  };
+  generatedAt: string;
 };
 
 export type WrStoreLinks = {

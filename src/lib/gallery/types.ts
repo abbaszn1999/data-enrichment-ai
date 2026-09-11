@@ -28,32 +28,33 @@ export type GalleryGenerationStage =
 export type GalleryProvider = "scraping" | "ai";
 
 /**
- * Explicit generation phase for two-step Find-main → Gallery workflows.
- * - main: source/create Main images only, then stop (Gallery runs later)
- * - gallery: source/create Gallery using an existing Main image
- * - full: Main is already resolved from the original image column, so only
- *   Gallery actually runs (kept as a distinct phase for credits/logging, but
- *   it never generates Main and Gallery back-to-back for the same row)
+ * Explicit generation phase.
+ * Scraping:
+ * - main: find Main only, then stop
+ * - gallery: find Gallery using an existing Main
+ * - full: copy original-column photo as Main, then find Gallery
+ * AI Generate:
+ * - gallery: planner + Gallery shots using sheet photo or existing Main
+ * - full: planner + generate 1 Main, wait, then Gallery (never stop after Main)
+ * - main is remapped to full (AI never uses stop-after-Main)
  */
 export type GalleryRunPhase = "main" | "gallery" | "full";
 
 /**
  * Decide which generation phase to run for a row.
- * Explicit request wins. Otherwise:
- * - a usable original image column value means Main is already resolved, so
- *   only Gallery needs to run ("full" here means "Gallery using the original
- *   image as Main", never "Main immediately followed by Gallery");
- * - an existing Main image (from a prior run, upload, or the original column)
- *   means only Gallery should run next;
- * - no Main and no usable original image means only Main should run — the
- *   row must stop there and wait for a separate Gallery run afterwards.
+ * Explicit request wins, except AI remaps `main` → `full`.
+ * Scraping default: original URLs → full; existing Main → gallery; else main.
+ * AI default: original URLs or existing Main → gallery; else full.
  */
 export function resolveGalleryRunPhase(params: {
   originalImageColumn?: string | null;
   row: Pick<GalleryRow, "mainImagePath" | "mainImagePaths"> &
     Partial<Pick<GalleryRow, "originalData">>;
   requested?: GalleryRunPhase | null;
+  provider?: GalleryProvider | null;
 }): GalleryRunPhase {
+  const isAi = params.provider === "ai";
+  if (isAi && params.requested === "main") return "full";
   if (
     params.requested === "main" ||
     params.requested === "gallery" ||
@@ -64,6 +65,10 @@ export function resolveGalleryRunPhase(params: {
   const originalUrls = params.originalImageColumn
     ? parseImageUrls(params.row.originalData?.[params.originalImageColumn])
     : [];
+  if (isAi) {
+    if (originalUrls.length > 0) return "gallery";
+    return getRowMainImagePaths(params.row).length > 0 ? "gallery" : "full";
+  }
   if (originalUrls.length > 0) return "full";
   return getRowMainImagePaths(params.row).length > 0 ? "gallery" : "main";
 }
@@ -77,15 +82,20 @@ export function resolveSelectionRunPhase(params: {
     Pick<GalleryRow, "mainImagePath" | "mainImagePaths"> &
       Partial<Pick<GalleryRow, "originalData">>
   >;
+  provider?: GalleryProvider | null;
 }): { phase: GalleryRunPhase | "mixed"; label: string } {
   if (params.rows.length === 0) {
-    return { phase: "full", label: "Generate images" };
+    return {
+      phase: "full",
+      label: params.provider === "ai" ? "Generate full" : "Generate images",
+    };
   }
   const phases = new Set(
     params.rows.map((row) =>
       resolveGalleryRunPhase({
         originalImageColumn: params.originalImageColumn,
         row,
+        provider: params.provider,
       })
     )
   );
@@ -96,7 +106,9 @@ export function resolveSelectionRunPhase(params: {
         ? "Generate gallery"
         : phase === "main"
           ? "Generate main"
-          : "Generate images";
+          : params.provider === "ai"
+            ? "Generate full"
+            : "Generate images";
     return { phase, label };
   }
   return { phase: "mixed", label: "Generate selected" };
