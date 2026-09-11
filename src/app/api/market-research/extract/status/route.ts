@@ -10,6 +10,7 @@ import {
   loadLatestMrExtract,
   loadMrExtractHeader,
   persistExtractKeywordSample,
+  syncKeywordSampleFromArchive,
 } from "@/lib/market-research/extract-advance";
 import { loadProjectSliceAdmin } from "@/lib/market-research/storage-admin";
 import type { DisplayKeyword } from "@/lib/market-research/map-keywords";
@@ -68,28 +69,36 @@ export async function GET(request: NextRequest) {
       runs = (fallback.data ?? []).map((row) => ({ ...row, next_cursor: null }));
     }
 
-    const active =
-      extract.status === "running" || extract.billing_status === "held";
     let sample: DisplayKeyword[] | undefined;
-    if (!active) {
+    if (extract.status !== "running") {
       const stored = await loadProjectSliceAdmin<DisplayKeyword[]>(
         auth.admin,
         parsed.data.workspaceId,
         parsed.data.projectId,
         "keywords"
       ).catch(() => null);
-      sample = Array.isArray(stored) ? stored : undefined;
-      const pulled = Number(extract.rows_returned) || 0;
-      if (pulled > 0 && (!sample?.length || sample.length < pulled)) {
-        sample = await persistExtractKeywordSample(auth.admin, {
-          workspaceId: parsed.data.workspaceId,
-          projectId: parsed.data.projectId,
-          extractId: extract.id,
-          runs: runs.map((run) => ({
-            seed_id: String(run.seed_id ?? ""),
-            seed_term: String(run.seed_term ?? ""),
-          })),
-        }).catch(() => sample);
+      const runMeta = runs.map((run) => ({
+        seed_id: String(run.seed_id ?? ""),
+        seed_term: String(run.seed_term ?? ""),
+      }));
+      sample = await syncKeywordSampleFromArchive(auth.admin, {
+        workspaceId: parsed.data.workspaceId,
+        projectId: parsed.data.projectId,
+        extractId: extract.id,
+        runs: runMeta,
+        stored: Array.isArray(stored) ? stored : null,
+      }).catch(() => (Array.isArray(stored) ? stored : undefined));
+      if (!sample?.length) {
+        sample = Array.isArray(stored) ? stored : undefined;
+        const pulled = Number(extract.rows_returned) || 0;
+        if (pulled > 0 && (!sample?.length || sample.length < pulled)) {
+          sample = await persistExtractKeywordSample(auth.admin, {
+            workspaceId: parsed.data.workspaceId,
+            projectId: parsed.data.projectId,
+            extractId: extract.id,
+            runs: runMeta,
+          }).catch(() => sample);
+        }
       }
     }
 

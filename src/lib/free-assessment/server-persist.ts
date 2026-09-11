@@ -28,6 +28,7 @@ import {
   saveProjectSliceAdmin,
   type FaSliceName,
 } from "./storage-admin";
+import { loadLatestMrExtract, syncKeywordSampleFromArchive } from "./extract-advance";
 
 type PersistAdmin = SupabaseClient;
 
@@ -203,6 +204,32 @@ export async function loadFaPersistedState(
               }
             } else if (Array.isArray(state.keywords)) {
               persisted.keywordsByProject[projectId] = state.keywords;
+            }
+            const extract = await loadLatestMrExtract(admin, {
+              workspaceId,
+              projectId,
+            }).catch(() => null);
+            if (
+              extract &&
+              extract.status !== "running"
+            ) {
+              const { data: runRows } = await admin
+                .from("fa_runs")
+                .select("seed_id, seed_term")
+                .eq("extract_id", extract.id);
+              const synced = await syncKeywordSampleFromArchive(admin, {
+                workspaceId,
+                projectId,
+                extractId: extract.id,
+                runs: (runRows ?? []).map((run) => ({
+                  seed_id: String(run.seed_id ?? ""),
+                  seed_term: String(run.seed_term ?? ""),
+                })),
+                stored: persisted.keywordsByProject[projectId] ?? [],
+              }).catch(() => []);
+              if (synced.length > 0) {
+                persisted.keywordsByProject[projectId] = synced;
+              }
             }
           } catch {
             if (Array.isArray(state.keywords)) {

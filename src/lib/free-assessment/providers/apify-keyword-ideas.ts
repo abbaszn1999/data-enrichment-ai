@@ -17,6 +17,14 @@ import { decodeIntents, decodeSerpFeatures } from "./semrush-codes";
 
 const PAGE_SIZE = 250;
 
+/**
+ * `clean=true` can return fewer than `limit` items while more rows still exist.
+ * A short page is not EOF — only an empty page is.
+ */
+export function datasetPageExhausted(returnedCount: number): boolean {
+  return returnedCount <= 0;
+}
+
 function num(value: unknown, fallback = 0): number {
   const n =
     typeof value === "number"
@@ -114,7 +122,7 @@ export async function pollApifyKeywordIdeas(
     .map((item) => parseKeywordIdeaItem(item, handle.seed, handle.database))
     .filter((row): row is KeywordRow => Boolean(row));
   const nextOffset = offset + items.length;
-  const exhausted = items.length < PAGE_SIZE;
+  const exhausted = datasetPageExhausted(items.length);
 
   if (status === "succeeded") {
     return {

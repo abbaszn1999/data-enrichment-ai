@@ -2080,15 +2080,16 @@ export function MarketResearchShell() {
             }, 2000);
             return;
           }
-          let finalSample = poll.sample ?? sample;
-          if (finalSample.length === 0) {
-            const status = await extractStatusApi(
-              input.workspaceId,
-              input.projectId,
-              input.extractId
-            ).catch(() => null);
-            if (status?.sample?.length) finalSample = status.sample;
-          }
+          const status = await extractStatusApi(
+            input.workspaceId,
+            input.projectId,
+            input.extractId
+          ).catch(() => null);
+          const archiveSample = status?.sample ?? poll.sample;
+          const finalSample =
+            (archiveSample?.length ?? 0) >= sample.length
+              ? (archiveSample ?? sample)
+              : sample;
           if (finalSample.length > 0) {
             setKeywordsByProject((prev) => ({
               ...prev,
@@ -2310,20 +2311,21 @@ export function MarketResearchShell() {
           return;
         }
         rememberExtractId(projectId, status.extract.id);
+        if (status.sample?.length) {
+          setKeywordsByProject((prev) => {
+            const current = prev[projectId] ?? [];
+            if (status.sample!.length <= current.length) return prev;
+            return {
+              ...prev,
+              [projectId]: status.sample ?? [],
+            };
+          });
+        }
         const active =
           status.extract.status === "running" ||
           status.extract.billingStatus === "held";
         if (!active) {
           resumedExtract.current.add(projectId);
-          if (
-            status.sample?.length &&
-            status.sample.length > (keywordsByProject[projectId]?.length ?? 0)
-          ) {
-            setKeywordsByProject((prev) => ({
-              ...prev,
-              [projectId]: status.sample ?? [],
-            }));
-          }
           if (status.extract.rowsReturned > 0) {
             settleExtractCharge(
               projectId,
@@ -2423,7 +2425,7 @@ export function MarketResearchShell() {
     setAnalyzeProgress({ done: 0, total: currentKws.length });
 
     // Classification now runs server-side as a cursor job over the FULL
-    // extract archive (not just this browser's capped 1.5k sample) — a
+    // extract archive (not just a stale Extract-tab cache) — a
     // 20k-keyword extract is 40+ pages at 500/page, each internally batched
     // at 100 keywords/batch with concurrency 5. The client just loops on
     // `offset` until `done`, same pattern as the Apify extract poll.

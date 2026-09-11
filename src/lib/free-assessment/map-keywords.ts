@@ -54,6 +54,14 @@ export function toExtractedKeyword(
  */
 export const MAX_DISPLAY_ROWS = 50_000;
 
+/** True when the extract archive has rows the UI cache never persisted. */
+export function keywordSampleNeedsRebuild(
+  storedCount: number,
+  archiveCount: number
+): boolean {
+  return archiveCount > Math.max(0, Math.floor(storedCount) || 0);
+}
+
 /** Appends every newly pulled row exactly as returned — no cross-seed dedup. */
 export function appendKeywordRows(
   existing: DisplayKeyword[],

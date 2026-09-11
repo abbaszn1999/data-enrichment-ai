@@ -7,12 +7,16 @@ import type {
 } from "@/lib/market-research/providers/keyword-provider";
 import { nextRowsReturned } from "@/lib/market-research/extract-progress";
 import {
+  loadClassifiedItemsAdmin,
   loadExtractRowsAdmin,
+  loadProjectSliceAdmin,
   saveExtractChunkAdmin,
   saveProjectSliceAdmin,
 } from "@/lib/market-research/storage-admin";
 import {
   MAX_DISPLAY_ROWS,
+  applyKeywordClassifications,
+  keywordSampleNeedsRebuild,
   toExtractedKeyword,
   type DisplayKeyword,
 } from "@/lib/market-research/map-keywords";
@@ -336,13 +340,46 @@ export async function persistExtractKeywordSample(
   const seedIdByTerm = new Map(
     params.runs.map((run) => [run.seed_term.trim().toLowerCase(), run.seed_id])
   );
-  const sample: DisplayKeyword[] = [];
+  let sample: DisplayKeyword[] = [];
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]!;
     const seedId =
-      seedIdByTerm.get(row.seed.trim().toLowerCase()) ?? row.seed ?? "seed";
+      seedIdByTerm.get(row.seed.trim().toLowerCase()) ?? row.seedId ?? row.seed ?? "seed";
     sample.push(toExtractedKeyword(row, seedId, index));
     if (sample.length >= MAX_DISPLAY_ROWS) break;
+  }
+  const previous = await loadProjectSliceAdmin<DisplayKeyword[]>(
+    admin,
+    params.workspaceId,
+    params.projectId,
+    "keywords"
+  ).catch(() => null);
+  if (Array.isArray(previous) && previous.length > 0) {
+    sample = applyKeywordClassifications(
+      sample,
+      previous.map((row) => ({
+        keyword: row.keyword,
+        sheet: row.sheet,
+        reason: row.exclusionReason,
+        plpConcept: row.plpConcept,
+      }))
+    );
+  }
+  const classified = await loadClassifiedItemsAdmin(
+    admin,
+    params.workspaceId,
+    params.projectId
+  ).catch(() => []);
+  if (classified.length > 0) {
+    sample = applyKeywordClassifications(
+      sample,
+      classified.map((row) => ({
+        keyword: row.keyword,
+        sheet: row.sheet,
+        reason: row.reason,
+        plpConcept: row.plpConcept,
+      }))
+    );
   }
   await saveProjectSliceAdmin(
     admin,
@@ -354,6 +391,46 @@ export async function persistExtractKeywordSample(
     console.error("[extract] Error saving keyword sample:", err)
   );
   return sample;
+}
+
+/**
+ * If keywords.json is shorter than the chunk archive (stale Extract cache),
+ * rebuild it so refresh shows every row the actor returned.
+ */
+export async function syncKeywordSampleFromArchive(
+  admin: Admin,
+  params: {
+    workspaceId: string;
+    projectId: string;
+    extractId: string;
+    runs: Array<{ seed_id: string; seed_term: string }>;
+    stored?: DisplayKeyword[] | null;
+  }
+): Promise<DisplayKeyword[]> {
+  const stored =
+    params.stored ??
+    (await loadProjectSliceAdmin<DisplayKeyword[]>(
+      admin,
+      params.workspaceId,
+      params.projectId,
+      "keywords"
+    ).catch(() => null));
+  const rows = await loadExtractRowsAdmin(
+    admin,
+    params.workspaceId,
+    params.projectId,
+    params.extractId,
+    { dedupe: false }
+  );
+  if (
+    !keywordSampleNeedsRebuild(
+      Array.isArray(stored) ? stored.length : 0,
+      rows.length
+    )
+  ) {
+    return Array.isArray(stored) && stored.length > 0 ? stored : [];
+  }
+  return persistExtractKeywordSample(admin, params);
 }
 
 export async function abortActiveMrExtractRuns(

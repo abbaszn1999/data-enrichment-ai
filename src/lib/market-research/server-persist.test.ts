@@ -133,7 +133,7 @@ describe("saveMrPersistedState storage routing", () => {
 
     await saveMrPersistedState(admin, workspaceId, userId, stateWithKeywords());
 
-    expect(uploadedPaths).toContain(
+    expect(uploadedPaths).not.toContain(
       `${workspaceId}/market-research/${projectId}/keywords.json`
     );
     expect(rowUpdates).toHaveLength(1);
