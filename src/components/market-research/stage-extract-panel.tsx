@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Loader2,
   Search,
@@ -8,8 +8,8 @@ import {
   HelpCircle,
   XCircle,
   Download,
-  Lock,
 } from "lucide-react";
+import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +27,6 @@ import {
   EXTRACT_CAP_PER_SEED,
   filterKeywords,
   pulledCountForSeed,
-  weightedCount,
   type ExtractedKeyword,
   type KeywordFilters,
   type KeywordSheet,
@@ -38,6 +37,7 @@ import { formatUsd } from "./mock-data";
 import { cn } from "@/lib/utils";
 
 type ExtractSheet = "all" | KeywordSheet;
+const EXTRACT_PAGE_SIZE = 50;
 
 export function StageExtractPanel({
   seeds,
@@ -78,11 +78,13 @@ export function StageExtractPanel({
   onNextCollections: (filteredCategoryKeywords: ExtractedKeyword[]) => void;
   clustering?: boolean;
   onCancelExtract?: () => void;
-  /** Export of every archived row, not just the on-screen sample. */
+  /** Export of every pulled keyword. */
   csvHref?: string;
 }) {
   const [filters, setFilters] = useState<KeywordFilters>(DEFAULT_FILTERS);
   const [sheet, setSheet] = useState<ExtractSheet>("all");
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(EXTRACT_PAGE_SIZE);
   const classified = analyzed || analyzeLoading;
   const activeSheet: ExtractSheet =
     classified && sheet === "all" && analyzeLoading ? "category" : sheet;
@@ -93,16 +95,33 @@ export function StageExtractPanel({
     return filtered.filter((row) => row.sheet === activeSheet);
   }, [keywords, filters, activeSheet, classified]);
 
+  useEffect(() => {
+    setPageIndex(0);
+  }, [filters, activeSheet, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize) || 1);
+  const safePageIndex = Math.min(pageIndex, pageCount - 1);
+  const paged = visible.slice(
+    safePageIndex * pageSize,
+    (safePageIndex + 1) * pageSize
+  );
+  const tableColCount = !classified
+    ? 4
+    : activeSheet === "excluded"
+      ? 5
+      : 6;
+
   const filteredCategoryKeywords = useMemo(() => {
     const filtered = filterKeywords(keywords, filters);
     return filtered.filter((row) => row.sheet === "category");
   }, [keywords, filters]);
 
-  const totalPulled = seeds.reduce(
-    (sum, seed) => sum + pulledCountForSeed(seed, probes),
-    0
-  );
-  const shownWeight = weightedCount(visible);
+  const totalPulled = keywords.length > 0
+    ? keywords.length
+    : seeds.reduce(
+        (sum, seed) => sum + pulledCountForSeed(seed, probes),
+        0
+      );
 
   const categoryCount = useMemo(
     () => keywords.filter((k) => k.sheet === "category").length,
@@ -184,8 +203,8 @@ export function StageExtractPanel({
           <h2 className="text-base font-semibold tracking-tight">Extract</h2>
           <p className="text-[11px] text-muted-foreground">
             {totalPulled.toLocaleString("en-US")} keywords pulled ·{" "}
-            {formatUsd(chargedUsd)} charged from wallet. Filters below are free
-            and do not change that bill.
+            {formatUsd(chargedUsd)} charged from wallet. Filters below are
+            optional and do not change that bill.
           </p>
           {csvHref && keywords.length > 0 ? (
             <a
@@ -193,7 +212,7 @@ export function StageExtractPanel({
               className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
             >
               <Download className="h-3 w-3" />
-              Download every pulled keyword (CSV)
+              Download all keywords (CSV)
             </a>
           ) : null}
         </div>
@@ -284,13 +303,10 @@ export function StageExtractPanel({
         >
           Questions
         </button>
-        <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
-          Showing {visible.length.toLocaleString("en-US")} sample rows · ~
-          {shownWeight.toLocaleString("en-US")} after filters
-        </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/70">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70">
+        <div className="min-h-0 flex-1 overflow-auto">
         {analyzeLoading && activeSheet !== "all" ? (
           <div className="divide-y divide-border/60">
             <div className="grid grid-cols-5 gap-3 px-4 py-2.5 text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -342,21 +358,15 @@ export function StageExtractPanel({
               {visible.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={
-                      !classified
-                        ? 4
-                        : activeSheet === "excluded"
-                          ? 5
-                          : 6
-                    }
+                    colSpan={tableColCount}
                     className="py-10 text-center text-xs text-muted-foreground"
                   >
                     No keywords match these filters.
                   </TableCell>
                 </TableRow>
               ) : (
-                visible.map((row) => (
-                  <TableRow key={row.id}>
+                paged.map((row, index) => (
+                  <TableRow key={`${row.id}-${safePageIndex}-${index}`}>
                     <TableCell className="text-sm font-medium">{row.keyword}</TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {row.seed}
@@ -424,6 +434,20 @@ export function StageExtractPanel({
             </TableBody>
           </Table>
         )}
+        </div>
+        <WorksheetPaginationBar
+          pageIndex={safePageIndex}
+          pageSize={pageSize}
+          totalRows={visible.length}
+          readyCount={0}
+          colCount={tableColCount}
+          itemLabel="keywords"
+          onPageChange={setPageIndex}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPageIndex(0);
+          }}
+        />
       </div>
 
       <div className="flex items-center justify-between gap-2 shrink-0">

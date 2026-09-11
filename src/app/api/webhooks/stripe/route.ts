@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { stripe, findPlanByStripePriceId, invalidateSubscriptionCache } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { creditWorkspaceWallet } from "@/lib/wallet/server";
+import { creditFaWallet } from "@/lib/free-assessment/wallet-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 
@@ -61,6 +62,11 @@ export async function POST(request: NextRequest) {
 async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
   const userId = session.metadata?.userId;
   if (!userId) return;
+
+  if (session.metadata?.faWalletTopup === "1") {
+    await handleFaWalletTopup(session, userId, admin);
+    return;
+  }
 
   if (session.metadata?.walletTopup === "1") {
     await handleWalletTopup(session, userId, admin);
@@ -146,6 +152,43 @@ async function handleWalletTopup(
   if (!credited.ok) {
     console.error(
       `[Stripe Webhook] Wallet top-up credit failed for session ${session.id}:`,
+      credited.message
+    );
+  }
+}
+
+/** Credits the Free Assessment wallet only — never workspace_wallets. */
+async function handleFaWalletTopup(
+  session: Stripe.Checkout.Session,
+  userId: string,
+  admin: SupabaseClient
+) {
+  const workspaceId = session.metadata?.workspaceId;
+  if (!workspaceId) return;
+  const targetCents = session.metadata?.targetAmountCents
+    ? parseInt(session.metadata.targetAmountCents, 10)
+    : (session.amount_subtotal ?? session.amount_total ?? 0);
+  const amountUsd = targetCents > 0 ? targetCents / 100 : (session.amount_total ?? 0) / 100;
+  if (amountUsd <= 0) return;
+
+  const credited = await creditFaWallet(admin, {
+    workspaceId,
+    userId,
+    amountUsd,
+    kind: "topup",
+    description: "Free Assessment wallet top-up · card",
+    module: "Billing",
+    method: "Card",
+    idempotencyKey: `fa_stripe_checkout:${session.id}`,
+    details: {
+      stripeSessionId: session.id,
+      stripePaymentIntentId: (session.payment_intent as string) || null,
+      amountPaidUsd: (session.amount_total ?? 0) / 100,
+    },
+  });
+  if (!credited.ok) {
+    console.error(
+      `[Stripe Webhook] Free Assessment wallet top-up failed for session ${session.id}:`,
       credited.message
     );
   }

@@ -221,6 +221,14 @@ export const agentClusterBodySchema = z.object({
   offset: z.number().int().nonnegative(),
 });
 
+// Stage 5 Phase 3 (duplicate-collection exclusion) runs once, after the
+// Phase 2 cursor loop above has fully finished and the "collections" slice
+// holds the complete final list — no offset/paging needed here.
+export const agentDedupeCollectionsBodySchema = z.object({
+  workspaceId: workspaceIdSchema,
+  projectId: projectIdSchema,
+});
+
 // Stage 6 on-page copywriting is a cursor job over the project's pushed
 // collections: the client sends only the ids it wants generated (up to
 // 20k), and the route resolves them against the canonical "collections"

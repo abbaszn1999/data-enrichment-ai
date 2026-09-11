@@ -27,12 +27,14 @@ interface WorkspaceStore {
   isLoading: boolean;
   creditsVersion: number;
   walletVersion: number;
+  faWalletVersion: number;
   setWorkspace: (workspace: Workspace | null) => void;
   setRole: (role: Role | null) => void;
   setMembers: (members: WorkspaceMember[]) => void;
   setLoading: (loading: boolean) => void;
   invalidateCredits: () => void;
   invalidateWallet: () => void;
+  invalidateFaWallet: () => void;
   reset: () => void;
 }
 
@@ -43,6 +45,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   isLoading: true,
   creditsVersion: 0,
   walletVersion: 0,
+  faWalletVersion: 0,
   setWorkspace: (workspace) => set({ workspace }),
   setRole: (role) => set({ role }),
   setMembers: (members) => set({ members }),
@@ -53,6 +56,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     set((s) => ({ creditsVersion: s.creditsVersion + 1 }));
   },
   invalidateWallet: () => set((s) => ({ walletVersion: s.walletVersion + 1 })),
+  invalidateFaWallet: () =>
+    set((s) => ({ faWalletVersion: s.faWalletVersion + 1 })),
   reset: () =>
     set({
       workspace: null,
@@ -61,5 +66,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       isLoading: false,
       creditsVersion: 0,
       walletVersion: 0,
+      faWalletVersion: 0,
     }),
 }));

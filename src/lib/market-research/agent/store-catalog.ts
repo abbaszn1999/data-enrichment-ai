@@ -4,7 +4,6 @@ import { fetchAllShopifyCollections } from "@/lib/sync/providers/shopify/collect
 import { shopifyGraphQL } from "@/lib/sync/providers/shopify/graphql-client";
 import { fetchWooCommerceCategories } from "@/lib/sync/providers/woocommerce/categories";
 import { createWooClient } from "@/lib/sync/providers/woocommerce/client";
-import { MOCK_NICHES } from "@/components/market-research/mock-data";
 import type { MarketResearchProduct } from "@/components/market-research/workspace-data";
 
 // ─── Brand / vendor discovery ──────────────────────────────────────────────
@@ -363,21 +362,21 @@ export async function fetchStoreCatalog(
         };
       });
 
-      if (collections.length > 0) {
-        const storeBrands = await fetchShopifyVendors(integration).catch((error) => {
-          console.error("[fetchStoreCatalog] Failed to fetch Shopify vendors:", error);
-          return [] as StoreCollectionItem[];
-        });
-        return {
-          storeName,
-          provider: "shopify",
-          baseUrl,
-          isMock: false,
-          collections,
-          storeBrands,
-        };
-      }
-    } else if (provider === "woocommerce" || provider === "wordpress") {
+      const storeBrands = await fetchShopifyVendors(integration).catch((error) => {
+        console.error("[fetchStoreCatalog] Failed to fetch Shopify vendors:", error);
+        return [] as StoreCollectionItem[];
+      });
+      return {
+        storeName,
+        provider: "shopify",
+        baseUrl,
+        isMock: false,
+        collections,
+        storeBrands,
+      };
+    }
+
+    if (provider === "woocommerce" || provider === "wordpress") {
       const sheet = await fetchWooCommerceCategories({
         integration,
         limit: 5000,
@@ -404,26 +403,27 @@ export async function fetchStoreCatalog(
 
       computeCollectionDepths(collections);
 
-      if (collections.length > 0) {
-        const storeBrands = await fetchWooBrands(integration).catch((error) => {
-          console.error("[fetchStoreCatalog] Failed to fetch WooCommerce brands:", error);
-          return [] as StoreCollectionItem[];
-        });
-        return {
-          storeName,
-          provider: "woocommerce",
-          baseUrl,
-          isMock: false,
-          collections,
-          storeBrands,
-        };
-      }
+      const storeBrands = await fetchWooBrands(integration).catch((error) => {
+        console.error("[fetchStoreCatalog] Failed to fetch WooCommerce brands:", error);
+        return [] as StoreCollectionItem[];
+      });
+      return {
+        storeName,
+        provider: "woocommerce",
+        baseUrl,
+        isMock: false,
+        collections,
+        storeBrands,
+      };
     }
+
+    throw new Error(
+      `Unsupported store provider "${provider}". Connect Shopify or WooCommerce in Settings.`
+    );
   } catch (error) {
     console.error("[fetchStoreCatalog] Failed to fetch live collections:", error);
+    throw error;
   }
-
-  return getFallbackStoreCatalog(storeName);
 }
 
 const SHOPIFY_COLLECTION_PRODUCTS_PAGE_QUERY = /* GraphQL */ `
@@ -664,8 +664,8 @@ function mapWooProductNode(
  * Fetches one resumable "page" of products for the given cursor position —
  * as many pages as fit inside the time budget, advancing through
  * `selectedCollections` in order. Call again with the returned `cursor`
- * until `cursor.done` is true. Falls back to mock data in one shot when the
- * workspace has no live store integration.
+ * until `cursor.done` is true. Returns no products when the workspace has
+ * no live store integration.
  */
 export async function fetchStoreProductsPage(
   admin: SupabaseClient,
@@ -684,15 +684,7 @@ export async function fetchStoreProductsPage(
     .maybeSingle();
 
   if (!integrationRow || !integrationRow.provider) {
-    // No live store: return the whole mock set in one shot, cursor closes immediately.
-    if (cursor.collectionIndex > 0 || cursor.totalFetched > 0) {
-      return { products: [], cursor: { ...cursor, done: true } };
-    }
-    const products = generateMockProductsForCollections(selectedCollections, "Demo Store");
-    return {
-      products,
-      cursor: { ...cursor, collectionIndex: selectedCollections.length, totalFetched: products.length, done: true },
-    };
+    return { products: [], cursor: { ...cursor, done: true } };
   }
 
   const integration = integrationRow as IntegrationRecord;
@@ -1330,28 +1322,12 @@ export function generateMockProductsForCollections(
 }
 
 export function getFallbackStoreCatalog(storeName = "Demo Store"): StoreCatalogResult {
-  const collections: StoreCollectionItem[] = [];
-  for (const niche of MOCK_NICHES) {
-    for (const c of niche.collections) {
-      collections.push({
-        id: c.id,
-        name: c.name,
-        handle: c.id,
-        description: c.description || "",
-        productCount: c.productCount,
-        plpPath: c.plpPath || "",
-        kind: c.kind,
-      });
-    }
-  }
   return {
     storeName,
-    provider: "demo",
+    provider: "none",
     baseUrl: "",
     isMock: true,
-    // Demo brand PLPs already live inside MOCK_NICHES[].collections (kind:
-    // "brand") and were flattened in above — nothing separate to merge here.
-    collections,
+    collections: [],
     storeBrands: [],
   };
 }

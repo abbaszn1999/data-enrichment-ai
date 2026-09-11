@@ -50,6 +50,7 @@ import { formatCredits } from "@/lib/format-credits";
 import { formatMoney } from "@/lib/wallet/format";
 import { trialDaysRemaining } from "@/lib/trial";
 import { useWallet } from "@/hooks/use-wallet";
+import { useFaWallet } from "@/hooks/use-fa-wallet";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -76,9 +77,16 @@ export default function WorkspaceLayout({
   const { workspace, role, hasIntegration, isLoading: wsLoading, error } = useWorkspace(slug, user);
   const permissions = useRole(role);
 
+  const isFreeAssessmentPage = pathname.includes("/free-assessment");
+  const isFreeAssessmentWalletPage = pathname.includes("/free-assessment/wallet");
   const credits = useCredits(workspace?.id ?? null);
-  const { wallet } = useWallet(workspace?.id ?? null);
-  const walletBalance = wallet?.balance ?? null;
+  const { wallet } = useWallet(
+    isFreeAssessmentPage ? null : workspace?.id ?? null
+  );
+  const { wallet: faWallet } = useFaWallet(
+    isFreeAssessmentPage ? workspace?.id ?? null : null
+  );
+  const walletBalance = (isFreeAssessmentPage ? faWallet : wallet)?.balance ?? null;
   const { subscription, isActive, isLoading: subLoading, plan: currentPlan } = useSubscription(workspace?.id ?? null);
   const isTrialing = currentPlan?.name === "trial" && subscription?.status === "trialing" && isActive;
   const trialDaysLeft = isTrialing ? trialDaysRemaining(subscription?.trialEnd) : 0;
@@ -104,6 +112,9 @@ export default function WorkspaceLayout({
   }, [workspace, role, setStoreWorkspace, setStoreRole]);
 
   const basePath = `/w/${slug}`;
+  const walletHref = isFreeAssessmentPage
+    ? `${basePath}/free-assessment/wallet`
+    : `${basePath}/wallet`;
 
   // Hide workspace nav sidebar on enrichment workbench tool (it has its own left panel).
   // Keep the top app header visible so credits / workspace / user stay accessible.
@@ -114,7 +125,6 @@ export default function WorkspaceLayout({
   const isSyncPage =
     pathname === `${basePath}/store-assistant` || pathname.startsWith(`${basePath}/store-assistant/`);
   const isMarketResearchPage = pathname.includes("/market-research");
-  const isFreeAssessmentPage = pathname.includes("/free-assessment");
   const isWebsiteRestructurePage = pathname.includes("/website-restructure");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
   const isProductsGalleryProject = isProductsGalleryPage && searchParams.has("project");
@@ -136,7 +146,7 @@ export default function WorkspaceLayout({
     isEnrichPage ||
     isSyncPage ||
     isMarketResearchPage ||
-    isFreeAssessmentPage ||
+    (isFreeAssessmentPage && !isFreeAssessmentWalletPage) ||
     isWebsiteRestructurePage;
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage =
@@ -192,7 +202,7 @@ export default function WorkspaceLayout({
       label: "Market research",
       icon: Search,
     },
-    { href: `${basePath}/wallet`, label: "Wallet", icon: Wallet },
+    { href: `${basePath}/free-assessment/wallet`, label: "Wallet", icon: Wallet },
   ];
 
   const isMediaActive = mediaChildren.some(
@@ -256,10 +266,15 @@ export default function WorkspaceLayout({
       : []),
   ];
 
-  const isLinkActive = (href: string) =>
-    pathname === href ||
-    (href !== basePath && pathname.startsWith(href + "/")) ||
-    (href === basePath && pathname === basePath);
+  const isLinkActive = (href: string) => {
+    if (!href) return false;
+    if (href === basePath) return pathname === basePath;
+    if (pathname === href) return true;
+    // Wallet is nested under /free-assessment — don't keep Market research
+    // highlighted on the wallet page.
+    if (href.endsWith("/free-assessment")) return false;
+    return pathname.startsWith(href + "/");
+  };
 
   // Section label — small uppercase caption above a group of nav links.
   // Fades out (rather than disappearing instantly) when the sidebar collapses.
@@ -501,8 +516,12 @@ export default function WorkspaceLayout({
             <div className="flex items-center gap-2">
               {walletBalance !== null && (
                 <Link
-                  href={`${basePath}/wallet`}
-                  title="Wallet balance"
+                  href={walletHref}
+                  title={
+                    isFreeAssessmentPage
+                      ? "Free Assessment wallet"
+                      : "Wallet balance"
+                  }
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium tabular-nums transition-colors ${
                     walletBalance < 25
                       ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"

@@ -599,6 +599,12 @@ export type ClassifyArchiveResponse = {
   informationalCount: number;
   excludedCount: number;
   isAiGenerated: boolean;
+  classifications?: Array<{
+    keyword: string;
+    sheet: "category" | "informational" | "excluded";
+    reason?: string;
+    plpConcept?: string;
+  }>;
 };
 
 export async function classifyArchivePageApi(
@@ -688,6 +694,26 @@ export async function runClusterCollectionsLoop(
     offset = res.nextOffset;
   }
   return last;
+}
+
+// ─── Stage 5 Phase 3: duplicate-collection exclusion (runs once, after the
+// cursor loop above is fully done) ─────────────────────────────────────────
+
+export type DedupeCollectionsResponse = {
+  collections: ProposedCollection[];
+  duplicateCount: number;
+};
+
+export async function dedupeCollectionsApi(
+  workspaceId: string,
+  projectId: string
+): Promise<DedupeCollectionsResponse> {
+  const response = await fetch("/api/market-research/agent/dedupe-collections", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, projectId }),
+  });
+  return readJson<DedupeCollectionsResponse>(response);
 }
 
 /**

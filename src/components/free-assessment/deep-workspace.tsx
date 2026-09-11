@@ -1,14 +1,12 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { StageCollectionSheet } from "./stage-collection-sheet";
 import { StageExtractPanel } from "./stage-extract-panel";
 import { WorkspaceStepper } from "./workspace-stepper";
 import { cn } from "@/lib/utils";
 import type {
   ExtractedKeyword,
   FlowTab,
-  ProposedCollection,
   SeedExtractProgress,
   WorkspaceTab,
 } from "./workspace-data";
@@ -33,13 +31,9 @@ export function DeepWorkspace({
   analyzeLoading,
   analyzeProgress,
   analyzed,
-  onNextCollections,
   onCancelExtract,
-  collections,
-  clustering,
-  clusterProgress,
-  selectedCollectionIds,
-  onChangeSelected,
+  keywordsCsvHref,
+  growthEngineHref,
 }: {
   projectName: string;
   storeLabel: string;
@@ -58,13 +52,10 @@ export function DeepWorkspace({
   analyzeLoading: boolean;
   analyzeProgress?: { done: number; total: number } | null;
   analyzed: boolean;
-  onNextCollections: (filteredCategoryKeywords?: ExtractedKeyword[]) => void;
   onCancelExtract?: () => void;
-  collections: ProposedCollection[];
-  clustering: boolean;
-  clusterProgress?: { processed: number; total: number } | null;
-  selectedCollectionIds: string[];
-  onChangeSelected: (ids: string[]) => void;
+  /** Export of every archived row, not just the on-screen table. */
+  keywordsCsvHref?: string;
+  growthEngineHref?: string;
 }) {
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
@@ -85,14 +76,14 @@ export function DeepWorkspace({
       <div
         className={cn(
           "flex-1 min-h-0 p-4 sm:p-5",
-          tab === "collections"
+          tab === "extract"
             ? "flex flex-col overflow-hidden"
             : "overflow-auto"
         )}
       >
         <div
           className={cn(
-            tab === "collections" && "flex min-h-0 flex-1 flex-col overflow-hidden"
+            tab === "extract" && "flex min-h-0 flex-1 flex-col overflow-hidden"
           )}
         >
           {!isWorkspaceTab(tab) ? brief : null}
@@ -109,22 +100,9 @@ export function DeepWorkspace({
               analyzeLoading={analyzeLoading}
               analyzeProgress={analyzeProgress}
               analyzed={analyzed}
-              onNextCollections={onNextCollections}
-              clustering={clustering}
               onCancelExtract={onCancelExtract}
-            />
-          ) : null}
-          {tab === "collections" ? (
-            <StageCollectionSheet
-              collections={collections}
-              products={[]}
-              loading={clustering}
-              loadingProgress={clusterProgress}
-              selectedIds={selectedCollectionIds}
-              onChangeSelected={onChangeSelected}
-              paid={false}
-              onStart={() => undefined}
-              showStoreActions={false}
+              csvHref={keywordsCsvHref}
+              growthEngineHref={growthEngineHref}
             />
           ) : null}
         </div>

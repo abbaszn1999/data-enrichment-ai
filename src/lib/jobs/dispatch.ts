@@ -3,6 +3,7 @@ import { runEnrichSession } from "./enrich-session";
 import { runGallerySession } from "./gallery-session";
 import { runVisualizerSession } from "./visualizer-session";
 import { runMrExtractSession } from "./mr-extract-session";
+import { runFaExtractSession } from "./fa-extract-session";
 import { loadJobRun } from "./repo";
 import type { JobKind } from "./types";
 
@@ -10,6 +11,7 @@ export function workflowTaskName(kind: JobKind): string {
   if (kind === "catalog") return "enrichSession";
   if (kind === "gallery") return "gallerySession";
   if (kind === "visualizer") return "visualizerSession";
+  if (kind === "fa_extract") return "faExtractSession";
   return "mrExtractSession";
 }
 
@@ -29,6 +31,10 @@ export async function runOrchestrator(runId: string, kind?: JobKind): Promise<vo
   }
   if (resolved === "mr_extract") {
     await runMrExtractSession(runId);
+    return;
+  }
+  if (resolved === "fa_extract") {
+    await runFaExtractSession(runId);
     return;
   }
   await runEnrichSession(runId);

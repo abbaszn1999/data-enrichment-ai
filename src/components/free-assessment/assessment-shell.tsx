@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useAuth } from "@/hooks/use-auth";
-import { useWallet } from "@/hooks/use-wallet";
+import { useFaWallet } from "@/hooks/use-fa-wallet";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRole } from "@/hooks/use-role";
 import {
@@ -19,6 +19,7 @@ import { StagePlpUploadPanel } from "./stage-plp-upload-panel";
 import { StageScopePanel } from "./stage-scope-panel";
 import { StageSelectPanel } from "./stage-select-panel";
 import { StageSeedsPanel } from "./stage-seeds-panel";
+import { WorkspaceStepper } from "./workspace-stepper";
 import {
   RunTimeline,
   StageStepper,
@@ -26,7 +27,7 @@ import {
   type StageStep,
   type StageStepStatus,
 } from "./run-timeline";
-import type { AssessmentCatalog } from "./assessment-csv";
+import type { AssessmentPlpRow } from "./assessment-csv";
 import {
   clampOpenedStage,
   emptyMarketResearchState,
@@ -48,28 +49,46 @@ import {
   type SeedProbe,
 } from "./mock-data";
 import {
-  buildProposedCollections,
+  briefStageFromFlow,
+  clampWorkspaceTab,
   isWorkspaceTab,
-  keywordsFromSeeds,
+  pulledCountForSeed,
   type ExtractedKeyword,
+  type FlowTab,
   type ProposedCollection,
   type SeedExtractProgress,
   type WorkspaceTab,
 } from "./workspace-data";
+import { InsufficientFundsDialog } from "./insufficient-funds-dialog";
+import {
+  analyzeSheetApi,
+  cancelExtractApi,
+  chatAgentApi,
+  createFaProjectApi,
+  deleteFaProjectApi,
+  extractStatusApi,
+  generateSeedsApi,
+  loadFaStateApi,
+  pollExtractApi,
+  probeSeedsApi,
+  runClassifyArchiveLoop,
+  saveFaStateApi,
+  startExtractApi,
+} from "@/lib/free-assessment/client";
+import { previewBalance } from "@/lib/free-assessment/billing";
+import { actualExtractCostUsd, estimateProbeCostUsd } from "@/lib/free-assessment/cost";
+import {
+  appendKeywordRows,
+  applyKeywordClassifications,
+  toExtractedKeyword,
+} from "@/lib/free-assessment/map-keywords";
+import { useWorkspaceStore } from "@/store/workspace-store";
 
 const STAGES: MarketResearchStage[] = [1, 2, 3];
 const DEFAULT_STORE = "Uploaded catalog";
 
 function newId(): string {
   return crypto.randomUUID();
-}
-
-function hashString(value: string): number {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) % 100000;
-  }
-  return hash;
 }
 
 export function FreeAssessmentShell() {
@@ -81,7 +100,7 @@ export function FreeAssessmentShell() {
   const permissions = useRole(role);
   const canEdit = permissions.canEdit;
   const canAdmin = permissions.canAdmin;
-  const { wallet } = useWallet(workspaceId || null);
+  const { wallet } = useFaWallet(workspaceId || null);
 
   const [hydrated, setHydrated] = useState(false);
   const [projects, setProjects] = useState<MarketResearchProject[]>([]);
@@ -157,9 +176,27 @@ export function FreeAssessmentShell() {
     done: number;
     total: number;
   } | null>(null);
-  const [clustering, setClustering] = useState(false);
+  const [chatBusy, setChatBusy] = useState(false);
   const [preparingStage2, setPreparingStage2] = useState(false);
   const [preparingStage3, setPreparingStage3] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [insufficientFundsDialog, setInsufficientFundsDialog] = useState<{
+    open: boolean;
+    requiredAmount: number;
+    currentBalance: number;
+    actionName: string;
+  }>({ open: false, requiredAmount: 0, currentBalance: 0, actionName: "" });
+  const extractIdByProject = useRef<Record<string, string>>({});
+  const extractIdRef = useRef("");
+  const resumedExtract = useRef(new Set<string>());
+  const probeGen = useRef(0);
+  const extractGen = useRef(0);
+  const analyzeGen = useRef(0);
+  const persistReady = useRef(false);
+  const persistRemote = useRef(false);
+  const skipPersistSave = useRef(true);
+  const invalidateFaWallet = useWorkspaceStore((s) => s.invalidateFaWallet);
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const openedMax = clampOpenedStage(
@@ -180,19 +217,49 @@ export function FreeAssessmentShell() {
     activeProject && committedProjectIds.has(activeProject.id)
   );
   const inWorkspace = committedForActive;
+  const [reviewFlow, setReviewFlow] = useState<FlowTab | null>(null);
+  const reviewingBrief = Boolean(
+    inWorkspace && reviewFlow && !isWorkspaceTab(reviewFlow)
+  );
+  const showWorkspace = inWorkspace && !reviewingBrief;
+  const [workspaceScene, setWorkspaceScene] = useState(showWorkspace);
+  const skipWorkspaceAnim = useRef(true);
   const workspaceTab: WorkspaceTab = activeProject
-    ? (workspaceTabByProject[activeProject.id] ?? "extract")
+    ? clampWorkspaceTab(workspaceTabByProject[activeProject.id] ?? "extract")
     : "extract";
   const openedWorkspace: WorkspaceTab = activeProject
-    ? (openedWorkspaceByProject[activeProject.id] ?? "extract")
+    ? clampWorkspaceTab(openedWorkspaceByProject[activeProject.id] ?? "extract")
     : "extract";
+
+  useLayoutEffect(() => {
+    if (!hydrated) {
+      setWorkspaceScene(showWorkspace);
+      return;
+    }
+    if (skipWorkspaceAnim.current) {
+      skipWorkspaceAnim.current = false;
+      setWorkspaceScene(showWorkspace);
+      return;
+    }
+    if (!showWorkspace) {
+      setWorkspaceScene(false);
+      return;
+    }
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setWorkspaceScene(true));
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [hydrated, showWorkspace]);
+
   const analyzed = Boolean(
     activeProject && analyzedProjectIds.has(activeProject.id)
   );
 
-  useEffect(() => {
-    if (!slug) return;
-    const saved = loadMarketResearchState(slug) ?? emptyMarketResearchState();
+  const applySaved = (saved: MarketResearchPersisted) => {
     setProjects(saved.projects ?? []);
     setActiveProjectId(saved.activeProjectId ?? saved.projects?.[0]?.id ?? "");
     setOpenedMaxByProject(saved.openedMaxByProject ?? {});
@@ -228,6 +295,7 @@ export function FreeAssessmentShell() {
     setProposedCollectionsByProject(saved.proposedCollectionsByProject ?? {});
     setClusterSelectionByProject(saved.clusterSelectionByProject ?? {});
     setExtractChargeByProject(saved.extractChargeByProject ?? {});
+    extractIdByProject.current = { ...(saved.extractIdByProject ?? {}) };
     const last = saved.projects?.find((p) => p.id === saved.activeProjectId);
     const opened = clampOpenedStage(
       last ? saved.openedMaxByProject?.[last.id] : 1,
@@ -239,8 +307,54 @@ export function FreeAssessmentShell() {
     );
     setStage(Math.min(preferred, opened, 5) as MarketResearchStage);
     setCreateOpen((saved.projects ?? []).length === 0);
-    setHydrated(true);
-  }, [slug]);
+  };
+
+  // Resume across devices/reloads: the server snapshot (fa_projects.state)
+  // is the source of truth; localStorage is only a same-device fallback
+  // while the server round-trip is in flight or unreachable.
+  useEffect(() => {
+    if (!slug) return;
+    let cancelled = false;
+    persistReady.current = false;
+    persistRemote.current = false;
+    skipPersistSave.current = true;
+    setHydrated(false);
+
+    const finish = (saved: MarketResearchPersisted | null) => {
+      if (cancelled) return;
+      applySaved(saved && saved.projects.length > 0 ? saved : emptyMarketResearchState());
+      persistReady.current = true;
+      skipPersistSave.current = true;
+      setHydrated(true);
+    };
+
+    if (!workspaceId) {
+      finish(loadMarketResearchState(slug));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void (async () => {
+      try {
+        const remote = await loadFaStateApi(workspaceId);
+        if (cancelled) return;
+        persistRemote.current = true;
+        if (remote.projects.length > 0) {
+          finish(remote);
+          return;
+        }
+        finish(loadMarketResearchState(slug));
+      } catch {
+        persistRemote.current = false;
+        finish(loadMarketResearchState(slug));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, workspaceId]);
 
   const persistedSnapshot = useMemo<MarketResearchPersisted>(() => {
     const base = emptyMarketResearchState();
@@ -268,6 +382,7 @@ export function FreeAssessmentShell() {
       proposedCollectionsByProject,
       clusterSelectionByProject,
       extractChargeByProject,
+      extractIdByProject: { ...extractIdByProject.current },
     };
   }, [
     projects,
@@ -297,7 +412,16 @@ export function FreeAssessmentShell() {
   useEffect(() => {
     if (!hydrated || !slug) return;
     saveMarketResearchState(slug, persistedSnapshot);
-  }, [hydrated, slug, persistedSnapshot]);
+    if (skipPersistSave.current) {
+      skipPersistSave.current = false;
+      return;
+    }
+    if (!canEdit || !workspaceId || !persistRemote.current) return;
+    const timer = window.setTimeout(() => {
+      void saveFaStateApi(workspaceId, persistedSnapshot).catch(() => undefined);
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, slug, workspaceId, persistedSnapshot, canEdit]);
 
   const appendAgent = (projectId: string, text: string) => {
     setChatByProject((prev) => ({
@@ -337,12 +461,6 @@ export function FreeAssessmentShell() {
   const extractedKeywords = activeProject
     ? (keywordsByProject[activeProject.id] ?? [])
     : [];
-  const proposedCollections = activeProject
-    ? (proposedCollectionsByProject[activeProject.id] ?? [])
-    : [];
-  const clusterSelection = activeProject
-    ? (clusterSelectionByProject[activeProject.id] ?? [])
-    : [];
 
   const stage3Rows = useMemo(() => {
     const generated = getSeedRowsForCollections(
@@ -375,10 +493,26 @@ export function FreeAssessmentShell() {
     if (!activeProjectId) return;
   };
 
+  const handleFlowTab = (next: FlowTab) => {
+    if (!activeProject) return;
+    if (isWorkspaceTab(next)) {
+      setReviewFlow(null);
+      setWorkspaceTabByProject((prev) => ({
+        ...prev,
+        [activeProject.id]: next,
+      }));
+      return;
+    }
+    setReviewFlow(next);
+    const briefStage = briefStageFromFlow(next);
+    if (briefStage) setViewStage(briefStage);
+  };
+
   const handleSelectProject = (id: string) => {
+    setReviewFlow(null);
     setActiveProjectId(id);
     const opened = clampOpenedStage(openedMaxByProject[id], 1);
-    setStage(Math.min(opened, 5) as MarketResearchStage);
+    setStage(Math.min(opened, 4) as MarketResearchStage);
   };
 
   const handleCreateProject = async (name: string) => {
@@ -388,8 +522,9 @@ export function FreeAssessmentShell() {
       });
       return;
     }
+    const localId = newId();
     const project: MarketResearchProject = {
-      id: newId(),
+      id: localId,
       name,
       status: "active",
       storeLabel: DEFAULT_STORE,
@@ -404,32 +539,75 @@ export function FreeAssessmentShell() {
       project.id,
       `New assessment “${name}”. Upload the PLP sheet on the right — name, page type, and SKU count for every collection, category, and brand page. No live store is connected here.`
     );
+    if (!workspaceId) return;
+    try {
+      const created = await createFaProjectApi(workspaceId, {
+        name,
+        storeLabel: DEFAULT_STORE,
+      });
+      if (created.id === localId) return;
+      setProjects((prev) =>
+        prev.map((p) => (p.id === localId ? { ...p, id: created.id } : p))
+      );
+      setActiveProjectId((prev) => (prev === localId ? created.id : prev));
+      setOpenedMaxByProject((prev) => {
+        const { [localId]: value, ...rest } = prev;
+        return value === undefined ? rest : { ...rest, [created.id]: value };
+      });
+      setChatByProject((prev) => {
+        const { [localId]: value, ...rest } = prev;
+        return value === undefined ? rest : { ...rest, [created.id]: value };
+      });
+    } catch (err) {
+      toast.error("Couldn't save the project to your account", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    }
   };
 
-  const handleCatalogUpload = (catalog: AssessmentCatalog) => {
-    if (!activeProject) return;
+  const handleUploadRows = async (
+    rows: AssessmentPlpRow[],
+    fileName: string
+  ) => {
+    if (!activeProject || !workspaceId) return;
     const projectId = activeProject.id;
-    setNichesByProject((prev) => ({ ...prev, [projectId]: catalog.niches }));
-    setStructuredNichesByProject((prev) => ({
-      ...prev,
-      [projectId]: catalog.structuredNiches,
-    }));
-    setStage1DoneIds((prev) => {
-      const next = new Set(prev);
-      next.add(projectId);
-      return next;
-    });
-    setProjects((prev) =>
-      prev.map((p) =>
-        p.id === projectId
-          ? { ...p, storeLabel: `${catalog.rowCount} PLPs from sheet` }
-          : p
-      )
-    );
-    appendAgent(
-      projectId,
-      `Loaded ${catalog.rowCount} PLP${catalog.rowCount === 1 ? "" : "s"} from the sheet into ${catalog.niches.length} niche${catalog.niches.length === 1 ? "" : "s"}. Edit names on the right if a grouping looks off, then press Next for catalog scope.`
-    );
+    setUploadBusy(true);
+    setUploadError(null);
+    try {
+      const result = await analyzeSheetApi(workspaceId, projectId, rows);
+      setNichesByProject((prev) => ({
+        ...prev,
+        [projectId]: result.niches as unknown as NicheReading[],
+      }));
+      setStructuredNichesByProject((prev) => ({
+        ...prev,
+        [projectId]: result.structuredNiches as unknown as MockNiche[],
+      }));
+      setStage1DoneIds((prev) => {
+        const next = new Set(prev);
+        next.add(projectId);
+        return next;
+      });
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? { ...p, storeLabel: `${result.rowCount} PLPs from ${fileName}` }
+            : p
+        )
+      );
+      appendAgent(
+        projectId,
+        result.agentConclusion ||
+          `Loaded ${result.rowCount} PLP${result.rowCount === 1 ? "" : "s"} from the sheet into ${result.niches.length} niche${result.niches.length === 1 ? "" : "s"}. Edit names on the right if a grouping looks off, then press Next for catalog scope.`
+      );
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to analyze the sheet";
+      setUploadError(message);
+      toast.error("Couldn't analyze the sheet", { description: message });
+    } finally {
+      setUploadBusy(false);
+    }
   };
 
   const handleNextFromStage1 = () => {
@@ -455,7 +633,7 @@ export function FreeAssessmentShell() {
     }, 600);
   };
 
-  const handleNextFromStage2 = () => {
+  const handleNextFromStage2 = async () => {
     if (!canEdit || !activeProject || preparingStage3) return;
     const collectionIds = activeProject.highlightedCollectionIds;
     if (collectionIds.length === 0) {
@@ -463,27 +641,69 @@ export function FreeAssessmentShell() {
       return;
     }
     const projectId = activeProject.id;
+    const currentStructured = structuredNichesByProject[projectId] ?? [];
+    const selectedIdSet = new Set(collectionIds);
+    const selectedScopeCollections: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      productCount: number;
+      parentNicheName: string;
+      nicheFullySelected: boolean;
+    }> = [];
+    for (const niche of currentStructured) {
+      const nicheFullySelected =
+        niche.collections.length > 0 &&
+        niche.collections.every((c) => selectedIdSet.has(c.id));
+      for (const col of niche.collections) {
+        if (!selectedIdSet.has(col.id)) continue;
+        selectedScopeCollections.push({
+          id: col.id,
+          name: col.name,
+          description: col.description,
+          productCount: col.productCount,
+          parentNicheName: niche.name,
+          nicheFullySelected,
+        });
+      }
+    }
+
     setOpenedMaxByProject((prev) => ({
       ...prev,
       [projectId]: Math.max(prev[projectId] ?? 1, 3) as MarketResearchStage,
     }));
     setStage(3);
     setPreparingStage3(true);
-    window.setTimeout(() => {
-      const rows = getSeedRowsForCollections(
-        collectionIds,
-        structuredNichesByProject[projectId] ?? []
-      );
+    appendAgent(
+      projectId,
+      "Analyzing selected PLPs to prepare broad niche seed variations…"
+    );
+
+    if (!workspaceId || selectedScopeCollections.length === 0) {
+      const rows = getSeedRowsForCollections(collectionIds, currentStructured);
       setSeedRowsByProject((prev) => ({ ...prev, [projectId]: rows }));
-      setStage3ScopeByProject((prev) => ({
-        ...prev,
-        [projectId]: [...collectionIds],
-      }));
-      setSeedSelectionByProject((prev) => ({
-        ...prev,
-        [projectId]: rows.map((r) => r.id),
-      }));
+      setStage3ScopeByProject((prev) => ({ ...prev, [projectId]: [...collectionIds] }));
+      setSeedSelectionByProject((prev) => ({ ...prev, [projectId]: rows.map((r) => r.id) }));
       setPreparingStage3(false);
+      setStage3ReadyIds((prev) => {
+        const next = new Set(prev);
+        next.add(projectId);
+        return next;
+      });
+      return;
+    }
+
+    try {
+      const res = await generateSeedsApi(
+        workspaceId,
+        projectId,
+        activeProject.storeLabel,
+        selectedScopeCollections
+      );
+      const rows = res.seedRows as unknown as MockSeedRow[];
+      setSeedRowsByProject((prev) => ({ ...prev, [projectId]: rows }));
+      setStage3ScopeByProject((prev) => ({ ...prev, [projectId]: [...collectionIds] }));
+      setSeedSelectionByProject((prev) => ({ ...prev, [projectId]: rows.map((r) => r.id) }));
       setStage3ReadyIds((prev) => {
         const next = new Set(prev);
         next.add(projectId);
@@ -493,46 +713,301 @@ export function FreeAssessmentShell() {
         projectId,
         `Prepared ${rows.length} broad seed variation${rows.length === 1 ? "" : "s"} from the selected PLPs. Run a demand check, then extract.`
       );
-    }, 700);
+    } catch (err) {
+      console.error("[handleNextFromStage2] Error:", err);
+      toast.error("Couldn't generate seed terms", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setPreparingStage3(false);
+    }
   };
 
-  const runProbe = (rowIds: string[]) => {
-    if (!activeProject || rowIds.length === 0) return;
+  const runProbe = async (rowIds: string[]) => {
+    if (!canEdit || !activeProject || rowIds.length === 0) return;
+    if (!workspaceId) {
+      toast.error("Workspace is still loading");
+      return;
+    }
     const projectId = activeProject.id;
     const market = activeMarket;
     const targets = stage3Rows.filter((row) => rowIds.includes(row.id));
-    setProbingIds(rowIds);
-    window.setTimeout(() => {
-      setProbesByProject((prev) => {
-        const current = { ...(prev[projectId] ?? {}) };
-        for (const row of targets) {
-          const h = hashString(row.broadSeedVariation + market);
-          current[row.id] = {
-            seedId: row.id,
+    if (targets.length === 0) return;
+
+    const totalEstCost = estimateProbeCostUsd(targets.length);
+    const balance = await previewBalance(workspaceId);
+    if (balance < totalEstCost) {
+      setInsufficientFundsDialog({
+        open: true,
+        requiredAmount: totalEstCost,
+        currentBalance: balance,
+        actionName: `Demand check for ${targets.length} seed${targets.length === 1 ? "" : "s"}`,
+      });
+      return;
+    }
+
+    const gen = ++probeGen.current;
+    setProbingIds(targets.map((row) => row.id));
+
+    const CHUNK_SIZE = 20;
+    const chunks: (typeof targets)[] = [];
+    for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
+      chunks.push(targets.slice(i, i + CHUNK_SIZE));
+    }
+
+    const allResults: Record<string, SeedProbe> = {};
+    let failedChunks = 0;
+    let lastErrorMessage: string | null = null;
+
+    for (let i = 0; i < chunks.length; i++) {
+      if (probeGen.current !== gen) return;
+      const chunk = chunks[i];
+      const chunkIds = new Set(chunk.map((r) => r.id));
+      try {
+        const response = await probeSeedsApi(
+          workspaceId,
+          projectId,
+          market,
+          chunk.map((row) => ({ id: row.id, term: row.broadSeedVariation })),
+          crypto.randomUUID()
+        );
+        if (probeGen.current !== gen) return;
+
+        const chunkResults: Record<string, SeedProbe> = {};
+        for (const row of response.results) {
+          if (row.failed) {
+            chunkResults[row.seedId] = {
+              seedId: row.seedId,
+              market,
+              rawKeywords: 0,
+              searchVolume: 0,
+              sampleKeywords: [],
+              checkedAt: Date.now(),
+              failed: true,
+            };
+            continue;
+          }
+          chunkResults[row.seedId] = {
+            seedId: row.seedId,
             market,
-            rawKeywords: 80 + (h % 420),
-            searchVolume: 200 + (h % 4800),
-            sampleKeywords: [
-              row.broadSeedVariation,
-              `buy ${row.broadSeedVariation.toLowerCase()}`,
-              `best ${row.broadSeedVariation.toLowerCase()}`,
-            ],
+            rawKeywords: row.keywordIdeasTotal,
+            searchVolume: row.volume,
+            sampleKeywords: row.sampleKeywords.slice(0, 5),
             checkedAt: Date.now(),
           };
         }
-        return { ...prev, [projectId]: current };
-      });
-      setProbingIds([]);
-      toast.message("Frontend preview", {
+        Object.assign(allResults, chunkResults);
+        setProbesByProject((prev) => ({
+          ...prev,
+          [projectId]: { ...(prev[projectId] ?? {}), ...chunkResults },
+        }));
+        setProbingIds((prev) => prev.filter((id) => !chunkIds.has(id)));
+        invalidateFaWallet();
+      } catch (error) {
+        if (probeGen.current !== gen) return;
+        failedChunks += 1;
+        const msg =
+          error instanceof Error ? error.message : "Could not retrieve seed metrics.";
+        lastErrorMessage = msg;
+        if (
+          msg.toLowerCase().includes("balance") ||
+          msg.toLowerCase().includes("funds") ||
+          msg.includes("402")
+        ) {
+          setInsufficientFundsDialog({
+            open: true,
+            requiredAmount: totalEstCost,
+            currentBalance: wallet?.balance ?? 0,
+            actionName: `Demand check for ${targets.length} seed${targets.length === 1 ? "" : "s"}`,
+          });
+        }
+        const failedResult: Record<string, SeedProbe> = {};
+        for (const row of chunk) {
+          failedResult[row.id] = {
+            seedId: row.id,
+            market,
+            rawKeywords: 0,
+            searchVolume: 0,
+            sampleKeywords: [],
+            checkedAt: Date.now(),
+            failed: true,
+          };
+        }
+        Object.assign(allResults, failedResult);
+        setProbesByProject((prev) => ({
+          ...prev,
+          [projectId]: { ...(prev[projectId] ?? {}), ...failedResult },
+        }));
+        setProbingIds((prev) => prev.filter((id) => !chunkIds.has(id)));
+        console.error(`[runProbe] Batch ${i + 1}/${chunks.length} failed:`, error);
+      }
+    }
+
+    if (probeGen.current !== gen) return;
+    setProbingIds([]);
+
+    const picked = new Set(seedSelection);
+    const estimate = estimateSelection(
+      stage3Rows.filter((row) => picked.has(row.id) || allResults[row.id]),
+      { ...activeProbes, ...allResults }
+    );
+    appendAgent(
+      projectId,
+      `Checked demand on ${targets.length} seed${targets.length === 1 ? "" : "s"}. ${estimate.rows} have real search volume — estimated extract cost is $${estimate.usd.toFixed(2)}.`
+    );
+
+    if (failedChunks > 0 && failedChunks === chunks.length) {
+      toast.error("Demand check failed", {
         description:
-          "Live Apify demand check will run once the free-assessment backend is connected.",
+          lastErrorMessage || "Could not retrieve seed metrics. Please try again.",
       });
-    }, 900);
+    }
   };
 
-  const handleExtract = () => {
-    if (!activeProject) return;
+  const settleExtractCharge = (
+    projectId: string,
+    rowsReturned: number,
+    amount = actualExtractCostUsd(rowsReturned)
+  ) => {
+    setExtractChargeByProject((prev) => ({ ...prev, [projectId]: amount }));
+    invalidateFaWallet();
+  };
+
+  const rememberExtractId = (projectId: string, extractId: string) => {
+    extractIdRef.current = extractId;
+    extractIdByProject.current = { ...extractIdByProject.current, [projectId]: extractId };
+  };
+
+  const runExtractPollLoop = async (input: {
+    gen: number;
+    workspaceId: string;
+    projectId: string;
+    extractId: string;
+    seedCaps: Array<{ id: string; term: string; cap: number }>;
+    initialSample?: ExtractedKeyword[];
+  }) => {
+    const pollState = input.seedCaps.map((seed) => ({
+      id: seed.id,
+      term: seed.term,
+      cap: seed.cap,
+      cursor: undefined as string | undefined,
+      status: "running" as "running" | "succeeded" | "failed" | "aborted",
+      pulled: 0,
+    }));
+    let sample: ExtractedKeyword[] = input.initialSample ?? [];
+
+    const tick = async () => {
+      if (extractGen.current !== input.gen) return;
+      try {
+        const poll = await pollExtractApi(
+          input.workspaceId,
+          input.projectId,
+          input.extractId,
+          pollState.map((seed) => ({
+            seedId: seed.id,
+            cursor: seed.cursor,
+            status: seed.status,
+          }))
+        );
+        if (extractGen.current !== input.gen) return;
+
+        for (const row of poll.seeds) {
+          const local = pollState.find((seed) => seed.id === row.seedId);
+          if (!local) continue;
+          local.status =
+            row.status === "succeeded" && row.nextCursor ? "running" : row.status;
+          local.cursor = row.nextCursor;
+          const returned =
+            typeof row.rowsReturned === "number" ? row.rowsReturned : local.pulled;
+          if (row.rows.length > 0) {
+            const mapped = row.rows.map((keyword, index) =>
+              toExtractedKeyword(keyword, row.seedId, local.pulled + index)
+            );
+            sample = appendKeywordRows(sample, mapped);
+            local.pulled = Math.max(local.pulled + row.rows.length, returned);
+          } else {
+            local.pulled = Math.max(local.pulled, returned);
+          }
+        }
+
+        const caps = pollState.reduce((sum, seed) => sum + seed.cap, 0);
+        const pulled = pollState.reduce((sum, seed) => sum + seed.pulled, 0);
+        setExtractProgress(caps ? Math.min(1, pulled / caps) : 0);
+        setSeedProgress(
+          pollState.map((seed) => ({
+            seedId: seed.id,
+            seed: seed.term,
+            cap: seed.cap,
+            pulled: seed.pulled,
+          }))
+        );
+        if (sample.length > 0) {
+          setKeywordsByProject((prev) => ({
+            ...prev,
+            [input.projectId]: sample,
+          }));
+        }
+
+        if (poll.allDone) {
+          if (poll.billingPending) {
+            window.setTimeout(() => {
+              void tick();
+            }, 2000);
+            return;
+          }
+          let finalSample = poll.sample ?? sample;
+          if (finalSample.length === 0) {
+            const status = await extractStatusApi(
+              input.workspaceId,
+              input.projectId,
+              input.extractId
+            ).catch(() => null);
+            if (status?.sample?.length) finalSample = status.sample;
+          }
+          if (finalSample.length > 0) {
+            setKeywordsByProject((prev) => ({
+              ...prev,
+              [input.projectId]: finalSample,
+            }));
+          }
+          setExtracting(false);
+          settleExtractCharge(
+            input.projectId,
+            poll.rowsReturned,
+            poll.settledUsd ?? actualExtractCostUsd(poll.rowsReturned)
+          );
+          return;
+        }
+      } catch {
+        if (extractGen.current !== input.gen) return;
+      }
+
+      window.setTimeout(() => {
+        void tick();
+      }, 800);
+    };
+
+    await tick();
+  };
+
+  const handleExtract = async () => {
+    if (!canEdit || !activeProject) return;
+    if (!workspaceId) {
+      toast.error("Workspace is still loading");
+      return;
+    }
     const projectId = activeProject.id;
+    const balance = await previewBalance(workspaceId);
+    if (balance < selectionEstimate.usd) {
+      setInsufficientFundsDialog({
+        open: true,
+        requiredAmount: selectionEstimate.usd,
+        currentBalance: balance,
+        actionName: `Keyword extraction for ${selectedSeedRows.length} seed${selectedSeedRows.length === 1 ? "" : "s"}`,
+      });
+      return;
+    }
+
     const seeds = selectedSeedRows.filter(
       (row) => activeProbes[row.id] && !activeProbes[row.id].failed
     );
@@ -540,6 +1015,8 @@ export function FreeAssessmentShell() {
       toast.error("Check demand on selected seeds first");
       return;
     }
+
+    const gen = ++extractGen.current;
     setCommittedProjectIds((prev) => {
       const next = new Set(prev);
       next.add(projectId);
@@ -552,108 +1029,253 @@ export function FreeAssessmentShell() {
       [projectId]: Math.max(prev[projectId] ?? 1, 4) as MarketResearchStage,
     }));
     setStage(4);
+    setAnalyzedProjectIds((prev) => {
+      if (!prev.has(projectId)) return prev;
+      const next = new Set(prev);
+      next.delete(projectId);
+      return next;
+    });
+    setKeywordsByProject((prev) => ({ ...prev, [projectId]: [] }));
     setExtracting(true);
     setExtractProgress(0);
-    const caps = seeds.map((seed) => ({
-      seedId: seed.id,
-      seed: seed.broadSeedVariation,
-      cap: 1,
-      pulled: 0,
+
+    const seedCaps = seeds.map((seed) => ({
+      id: seed.id,
+      term: seed.broadSeedVariation,
+      cap: pulledCountForSeed(seed, activeProbes),
     }));
-    setSeedProgress(caps);
-    let tick = 0;
-    const timer = window.setInterval(() => {
-      tick += 1;
-      setExtractProgress(Math.min(1, tick / 6));
-      setSeedProgress((prev) =>
-        prev.map((row, i) =>
-          i < tick ? { ...row, pulled: row.cap } : row
-        )
+    setSeedProgress(
+      seedCaps.map((seed) => ({
+        seedId: seed.id,
+        seed: seed.term,
+        cap: seed.cap,
+        pulled: 0,
+      }))
+    );
+
+    try {
+      const started = await startExtractApi(
+        workspaceId,
+        projectId,
+        activeMarket,
+        seeds.map((seed) => ({
+          id: seed.id,
+          term: seed.broadSeedVariation,
+          rawKeywordEstimate: activeProbes[seed.id]?.rawKeywords ?? 0,
+        }))
       );
-      if (tick >= 6) {
-        window.clearInterval(timer);
-        const rows = keywordsFromSeeds(seeds, activeProbes);
-        setKeywordsByProject((prev) => ({ ...prev, [projectId]: rows }));
+      if (extractGen.current !== gen) {
         setExtracting(false);
-        setExtractChargeByProject((prev) => ({ ...prev, [projectId]: 0 }));
-        toast.message("Frontend preview", {
-          description:
-            "Keyword extract listed the selected seed terms. Apify will replace this once the assessment backend is connected.",
-        });
+        await cancelExtractApi(workspaceId, projectId, started.extractId).catch(
+          () => undefined
+        );
+        return;
       }
-    }, 220);
+      rememberExtractId(projectId, started.extractId);
+      await runExtractPollLoop({
+        gen,
+        workspaceId,
+        projectId,
+        extractId: started.extractId,
+        seedCaps: started.seeds.map((seed) => {
+          const match = seedCaps.find((row) => row.id === seed.seedId);
+          return {
+            id: seed.seedId,
+            term: seed.term,
+            cap: match?.cap ?? seed.pages * 100,
+          };
+        }),
+      });
+    } catch (error) {
+      if (extractGen.current !== gen) return;
+      setExtracting(false);
+      toast.error("Extract failed", {
+        description: error instanceof Error ? error.message : "Could not start Apify.",
+      });
+    }
   };
 
-  const handleAnalyze = () => {
-    if (!activeProject) return;
+  const handleCancelExtract = async () => {
+    extractGen.current += 1;
+    const projectId = activeProject?.id;
+    setExtracting(false);
+    if (!workspaceId || !projectId) return;
+    let extractId = extractIdRef.current || extractIdByProject.current[projectId] || "";
+    if (!extractId) {
+      const status = await extractStatusApi(workspaceId, projectId).catch(() => null);
+      extractId = status?.extract?.id ?? "";
+    }
+    if (!extractId) return;
+    try {
+      const cancelled = await cancelExtractApi(workspaceId, projectId, extractId);
+      settleExtractCharge(projectId, cancelled.rowsReturned, cancelled.settledUsd);
+    } catch (err) {
+      console.error("[handleCancelExtract] Error:", err);
+    }
+  };
+
+  // Resume a still-running Apify extract after a refresh or a return visit —
+  // the poll loop otherwise only runs in-memory from handleExtract.
+  useEffect(() => {
+    if (!hydrated || !workspaceId || !canEdit || !activeProject) return;
     const projectId = activeProject.id;
-    const current = keywordsByProject[projectId] ?? [];
-    if (current.length === 0) {
+    if (extracting) return;
+    if (resumedExtract.current.has(projectId)) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await extractStatusApi(workspaceId, projectId);
+        if (cancelled) return;
+        if (!status.extract) {
+          resumedExtract.current.add(projectId);
+          return;
+        }
+        rememberExtractId(projectId, status.extract.id);
+        const active =
+          status.extract.status === "running" ||
+          status.extract.billingStatus === "held";
+        if (!active) {
+          resumedExtract.current.add(projectId);
+          if (
+            status.sample?.length &&
+            status.sample.length > (keywordsByProject[projectId]?.length ?? 0)
+          ) {
+            setKeywordsByProject((prev) => ({
+              ...prev,
+              [projectId]: status.sample as unknown as ExtractedKeyword[],
+            }));
+          }
+          if (status.extract.rowsReturned > 0) {
+            settleExtractCharge(
+              projectId,
+              status.extract.rowsReturned,
+              status.extract.actualUsd ||
+                actualExtractCostUsd(status.extract.rowsReturned)
+            );
+          }
+          return;
+        }
+
+        const gen = ++extractGen.current;
+        setCommittedProjectIds((prev) => {
+          const next = new Set(prev);
+          next.add(projectId);
+          return next;
+        });
+        setExtracting(true);
+        const seedCaps = status.seeds.map((seed) => {
+          const match = selectedSeedRows.find((row) => row.id === seed.seedId);
+          return {
+            id: seed.seedId,
+            term: seed.term,
+            cap: match
+              ? pulledCountForSeed(match, activeProbes)
+              : Math.max(seed.pages * 100, seed.rowsReturned, 1),
+          };
+        });
+        setSeedProgress(
+          seedCaps.map((seed) => ({
+            seedId: seed.id,
+            seed: seed.term,
+            cap: seed.cap,
+            pulled: status.seeds.find((row) => row.seedId === seed.id)?.rowsReturned ?? 0,
+          }))
+        );
+        await runExtractPollLoop({
+          gen,
+          workspaceId,
+          projectId,
+          extractId: status.extract.id,
+          seedCaps,
+          initialSample: keywordsByProject[projectId],
+        });
+      } catch {
+        resumedExtract.current.delete(projectId);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Runs once per active project after hydration; re-firing on every
+    // keyword/probe change would restart the resume check mid-poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, workspaceId, canEdit, activeProject?.id]);
+
+  const handleAnalyze = async () => {
+    if (!activeProject) return;
+    if (!workspaceId) {
+      toast.error("Workspace is still loading");
+      return;
+    }
+    const projectId = activeProject.id;
+    const currentKws = keywordsByProject[projectId] ?? [];
+    if (currentKws.length === 0) {
       toast.error("No keywords to analyze");
       return;
     }
+
+    const gen = ++analyzeGen.current;
     setAnalyzeLoading(true);
-    setAnalyzeProgress({ done: 0, total: current.length });
-    window.setTimeout(() => {
-      const classified = current.map((row) => {
-        if (row.isQuestion) {
-          return {
-            ...row,
-            sheet: "informational" as const,
-            exclusionReason: "Question / guide",
-          };
+    setAnalyzeProgress({ done: 0, total: currentKws.length });
+
+    try {
+      const result = await runClassifyArchiveLoop(
+        workspaceId,
+        projectId,
+        (state) => {
+          if (analyzeGen.current !== gen) return;
+          setAnalyzeProgress({ done: state.nextOffset, total: state.total });
+          if (state.classifications?.length) {
+            setKeywordsByProject((prev) => ({
+              ...prev,
+              [projectId]: applyKeywordClassifications(
+                prev[projectId] ?? [],
+                state.classifications ?? []
+              ),
+            }));
+          }
+        },
+        () => analyzeGen.current !== gen
+      );
+      if (analyzeGen.current !== gen) return;
+
+      if (!result) {
+        toast.error("Classification error", {
+          description: "Could not classify keywords. Please try again.",
+        });
+        return;
+      }
+
+      try {
+        const state = await loadFaStateApi(workspaceId);
+        if (analyzeGen.current !== gen) return;
+        const refreshed = state.keywordsByProject?.[projectId];
+        if (Array.isArray(refreshed) && refreshed.length > 0) {
+          setKeywordsByProject((prev) => ({ ...prev, [projectId]: refreshed }));
         }
-        return {
-          ...row,
-          sheet: "category" as const,
-          plpConcept: "Category PLP",
-        };
-      });
-      setKeywordsByProject((prev) => ({ ...prev, [projectId]: classified }));
+      } catch (refreshErr) {
+        console.error("[handleAnalyze] Failed to refresh sample:", refreshErr);
+      }
+
       setAnalyzedProjectIds((prev) => {
         const next = new Set(prev);
         next.add(projectId);
         return next;
       });
-      setAnalyzeLoading(false);
-      setAnalyzeProgress(null);
-    }, 700);
-  };
-
-  const handleNextCollections = (filtered?: ExtractedKeyword[]) => {
-    if (!activeProject) return;
-    const projectId = activeProject.id;
-    const source =
-      filtered && filtered.length > 0
-        ? filtered
-        : (keywordsByProject[projectId] ?? []).filter(
-            (row) => row.sheet === "category"
-          );
-    setClustering(true);
-    window.setTimeout(() => {
-      const collections = buildProposedCollections(selectedSeedRows, source);
-      setProposedCollectionsByProject((prev) => ({
-        ...prev,
-        [projectId]: collections,
-      }));
-      setClusterSelectionByProject((prev) => ({
-        ...prev,
-        [projectId]: collections.map((c) => c.id),
-      }));
-      setWorkspaceTabByProject((prev) => ({
-        ...prev,
-        [projectId]: "collections",
-      }));
-      setOpenedWorkspaceByProject((prev) => ({
-        ...prev,
-        [projectId]: "collections",
-      }));
-      setOpenedMaxByProject((prev) => ({
-        ...prev,
-        [projectId]: Math.max(prev[projectId] ?? 1, 5) as MarketResearchStage,
-      }));
-      setClustering(false);
-    }, 800);
+    } catch (err) {
+      if (analyzeGen.current !== gen) return;
+      console.error("[handleAnalyze] Error:", err);
+      toast.error("Classification error", {
+        description: "Could not classify keywords. Please try again.",
+      });
+    } finally {
+      if (analyzeGen.current === gen) {
+        setAnalyzeLoading(false);
+        setAnalyzeProgress(null);
+      }
+    }
   };
 
   const timelineSteps = useMemo<StageStep[]>(() => {
@@ -679,19 +1301,11 @@ export function FreeAssessmentShell() {
         : openedMax >= 4
           ? "pending"
           : "locked";
-    const s5: StageStepStatus = clustering
-      ? "running"
-      : proposedCollections.length > 0
-        ? "done"
-        : openedMax >= 5
-          ? "pending"
-          : "locked";
     return [
       { stage: 1, status: s1, detail: STAGE_META[1].agentDetail },
       { stage: 2, status: s2, detail: STAGE_META[2].agentDetail },
       { stage: 3, status: s3, detail: STAGE_META[3].agentDetail },
       { stage: 4, status: s4, detail: STAGE_META[4].agentDetail },
-      { stage: 5, status: s5, detail: STAGE_META[5].agentDetail },
     ];
   }, [
     stage1DoneForActive,
@@ -704,8 +1318,6 @@ export function FreeAssessmentShell() {
     analyzeLoading,
     extractedKeywords.length,
     committedForActive,
-    clustering,
-    proposedCollections.length,
   ]);
 
   const timelineReceipts = useMemo<StageReceipt[]>(() => {
@@ -723,15 +1335,7 @@ export function FreeAssessmentShell() {
         id: "r4",
         stage: 4,
         title: `Keywords ready · ${extractedKeywords.length} terms`,
-        detail: analyzed ? "Classified" : "Awaiting Analyze with AI",
-      });
-    }
-    if (proposedCollections.length > 0) {
-      list.push({
-        id: "r5",
-        stage: 5,
-        title: `Collections · ${proposedCollections.length}`,
-        detail: "Assessment stops here — no push or on-page.",
+        detail: analyzed ? "Classified — proposal ready" : "Awaiting Analyze with AI",
       });
     }
     return list;
@@ -741,14 +1345,85 @@ export function FreeAssessmentShell() {
     activeNiches.length,
     extractedKeywords.length,
     analyzed,
-    proposedCollections.length,
   ]);
+
+  const handleSendMessage = (text: string) => {
+    if (!canEdit || !activeProject || preparingStage2 || preparingStage3) return;
+    const projectId = activeProject.id;
+    setChatByProject((prev) => ({
+      ...prev,
+      [projectId]: [...(prev[projectId] ?? []), { id: newId(), role: "user", text }],
+    }));
+
+    if (!workspaceId) {
+      window.setTimeout(() => {
+        appendAgent(
+          projectId,
+          "Workspace is still loading — try again in a moment."
+        );
+      }, 400);
+      return;
+    }
+
+    setChatBusy(true);
+    const history = (chatByProject[projectId] ?? []).map((m) => ({
+      role: m.role === "agent" ? ("assistant" as const) : ("user" as const),
+      content: m.text,
+    }));
+    const plpRows: AssessmentPlpRow[] = activeStructuredNiches.flatMap((niche) =>
+      niche.collections.map((col) => ({
+        name: col.name,
+        pageType: (col.kind === "brand" ? "brand" : "collection") as
+          | "collection"
+          | "brand",
+        skuCount: col.productCount,
+        description: col.description ?? "",
+      }))
+    );
+
+    void (async () => {
+      try {
+        const res = await chatAgentApi(workspaceId, projectId, history, text, activeNiches, {
+          stage,
+          market: activeMarket,
+          selectedCollectionIds:
+            stage === 2
+              ? activeProject.highlightedCollectionIds
+              : (stage3ScopeByProject[projectId] ?? activeProject.highlightedCollectionIds),
+          seedRows: stage3Rows,
+          probes: activeProbes,
+          plpRows: plpRows.length > 0 ? plpRows : undefined,
+        });
+        setChatBusy(false);
+        appendAgent(projectId, res.reply);
+        if (res.updatedNiches && res.updatedNiches.length > 0) {
+          setNichesByProject((prev) => ({ ...prev, [projectId]: res.updatedNiches! }));
+        }
+        if (res.updatedStructuredNiches && res.updatedStructuredNiches.length > 0) {
+          setStructuredNichesByProject((prev) => ({
+            ...prev,
+            [projectId]: res.updatedStructuredNiches as unknown as MockNiche[],
+          }));
+        }
+      } catch (err) {
+        setChatBusy(false);
+        appendAgent(
+          projectId,
+          err instanceof Error
+            ? `Couldn't reach the agent: ${err.message}`
+            : "Couldn't reach the agent. Please try again."
+        );
+      }
+    })();
+  };
 
   if (wsLoading || !hydrated) {
     return <PageLoader />;
   }
 
-  const lockedViewStage = (Math.min(stage, 3) as MarketResearchStage);
+  const lockedViewStage: MarketResearchStage = reviewFlow
+    ? (briefStageFromFlow(reviewFlow) ?? (Math.min(stage, 3) as MarketResearchStage))
+    : (Math.min(stage, 3) as MarketResearchStage);
   const messages = activeProject
     ? (chatByProject[activeProject.id] ?? [])
     : [];
@@ -766,36 +1441,22 @@ export function FreeAssessmentShell() {
           />
 
           {activeProject ? (
-            <div className={`mr-stage-frame${inWorkspace ? " is-workspace" : ""}`}>
-              <div className="mr-agent-cell" aria-hidden={inWorkspace}>
+            <div className={`mr-stage-frame${workspaceScene ? " is-workspace" : ""}`}>
+              <div className="mr-agent-cell" aria-hidden={workspaceScene}>
                 <div className="mr-agent-inner">
                   <AgentPanel
                     stage={lockedViewStage}
                     storeLabel={activeProject.storeLabel}
                     projectName={activeProject.name}
-                    analyzingStage1={false}
+                    analyzingStage1={uploadBusy}
                     pendingStage1={!stage1DoneForActive}
                     stage1Done={stage1DoneForActive}
                     preparingStage2={preparingStage2}
                     preparingStage3={preparingStage3}
                     messages={messages}
-                    onSendMessage={(text) => {
-                      if (!canEdit) return;
-                      setChatByProject((prev) => ({
-                        ...prev,
-                        [activeProject.id]: [
-                          ...(prev[activeProject.id] ?? []),
-                          { id: newId(), role: "user", text },
-                        ],
-                      }));
-                      window.setTimeout(() => {
-                        appendAgent(
-                          activeProject.id,
-                          "Noted. This assessment frontend is a preview — chat against the cloned agents lands with the backend next."
-                        );
-                      }, 400);
-                    }}
-                    readOnly={!canEdit}
+                    onSendMessage={handleSendMessage}
+                    chatBusy={chatBusy}
+                    readOnly={reviewingBrief || !canEdit}
                     timeline={
                       <RunTimeline
                         steps={timelineSteps}
@@ -810,6 +1471,15 @@ export function FreeAssessmentShell() {
               <div className="mr-pane-cell">
                 <section className="mr-pane mr-pane-brief">
                   <div className="flex items-center gap-1 border-b border-border/60 px-3 py-2 shrink-0">
+                    {reviewingBrief ? (
+                      <div className="min-w-0 flex-1 overflow-x-auto">
+                        <WorkspaceStepper
+                          current={reviewFlow ?? "niches"}
+                          opened={openedWorkspace}
+                          onChange={handleFlowTab}
+                        />
+                      </div>
+                    ) : (
                     <div
                       role="tablist"
                       aria-label="Free assessment stages"
@@ -842,6 +1512,8 @@ export function FreeAssessmentShell() {
                         );
                       })}
                     </div>
+                    )}
+                    {reviewingBrief ? null : (
                     <div className="ml-auto flex items-center gap-3 px-1">
                       <StageStepper
                         current={Math.min(stage, 5) as MarketResearchStage}
@@ -849,6 +1521,7 @@ export function FreeAssessmentShell() {
                         totalStages={5}
                       />
                     </div>
+                    )}
                   </div>
 
                   <div className="flex-1 min-h-0 overflow-hidden p-4 sm:p-5 flex flex-col">
@@ -897,12 +1570,14 @@ export function FreeAssessmentShell() {
                             }));
                           }}
                           onMergeNiche={() => undefined}
-                          readOnly={!canEdit}
+                          readOnly={reviewingBrief || !canEdit}
                         />
                       ) : (
                         <StagePlpUploadPanel
-                          onCatalog={handleCatalogUpload}
-                          readOnly={!canEdit}
+                          onRows={handleUploadRows}
+                          busy={uploadBusy}
+                          error={uploadError}
+                          readOnly={reviewingBrief || !canEdit}
                         />
                       )
                     )}
@@ -911,7 +1586,9 @@ export function FreeAssessmentShell() {
                         project={activeProject}
                         niches={activeStructuredNiches}
                         preparing={preparingStage2 || !stage2ReadyForActive}
-                        showNext={stage2ReadyForActive && !preparingStage2}
+                        showNext={
+                          stage2ReadyForActive && !preparingStage2 && !reviewingBrief
+                        }
                         nextLabel={
                           openedMax >= 3 ? "Open Stage 3" : "Next · Seed variations"
                         }
@@ -925,7 +1602,7 @@ export function FreeAssessmentShell() {
                             )
                           );
                         }}
-                        readOnly={!canEdit}
+                        readOnly={reviewingBrief || !canEdit}
                       />
                     )}
                     {lockedViewStage === 3 && openedMax >= 3 && (
@@ -972,9 +1649,9 @@ export function FreeAssessmentShell() {
                         }}
                         onConfirmSpend={handleExtract}
                         committed={committedForActive}
-                        walletHref={`/w/${slug}/wallet`}
+                        walletHref={`/w/${slug}/free-assessment/wallet`}
                         walletBalance={wallet?.balance ?? null}
-                        readOnly={!canEdit}
+                        readOnly={reviewingBrief || !canEdit}
                       />
                     )}
                   </div>
@@ -988,14 +1665,7 @@ export function FreeAssessmentShell() {
                         isWorkspaceTab(workspaceTab) ? workspaceTab : "extract"
                       }
                       opened={openedWorkspace}
-                      onTab={(next) => {
-                        if (isWorkspaceTab(next)) {
-                          setWorkspaceTabByProject((prev) => ({
-                            ...prev,
-                            [activeProject.id]: next,
-                          }));
-                        }
-                      }}
+                      onTab={handleFlowTab}
                       seeds={selectedSeedRows}
                       probes={activeProbes}
                       keywords={extractedKeywords}
@@ -1010,16 +1680,13 @@ export function FreeAssessmentShell() {
                       analyzeLoading={analyzeLoading}
                       analyzeProgress={analyzeProgress}
                       analyzed={analyzed}
-                      onNextCollections={handleNextCollections}
-                      collections={proposedCollections}
-                      clustering={clustering}
-                      selectedCollectionIds={clusterSelection}
-                      onChangeSelected={(ids) =>
-                        setClusterSelectionByProject((prev) => ({
-                          ...prev,
-                          [activeProject.id]: ids,
-                        }))
+                      onCancelExtract={handleCancelExtract}
+                      keywordsCsvHref={
+                        workspaceId && committedForActive
+                          ? `/api/free-assessment/extract/download?workspaceId=${workspaceId}&projectId=${activeProject.id}`
+                          : undefined
                       }
+                      growthEngineHref={`/w/${slug}/market-research`}
                     />
                   </div>
                 ) : null}
@@ -1059,6 +1726,13 @@ export function FreeAssessmentShell() {
               setActiveProjectId(fallback?.id ?? "");
               setCreateOpen(!fallback);
             }
+            if (workspaceId) {
+              void deleteFaProjectApi(workspaceId, id).catch((err) => {
+                toast.error("Couldn't delete the project", {
+                  description: err instanceof Error ? err.message : undefined,
+                });
+              });
+            }
           }}
           onToggleComplete={(id, completed) => {
             setProjects((prev) =>
@@ -1075,6 +1749,17 @@ export function FreeAssessmentShell() {
           canAdmin={canAdmin}
         />
       ) : null}
+
+      <InsufficientFundsDialog
+        open={insufficientFundsDialog.open}
+        onOpenChange={(open) =>
+          setInsufficientFundsDialog((prev) => ({ ...prev, open }))
+        }
+        requiredAmount={insufficientFundsDialog.requiredAmount}
+        currentBalance={insufficientFundsDialog.currentBalance}
+        actionName={insufficientFundsDialog.actionName}
+        walletHref={`/w/${slug}/free-assessment/wallet`}
+      />
     </div>
   );
 }

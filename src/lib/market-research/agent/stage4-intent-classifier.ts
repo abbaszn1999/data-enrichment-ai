@@ -40,6 +40,29 @@ interface GeminiIntentClassificationResponse {
   classifications: GeminiKeywordClassificationItem[];
 }
 
+function indexGeminiClassifications(
+  items: GeminiKeywordClassificationItem[]
+): Map<string, GeminiKeywordClassificationItem> {
+  const map = new Map<string, GeminiKeywordClassificationItem>();
+  for (const item of items) {
+    if (!item?.id) continue;
+    map.set(item.id, item);
+    map.set(item.id.trim().toLowerCase(), item);
+  }
+  return map;
+}
+
+function lookupGeminiClassification(
+  map: Map<string, GeminiKeywordClassificationItem>,
+  kw: KeywordToClassify
+): GeminiKeywordClassificationItem | undefined {
+  return (
+    map.get(kw.id) ??
+    map.get(kw.id.trim().toLowerCase()) ??
+    map.get(kw.keyword.trim().toLowerCase())
+  );
+}
+
 function normalizeSheet(val: string): ClassifiedSheetType {
   const clean = val.toLowerCase().trim();
   if (clean.includes("category") || clean.includes("plp") || clean === "commercial" || clean === "collection") {
@@ -217,18 +240,13 @@ Output strictly valid JSON with this exact schema:
   ): Promise<ClassifiedKeywordItem[]> {
     const data = await classifyBatchWithGemini(batch);
 
-    const responseMap = new Map<string, GeminiKeywordClassificationItem>();
-    if (Array.isArray(data?.classifications)) {
-      for (const item of data.classifications) {
-        if (item?.id) {
-          responseMap.set(item.id, item);
-        }
-      }
-    }
+    const responseMap = indexGeminiClassifications(
+      Array.isArray(data?.classifications) ? data.classifications : []
+    );
 
     const results: ClassifiedKeywordItem[] = [];
     for (const kw of batch) {
-      const item = responseMap.get(kw.id);
+      const item = lookupGeminiClassification(responseMap, kw);
       if (item) {
         results.push({
           id: kw.id,

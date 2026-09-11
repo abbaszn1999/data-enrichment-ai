@@ -57,6 +57,7 @@ export function DeepWorkspace({
   collectionsPaid,
   onStartWorking,
   onPushToStore,
+  onRemoveDuplicates,
   pushingCollections = false,
   walletBalance = null,
   walletHref,
@@ -127,6 +128,7 @@ export function DeepWorkspace({
   collectionsPaid: boolean;
   onStartWorking: () => void;
   onPushToStore?: (selectedIds: string[]) => Promise<void> | void;
+  onRemoveDuplicates?: (ids: string[]) => void;
   pushingCollections?: boolean;
   walletBalance?: number | null;
   walletHref?: string;
@@ -183,7 +185,7 @@ export function DeepWorkspace({
       <div
         className={cn(
           "flex-1 min-h-0 p-4 sm:p-5",
-          tab === "collections"
+          tab === "collections" || tab === "extract"
             ? "flex flex-col overflow-hidden"
             : "overflow-auto"
         )}
@@ -191,7 +193,8 @@ export function DeepWorkspace({
         <div
           className={cn(
             readOnly && "pointer-events-none",
-            tab === "collections" && "flex min-h-0 flex-1 flex-col overflow-hidden"
+            (tab === "collections" || tab === "extract") &&
+              "flex min-h-0 flex-1 flex-col overflow-hidden"
           )}
         >
         {!isWorkspaceTab(tab) ? brief : null}
@@ -227,6 +230,7 @@ export function DeepWorkspace({
             paid={collectionsPaid}
             onStart={onStartWorking}
             onPushToStore={onPushToStore}
+            onRemoveDuplicates={onRemoveDuplicates}
             pushing={pushingCollections}
             walletBalance={walletBalance}
             walletHref={walletHref}

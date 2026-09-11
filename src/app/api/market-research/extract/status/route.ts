@@ -79,7 +79,8 @@ export async function GET(request: NextRequest) {
         "keywords"
       ).catch(() => null);
       sample = Array.isArray(stored) ? stored : undefined;
-      if (!sample?.length && Number(extract.rows_returned) > 0) {
+      const pulled = Number(extract.rows_returned) || 0;
+      if (pulled > 0 && (!sample?.length || sample.length < pulled)) {
         sample = await persistExtractKeywordSample(auth.admin, {
           workspaceId: parsed.data.workspaceId,
           projectId: parsed.data.projectId,
@@ -88,7 +89,7 @@ export async function GET(request: NextRequest) {
             seed_id: String(run.seed_id ?? ""),
             seed_term: String(run.seed_term ?? ""),
           })),
-        }).catch(() => undefined);
+        }).catch(() => sample);
       }
     }
 

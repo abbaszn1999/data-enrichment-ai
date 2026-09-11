@@ -32,12 +32,20 @@ describe("jobHref", () => {
         sessionId: "extract-1",
       })
     ).toBe("/w/acme/market-research");
+    expect(
+      jobHref({
+        kind: "fa_extract",
+        workspaceSlug: "acme",
+        sessionId: "extract-1",
+      })
+    ).toBe("/w/acme/free-assessment");
   });
 
   it("labels tools for the inbox", () => {
     expect(jobKindLabel("catalog")).toBe("Catalog Intelligence");
     expect(jobKindLabel("gallery")).toBe("Products Gallery");
     expect(jobKindLabel("mr_extract")).toBe("Market Research");
+    expect(jobKindLabel("fa_extract")).toBe("Free Assessment");
   });
 });
 

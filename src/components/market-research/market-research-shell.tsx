@@ -34,6 +34,7 @@ import {
   pollExtractApi,
   extractStatusApi,
   probeSeedsApi,
+  dedupeCollectionsApi,
   pushCollectionsApi,
   runBuildInternalLinksLoop,
   runClassifyArchiveLoop,
@@ -56,8 +57,8 @@ import {
 } from "@/lib/market-research/cost";
 import { assignUuidProjectIds } from "@/lib/market-research/project-state";
 import {
-  applySampleWeights,
-  mergeKeywordSample,
+  appendKeywordRows,
+  applyKeywordClassifications,
   toExtractedKeyword,
 } from "@/lib/market-research/map-keywords";
 import type {
@@ -100,7 +101,6 @@ import {
   DEFAULT_MARKET,
   MAX_MARKET_RESEARCH_PROJECTS,
   PROBE_BEATS,
-  MOCK_NICHES,
   STAGE1_ANALYSIS_BEATS,
   STAGE1_ANALYSIS_MS,
   STAGE1_NICHE_READINGS,
@@ -137,8 +137,6 @@ import {
   STRATEGY_MS,
   USD_PER_COLLECTION,
   buildCollectionContent,
-  buildExtractedKeywords,
-  buildProposedCollections,
   EMPTY_ON_PAGE_INSTRUCTIONS,
   clampWorkspaceTab,
   briefStageFromFlow,
@@ -824,13 +822,13 @@ export function MarketResearchShell() {
     ? (clusterSelectionByProject[activeProject.id] ?? EMPTY_IDS)
     : EMPTY_IDS;
   const activeStructuredNiches = useMemo(() => {
-    if (!activeProject) return MOCK_NICHES;
+    if (!activeProject) return [];
     const projectNiches = nichesByProject[activeProject.id];
     const structured = structuredNichesByProject[activeProject.id];
 
     if (Array.isArray(projectNiches) && projectNiches.length > 0) {
       const structuredMap = new Map(
-        (Array.isArray(structured) ? structured : MOCK_NICHES).map((sn) => [
+        (Array.isArray(structured) ? structured : []).map((sn) => [
           sn.id,
           sn,
         ])
@@ -856,7 +854,7 @@ export function MarketResearchShell() {
       return structured;
     }
 
-    return MOCK_NICHES;
+    return [];
   }, [activeProject, nichesByProject, structuredNichesByProject]);
   const activeSeedRows = useMemo(
     () =>
@@ -893,36 +891,12 @@ export function MarketResearchShell() {
     const picked = new Set(seedSelection);
     return stage3Rows.filter((row) => picked.has(row.id));
   }, [stage3Rows, seedSelection]);
-  const extractedKeywords = useMemo(() => {
-    if (activeProject && keywordsByProject[activeProject.id]?.length) {
-      return keywordsByProject[activeProject.id];
-    }
-    if (activeProject && committedProjectIds.has(activeProject.id)) {
-      return buildExtractedKeywords(selectedSeedRows, activeProbes);
-    }
-    return [];
-  }, [
-    activeProject,
-    keywordsByProject,
-    committedProjectIds,
-    selectedSeedRows,
-    activeProbes,
-  ]);
-  const proposedCollections = useMemo(() => {
-    if (
-      activeProject &&
-      proposedCollectionsByProject[activeProject.id] &&
-      proposedCollectionsByProject[activeProject.id].length > 0
-    ) {
-      return proposedCollectionsByProject[activeProject.id];
-    }
-    return buildProposedCollections(selectedSeedRows, extractedKeywords);
-  }, [
-    activeProject,
-    proposedCollectionsByProject,
-    selectedSeedRows,
-    extractedKeywords,
-  ]);
+  const extractedKeywords = activeProject
+    ? (keywordsByProject[activeProject.id] ?? [])
+    : [];
+  const proposedCollections = activeProject
+    ? (proposedCollectionsByProject[activeProject.id] ?? [])
+    : [];
   const selectedCollections = useMemo(
     () =>
       proposedCollections.filter((row) => clusterSelection.includes(row.id)),
@@ -1557,7 +1531,7 @@ export function MarketResearchShell() {
       });
 
       const currentStructured =
-        structuredNichesByProject[projectId] ?? MOCK_NICHES;
+        structuredNichesByProject[projectId] ?? [];
       const selectedIdSet = new Set(collectionIds);
       const selectedScopeCollections: Array<{
         id: string;
@@ -1750,6 +1724,21 @@ export function MarketResearchShell() {
     setStage(s);
     if (!activeProjectId) return;
     setStageByProject((prev) => ({ ...prev, [activeProjectId]: s }));
+  };
+
+  const handleFlowTab = (next: FlowTab) => {
+    if (!activeProject) return;
+    if (isWorkspaceTab(next)) {
+      setReviewFlow(null);
+      setWorkspaceTabByProject((prev) => ({
+        ...prev,
+        [activeProject.id]: next,
+      }));
+      return;
+    }
+    setReviewFlow(next);
+    const briefStage = briefStageFromFlow(next);
+    if (briefStage) setViewStage(briefStage);
   };
 
   const handleNextFromStage1 = () => {
@@ -2030,7 +2019,6 @@ export function MarketResearchShell() {
       status: "running" as "running" | "succeeded" | "failed" | "aborted",
       pulled: 0,
     }));
-    const pulledBySeed: Record<string, number> = {};
     let sample: ExtractedKeyword[] = input.initialSample ?? [];
 
     const tick = async () => {
@@ -2060,12 +2048,11 @@ export function MarketResearchShell() {
             const mapped = row.rows.map((keyword, index) =>
               toExtractedKeyword(keyword, row.seedId, local.pulled + index)
             );
-            sample = mergeKeywordSample(sample, mapped);
+            sample = appendKeywordRows(sample, mapped);
             local.pulled = Math.max(local.pulled + row.rows.length, returned);
           } else {
             local.pulled = Math.max(local.pulled, returned);
           }
-          pulledBySeed[row.seedId] = local.pulled;
         }
 
         const caps = pollState.reduce((sum, seed) => sum + seed.cap, 0);
@@ -2082,7 +2069,7 @@ export function MarketResearchShell() {
         if (sample.length > 0) {
           setKeywordsByProject((prev) => ({
             ...prev,
-            [input.projectId]: applySampleWeights(sample, pulledBySeed),
+            [input.projectId]: sample,
           }));
         }
 
@@ -2105,7 +2092,7 @@ export function MarketResearchShell() {
           if (finalSample.length > 0) {
             setKeywordsByProject((prev) => ({
               ...prev,
-              [input.projectId]: applySampleWeights(finalSample, pulledBySeed),
+              [input.projectId]: finalSample,
             }));
           }
           setExtractingProjectId((id) =>
@@ -2327,9 +2314,10 @@ export function MarketResearchShell() {
           status.extract.status === "running" ||
           status.extract.billingStatus === "held";
         if (!active) {
+          resumedExtract.current.add(projectId);
           if (
             status.sample?.length &&
-            !(keywordsByProject[projectId]?.length)
+            status.sample.length > (keywordsByProject[projectId]?.length ?? 0)
           ) {
             setKeywordsByProject((prev) => ({
               ...prev,
@@ -2446,6 +2434,15 @@ export function MarketResearchShell() {
         (state) => {
           if (analyzeGen.current !== gen) return;
           setAnalyzeProgress({ done: state.nextOffset, total: state.total });
+          if (state.classifications?.length) {
+            setKeywordsByProject((prev) => ({
+              ...prev,
+              [projectId]: applyKeywordClassifications(
+                prev[projectId] ?? [],
+                state.classifications ?? []
+              ),
+            }));
+          }
         },
         () => analyzeGen.current !== gen
       );
@@ -2578,21 +2575,30 @@ export function MarketResearchShell() {
         ...prev,
         [projectId]: result.collections.map((c) => c.id),
       }));
+
+      // Stage 5 Phase 3 — one extra pass, still inside the same loading
+      // state, that flags any of the collections just proposed above whose
+      // shopper-intent coverage duplicates something already live in the
+      // merchant's store. Never blocks or fails the tab: a failure here
+      // just leaves every collection tagged "new", same as before this
+      // step existed.
+      try {
+        const dedupeResult = await dedupeCollectionsApi(workspaceId, projectId);
+        if (clusterGen.current !== gen) return;
+        if (dedupeResult.collections.length > 0) {
+          setProposedCollectionsByProject((prev) => ({
+            ...prev,
+            [projectId]: dedupeResult.collections,
+          }));
+        }
+      } catch (dedupeErr) {
+        console.error("[handleNextCollections] Duplicate-collection check failed:", dedupeErr);
+      }
     } catch (err) {
       if (clusterGen.current !== gen) return;
       console.error("[handleNextCollections] Error:", err);
-      const fallback = buildProposedCollections(selectedSeedRows, targetKeywords);
-      setProposedCollectionsByProject((prev) => ({
-        ...prev,
-        [projectId]: fallback,
-      }));
-      setClusterSelectionByProject((prev) => ({
-        ...prev,
-        [projectId]: fallback.map((c) => c.id),
-      }));
-      toast.error("Clustering fallback used", {
-        description:
-          err instanceof Error ? err.message : "Clustered using heuristic fallback",
+      toast.error("Clustering failed", {
+        description: err instanceof Error ? err.message : "Please try again.",
       });
     } finally {
       if (clusterGen.current === gen) {
@@ -3370,7 +3376,7 @@ export function MarketResearchShell() {
     if (activeProject) {
       const projectId = activeProject.id;
       setStructuredNichesByProject((prev) => {
-        const current = prev[projectId] ?? MOCK_NICHES;
+        const current = prev[projectId] ?? [];
         const source = current.find((sn) => sn.id === sourceId);
         const target = current.find((sn) => sn.id === targetId);
         if (!source || !target) {
@@ -3809,17 +3815,7 @@ export function MarketResearchShell() {
                       <WorkspaceStepper
                         current={reviewFlow ?? "niches"}
                         opened={openedWorkspace}
-                        onChange={(next) => {
-                          if (isWorkspaceTab(next)) {
-                            setReviewFlow(null);
-                            setWorkspaceTabByProject((prev) => ({
-                              ...prev,
-                              [activeProject.id]: next,
-                            }));
-                            return;
-                          }
-                          setReviewFlow(next);
-                        }}
+                        onChange={handleFlowTab}
                       />
                     </div>
                   ) : (
@@ -4052,17 +4048,7 @@ export function MarketResearchShell() {
                     storeLabel={activeProject.storeLabel}
                     tab={workspaceTab}
                     opened={openedWorkspace}
-                    onTab={(next) => {
-                      if (isWorkspaceTab(next)) {
-                        setReviewFlow(null);
-                        setWorkspaceTabByProject((prev) => ({
-                          ...prev,
-                          [activeProject.id]: next,
-                        }));
-                        return;
-                      }
-                      setReviewFlow(next);
-                    }}
+                    onTab={handleFlowTab}
                     seeds={selectedSeedRows}
                     probes={activeProbes}
                     keywords={extractedKeywords}
@@ -4104,6 +4090,22 @@ export function MarketResearchShell() {
                     collectionsPaid={collectionsPaid}
                     onStartWorking={handleStartWorking}
                     onPushToStore={handlePushToStore}
+                    onRemoveDuplicates={(ids) => {
+                      const idSet = new Set(ids);
+                      const projectId = activeProject.id;
+                      setProposedCollectionsByProject((prev) => ({
+                        ...prev,
+                        [projectId]: (prev[projectId] ?? []).filter(
+                          (c) => !idSet.has(c.id)
+                        ),
+                      }));
+                      setClusterSelectionByProject((prev) => ({
+                        ...prev,
+                        [projectId]: (prev[projectId] ?? []).filter(
+                          (id) => !idSet.has(id)
+                        ),
+                      }));
+                    }}
                     pushingCollections={Boolean(
                       pushingCollectionsByProject[activeProject.id]
                     )}

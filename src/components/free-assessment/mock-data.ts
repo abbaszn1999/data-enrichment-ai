@@ -557,14 +557,12 @@ export function getSeedRowsForCollections(
     if (matched.length > 0) return matched;
   }
 
-  const pool = niches && niches.length > 0 ? niches : MOCK_NICHES;
-  const curated = MOCK_SEED_ROWS.filter((r) => selected.has(r.collectionId));
-  const covered = new Set(curated.map((r) => r.collectionId));
+  const pool = niches ?? [];
 
   const synthesized: MockSeedRow[] = [];
   for (const niche of pool) {
     for (const collection of niche.collections) {
-      if (!selected.has(collection.id) || covered.has(collection.id)) continue;
+      if (!selected.has(collection.id)) continue;
       synthesized.push(
         {
           id: `gen-${collection.id}-primary`,
@@ -592,7 +590,7 @@ export function getSeedRowsForCollections(
     }
   }
 
-  return [...curated, ...synthesized];
+  return synthesized;
 }
 
 export type SeedSeedGroup = {
@@ -681,7 +679,7 @@ export function countProductsForCollections(
   niches?: MockNiche[]
 ): number {
   const selected = new Set(collectionIds);
-  const pool = niches && niches.length > 0 ? niches : MOCK_NICHES;
+  const pool = niches ?? [];
   let total = 0;
   for (const niche of pool) {
     const picked = niche.collections.filter((c) => selected.has(c.id));
@@ -702,7 +700,7 @@ export function sumProductsForCollections(
   niches?: MockNiche[]
 ): number {
   const selected = new Set(collectionIds);
-  const pool = niches && niches.length > 0 ? niches : MOCK_NICHES;
+  const pool = niches ?? [];
   let total = 0;
   for (const niche of pool) {
     for (const collection of niche.collections) {
@@ -717,7 +715,7 @@ export function collectionNamesForIds(
   niches?: MockNiche[]
 ): string[] {
   const selected = new Set(collectionIds);
-  const pool = niches && niches.length > 0 ? niches : MOCK_NICHES;
+  const pool = niches ?? [];
   return pool.flatMap((niche) =>
     niche.collections.filter((c) => selected.has(c.id)).map((c) => c.name)
   );
@@ -968,7 +966,7 @@ export const STAGE_META: Record<
     shortLabel: "Extract",
     agentPrompt: "Extracted keywords classified into commercial categories, informational guides, and excluded SKUs.",
     agentDetail:
-      "Phrase match extraction with instant hold settlement and Gemini 3.7 Flash search intent classification.",
+      "Phrase match extraction with instant hold settlement and Gemini 3.7 Flash search intent classification. After Analyze, open the proposal for 20 / 40 / 60% capture scenarios — collection matching needs a live store in Growth Engine.",
   },
   5: {
     label: "Collection clustering",

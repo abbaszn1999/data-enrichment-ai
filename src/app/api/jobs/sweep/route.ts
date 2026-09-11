@@ -5,7 +5,8 @@ import { dispatchJob } from "@/lib/jobs/dispatch";
 import { notifyIfMissing } from "@/lib/jobs/notify";
 import { claimStaleJobRuns, mapJobRun } from "@/lib/jobs/repo";
 import { isTerminalJobStatus } from "@/lib/jobs/types";
-import { expireStaleHeldExtracts } from "@/lib/market-research/extract-advance";
+import { expireStaleHeldExtracts as expireStaleMrHeldExtracts } from "@/lib/market-research/extract-advance";
+import { expireStaleHeldExtracts as expireStaleFaHeldExtracts } from "@/lib/free-assessment/extract-advance";
 import { expireElapsedTrials } from "@/lib/trial-server";
 
 import { cronSecretFromEnv, cronSecretMatches } from "@/lib/auth/cron-secret";
@@ -56,10 +57,20 @@ export async function POST(request: NextRequest) {
 
   let expiredExtracts = 0;
   try {
-    expiredExtracts = await expireStaleHeldExtracts(admin);
+    expiredExtracts = await expireStaleMrHeldExtracts(admin);
   } catch (error) {
     console.error(
-      "[jobs/sweep] expire held extracts failed",
+      "[jobs/sweep] expire held mr extracts failed",
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  let expiredFaExtracts = 0;
+  try {
+    expiredFaExtracts = await expireStaleFaHeldExtracts(admin);
+  } catch (error) {
+    console.error(
+      "[jobs/sweep] expire held fa extracts failed",
       error instanceof Error ? error.message : error
     );
   }
@@ -80,6 +91,7 @@ export async function POST(request: NextRequest) {
     ids: dispatched,
     notified,
     expiredExtracts,
+    expiredFaExtracts,
     expiredTrials,
   });
 }
