@@ -1,25 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
-import { getWorkspaceContext, isContextSubscriptionActive } from "@/lib/workspace-context";
+import { getWorkspaceContext, isContextSubscriptionActive, clearWorkspaceContextCache } from "@/lib/workspace-context";
+import { getActiveSubscriptionPlans, invalidateSubscriptionCache } from "@/lib/stripe";
+import { ensureOwnerTrial } from "@/lib/trial-server";
 
 // Unified bootstrap endpoint for the dashboard layout. Returns workspace +
 // role + credits + subscription + integration in ONE request, collapsing the
 // previous 4-level client fetch waterfall into a single round-trip. Server-side
 // this is cheap: getWorkspaceContext resolves everything via a single cached RPC.
-
-let _plansCache: { data: unknown[] | null; ts: number } = { data: null, ts: 0 };
-const REF_CACHE_TTL = 10 * 60 * 1000;
-
-async function getCachedPlans() {
-  if (_plansCache.data && Date.now() - _plansCache.ts < REF_CACHE_TTL) return _plansCache.data;
-  const admin = createAdminClient();
-  const { data } = await admin
-    .from("subscription_plans").select("*").eq("is_active", true)
-    .order("sort_order", { ascending: true });
-  _plansCache = { data: data || [], ts: Date.now() };
-  return _plansCache.data;
-}
 
 export async function GET(request: NextRequest) {
   try {
@@ -43,9 +32,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
     }
 
+    const isOwner = user.id === workspace.owner_id;
+    if (isOwner) {
+      try {
+        await ensureOwnerTrial(user.id);
+      } catch (err) {
+        console.error("[trial] ensureOwnerTrial failed", err);
+      }
+      clearWorkspaceContextCache(workspace.id);
+      invalidateSubscriptionCache(workspace.id);
+    }
+
     const [ctx, plans] = await Promise.all([
-      getWorkspaceContext({ workspaceId: workspace.id, userId: user.id }),
-      getCachedPlans(),
+      getWorkspaceContext({
+        workspaceId: workspace.id,
+        userId: user.id,
+        forceRefresh: isOwner,
+      }),
+      getActiveSubscriptionPlans(),
     ]);
 
     if (!ctx.membershipRole) {
@@ -73,6 +77,7 @@ export async function GET(request: NextRequest) {
           billingCycle: sub.billing_cycle,
           cancelAtPeriodEnd: sub.cancel_at_period_end,
           currentPeriodEnd: sub.current_period_end,
+          trialEnd: sub.trial_end ?? null,
           stripeCustomerId: sub.stripe_customer_id,
           stripeSubscriptionId: sub.stripe_subscription_id,
         } : null,

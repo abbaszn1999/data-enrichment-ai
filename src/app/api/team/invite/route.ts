@@ -50,7 +50,10 @@ export async function POST(request: NextRequest) {
     const adminClient = createAdminClient();
 
     const ownerSub = await getOwnerSubscription(workspaceId);
-    const hasActiveSubscription = !!ownerSub?.subscription && isSubscriptionActive(ownerSub.subscription.status);
+    const hasActiveSubscription = !!ownerSub?.subscription && isSubscriptionActive(
+      ownerSub.subscription.status,
+      ownerSub.subscription.trial_end
+    );
 
     if (!hasActiveSubscription) {
       return NextResponse.json(

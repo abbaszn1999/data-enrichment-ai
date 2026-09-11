@@ -54,7 +54,10 @@ export function SubscriptionGate({ subscription, isActive, isLoading, role, chil
   // Subscription exists but not active (expired/cancelled past grace)
   if (!isActive) {
     const isCancelled = subscription.status === "cancelled";
-    const isExpired = subscription.status === "expired";
+    const trialEnded =
+      Boolean(subscription.trialEnd) &&
+      !subscription.stripeSubscriptionId &&
+      (subscription.status === "expired" || subscription.status === "trialing");
 
     return (
       <div className="h-full flex items-center justify-center p-8">
@@ -64,13 +67,13 @@ export function SubscriptionGate({ subscription, isActive, isLoading, role, chil
           </div>
           <div className="space-y-2">
             <h2 className="text-xl font-bold">
-              {isCancelled ? "Subscription Cancelled" : isExpired ? "Subscription Expired" : "Subscription Inactive"}
+              {isCancelled ? "Subscription Cancelled" : trialEnded ? "Trial ended" : "Subscription Inactive"}
             </h2>
             <p className="text-sm text-muted-foreground leading-relaxed">
               {isCancelled
                 ? "Your subscription has been cancelled. Resubscribe to regain access to all features."
-                : isExpired
-                ? "Your subscription has expired. Please renew to continue using the platform."
+                : trialEnded
+                ? "Your 14-day free trial has ended. Subscribe to keep using Catalog Intelligence, Store Assistant, and the rest of the platform. Your projects are saved."
                 : "Your subscription is no longer active. Please update your billing to continue."}
             </p>
           </div>

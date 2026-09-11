@@ -66,6 +66,7 @@ type SubscriptionRow = {
   billing_cycle: string;
   status: string;
   current_period_end: string | null;
+  trial_end: string | null;
   cancel_at_period_end: boolean | null;
   credits_used: number | null;
   bonus_credits: number | null;
@@ -170,6 +171,7 @@ function mapSubscription(row: SubscriptionRow, nameById: Map<string, string>, em
     creditsUsed,
     bonusCredits,
     monthlyAiCredits: monthlyCredits,
+    trialEnd: row.trial_end,
   });
   return {
     id: row.id,
@@ -188,6 +190,7 @@ function mapSubscription(row: SubscriptionRow, nameById: Map<string, string>, em
     periodCredits: balance.periodCredits,
     remaining: balance.remaining,
     mrr: subscriptionMrr(status, billingCycle, Number(plan.price_monthly ?? 0), Number(plan.price_yearly ?? 0)),
+    legacyPlan: plan.name === "starter",
   };
 }
 
@@ -271,7 +274,7 @@ async function loadSubscriptionsRaw() {
     admin
       .from("user_subscriptions")
       .select(
-        "id, user_id, billing_cycle, status, current_period_end, cancel_at_period_end, credits_used, bonus_credits, created_at, subscription_plans(name, display_name, monthly_ai_credits, price_monthly, price_yearly)"
+        "id, user_id, billing_cycle, status, current_period_end, trial_end, cancel_at_period_end, credits_used, bonus_credits, created_at, subscription_plans(name, display_name, monthly_ai_credits, price_monthly, price_yearly)"
       )
       .order("created_at", { ascending: false })
       .range(from, to)

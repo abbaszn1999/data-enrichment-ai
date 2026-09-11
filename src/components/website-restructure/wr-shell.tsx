@@ -76,7 +76,7 @@ export function WebsiteRestructureShell() {
   const workspaceId = workspace?.id ?? "";
 
   const [projects, setProjects] = useState<WrProjectRowWithUrls[]>([]);
-  const [projectLimit, setProjectLimit] = useState(WR_DEFAULT_PROJECT_LIMIT);
+  const [projectLimit, setProjectLimit] = useState<number | null>(WR_DEFAULT_PROJECT_LIMIT);
   const [projectsCreatedTotal, setProjectsCreatedTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [activeProjectId, setActiveProjectId] = useState("");
@@ -228,7 +228,7 @@ export function WebsiteRestructureShell() {
     [workspaceId, updateProjectLocal]
   );
 
-  const atProjectCap = projectsCreatedTotal >= projectLimit;
+  const atProjectCap = projectLimit != null && projectsCreatedTotal >= projectLimit;
 
   const handleNewProject = () => {
     if (!canEdit) return;

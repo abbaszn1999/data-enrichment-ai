@@ -216,5 +216,8 @@ export async function getWorkspaceContext(params: {
 }
 
 export function isContextSubscriptionActive(ctx: WorkspaceContext) {
-  return !!ctx.subscription && isSubscriptionActive(ctx.subscription.status);
+  return (
+    !!ctx.subscription &&
+    isSubscriptionActive(ctx.subscription.status, ctx.subscription.trial_end)
+  );
 }

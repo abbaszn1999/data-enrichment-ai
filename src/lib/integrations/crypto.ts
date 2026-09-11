@@ -11,6 +11,7 @@ const SECRET_KEYS = [
   "consumer_secret",
   "client_secret",
   "access_token",
+  "refresh_token",
 ] as const;
 
 export type EncryptedEnvelope = {

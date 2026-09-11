@@ -480,6 +480,7 @@ export interface Database {
           current_period_start: string;
           current_period_end: string | null;
           trial_end: string | null;
+          has_used_trial: boolean;
           cancelled_at: string | null;
           cancel_at_period_end: boolean;
           credits_used: number;
@@ -494,6 +495,7 @@ export interface Database {
           billing_cycle?: "monthly" | "yearly";
           stripe_customer_id?: string | null;
           stripe_subscription_id?: string | null;
+          has_used_trial?: boolean;
         };
         Update: {
           plan_id?: string;
@@ -504,6 +506,7 @@ export interface Database {
           current_period_start?: string;
           current_period_end?: string | null;
           trial_end?: string | null;
+          has_used_trial?: boolean;
           cancelled_at?: string | null;
           cancel_at_period_end?: boolean;
           credits_used?: number;

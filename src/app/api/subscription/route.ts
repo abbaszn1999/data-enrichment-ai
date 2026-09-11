@@ -1,18 +1,10 @@
 import { NextResponse } from "next/server";
-import { getOwnerSubscription, isSubscriptionActive, calculateCreditBalance } from "@/lib/stripe";
-import { createAdminClient } from "@/lib/supabase-admin";
-
-// Cache reference data (plans) — it almost never changes
-let _plansCache: { data: any[] | null; ts: number } = { data: null, ts: 0 };
-const REF_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
-
-async function getCachedPlans() {
-  if (_plansCache.data && Date.now() - _plansCache.ts < REF_CACHE_TTL) return _plansCache.data;
-  const admin = createAdminClient();
-  const { data } = await admin.from("subscription_plans").select("*").eq("is_active", true).order("sort_order", { ascending: true });
-  _plansCache = { data: data || [], ts: Date.now() };
-  return _plansCache.data;
-}
+import {
+  getOwnerSubscription,
+  getActiveSubscriptionPlans,
+  isSubscriptionActive,
+  calculateCreditBalance,
+} from "@/lib/stripe";
 
 export async function GET(request: Request) {
   try {
@@ -25,7 +17,7 @@ export async function GET(request: Request) {
 
     const [ownerSub, plans] = await Promise.all([
       getOwnerSubscription(workspaceId),
-      getCachedPlans(),
+      getActiveSubscriptionPlans(),
     ]);
 
     const sub = ownerSub?.subscription ?? null;
@@ -38,13 +30,14 @@ export async function GET(request: Request) {
         billingCycle: sub.billing_cycle,
         cancelAtPeriodEnd: sub.cancel_at_period_end,
         currentPeriodEnd: sub.current_period_end,
+        trialEnd: sub.trial_end ?? null,
         stripeCustomerId: sub.stripe_customer_id,
         stripeSubscriptionId: sub.stripe_subscription_id,
       } : null,
       currentPlan: ownerSub?.plan || null,
       availablePlans: plans || [],
       credits: bal,
-      isActive: sub ? isSubscriptionActive(sub.status) : false,
+      isActive: sub ? isSubscriptionActive(sub.status, sub.trial_end) : false,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || "Internal server error" }, { status: 500 });

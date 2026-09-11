@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe, findPlanByStripePriceId, invalidateSubscriptionCache } from "@/lib/stripe";
+import { isSelfServePlanName } from "@/lib/billing/plans";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { creditWorkspaceWallet } from "@/lib/wallet/server";
 import { creditFaWallet } from "@/lib/free-assessment/wallet-server";
@@ -79,6 +80,16 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
     const planId = session.metadata?.planId;
     if (!planId) return;
 
+    const { data: purchasedPlan } = await admin
+      .from("subscription_plans")
+      .select("name")
+      .eq("id", planId)
+      .maybeSingle();
+    if (!isSelfServePlanName(purchasedPlan?.name)) {
+      console.error("[Stripe Webhook] Refusing to create a non-self-serve plan from checkout", purchasedPlan?.name);
+      return;
+    }
+
     const stripeSub = await stripe.subscriptions.retrieve(subId);
     const item = stripeSub.items.data[0];
     const cycle = item?.price?.recurring?.interval === "year" ? "yearly" : "monthly";
@@ -90,7 +101,8 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
       stripe_customer_id: customerId, stripe_subscription_id: subId,
       current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
       current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
-      cancel_at_period_end: false, credits_used: 0,
+      cancel_at_period_end: false, credits_used: 0, bonus_credits: 0,
+      trial_end: null, has_used_trial: true,
       credits_reset_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     }, { onConflict: "user_id" });
 
@@ -244,6 +256,7 @@ async function handleSubUpdated(sub: Stripe.Subscription, admin: any) {
     current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
     current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
     ...(shouldResetIncludedCredits ? { credits_used: 0 } : {}),
+    ...(normalizedStatus === "active" ? { trial_end: null, has_used_trial: true } : {}),
     updated_at: new Date().toISOString(),
   }).eq("stripe_subscription_id", sub.id);
 }

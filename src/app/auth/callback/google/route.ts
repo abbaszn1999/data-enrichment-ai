@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
 import { publicOriginFromRequest } from "@/lib/app-origin";
+import { applySignedInPresenceCookie } from "@/lib/auth/signed-in-presence";
 import { createClient } from "@/lib/supabase-server";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const origin = publicOriginFromRequest(request);
+  const originUrl = new URL(origin);
+  const presenceHost = {
+    hostname: originUrl.hostname,
+    secure: originUrl.protocol === "https:",
+  };
   const code = searchParams.get("code");
 
   let next = searchParams.get("next") ?? "/workspaces";
@@ -16,7 +22,10 @@ export async function GET(request: Request) {
     const supabase = await createClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      return NextResponse.redirect(`${origin}${next}`);
+      return applySignedInPresenceCookie(NextResponse.redirect(`${origin}${next}`), {
+        ...presenceHost,
+        signedIn: true,
+      });
     }
     console.error("[auth/callback/google] exchange failed:", error.message);
   } else {
@@ -31,5 +40,8 @@ export async function GET(request: Request) {
   const errorCode = searchParams.get("error_code") || searchParams.get("error");
   if (errorCode) params.set("error_code", errorCode);
   if (next !== "/workspaces") params.set("redirect", next);
-  return NextResponse.redirect(`${origin}/login?${params.toString()}`);
+  return applySignedInPresenceCookie(
+    NextResponse.redirect(`${origin}/login?${params.toString()}`),
+    { ...presenceHost, signedIn: false }
+  );
 }

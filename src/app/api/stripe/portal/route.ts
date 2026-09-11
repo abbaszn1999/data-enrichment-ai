@@ -21,12 +21,15 @@ export async function POST(request: NextRequest) {
     // Get user's stripe customer ID
     const { data: sub } = await admin
       .from("user_subscriptions")
-      .select("stripe_customer_id")
+      .select("stripe_customer_id, stripe_subscription_id")
       .eq("user_id", user.id)
       .single();
 
-    if (!sub?.stripe_customer_id) {
-      return NextResponse.json({ error: "No billing account found" }, { status: 404 });
+    if (!sub?.stripe_subscription_id || !sub?.stripe_customer_id) {
+      return NextResponse.json(
+        { error: "No paid billing account found. Subscribe to a plan first." },
+        { status: 404 }
+      );
     }
 
     const returnUrl = `${process.env.NEXT_PUBLIC_APP_URL}/w/${workspaceSlug}/subscription`;

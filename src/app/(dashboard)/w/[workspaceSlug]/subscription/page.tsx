@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useState } from "react";
+import { useParams } from "next/navigation";
 import { motion } from "motion/react";
 import {
+  Building2,
   Check,
   Zap,
   Rocket,
@@ -12,7 +13,6 @@ import {
   Coins,
   ArrowRight,
   Sparkles,
-  Users,
   Loader2,
   ExternalLink,
   Infinity as InfinityIcon,
@@ -20,6 +20,7 @@ import {
   Wallet,
   Minus,
   Plus,
+  AlertTriangle,
 } from "lucide-react";
 import { PageLoader } from "@/components/brand/page-loader";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,12 @@ import { Input } from "@/components/ui/input";
 import { useWorkspaceContext } from "../workspace-context";
 import { useSubscription } from "@/hooks/use-subscription";
 import { formatCredits } from "@/lib/format-credits";
+import { isTrialPlanName, trialDaysRemaining } from "@/lib/trial";
+import {
+  ENTERPRISE_CONTACT_URL,
+  isGrandfatheredPlanName,
+  type PublicCheckoutPlan,
+} from "@/lib/billing/plans";
 
 const CREDIT_TOPUP_USD_PER_CREDIT = 0.3;
 const CREDIT_TOPUP_MIN_CREDITS = 100;
@@ -37,6 +44,7 @@ const PLAN_META: Record<string, { icon: any; color: string; bgColor: string; bor
   starter: { icon: Zap, color: "text-blue-500", bgColor: "bg-blue-500/10", borderColor: "border-blue-500/20", activeBorder: "border-blue-500" },
   growth: { icon: Rocket, color: "text-[#6B358D] dark:text-[#F76D01]", bgColor: "bg-[#400095]/10 dark:bg-[#F76D01]/10", borderColor: "border-[#6B358D]/20 dark:border-[#F76D01]/20", activeBorder: "border-[#6B358D] dark:border-[#F76D01]" },
   pro: { icon: Crown, color: "text-amber-500", bgColor: "bg-amber-500/10", borderColor: "border-amber-500/20", activeBorder: "border-amber-500" },
+  enterprise: { icon: Building2, color: "text-slate-600 dark:text-slate-300", bgColor: "bg-slate-500/10", borderColor: "border-slate-500/25", activeBorder: "border-slate-500" },
 };
 
 export default function SubscriptionPage() {
@@ -60,13 +68,17 @@ export default function SubscriptionPage() {
     setTopupCredits(String(Math.max(0, topupCreditsNum + delta)));
   };
 
-  const handleSubscribe = async (planId: string) => {
-    setLoadingAction(planId);
+  const handleSubscribe = async (plan: PublicCheckoutPlan) => {
+    if (plan.checkout === "contact") {
+      window.open(ENTERPRISE_CONTACT_URL, "_blank", "noopener,noreferrer");
+      return;
+    }
+    setLoadingAction(plan.id);
     try {
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "subscription", planId, billingCycle: billing, workspaceSlug: slug }),
+        body: JSON.stringify({ type: "subscription", planId: plan.id, billingCycle: billing, workspaceSlug: slug }),
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
@@ -108,6 +120,8 @@ export default function SubscriptionPage() {
   }
 
   const currentPlanName = currentPlan?.name;
+  const isTrialing = isTrialPlanName(currentPlanName) && subscription?.status === "trialing" && isActive;
+  const trialDaysLeft = isTrialing ? trialDaysRemaining(subscription?.trialEnd) : 0;
 
   return (
     <div className="autommerce-dashboard flex-1 overflow-auto bg-background [font-family:var(--brand-font)]">
@@ -155,6 +169,7 @@ export default function SubscriptionPage() {
               <div className="text-xs text-muted-foreground">
                 {credits ? `${formatCredits(credits.total)} credits remaining` : "No credits"}
                 {credits?.bonus ? ` (incl. ${formatCredits(credits.bonus)} bonus)` : ""}
+                {isTrialing && ` · ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} left`}
                 {subscription.status === "past_due" && " · Payment failed"}
                 {subscription.cancelAtPeriodEnd && " · Cancels at period end"}
               </div>
@@ -170,6 +185,19 @@ export default function SubscriptionPage() {
                 Manage Billing
               </Button>
             )}
+          </div>
+        </div>
+      )}
+
+      {isGrandfatheredPlanName(currentPlanName) && isActive && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">Starter is no longer sold</p>
+            <p className="text-xs leading-relaxed text-amber-800/80 dark:text-amber-200/80">
+              Your Starter subscription stays active until sales migrates you. New checkout is Growth or Pro —
+              Enterprise is quote-only.
+            </p>
           </div>
         </div>
       )}
@@ -191,13 +219,36 @@ export default function SubscriptionPage() {
 
       {/* Plans Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        {availablePlans.map((plan: any) => {
-          const meta = PLAN_META[plan.name] || PLAN_META.starter;
+        {(availablePlans as PublicCheckoutPlan[]).map((plan) => {
+          const meta = PLAN_META[plan.name] || PLAN_META.growth;
           const Icon = meta.icon;
+          const isContact = plan.checkout === "contact";
           const price = billing === "monthly" ? plan.price_monthly : plan.price_yearly;
-          const isCurrentPlan = currentPlanName === plan.name && isActive;
+          const isCurrentPlan = currentPlanName === plan.name && isActive && !isTrialPlanName(currentPlanName);
           const isPopular = plan.name === "growth";
           const isLoading_ = loadingAction === plan.id;
+          const creditsLabel =
+            plan.monthly_ai_credits == null
+              ? "Custom credit pool"
+              : billing === "yearly"
+                ? `${(plan.monthly_ai_credits * 12).toLocaleString()} credits/year`
+                : `${plan.monthly_ai_credits.toLocaleString()} credits/mo`;
+          const includes = [
+            plan.monthly_ai_credits == null
+              ? "Credit pool sized to your catalog"
+              : billing === "yearly"
+                ? `${(plan.monthly_ai_credits * 12).toLocaleString()} AI credits / year`
+                : `${plan.monthly_ai_credits.toLocaleString()} AI credits / month`,
+            plan.max_workspaces ? `${plan.max_workspaces} workspaces` : "Custom workspaces",
+            plan.max_members_per_workspace
+              ? `Up to ${plan.max_members_per_workspace} users`
+              : "Custom users",
+            "Unlimited projects",
+            `${plan.support} support`,
+            `${plan.onboarding} onboarding`,
+            "Product Enrichment, Ranking Engine, Product Visualizer, Product Gallery, Image Classification, Store Assistant",
+            ...(plan.extras ?? []),
+          ];
 
           return (
             <motion.div
@@ -222,18 +273,25 @@ export default function SubscriptionPage() {
                 <div>
                   <div className="text-sm font-bold">{plan.display_name}</div>
                   <div className={`text-[10px] font-semibold ${meta.color}`}>
-                    {billing === "yearly"
-                      ? `${((plan.monthly_ai_credits ?? 0) * 12).toLocaleString()} credits/year`
-                      : `${(plan.monthly_ai_credits ?? 0).toLocaleString()} credits/mo`}
+                    {creditsLabel}
                   </div>
                 </div>
               </div>
 
               <div className="flex items-end gap-1">
-                <span className="text-3xl font-extrabold tracking-tight">${price}</span>
-                <span className="text-xs text-muted-foreground mb-1">/month</span>
+                {isContact || price == null ? (
+                  <>
+                    <span className="text-3xl font-extrabold tracking-tight">Custom</span>
+                    <span className="text-xs text-muted-foreground mb-1">Contact us</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-3xl font-extrabold tracking-tight">${price.toLocaleString()}</span>
+                    <span className="text-xs text-muted-foreground mb-1">/month</span>
+                  </>
+                )}
               </div>
-              {billing === "yearly" && (
+              {billing === "yearly" && !isContact && price != null && (
                 <p className="text-[10px] text-muted-foreground -mt-2">Billed as ${(price * 12).toLocaleString()}/year</p>
               )}
 
@@ -244,30 +302,23 @@ export default function SubscriptionPage() {
                 variant={isPopular ? "default" : "outline"}
                 disabled={isCurrentPlan || !!isLoading_}
                 className={`w-full gap-1.5 rounded-xl font-semibold ${isPopular ? "bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90" : `border-2 ${meta.borderColor}`}`}
-                onClick={() => handleSubscribe(plan.id)}
+                onClick={() => handleSubscribe(plan)}
               >
                 {isLoading_ ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : isCurrentPlan ? (
                   <><Check className="h-3.5 w-3.5" /> Current Plan</>
+                ) : isContact ? (
+                  <><ExternalLink className="h-3.5 w-3.5" /> Contact Us to get a quote</>
                 ) : (
-                  <><ArrowRight className="h-3.5 w-3.5" /> {subscription ? "Switch to" : "Subscribe to"} {plan.display_name}</>
+                  <><ArrowRight className="h-3.5 w-3.5" /> {subscription && !isTrialing ? "Switch to" : "Subscribe to"} {plan.display_name}</>
                 )}
               </Button>
 
               <div className="space-y-2 pt-1 border-t border-border/50">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pt-1">Includes</p>
-                {[
-                  billing === "yearly"
-                    ? `${((plan.monthly_ai_credits ?? 0) * 12).toLocaleString()} AI credits / year`
-                    : `${(plan.monthly_ai_credits ?? 0).toLocaleString()} AI credits / month`,
-                  plan.max_workspaces ? `Up to ${plan.max_workspaces} workspaces` : "Unlimited workspaces",
-                  plan.max_members_per_workspace ? `Up to ${plan.max_members_per_workspace} team members` : "Unlimited team members",
-                  "AI Enrichment (all columns)",
-                  "CSV / Excel export",
-                  "All export platforms",
-                ].map((f, i) => (
-                  <div key={i} className="flex items-center gap-2">
+                {includes.map((f, i) => (
+                  <div key={`${plan.id}-${i}`} className="flex items-center gap-2">
                     <div className={`h-4 w-4 rounded-full ${meta.bgColor} flex items-center justify-center shrink-0`}>
                       <Check className={`h-2.5 w-2.5 ${meta.color}`} />
                     </div>
@@ -281,7 +332,7 @@ export default function SubscriptionPage() {
       </div>
 
       {/* Extra Credits — buy any amount, priced at a flat $0.30/credit */}
-      {isActive && (
+      {isActive && !isTrialing && (
         <div className="relative overflow-hidden rounded-2xl border-2 border-[#F76D01]/20 bg-gradient-to-br from-[#F76D01]/[0.07] via-background to-[#400095]/[0.06] p-5 sm:p-7">
           <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-[#F76D01]/10 blur-3xl" />
           <div className="pointer-events-none absolute -bottom-20 -left-10 h-48 w-48 rounded-full bg-[#400095]/10 blur-3xl" />

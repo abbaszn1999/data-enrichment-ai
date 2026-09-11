@@ -7,6 +7,7 @@ import { claimStaleJobRuns, mapJobRun } from "@/lib/jobs/repo";
 import { isTerminalJobStatus } from "@/lib/jobs/types";
 import { expireStaleHeldExtracts as expireStaleMrHeldExtracts } from "@/lib/market-research/extract-advance";
 import { expireStaleHeldExtracts as expireStaleFaHeldExtracts } from "@/lib/free-assessment/extract-advance";
+import { expireElapsedTrials } from "@/lib/trial-server";
 
 import { cronSecretFromEnv, cronSecretMatches } from "@/lib/auth/cron-secret";
 
@@ -74,6 +75,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let expiredTrials = 0;
+  try {
+    expiredTrials = await expireElapsedTrials();
+  } catch (error) {
+    console.error(
+      "[jobs/sweep] expire elapsed trials failed",
+      error instanceof Error ? error.message : error
+    );
+  }
+
   return NextResponse.json({
     ok: true,
     dispatched: dispatched.length,
@@ -81,5 +92,6 @@ export async function POST(request: NextRequest) {
     notified,
     expiredExtracts,
     expiredFaExtracts,
+    expiredTrials,
   });
 }

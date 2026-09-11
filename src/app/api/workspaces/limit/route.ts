@@ -23,7 +23,10 @@ export async function GET() {
 
     const currentCount = count ?? 0;
     const userSub = await getUserSubscription(user.id);
-    const hasActiveSubscription = !!userSub && isSubscriptionActive(userSub.subscription.status);
+    const hasActiveSubscription = !!userSub && isSubscriptionActive(
+      userSub.subscription.status,
+      userSub.subscription.trial_end
+    );
     const maxWorkspaces = hasActiveSubscription ? userSub?.plan?.max_workspaces ?? 1 : 1;
     const canCreate = currentCount < maxWorkspaces;
 

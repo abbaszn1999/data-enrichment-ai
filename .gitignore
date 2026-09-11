@@ -58,3 +58,5 @@ promo-video/.env.local
 
 # agent skills install dir
 .agents/
+
+/low-hanging-fruits

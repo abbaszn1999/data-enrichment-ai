@@ -18,20 +18,26 @@ export const WR_MAX_EDIT_MESSAGES = 10;
 /** Images attached to a single edit message (logo, palette, screenshot, …). */
 export const WR_MAX_CHAT_ATTACHMENTS = 4;
 
-/** Lifetime project limit per subscription plan. This counts every project a
- *  workspace has ever created, not just currently-active ones, so deleting a
- *  project never frees up a new slot — see `wr_projects_created_total` on
- *  `workspaces` and the `wr_try_reserve_project_slot` RPC. */
-export const WR_PLAN_PROJECT_LIMITS: Record<string, number> = {
+/** Lifetime project limit per subscription plan. Paid OS plans are unlimited.
+ *  Starter stays capped for grandfathered subscribers. Null = unlimited. */
+export const WR_PLAN_PROJECT_LIMITS: Record<string, number | null> = {
+  trial: 2,
   starter: 2,
-  growth: 3,
-  pro: 5,
+  growth: null,
+  pro: null,
+  enterprise: null,
 };
 export const WR_DEFAULT_PROJECT_LIMIT = 2;
 
-export function getWrProjectLimit(planName: string | null | undefined): number {
+export function getWrProjectLimit(planName: string | null | undefined): number | null {
   if (!planName) return WR_DEFAULT_PROJECT_LIMIT;
-  return WR_PLAN_PROJECT_LIMITS[planName.toLowerCase()] ?? WR_DEFAULT_PROJECT_LIMIT;
+  const key = planName.toLowerCase();
+  if (key in WR_PLAN_PROJECT_LIMITS) return WR_PLAN_PROJECT_LIMITS[key];
+  return WR_DEFAULT_PROJECT_LIMIT;
+}
+
+export function isWrProjectUnlimited(limit: number | null | undefined): boolean {
+  return limit == null;
 }
 
 /** A workspace may create at most `limit` projects over its lifetime. */

@@ -35,6 +35,8 @@ import {
   LayoutTemplate,
   Wallet,
   Bot,
+  Apple,
+  BarChart3,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useTheme } from "next-themes";
@@ -46,6 +48,7 @@ import { useSubscription } from "@/hooks/use-subscription";
 import { signOut } from "@/lib/auth";
 import { formatCredits } from "@/lib/format-credits";
 import { formatMoney } from "@/lib/wallet/format";
+import { trialDaysRemaining } from "@/lib/trial";
 import { useWallet } from "@/hooks/use-wallet";
 import { useFaWallet } from "@/hooks/use-fa-wallet";
 import type { Workspace } from "@/lib/supabase";
@@ -84,11 +87,14 @@ export default function WorkspaceLayout({
     isFreeAssessmentPage ? workspace?.id ?? null : null
   );
   const walletBalance = (isFreeAssessmentPage ? faWallet : wallet)?.balance ?? null;
-  const { subscription, isActive, isLoading: subLoading } = useSubscription(workspace?.id ?? null);
+  const { subscription, isActive, isLoading: subLoading, plan: currentPlan } = useSubscription(workspace?.id ?? null);
+  const isTrialing = currentPlan?.name === "trial" && subscription?.status === "trialing" && isActive;
+  const trialDaysLeft = isTrialing ? trialDaysRemaining(subscription?.trialEnd) : 0;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
   const [growthEngineOpen, setGrowthEngineOpen] = useState(false);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -148,7 +154,9 @@ export default function WorkspaceLayout({
     pathname.startsWith(`${basePath}/subscription/`);
   const isTeamPage = pathname.includes("/team");
   const isSettingsPage = pathname.includes("/settings");
-  const requiresAdminAccess = isTeamPage || isSettingsPage;
+  const isAnalyticsPage =
+    pathname === `${basePath}/analytics` || pathname.startsWith(`${basePath}/analytics/`);
+  const requiresAdminAccess = isTeamPage || isSettingsPage || isAnalyticsPage;
   const canAccessAdminPages = role === "owner" || role === "admin";
 
   const mediaChildren = [
@@ -181,6 +189,13 @@ export default function WorkspaceLayout({
     { href: `${basePath}/wallet`, label: "Wallet", icon: Wallet },
   ];
 
+  const analyticsChildren = [
+    { href: `${basePath}/analytics/overview`, label: "Overview", icon: BarChart3 },
+    { href: `${basePath}/analytics/plp`, label: "PLP Pages", icon: FolderTree },
+    { href: `${basePath}/analytics/products`, label: "Products Pages", icon: Package },
+    { href: `${basePath}/analytics/low-hanging-fruits`, label: "Low Hanging Fruits", icon: Apple },
+  ];
+
   const assessmentGrowthChildren = [
     {
       href: `${basePath}/free-assessment`,
@@ -200,6 +215,10 @@ export default function WorkspaceLayout({
       (pathname === child.href || pathname.startsWith(child.href + "/"))
   );
 
+  const isAnalyticsActive = analyticsChildren.some(
+    (child) => pathname === child.href || pathname.startsWith(child.href + "/")
+  ) || pathname === `${basePath}/analytics` || pathname.startsWith(`${basePath}/analytics/`);
+
   useEffect(() => {
     if (isMediaActive) setMediaOpen(true);
   }, [isMediaActive]);
@@ -207,6 +226,10 @@ export default function WorkspaceLayout({
   useEffect(() => {
     if (isGrowthEngineActive) setGrowthEngineOpen(true);
   }, [isGrowthEngineActive]);
+
+  useEffect(() => {
+    if (isAnalyticsActive) setAnalyticsOpen(true);
+  }, [isAnalyticsActive]);
 
   const sidebarLinksBeforeMedia = [
     { href: `${basePath}`, label: "Dashboard", icon: LayoutDashboard },
@@ -511,7 +534,7 @@ export default function WorkspaceLayout({
               )}
 
               {/* Credits Badge */}
-              {!credits.isLoading && credits.total > 0 && (
+              {!credits.isLoading && (credits.total > 0 || isTrialing) && (
                 <Link
                   href={`${basePath}/usage`}
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
@@ -521,8 +544,16 @@ export default function WorkspaceLayout({
                   }`}
                 >
                   <Coins className="h-3.5 w-3.5" />
-                  <span title={`Monthly ${formatCredits(credits.total)} · bonus included in available`}>
-                    {formatCredits(credits.remaining)} available
+                  <span
+                    title={
+                      isTrialing
+                        ? `Free trial · ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} left · ${formatCredits(credits.remaining)} credits remaining`
+                        : `Monthly ${formatCredits(credits.total)} · bonus included in available`
+                    }
+                  >
+                    {isTrialing
+                      ? `${formatCredits(credits.remaining)} · ${trialDaysLeft}d trial`
+                      : `${formatCredits(credits.remaining)} available`}
                   </span>
                 </Link>
               )}
@@ -664,6 +695,20 @@ export default function WorkspaceLayout({
                 isActive: isGrowthEngineActive,
                 children: growthEngineChildren,
               })}
+
+              {permissions.canAdmin ? (
+                <>
+                  <SectionLabel>Analytics</SectionLabel>
+                  {renderNavGroup({
+                    label: "Analytics",
+                    icon: BarChart3,
+                    isOpen: analyticsOpen,
+                    setOpen: setAnalyticsOpen,
+                    isActive: isAnalyticsActive,
+                    children: analyticsChildren,
+                  })}
+                </>
+              ) : null}
 
               <SectionLabel>Tools</SectionLabel>
               {toolsLinksAfterGrowthEngine.map((link) => renderNavLink(link))}

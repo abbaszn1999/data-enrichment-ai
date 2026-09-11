@@ -1,4 +1,4 @@
-export type AdminPlanId = "free" | "starter" | "growth" | "pro";
+export type AdminPlanId = "free" | "starter" | "growth" | "pro" | "enterprise";
 
 export type AdminBillingCycle = "monthly" | "yearly";
 

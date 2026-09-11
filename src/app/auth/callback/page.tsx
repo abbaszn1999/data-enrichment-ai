@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
 import { PageLoader } from "@/components/brand/page-loader";
 import { fetchNeedsAccountSetup, inviteRedirectAfterAuth } from "@/lib/team/account-setup";
+import { writeSignedInPresenceCookieBrowser } from "@/lib/auth/signed-in-presence";
 
 const LOG = "[auth/callback]";
 
@@ -60,6 +61,7 @@ function AuthCallbackHandler() {
 
   async function finalizeRedirect(next: string, userEmail?: string | null) {
     console.log(`${LOG} finalizeRedirect: authenticated as`, userEmail, "next=", next);
+    writeSignedInPresenceCookieBrowser();
     const redirect = await getInviteSetupRedirect(next);
     if (redirect) {
       console.log(`${LOG} redirecting (invite setup logic) →`, redirect);

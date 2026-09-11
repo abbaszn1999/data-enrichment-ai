@@ -74,10 +74,13 @@ export default function AdminSubscriptionsPage() {
     const healthy = subscriptions.filter((row) => row.status === "active" || row.status === "trialing").length;
     const pastDue = subscriptions.filter((row) => row.status === "past_due").length;
     const canceling = subscriptions.filter((row) => row.cancelAtPeriodEnd).length;
+    const legacyStarter = subscriptions.filter(
+      (row) => row.legacyPlan && (row.status === "active" || row.status === "trialing")
+    ).length;
     const mrr = subscriptions
       .filter((row) => row.status === "active" || row.status === "trialing")
       .reduce((sum, row) => sum + row.mrr, 0);
-    return { healthy, pastDue, canceling, mrr };
+    return { healthy, pastDue, canceling, mrr, legacyStarter };
   }, [subscriptions]);
 
   const rows = paginate(sorted, page);
@@ -138,6 +141,15 @@ export default function AdminSubscriptionsPage() {
               icon: RefreshCcw,
               active: cancel === "yes",
               onClick: () => exclusiveFilter(cancel === "yes", clearFilters, () => setCancel("yes")),
+            },
+            {
+              label: "Legacy Starter",
+              value: String(stats.legacyStarter),
+              hint: stats.legacyStarter ? "Hidden from checkout — do not auto-cancel" : "None live",
+              tone: stats.legacyStarter ? "warn" : "ok",
+              icon: AlertTriangle,
+              active: plan === "starter",
+              onClick: () => exclusiveFilter(plan === "starter", clearFilters, () => setPlan("starter")),
             },
           ]}
         />
@@ -242,7 +254,7 @@ export default function AdminSubscriptionsPage() {
                 <PersonCell name={row.fullName} email={row.email} href={adminRoutes.user(row.userId)} />
               ),
             },
-            { header: "Plan", sortKey: "plan", cell: (row) => <PlanBadge name={row.planName} /> },
+            { header: "Plan", sortKey: "plan", cell: (row) => <PlanBadge name={row.planName} legacy={row.legacyPlan} /> },
             { header: "Status", sortKey: "status", cell: (row) => <SubscriptionStatusBadge status={row.status} /> },
             { header: "Cycle", sortKey: "cycle", cell: (row) => row.billingCycle },
             {

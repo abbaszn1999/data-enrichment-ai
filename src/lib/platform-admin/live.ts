@@ -189,7 +189,7 @@ export async function loadLiveWorkspaces(): Promise<LiveWorkspaceListRow[]> {
     admin.from("workspace_members").select("workspace_id"),
     admin.from("workspace_wallets").select("workspace_id, balance_usd"),
     admin.from("workspace_integrations").select("workspace_id, provider, status"),
-    admin.from("user_subscriptions").select("user_id, status, billing_cycle, credits_used, bonus_credits, subscription_plans(name, display_name, monthly_ai_credits)"),
+    admin.from("user_subscriptions").select("user_id, status, billing_cycle, credits_used, bonus_credits, trial_end, subscription_plans(name, display_name, monthly_ai_credits)"),
     loadWorkspaceUsageMap(),
   ]);
   if (profileError) throw new Error(profileError.message);
@@ -230,6 +230,7 @@ export async function loadLiveWorkspaces(): Promise<LiveWorkspaceListRow[]> {
         creditsUsed: Number(row.credits_used ?? 0),
         bonusCredits: Number(row.bonus_credits ?? 0),
         monthlyAiCredits: Number(plan?.monthly_ai_credits ?? 0),
+        trialEnd: (row as { trial_end?: string | null }).trial_end ?? null,
       });
       return [
         row.user_id as string,
@@ -283,7 +284,7 @@ export async function loadLiveUserDetail(id: string): Promise<LiveUserDetail | n
   if (memberError) throw new Error(memberError.message);
   const { data: sub, error: subError } = await admin
     .from("user_subscriptions")
-    .select("stripe_customer_id, stripe_subscription_id, credits_used, bonus_credits, billing_cycle, current_period_end, cancel_at_period_end, status, subscription_plans(monthly_ai_credits)")
+    .select("stripe_customer_id, stripe_subscription_id, credits_used, bonus_credits, billing_cycle, current_period_end, trial_end, cancel_at_period_end, status, subscription_plans(monthly_ai_credits)")
     .eq("user_id", id)
     .maybeSingle();
   if (subError) throw new Error(subError.message);
@@ -309,6 +310,7 @@ export async function loadLiveUserDetail(id: string): Promise<LiveUserDetail | n
         creditsUsed: Number(sub.credits_used ?? 0),
         bonusCredits: Number(sub.bonus_credits ?? 0),
         monthlyAiCredits: Number(plan?.monthly_ai_credits ?? 0),
+        trialEnd: (sub.trial_end as string | null) ?? null,
       })
     : null;
 
