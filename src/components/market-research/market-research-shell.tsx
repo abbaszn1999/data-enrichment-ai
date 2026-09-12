@@ -56,6 +56,7 @@ import {
   estimateProbeCostUsd,
 } from "@/lib/market-research/cost";
 import { assignUuidProjectIds } from "@/lib/market-research/project-state";
+import { clearSelectedContent } from "@/lib/market-research/collection-sheet";
 import {
   appendKeywordRows,
   applyKeywordClassifications,
@@ -143,10 +144,14 @@ import {
   isWorkspaceTab,
   maxTab,
   pulledCountForSeed,
+  filterKeywords,
+  DEFAULT_SHEET_FILTERS,
   type FlowTab,
   type GeneratedArticle,
+  type KeywordFilters,
   type OnPageInstructions,
   type SeedExtractProgress,
+  type SheetKeywordFilters,
   type StoreBlog,
   type StrategyArticle,
   type WorkspaceTab,
@@ -389,6 +394,9 @@ export function MarketResearchShell() {
   const [keywordsByProject, setKeywordsByProject] = useState<
     Record<string, ExtractedKeyword[]>
   >({});
+  const [sheetFiltersByProject, setSheetFiltersByProject] = useState<
+    Record<string, SheetKeywordFilters>
+  >({});
   const [extractIdByProject, setExtractIdByProject] = useState<
     Record<string, string>
   >({});
@@ -468,6 +476,7 @@ export function MarketResearchShell() {
   const stage2Gen = useRef(0);
   const stage3Gen = useRef(0);
   const pendingAutoAnalyzeId = useRef<string | null>(null);
+  const productsHydratedFor = useRef<Record<string, boolean>>({});
 
   const applySaved = useCallback((saved: MarketResearchPersisted) => {
     if (saved.projects.length === 0) {
@@ -490,7 +499,6 @@ export function MarketResearchShell() {
     setSeedSelectionByProject(saved.seedSelectionByProject ?? {});
     setNichesByProject(saved.nichesByProject ?? {});
     setStructuredNichesByProject(saved.structuredNichesByProject ?? {});
-    setProductsByProject(saved.productsByProject ?? {});
     setSeedRowsByProject(saved.seedRowsByProject ?? {});
     setMarketByProject(saved.marketByProject ?? {});
     setProbesByProject(saved.probesByProject ?? {});
@@ -513,6 +521,7 @@ export function MarketResearchShell() {
     setExtractChargeByProject(saved.extractChargeByProject ?? {});
     setExtractRowsByProject(saved.extractRowsByProject ?? {});
     setKeywordsByProject(saved.keywordsByProject ?? {});
+    setSheetFiltersByProject(saved.sheetFiltersByProject ?? {});
     setExtractIdByProject(saved.extractIdByProject ?? {});
     const opened = clampOpenedStage(saved.openedMaxByProject?.[last.id], 1);
     const preferred = clampOpenedStage(saved.stageByProject?.[last.id], 1);
@@ -641,6 +650,7 @@ export function MarketResearchShell() {
       extractChargeByProject,
       extractRowsByProject,
       keywordsByProject,
+      sheetFiltersByProject,
       extractIdByProject,
     }),
     [
@@ -677,6 +687,7 @@ export function MarketResearchShell() {
       extractChargeByProject,
       extractRowsByProject,
       keywordsByProject,
+      sheetFiltersByProject,
       extractIdByProject,
     ]
   );
@@ -894,9 +905,47 @@ export function MarketResearchShell() {
   const extractedKeywords = activeProject
     ? (keywordsByProject[activeProject.id] ?? [])
     : [];
+  const appliedSheetFilters = useMemo(
+    () =>
+      activeProject
+        ? (sheetFiltersByProject[activeProject.id] ?? DEFAULT_SHEET_FILTERS)
+        : DEFAULT_SHEET_FILTERS,
+    [activeProject, sheetFiltersByProject]
+  );
   const proposedCollections = activeProject
     ? (proposedCollectionsByProject[activeProject.id] ?? [])
     : [];
+
+  const hydrateProjectProducts = useCallback(
+    async (projectId: string, force = false) => {
+      if (!workspaceId) return;
+      if (!force && productsHydratedFor.current[projectId]) return;
+      productsHydratedFor.current[projectId] = true;
+      try {
+        const products = await loadProjectProductsApi(workspaceId, projectId);
+        setProductsByProject((prev) => ({ ...prev, [projectId]: products }));
+      } catch (err) {
+        productsHydratedFor.current[projectId] = false;
+        console.error("[hydrateProjectProducts] Failed:", err);
+      }
+    },
+    [workspaceId]
+  );
+
+  useEffect(() => {
+    if (!hydrated || !activeProject) return;
+    const projectId = activeProject.id;
+    const needsCatalog =
+      workspaceTab === "collections" || proposedCollections.length > 0;
+    if (!needsCatalog) return;
+    void hydrateProjectProducts(projectId);
+  }, [
+    hydrated,
+    activeProject,
+    workspaceTab,
+    proposedCollections.length,
+    hydrateProjectProducts,
+  ]);
   const selectedCollections = useMemo(
     () =>
       proposedCollections.filter((row) => clusterSelection.includes(row.id)),
@@ -2163,6 +2212,10 @@ export function MarketResearchShell() {
       return next;
     });
     setKeywordsByProject((prev) => ({ ...prev, [projectId]: [] }));
+    setSheetFiltersByProject((prev) => ({
+      ...prev,
+      [projectId]: DEFAULT_SHEET_FILTERS,
+    }));
     setExtractingProjectId(projectId);
     setExtractProgress(0);
 
@@ -2489,6 +2542,21 @@ export function MarketResearchShell() {
     }
   };
 
+  const handleApplySheetFilters = (
+    sheet: "category" | "informational",
+    filters: KeywordFilters
+  ) => {
+    if (!activeProject) return;
+    const projectId = activeProject.id;
+    setSheetFiltersByProject((prev) => ({
+      ...prev,
+      [projectId]: {
+        ...(prev[projectId] ?? DEFAULT_SHEET_FILTERS),
+        [sheet]: filters,
+      },
+    }));
+  };
+
   const handleNextCollections = async (
     filteredCategoryKeywords?: ExtractedKeyword[]
   ) => {
@@ -2498,11 +2566,15 @@ export function MarketResearchShell() {
       return;
     }
     const projectId = activeProject.id;
+    const categoryFilters =
+      sheetFiltersByProject[projectId]?.category ?? DEFAULT_SHEET_FILTERS.category;
     const targetKeywords =
       filteredCategoryKeywords && filteredCategoryKeywords.length > 0
         ? filteredCategoryKeywords
-        : (keywordsByProject[projectId] ?? []).filter(
-            (k) => k.sheet === "category"
+        : filterKeywords(
+            keywordsByProject[projectId] ?? [],
+            categoryFilters,
+            "category"
           );
 
     if (targetKeywords.length === 0) {
@@ -2540,19 +2612,16 @@ export function MarketResearchShell() {
             },
           }));
         },
-        () => termEmbedGen.current[projectId] !== termEmbedGenId
+        () => termEmbedGen.current[projectId] !== termEmbedGenId,
+        categoryFilters
       );
     } catch (embedErr) {
       console.error("[handleNextCollections] Term embedding pass failed:", embedErr);
     }
     if (clusterGen.current !== gen) return;
 
-    // Stage 5 now runs server-side as a cursor job over the FULL classified
-    // "category" archive (not just this browser's filtered/capped view) —
-    // thousands of surviving terms means thousands of candidate collections,
-    // far past one request or one route call. The client loops on `offset`
-    // until `done`, merging the server's running collection list into state
-    // as each page lands.
+    // Stage 5 runs over the classified category archive after the Tab 4
+    // Apply filters (volume / KD / query), not the unfiltered set.
     try {
       const result = await runClusterCollectionsLoop(
         workspaceId,
@@ -2565,7 +2634,8 @@ export function MarketResearchShell() {
           }));
           setClusterProgress({ processed: state.nextOffset, total: state.total });
         },
-        () => clusterGen.current !== gen
+        () => clusterGen.current !== gen,
+        categoryFilters
       );
       if (clusterGen.current !== gen) return;
 
@@ -2596,6 +2666,7 @@ export function MarketResearchShell() {
       } catch (dedupeErr) {
         console.error("[handleNextCollections] Duplicate-collection check failed:", dedupeErr);
       }
+      void hydrateProjectProducts(projectId, true);
     } catch (err) {
       if (clusterGen.current !== gen) return;
       console.error("[handleNextCollections] Error:", err);
@@ -2745,27 +2816,30 @@ export function MarketResearchShell() {
     handlePushToStore();
   };
 
-  const handleStartContent = async () => {
+  const handleStartContent = async (ids: string[]) => {
     if (!canEdit || !activeProject) return;
     if (!workspaceId) {
       toast.error("Workspace is still loading");
       return;
     }
-    const projectId = activeProject.id;
-    const gen = ++contentGen.current;
-    const selected = proposedCollections.filter((row) =>
-      clusterSelection.includes(row.id)
-    );
+    const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+    const selected = proposedCollections.filter((row) => uniqueIds.includes(row.id));
     if (selected.length === 0) {
       toast.error("No collections selected to generate copy");
       return;
     }
 
+    const projectId = activeProject.id;
+    const gen = ++contentGen.current;
+    const selectedIds = selected.map((c) => c.id);
+
     setGenerating(true);
-    setContentByIdByProject((prev) => ({ ...prev, [projectId]: {} }));
+    setContentByIdByProject((prev) => ({
+      ...prev,
+      [projectId]: clearSelectedContent(prev[projectId] ?? {}, selectedIds),
+    }));
     setContentGenProgress({ processed: 0, total: selected.length });
     const instructions = customInstructions;
-    const selectedIds = selected.map((c) => c.id);
 
     // A collection with no content by the time the loop ends — whether from a
     // network failure or the guard tripping — still needs something to show
@@ -2935,8 +3009,11 @@ export function MarketResearchShell() {
       return;
     }
 
-    const informational = extractedKeywords.filter(
-      (row) => row.sheet === "informational"
+    const informational = filterKeywords(
+      extractedKeywords,
+      sheetFiltersByProject[projectId]?.informational ??
+        DEFAULT_SHEET_FILTERS.informational,
+      "informational"
     );
     if (informational.length === 0) {
       toast.error("No informational keywords to plan articles from");
@@ -4068,6 +4145,8 @@ export function MarketResearchShell() {
                       productEmbedProgressByProject[activeProject.id] ?? null
                     }
                     analyzed={analyzed}
+                    appliedSheetFilters={appliedSheetFilters}
+                    onApplySheetFilters={handleApplySheetFilters}
                     onNextCollections={handleNextCollections}
                     onCancelExtract={handleCancelExtract}
                     keywordsCsvHref={
@@ -4077,6 +4156,8 @@ export function MarketResearchShell() {
                     }
                     collections={proposedCollections}
                     products={productsByProject[activeProject.id] ?? []}
+                    workspaceId={workspaceId}
+                    projectId={activeProject.id}
                     clustering={clustering}
                     clusterProgress={clusterProgress}
                     termEmbedProgress={

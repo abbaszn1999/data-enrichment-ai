@@ -9,12 +9,14 @@ import type {
 import type { Stage1ChatMessage } from "./agent-panel";
 import {
   normalizeOnPageInstructions,
+  normalizeSheetFilters,
   type CollectionContent,
   type ExtractedKeyword,
   type GeneratedArticle,
   type MarketResearchProduct,
   type OnPageInstructions,
   type ProposedCollection,
+  type SheetKeywordFilters,
   type StrategyArticle,
   type WorkspaceTab,
 } from "./workspace-data";
@@ -64,6 +66,8 @@ export type MarketResearchPersisted = {
   extractChargeByProject: Record<string, number>;
   extractRowsByProject: Record<string, number>;
   keywordsByProject: Record<string, ExtractedKeyword[]>;
+  /** Applied Extract-tab filters per sheet (category vs informational). */
+  sheetFiltersByProject: Record<string, SheetKeywordFilters>;
   /** Last keyword extract id per project, so cancel/resume survive a reload. */
   extractIdByProject: Record<string, string>;
   /** Stage 7 article plan rows. */
@@ -113,6 +117,7 @@ export function emptyMarketResearchState(): MarketResearchPersisted {
     extractChargeByProject: {},
     extractRowsByProject: {},
     keywordsByProject: {},
+    sheetFiltersByProject: {},
     extractIdByProject: {},
     strategyByProject: {},
     articlesByProject: {},
@@ -195,6 +200,7 @@ export function loadMarketResearchState(
         extractChargeByProject: {},
         extractRowsByProject: {},
         keywordsByProject: {},
+        sheetFiltersByProject: {},
         extractIdByProject: {},
         strategyByProject: {},
         articlesByProject: {},
@@ -261,6 +267,7 @@ export function loadMarketResearchState(
       extractChargeByProject: isNumberMap(parsed.extractChargeByProject),
       extractRowsByProject: isNumberMap(parsed.extractRowsByProject),
       keywordsByProject: isKeywordMap(parsed.keywordsByProject),
+      sheetFiltersByProject: isSheetFiltersMap(parsed.sheetFiltersByProject),
       extractIdByProject: isStringMap(parsed.extractIdByProject),
       strategyByProject: isArrayMap<StrategyArticle>(parsed.strategyByProject),
       articlesByProject: isObjectMap<GeneratedArticle>(parsed.articlesByProject),
@@ -320,6 +327,15 @@ function isStringMap(raw: unknown): Record<string, string> {
 
 function isKeywordMap(raw: unknown): Record<string, ExtractedKeyword[]> {
   return isArrayMap<ExtractedKeyword>(raw);
+}
+
+function isSheetFiltersMap(raw: unknown): Record<string, SheetKeywordFilters> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, SheetKeywordFilters> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    out[id] = normalizeSheetFilters(value);
+  }
+  return out;
 }
 
 function isArrayMap<T>(raw: unknown): Record<string, T[]> {

@@ -7,6 +7,10 @@ import {
   workspaceIdSchema,
 } from "@/lib/market-research/api-schema";
 import { loadProjectProducts } from "@/lib/market-research/storage-admin";
+import {
+  parseProductIdQuery,
+  selectProductsByIds,
+} from "@/lib/market-research/product-list";
 
 // Read-only display endpoint for panels that need real product records
 // (images, price, title) for already-matched product ids — e.g. the Tab 5
@@ -39,7 +43,9 @@ export async function GET(request: NextRequest) {
       parsed.data.workspaceId,
       parsed.data.projectId
     );
-    return NextResponse.json({ products }, { headers: auth.headers });
+    const ids = parseProductIdQuery(searchParams.get("ids"));
+    const selected = selectProductsByIds(products, ids);
+    return NextResponse.json({ products: selected }, { headers: auth.headers });
   } catch (err) {
     console.error("[api/market-research/products/list] Error:", err);
     const msg = err instanceof Error ? err.message : "Failed to load products";

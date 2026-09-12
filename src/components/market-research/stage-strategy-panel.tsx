@@ -1,9 +1,10 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   CalendarClock,
+  Check,
   Eye,
   Loader2,
   Sparkles,
@@ -20,6 +21,14 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { ArticleDrawer } from "./article-drawer";
+import { TableSelectHeader } from "@/components/table-select-header";
+import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
+import {
+  WORKSHEET_PAGE_SIZE,
+  pageSelectionState,
+  removeSelectedIds,
+  unionSelectedIds,
+} from "@/lib/market-research/collection-sheet";
 import {
   ARTICLE_GENERATION_CONCURRENCY,
   type GeneratedArticle,
@@ -93,6 +102,8 @@ export function StageStrategyPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(WORKSHEET_PAGE_SIZE);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -105,6 +116,17 @@ export function StageStrategyPanel({
       );
     });
   }, [articles, query, type]);
+
+  useEffect(() => {
+    setPageIndex(0);
+  }, [query, type, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize) || 1);
+  const safePageIndex = Math.min(pageIndex, pageCount - 1);
+  const paged = visible.slice(
+    safePageIndex * pageSize,
+    (safePageIndex + 1) * pageSize
+  );
 
   // Derived rather than pruned in an effect: a row that reached the store's
   // calendar simply stops counting as selected.
@@ -137,10 +159,25 @@ export function StageStrategyPanel({
     );
   };
 
-  const toggleAll = () => {
-    const selectable = visible.filter((row) => row.status !== "scheduled");
-    const allOn = selectable.every((row) => selectedSet.has(row.id));
-    setSelected(allOn ? [] : selectable.map((row) => row.id));
+  const selectableVisibleIds = visible
+    .filter((row) => row.status !== "scheduled")
+    .map((row) => row.id);
+  const selectablePageIds = paged
+    .filter((row) => row.status !== "scheduled")
+    .map((row) => row.id);
+  const { allSelected: pageAllSelected, someSelected: pageSomeSelected } =
+    pageSelectionState(selectablePageIds, selectedSet);
+
+  const selectThisPage = () =>
+    setSelected((prev) => unionSelectedIds(prev, selectablePageIds));
+  const selectAllMatching = () => setSelected(selectableVisibleIds);
+  const unselectAll = () => setSelected([]);
+  const togglePageSelection = () => {
+    if (pageAllSelected) {
+      setSelected((prev) => removeSelectedIds(prev, selectablePageIds));
+    } else {
+      selectThisPage();
+    }
   };
 
   if (!ready && !loading) {
@@ -254,19 +291,22 @@ export function StageStrategyPanel({
         aria-label="Filter articles"
       />
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/70">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70">
+        <div className="min-h-0 flex-1 overflow-auto">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-9">
-                <button
-                  type="button"
-                  onClick={toggleAll}
-                  className="text-[10px] text-muted-foreground hover:text-foreground"
-                  aria-label="Select all articles"
-                >
-                  All
-                </button>
+              <TableHead className="w-14 px-2">
+                <TableSelectHeader
+                  allSelected={pageAllSelected}
+                  someSelected={pageSomeSelected}
+                  pageCount={selectablePageIds.length}
+                  totalCount={selectableVisibleIds.length}
+                  onTogglePage={togglePageSelection}
+                  onSelectPage={selectThisPage}
+                  onSelectAll={selectAllMatching}
+                  onClear={unselectAll}
+                />
               </TableHead>
               <TableHead className="text-xs">Title</TableHead>
               <TableHead className="text-xs">Informational</TableHead>
@@ -289,7 +329,7 @@ export function StageStrategyPanel({
                 </TableCell>
               </TableRow>
             ) : (
-              visible.map((row) => {
+              paged.map((row) => {
                 const on = selectedSet.has(row.id);
                 const expanded = expandedId === row.id;
                 const locked = row.status === "scheduled";
@@ -315,7 +355,7 @@ export function StageStrategyPanel({
                                 : "border-border"
                           )}
                         >
-                          {on && !locked ? "✓" : ""}
+                          {on && !locked ? <Check className="h-3 w-3 stroke-[3]" /> : null}
                         </span>
                       </TableCell>
                       <TableCell className="text-sm font-medium">
@@ -461,6 +501,20 @@ export function StageStrategyPanel({
             )}
           </TableBody>
         </Table>
+        </div>
+        <WorksheetPaginationBar
+          pageIndex={safePageIndex}
+          pageSize={pageSize}
+          totalRows={visible.length}
+          readyCount={0}
+          colCount={9}
+          itemLabel="articles"
+          onPageChange={setPageIndex}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPageIndex(0);
+          }}
+        />
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-2xl border border-border/70 bg-muted/30 px-4 py-3">

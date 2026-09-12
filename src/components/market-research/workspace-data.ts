@@ -127,6 +127,8 @@ export type ProposedCollection = {
   keywordCount: number;
   status: "new" | "existing" | "merge" | "duplicate";
   existingName?: string;
+  /** Live store PLPs the duplicate agent named as the same shopper intent. */
+  duplicateMatches?: Array<{ id: string; name: string }>;
   matchedProductIds?: string[];
   productMatches?: CollectionProductMatch[];
   candidateMatches?: CollectionProductMatch[];
@@ -288,6 +290,66 @@ export const DEFAULT_FILTERS: KeywordFilters = {
   query: "",
 };
 
+export type SheetKeywordFilters = {
+  category: KeywordFilters;
+  informational: KeywordFilters;
+};
+
+export const DEFAULT_SHEET_FILTERS: SheetKeywordFilters = {
+  category: DEFAULT_FILTERS,
+  informational: DEFAULT_FILTERS,
+};
+
+export function normalizeKeywordFilters(raw: unknown): KeywordFilters {
+  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const minVolume = Number(value.minVolume);
+  const maxKd = Number(value.maxKd);
+  return {
+    minVolume:
+      Number.isFinite(minVolume) && minVolume > 0 ? Math.floor(minVolume) : 0,
+    maxKd: Number.isFinite(maxKd)
+      ? Math.min(100, Math.max(0, Math.floor(maxKd)))
+      : 100,
+    questionsOnly: value.questionsOnly === true,
+    query: typeof value.query === "string" ? value.query : "",
+  };
+}
+
+export function normalizeSheetFilters(raw: unknown): SheetKeywordFilters {
+  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    category: normalizeKeywordFilters(value.category),
+    informational: normalizeKeywordFilters(value.informational),
+  };
+}
+
+export function filtersEqual(a: KeywordFilters, b: KeywordFilters): boolean {
+  return (
+    a.minVolume === b.minVolume &&
+    a.maxKd === b.maxKd &&
+    a.questionsOnly === b.questionsOnly &&
+    a.query === b.query
+  );
+}
+
+export function keywordPassesFilters(
+  row: Pick<
+    ExtractedKeyword,
+    "keyword" | "seed" | "volume" | "difficulty" | "isQuestion"
+  >,
+  filters: KeywordFilters
+): boolean {
+  if (row.volume < filters.minVolume) return false;
+  if (row.difficulty > filters.maxKd) return false;
+  if (filters.questionsOnly && !row.isQuestion) return false;
+  const q = filters.query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    row.keyword.toLowerCase().includes(q) ||
+    row.seed.toLowerCase().includes(q)
+  );
+}
+
 function hash(value: string): number {
   let h = 0;
   for (let i = 0; i < value.length; i += 1) {
@@ -398,17 +460,9 @@ export function filterKeywords(
   filters: KeywordFilters,
   sheet?: KeywordSheet
 ): ExtractedKeyword[] {
-  const q = filters.query.trim().toLowerCase();
   return rows.filter((row) => {
     if (sheet && row.sheet !== sheet) return false;
-    if (row.volume < filters.minVolume) return false;
-    if (row.difficulty > filters.maxKd) return false;
-    if (filters.questionsOnly && !row.isQuestion) return false;
-    if (!q) return true;
-    return (
-      row.keyword.toLowerCase().includes(q) ||
-      row.seed.toLowerCase().includes(q)
-    );
+    return keywordPassesFilters(row, filters);
   });
 }
 

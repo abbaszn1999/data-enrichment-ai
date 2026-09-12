@@ -22,11 +22,11 @@ import { formatUsd } from "./mock-data";
 import { USD_PER_COLLECTION, type ProposedCollection } from "./workspace-data";
 import { cn } from "@/lib/utils";
 
-/** Conservative share of monthly search volume modeled as organic sessions. */
-export const TRAFFIC_HORIZONS = [
-  { months: 3, capture: 0.1, label: "3 months", note: "Index & early ranks" },
-  { months: 6, capture: 0.2, label: "6 months", note: "Compounding ranks" },
-  { months: 12, capture: 0.35, label: "12 months", note: "Mature capture" },
+/** Share of monthly search volume modeled as organic sessions. */
+export const CAPTURE_SCENARIOS = [
+  { capture: 0.03, label: "3%", note: "Conservative capture" },
+  { capture: 0.09, label: "9%", note: "Growing capture" },
+  { capture: 0.15, label: "15%", note: "Strong capture" },
 ] as const;
 
 const DEFAULT_AOV = 80;
@@ -76,6 +76,33 @@ export function projectHorizon(params: {
   return { sessions, orders, revenue };
 }
 
+export function proposalRoi(monthlySales: number, publishCost: number) {
+  if (!(publishCost > 0) || !Number.isFinite(monthlySales)) return null;
+  return {
+    multiple: monthlySales / publishCost,
+    pct: ((monthlySales - publishCost) / publishCost) * 100,
+  };
+}
+
+export function formatRoiMultiple(value: number) {
+  if (value >= 10) return value.toFixed(0);
+  if (value >= 1) return value.toFixed(1);
+  return value.toFixed(2);
+}
+
+export function formatProposalRoiLine(params: {
+  capturePct: number;
+  monthlySales: number;
+  publishCost: number;
+}) {
+  const roi = proposalRoi(params.monthlySales, params.publishCost);
+  const sales = formatUsd(params.monthlySales);
+  if (!roi) {
+    return `If we capture ${params.capturePct}% of this selection's search volume, estimated monthly sales are ${sales}.`;
+  }
+  return `If we capture ${params.capturePct}% of this selection's search volume, estimated monthly sales are ${sales} vs ${formatUsd(params.publishCost)} to publish — about ${formatRoiMultiple(roi.multiple)}× the publish cost (ROI ${Math.round(roi.pct)}%).`;
+}
+
 function formatCount(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 10_000) return `${Math.round(value / 1_000).toLocaleString("en-US")}K`;
@@ -109,21 +136,19 @@ export function CollectionProposalDialog({
   const stats = useMemo(() => summarizeSelection(collections), [collections]);
   const publishCost = stats.count * USD_PER_COLLECTION;
 
-  const horizons = useMemo(
+  const scenarios = useMemo(
     () =>
-      TRAFFIC_HORIZONS.map((horizon) => ({
-        ...horizon,
+      CAPTURE_SCENARIOS.map((scenario) => ({
+        ...scenario,
         ...projectHorizon({
           monthlyVolume: stats.totalVolume,
-          capture: horizon.capture,
+          capture: scenario.capture,
           croPct,
           aov,
         }),
       })),
     [stats.totalVolume, croPct, aov]
   );
-
-  const yearRunRate = horizons[2]?.revenue ?? 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -153,12 +178,21 @@ export function CollectionProposalDialog({
 
         <div className="max-h-[min(72vh,720px)] space-y-5 overflow-y-auto px-6 py-5">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <StatCard
-              icon={Layers}
-              label="Collections selected"
-              value={stats.count.toLocaleString("en-US")}
-              hint={`${formatUsd(publishCost)} to publish`}
-            />
+            <div className="rounded-2xl border border-border/70 bg-card p-4">
+              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Layers className="h-3.5 w-3.5" />
+                Collections selected
+              </div>
+              <p className="mt-2 text-2xl font-black tracking-tight tabular-nums">
+                {stats.count.toLocaleString("en-US")}
+              </p>
+              <p className="mt-3 text-2xl font-black tracking-tight tabular-nums text-foreground">
+                {formatUsd(publishCost)}
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                to publish · {formatUsd(USD_PER_COLLECTION)} / collection
+              </p>
+            </div>
             <StatCard
               icon={TrendingUp}
               label="Monthly search volume"
@@ -236,9 +270,9 @@ export function CollectionProposalDialog({
               Projected monthly run-rate
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              {horizons.map((horizon, index) => (
+              {scenarios.map((scenario, index) => (
                 <div
-                  key={horizon.months}
+                  key={scenario.label}
                   className={cn(
                     "flex flex-col rounded-2xl border p-4",
                     index === 2
@@ -247,11 +281,10 @@ export function CollectionProposalDialog({
                   )}
                 >
                   <p className="text-[11px] font-bold uppercase tracking-wider text-foreground">
-                    After {horizon.label}
+                    If we capture {scenario.label}
                   </p>
                   <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                    {horizon.note} · capturing {Math.round(horizon.capture * 100)}% of
-                    search volume
+                    {scenario.note} · {scenario.label} of selected search volume
                   </p>
 
                   <div className="mt-4 rounded-xl bg-background/80 px-3 py-3 ring-1 ring-border/60">
@@ -259,7 +292,7 @@ export function CollectionProposalDialog({
                       Sales / month
                     </p>
                     <p className="mt-1 text-[1.65rem] font-black leading-none tracking-tight tabular-nums text-primary">
-                      {formatUsd(horizon.revenue)}
+                      {formatUsd(scenario.revenue)}
                     </p>
                   </div>
 
@@ -269,7 +302,7 @@ export function CollectionProposalDialog({
                         Orders
                       </p>
                       <p className="mt-1 text-lg font-bold leading-none tabular-nums text-foreground">
-                        {formatOrders(horizon.orders)}
+                        {formatOrders(scenario.orders)}
                       </p>
                       <p className="mt-1 text-[10px] text-muted-foreground">
                         / month
@@ -280,7 +313,7 @@ export function CollectionProposalDialog({
                         Sessions
                       </p>
                       <p className="mt-1 text-lg font-bold leading-none tabular-nums text-foreground">
-                        {formatCount(horizon.sessions)}
+                        {formatCount(scenario.sessions)}
                       </p>
                       <p className="mt-1 text-[10px] text-muted-foreground">
                         / month
@@ -292,14 +325,17 @@ export function CollectionProposalDialog({
             </div>
           </div>
 
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            At the 12-month capture rate, this selection is a{" "}
-            <span className="font-semibold text-foreground">
-              {formatUsd(yearRunRate)}
-            </span>{" "}
-            monthly sales run-rate on your AOV and conversion — not a guarantee.
-            Rankings, inventory, and on-page work still have to earn the click.
-          </p>
+          <div className="space-y-1.5 text-[11px] leading-relaxed text-muted-foreground">
+            {scenarios.map((scenario) => (
+              <p key={scenario.label}>
+                {formatProposalRoiLine({
+                  capturePct: Math.round(scenario.capture * 100),
+                  monthlySales: scenario.revenue,
+                  publishCost,
+                })}
+              </p>
+            ))}
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border/70 bg-muted/20 px-6 py-3">

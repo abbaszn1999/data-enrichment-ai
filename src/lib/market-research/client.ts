@@ -558,12 +558,18 @@ export async function runEmbedProductsLoop(
 export async function embedTermsPageApi(
   workspaceId: string,
   projectId: string,
-  offset: number
+  offset: number,
+  filters?: {
+    minVolume?: number;
+    maxKd?: number;
+    questionsOnly?: boolean;
+    query?: string;
+  }
 ): Promise<EmbedPassResponse> {
   const response = await fetch("/api/market-research/embeddings/terms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, projectId, offset }),
+    body: JSON.stringify({ workspaceId, projectId, offset, filters }),
   });
   return readJson<EmbedPassResponse>(response);
 }
@@ -572,14 +578,20 @@ export async function runEmbedTermsLoop(
   workspaceId: string,
   projectId: string,
   onProgress?: (state: EmbedPassResponse) => void,
-  isCancelled?: () => boolean
+  isCancelled?: () => boolean,
+  filters?: {
+    minVolume?: number;
+    maxKd?: number;
+    questionsOnly?: boolean;
+    query?: string;
+  }
 ): Promise<void> {
   let offset = 0;
   let guard = 0;
   const MAX_CALLS = 200;
   for (;;) {
     if (isCancelled?.() || guard >= MAX_CALLS) break;
-    const res = await embedTermsPageApi(workspaceId, projectId, offset);
+    const res = await embedTermsPageApi(workspaceId, projectId, offset, filters);
     onProgress?.(res);
     guard += 1;
     if (res.done) break;
@@ -664,12 +676,24 @@ export type ClusterPageResponse = {
 export async function clusterCollectionsPageApi(
   workspaceId: string,
   projectId: string,
-  offset: number
+  offset: number,
+  filters?: {
+    minVolume?: number;
+    maxKd?: number;
+    questionsOnly?: boolean;
+    query?: string;
+  }
 ): Promise<ClusterPageResponse> {
   const response = await fetch("/api/market-research/agent/cluster", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, projectId, mode: "archive", offset }),
+    body: JSON.stringify({
+      workspaceId,
+      projectId,
+      mode: "archive",
+      offset,
+      filters,
+    }),
   });
   return readJson<ClusterPageResponse>(response);
 }
@@ -678,7 +702,13 @@ export async function runClusterCollectionsLoop(
   workspaceId: string,
   projectId: string,
   onProgress?: (state: ClusterPageResponse) => void,
-  isCancelled?: () => boolean
+  isCancelled?: () => boolean,
+  filters?: {
+    minVolume?: number;
+    maxKd?: number;
+    questionsOnly?: boolean;
+    query?: string;
+  }
 ): Promise<ClusterPageResponse | null> {
   let offset = 0;
   let guard = 0;
@@ -686,7 +716,12 @@ export async function runClusterCollectionsLoop(
   let last: ClusterPageResponse | null = null;
   for (;;) {
     if (isCancelled?.() || guard >= MAX_CALLS) break;
-    const res = await clusterCollectionsPageApi(workspaceId, projectId, offset);
+    const res = await clusterCollectionsPageApi(
+      workspaceId,
+      projectId,
+      offset,
+      filters
+    );
     last = res;
     onProgress?.(res);
     guard += 1;
@@ -722,10 +757,15 @@ export async function dedupeCollectionsApi(
  */
 export async function loadProjectProductsApi(
   workspaceId: string,
-  projectId: string
+  projectId: string,
+  ids?: string[]
 ): Promise<MarketResearchProduct[]> {
+  const params = new URLSearchParams({ workspaceId, projectId });
+  if (ids && ids.length > 0) {
+    params.set("ids", ids.slice(0, 500).join(","));
+  }
   const response = await fetch(
-    `/api/market-research/products/list?workspaceId=${encodeURIComponent(workspaceId)}&projectId=${encodeURIComponent(projectId)}`
+    `/api/market-research/products/list?${params.toString()}`
   );
   const data = await readJson<{ products: MarketResearchProduct[] }>(response);
   return data.products;

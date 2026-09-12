@@ -72,11 +72,15 @@ usually enough to judge intent — do not require a description to make a call.
 2. For every `newCollections` entry, run the Core Test against the full `existingCollections`
    list — check whether the new collection could match more than one existing entry; the flag only
    needs one existing match to apply.
-3. If a new collection duplicates an existing one, add exactly one entry
-   `{ "id": <newCollections id>, "status": "duplicate" }` to the output array.
+3. If a new collection duplicates an existing one, add exactly one entry to the output array:
+   `{ "id": <newCollections id>, "status": "duplicate", "existingId": <existingCollections id>, "existingName": <that PLP's name> }`.
+   When more than one existing PLP is an exact-intent match, add them in `matches` as
+   `{ "id", "name" }` objects. `existingId`, `existingName`, and `matches` are optional — if you
+   cannot name the live PLP, still flag the duplicate with only `id` and `status`.
 4. If a new collection does not duplicate anything existing, do not add an entry for it at all —
    omission is the "not a duplicate" signal. Never output `"status": "new"` explicitly.
-5. Return the smallest possible output: only the duplicates, nothing else.
+5. Return only the duplicates. Include the matching live PLP when you know it; never invent an
+   existing collection that was not in the input.
 
 ---
 
@@ -135,7 +139,12 @@ Strict JSON matching `DuplicateExclusionOutput` — the smallest possible payloa
 ```json
 {
   "duplicates": [
-    { "id": "col-1", "status": "duplicate" }
+    {
+      "id": "col-1",
+      "status": "duplicate",
+      "existingId": "ex-1",
+      "existingName": "Women's Gucci Eyewear"
+    }
   ]
 }
 ```
@@ -144,6 +153,9 @@ Strict JSON matching `DuplicateExclusionOutput` — the smallest possible payloa
 |---|---|
 | `duplicates[].id` | Must exactly match an `id` from the input `newCollections` array. |
 | `duplicates[].status` | Always the literal string `"duplicate"` — no other value is ever written. |
+| `duplicates[].existingId` | Optional. When present, must match an `id` from `existingCollections`. |
+| `duplicates[].existingName` | Optional. The live PLP's name. Prefer the `existingCollections` name verbatim. |
+| `duplicates[].matches` | Optional extra live PLPs with the same exact intent. Same `{ id, name }` shape. |
 
 Every `newCollections` id that is not present in `duplicates` is implicitly `"new"` — never add an
 entry to say so. When nothing is a duplicate, return `{ "duplicates": [] }`.
@@ -183,7 +195,7 @@ Before returning, verify:
 **Reasoning:** "Eyewear" is the umbrella term already covering sunglasses for this exact
 audience/brand combination — a shopper searching either term sees the same products.
 
-**Output:** `{ "id": "col-1", "status": "duplicate" }`
+**Output:** `{ "id": "col-1", "status": "duplicate", "existingId": "ex-1", "existingName": "Women's Gucci Eyewear" }`
 
 ---
 

@@ -654,6 +654,100 @@ describe("Market Research Agent - Stage 5 collection-scoped vector candidate fil
   });
 });
 
+describe("Market Research Agent - Stage 5 Gemini receives the full cosine shortlist", () => {
+  afterEach(() => {
+    vi.mocked(runGeminiMarketResearch).mockReset();
+  });
+
+  it("sends every cosine survivor to Gemini and persists the full match lists", async () => {
+    const captured: string[] = [];
+    vi.mocked(runGeminiMarketResearch).mockImplementation(
+      async (opts: GeminiRunOptions): Promise<GeminiRunResult<unknown>> => {
+        captured.push(opts.userPrompt);
+        const jsonStart = opts.userPrompt.indexOf("[");
+        const batch = JSON.parse(opts.userPrompt.slice(jsonStart)) as Array<{
+          keywordId: string;
+          candidateProducts: Array<{ id: string }>;
+        }>;
+        return {
+          data: {
+            collections: batch.map((piece) => ({
+              keywordId: piece.keywordId,
+              matchedProductIds: piece.candidateProducts.map((c) => c.id),
+              rationale: "kept",
+            })),
+          },
+          rawText: "",
+          cost: {} as GeminiRunResult<unknown>["cost"],
+          credits: 0,
+          model: "gemini-3.7-flash",
+          thinkingLevel: "low",
+        };
+      }
+    );
+
+    const { runStage5CollectionClustering } = await import(
+      "./agent/stage5-collection-clusterer"
+    );
+
+    const COUNT = 60;
+    const makeProduct = (id: string): MarketResearchProduct => ({
+      id,
+      title: id,
+      handle: id,
+      url: `/products/${id}`,
+      images: [],
+      price: { amount: 10, currency: "USD", priceFormatted: "$10.00" },
+      tags: [],
+      attributes: [],
+      collectionIds: ["col-tablets"],
+      collectionNames: ["Tablets"],
+      inStock: true,
+    });
+
+    const products = Array.from({ length: COUNT }, (_, i) => makeProduct(`p${i}`));
+    const termVector = [1, 0, 0, 0];
+    const productVectors = new Map<string, number[]>(
+      products.map((p) => [p.id, [1, 0, 0, 0]])
+    );
+
+    const result = await runStage5CollectionClustering({
+      storeName: "Tech Store",
+      keywords: [
+        {
+          id: "k1",
+          keyword: "test term",
+          volume: 100,
+          difficulty: 10,
+        },
+      ],
+      products,
+      collectionIdByKeywordId: { k1: "col-tablets" },
+      termVectors: new Map([["k1", termVector]]),
+      productVectors,
+    });
+
+    expect(captured.length).toBeGreaterThan(0);
+    const sentIds = captured.flatMap((prompt) => {
+      const jsonStart = prompt.indexOf("[");
+      const batch = JSON.parse(prompt.slice(jsonStart)) as Array<{
+        candidateProducts: Array<{ id: string }>;
+      }>;
+      return batch.flatMap((piece) => piece.candidateProducts.map((c) => c.id));
+    });
+    expect(sentIds).toHaveLength(COUNT);
+    expect(new Set(sentIds).size).toBe(COUNT);
+    for (let i = 0; i < COUNT; i++) {
+      expect(sentIds).toContain(`p${i}`);
+    }
+
+    expect(result.collections).toHaveLength(1);
+    expect(result.collections[0].matchedProductIds).toHaveLength(COUNT);
+    expect(result.collections[0].productMatches).toHaveLength(COUNT);
+    expect(result.collections[0].candidateMatches).toHaveLength(COUNT);
+  });
+});
+
 describe("Market Research Agent - Storage Admin merge-not-overwrite on cursor writes", () => {
   it("mergeById upserts by id without dropping earlier pages' entries", async () => {
     const { mergeById } = await import("./storage-admin");

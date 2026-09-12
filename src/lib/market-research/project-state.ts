@@ -13,11 +13,13 @@ import {
 } from "@/components/market-research/persistence";
 import {
   normalizeOnPageInstructions,
+  normalizeSheetFilters,
   type CollectionContent,
   type ExtractedKeyword,
   type GeneratedArticle,
   type OnPageInstructions,
   type ProposedCollection,
+  type SheetKeywordFilters,
   type StrategyArticle,
   type WorkspaceTab,
 } from "@/components/market-research/workspace-data";
@@ -50,6 +52,7 @@ export type MrProjectStateJson = {
   extractCharge?: number;
   extractRows?: number;
   keywords?: ExtractedKeyword[];
+  sheetFilters?: SheetKeywordFilters;
   strategy?: StrategyArticle[];
   articles?: Record<string, GeneratedArticle>;
   extractId?: string;
@@ -186,6 +189,9 @@ export function rowsToPersisted(
     if (Array.isArray(state.keywords)) {
       next.keywordsByProject[id] = state.keywords;
     }
+    if (state.sheetFilters) {
+      next.sheetFiltersByProject[id] = normalizeSheetFilters(state.sheetFilters);
+    }
     if (typeof state.extractId === "string" && state.extractId) {
       next.extractIdByProject[id] = state.extractId;
     }
@@ -233,6 +239,7 @@ export function projectStateSlice(
     extractCharge: persisted.extractChargeByProject[projectId] ?? 0,
     extractRows: persisted.extractRowsByProject[projectId] ?? 0,
     keywords: Array.isArray(keywords) ? keywords : [],
+    sheetFilters: persisted.sheetFiltersByProject[projectId],
     extractId: persisted.extractIdByProject[projectId],
     strategy: persisted.strategyByProject?.[projectId] ?? [],
     articles: persisted.articlesByProject?.[projectId] ?? {},
@@ -287,6 +294,7 @@ export function remapPersistedIds(
     extractRowsByProject: remapRecord(persisted.extractRowsByProject),
     extractIdByProject: remapRecord(persisted.extractIdByProject ?? {}),
     keywordsByProject: remapRecord(persisted.keywordsByProject),
+    sheetFiltersByProject: remapRecord(persisted.sheetFiltersByProject ?? {}),
     strategyByProject: remapRecord(persisted.strategyByProject ?? {}),
     articlesByProject: remapRecord(persisted.articlesByProject ?? {}),
   };

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   ExternalLink,
   FileText,
-  Filter,
   Layers,
   Loader2,
   Lock,
@@ -50,6 +49,21 @@ import {
 import { cn } from "@/lib/utils";
 import { FuturisticAiLoader } from "./futuristic-ai-loader";
 import { CollectionProposalDialog } from "./collection-proposal-dialog";
+import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
+import { TableSelectHeader } from "@/components/table-select-header";
+import { loadProjectProductsApi } from "@/lib/market-research/client";
+import {
+  DEFAULT_COLLECTION_FILTERS,
+  collectionFiltersEqual,
+  filterProposedCollections,
+  pageSelectionState,
+  removeSelectedIds,
+  selectedDuplicateIds,
+  unionSelectedIds,
+  type CollectionSheetFilters,
+} from "@/lib/market-research/collection-sheet";
+
+const SHEET_PAGE_SIZE = 50;
 
 export function StageCollectionSheet({
   collections,
@@ -66,6 +80,8 @@ export function StageCollectionSheet({
   walletHref,
   pushing = false,
   onRemoveDuplicates,
+  workspaceId,
+  projectId,
 }: {
   collections: ProposedCollection[];
   products?: MarketResearchProduct[];
@@ -90,6 +106,8 @@ export function StageCollectionSheet({
    * merchant via the "Remove Duplicates" button.
    */
   onRemoveDuplicates?: (ids: string[]) => void;
+  workspaceId?: string;
+  projectId?: string;
 }) {
   const [activeTab, setActiveTab] = useState<"collections" | "products">("collections");
   const [activeModalCollection, setActiveModalCollection] = useState<ProposedCollection | null>(null);
@@ -99,19 +117,26 @@ export function StageCollectionSheet({
   } | null>(null);
   const [confirmPushOpen, setConfirmPushOpen] = useState(false);
   const [proposalOpen, setProposalOpen] = useState(false);
+  const [duplicateMatchCollection, setDuplicateMatchCollection] =
+    useState<ProposedCollection | null>(null);
 
-  // Collections sheet filters
-  const [searchQuery, setSearchQuery] = useState("");
-  const [minVolume, setMinVolume] = useState(0);
-  const [maxKd, setMaxKd] = useState(100);
-  const [minProducts, setMinProducts] = useState(0);
-  /** Header filter: view every collection, only "new" ones, or only Stage 5 Phase 3's flagged "duplicate" ones. */
+  const [draftFilters, setDraftFilters] = useState<CollectionSheetFilters>(
+    DEFAULT_COLLECTION_FILTERS
+  );
+  const [appliedFilters, setAppliedFilters] = useState<CollectionSheetFilters>(
+    DEFAULT_COLLECTION_FILTERS
+  );
+  /** Live view switch: every collection, only non-duplicates, or only flagged duplicates. */
   const [statusFilter, setStatusFilter] = useState<"all" | "new" | "duplicate">("all");
-  /** Which flagged duplicates the merchant has individually checked for removal — distinct from `selectedIds` (push selection). */
-  const [duplicateSelection, setDuplicateSelection] = useState<Set<string>>(new Set());
 
   // Products sheet filters
   const [productSearch, setProductSearch] = useState("");
+  const [extraProducts, setExtraProducts] = useState<MarketResearchProduct[]>([]);
+  const [modalProductsLoading, setModalProductsLoading] = useState(false);
+  const [collectionPageIndex, setCollectionPageIndex] = useState(0);
+  const [collectionPageSize, setCollectionPageSize] = useState(SHEET_PAGE_SIZE);
+  const [productPageIndex, setProductPageIndex] = useState(0);
+  const [productPageSize, setProductPageSize] = useState(SHEET_PAGE_SIZE);
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -121,8 +146,11 @@ export function StageCollectionSheet({
     for (const p of products) {
       map.set(p.id, p);
     }
+    for (const p of extraProducts) {
+      if (!map.has(p.id)) map.set(p.id, p);
+    }
     return map;
-  }, [products]);
+  }, [products, extraProducts]);
 
   // Reverse index: productId -> list of matching ProposedCollection (AI Curated / Assigned)
   const collectionsByProductId = useMemo(() => {
@@ -180,47 +208,57 @@ export function StageCollectionSheet({
     return map;
   }, [collections]);
 
-  const visibleCollections = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return collections.filter((row) => {
-      if (statusFilter === "duplicate" && row.status !== "duplicate") return false;
-      if (statusFilter === "new" && row.status === "duplicate") return false;
-      if (row.volume < minVolume) return false;
-      if (row.difficulty > maxKd) return false;
-      if (row.productCount < minProducts) return false;
-      if (q) {
-        const matchName = row.name.toLowerCase().includes(q);
-        const matchHead = row.headKeyword.toLowerCase().includes(q);
-        const matchNiche = row.parentNiche.toLowerCase().includes(q);
-        if (!matchName && !matchHead && !matchNiche) return false;
-      }
-      return true;
-    });
-  }, [collections, minVolume, maxKd, minProducts, searchQuery, statusFilter]);
+  const draftDirty = !collectionFiltersEqual(draftFilters, appliedFilters);
+  const appliedActive = !collectionFiltersEqual(
+    appliedFilters,
+    DEFAULT_COLLECTION_FILTERS
+  );
 
-  // Stage 5 Phase 3 flagged these — same-shopper-intent duplicates of a PLP
-  // the merchant already has. Drives the header filter tab, the per-row
-  // checkbox in the "Duplicate Check" column, and the Remove Selected/All
-  // actions — nothing here removes anything on its own.
+  const visibleCollections = useMemo(
+    () => filterProposedCollections(collections, appliedFilters, statusFilter),
+    [collections, appliedFilters, statusFilter]
+  );
+
+  const applyFilters = () => {
+    setAppliedFilters(draftFilters);
+    const matching = filterProposedCollections(collections, draftFilters, "all");
+    const allowed = new Set(matching.map((c) => c.id));
+    onChangeSelected(selectedIds.filter((id) => allowed.has(id)));
+    setCollectionPageIndex(0);
+  };
+
+  const resetFilters = () => {
+    setDraftFilters(DEFAULT_COLLECTION_FILTERS);
+    setAppliedFilters(DEFAULT_COLLECTION_FILTERS);
+    setCollectionPageIndex(0);
+  };
+
+  useEffect(() => {
+    setCollectionPageIndex(0);
+  }, [appliedFilters, statusFilter, collectionPageSize]);
+
+  const collectionPageCount = Math.max(
+    1,
+    Math.ceil(visibleCollections.length / collectionPageSize) || 1
+  );
+  const safeCollectionPageIndex = Math.min(collectionPageIndex, collectionPageCount - 1);
+  const pagedCollections = visibleCollections.slice(
+    safeCollectionPageIndex * collectionPageSize,
+    (safeCollectionPageIndex + 1) * collectionPageSize
+  );
+  const pagedIds = pagedCollections.map((c) => c.id);
+  const { allSelected: pageAllSelected, someSelected: pageSomeSelected } =
+    pageSelectionState(pagedIds, selected);
+
   const duplicateIds = useMemo(
     () => collections.filter((c) => c.status === "duplicate").map((c) => c.id),
     [collections]
   );
-
-  const toggleDuplicateSelected = (id: string) => {
-    setDuplicateSelection((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  const selectedDuplicateCount = selectedDuplicateIds(collections, selected);
 
   const removeDuplicates = (ids: string[]) => {
     if (!onRemoveDuplicates || ids.length === 0) return;
     onRemoveDuplicates(ids);
-    const removed = new Set(ids);
-    setDuplicateSelection((prev) => new Set([...prev].filter((id) => !removed.has(id))));
   };
 
   const visibleProducts = useMemo(() => {
@@ -240,6 +278,20 @@ export function StageCollectionSheet({
     });
   }, [products, productSearch, collectionsByProductId, semanticCandidatesByProductId]);
 
+  useEffect(() => {
+    setProductPageIndex(0);
+  }, [productSearch, productPageSize]);
+
+  const productPageCount = Math.max(
+    1,
+    Math.ceil(visibleProducts.length / productPageSize) || 1
+  );
+  const safeProductPageIndex = Math.min(productPageIndex, productPageCount - 1);
+  const pagedProducts = visibleProducts.slice(
+    safeProductPageIndex * productPageSize,
+    (safeProductPageIndex + 1) * productPageSize
+  );
+
   const toggleSelect = (id: string) => {
     if (paid) return;
     const next = new Set(selected);
@@ -248,12 +300,27 @@ export function StageCollectionSheet({
     onChangeSelected([...next]);
   };
 
-  const toggleSelectAll = () => {
+  const selectThisPage = () => {
     if (paid) return;
-    if (selected.size === visibleCollections.length && visibleCollections.length > 0) {
-      onChangeSelected([]);
+    onChangeSelected(unionSelectedIds(selectedIds, pagedIds));
+  };
+
+  const selectAllMatching = () => {
+    if (paid) return;
+    onChangeSelected(visibleCollections.map((c) => c.id));
+  };
+
+  const unselectAll = () => {
+    if (paid) return;
+    onChangeSelected([]);
+  };
+
+  const togglePageSelection = () => {
+    if (paid) return;
+    if (pageAllSelected) {
+      onChangeSelected(removeSelectedIds(selectedIds, pagedIds));
     } else {
-      onChangeSelected(visibleCollections.map((c) => c.id));
+      selectThisPage();
     }
   };
 
@@ -290,6 +357,44 @@ export function StageCollectionSheet({
     result.sort((a, b) => b.score - a.score);
     return result;
   }, [activeModalCollection, productMap]);
+
+  useEffect(() => {
+    if (!activeModalCollection || !workspaceId || !projectId) {
+      setModalProductsLoading(false);
+      return;
+    }
+    const matchIds =
+      activeModalCollection.matchedProductIds ??
+      (activeModalCollection.productMatches ?? []).map((m) => m.productId);
+    const missing = matchIds.filter((id) => !productMap.has(id));
+    if (missing.length === 0) {
+      setModalProductsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setModalProductsLoading(true);
+    void loadProjectProductsApi(workspaceId, projectId, missing)
+      .then((rows) => {
+        if (cancelled || rows.length === 0) return;
+        setExtraProducts((prev) => {
+          const seen = new Set(prev.map((p) => p.id));
+          const next = [...prev];
+          for (const row of rows) {
+            if (!seen.has(row.id)) next.push(row);
+          }
+          return next;
+        });
+      })
+      .catch((err) => {
+        console.error("[StageCollectionSheet] Product lookup failed:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setModalProductsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeModalCollection, workspaceId, projectId, productMap]);
 
   // Collections matching the opened modal product (either candidates or assigned)
   const modalProductCollections = useMemo(() => {
@@ -418,8 +523,10 @@ export function StageCollectionSheet({
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <Input
                 placeholder="Filter collections by name or keyword…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={draftFilters.query}
+                onChange={(e) =>
+                  setDraftFilters((prev) => ({ ...prev, query: e.target.value }))
+                }
                 className="h-8 pl-8 text-xs"
               />
             </div>
@@ -428,8 +535,13 @@ export function StageCollectionSheet({
               <Input
                 type="number"
                 min={0}
-                value={minVolume}
-                onChange={(e) => setMinVolume(Number(e.target.value) || 0)}
+                value={draftFilters.minVolume}
+                onChange={(e) =>
+                  setDraftFilters((prev) => ({
+                    ...prev,
+                    minVolume: Number(e.target.value) || 0,
+                  }))
+                }
                 className="h-8 w-[90px] text-xs"
               />
             </label>
@@ -439,8 +551,13 @@ export function StageCollectionSheet({
                 type="number"
                 min={0}
                 max={100}
-                value={maxKd}
-                onChange={(e) => setMaxKd(Number(e.target.value) || 0)}
+                value={draftFilters.maxKd}
+                onChange={(e) =>
+                  setDraftFilters((prev) => ({
+                    ...prev,
+                    maxKd: Number(e.target.value) || 0,
+                  }))
+                }
                 className="h-8 w-[72px] text-xs"
               />
             </label>
@@ -449,90 +566,95 @@ export function StageCollectionSheet({
               <Input
                 type="number"
                 min={0}
-                value={minProducts}
-                onChange={(e) => setMinProducts(Number(e.target.value) || 0)}
+                value={draftFilters.minProducts}
+                onChange={(e) =>
+                  setDraftFilters((prev) => ({
+                    ...prev,
+                    minProducts: Number(e.target.value) || 0,
+                  }))
+                }
                 className="h-8 w-[72px] text-xs"
               />
             </label>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={applyFilters}
+              disabled={!draftDirty}
+            >
+              Apply
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 text-xs"
+              onClick={resetFilters}
+              disabled={!appliedActive && !draftDirty}
+            >
+              Reset
+            </Button>
             {onRemoveDuplicates ? (
-              <>
-                {/* Header filter: All / New / Duplicate */}
-                <div className="flex items-center rounded-lg border border-border/70 bg-muted/30 p-0.5">
-                  {(["all", "new", "duplicate"] as const).map((f) => (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => setStatusFilter(f)}
-                      className={cn(
-                        "h-7 rounded-md px-2.5 text-[11px] font-medium capitalize transition-colors",
-                        statusFilter === f
-                          ? "bg-background shadow-2xs text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      {f === "all"
-                        ? "All"
-                        : f === "new"
-                        ? "New"
-                        : `Duplicate${duplicateIds.length > 0 ? ` (${duplicateIds.length})` : ""}`}
-                    </button>
-                  ))}
-                </div>
-                {duplicateSelection.size > 0 ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={paid}
-                    onClick={() => removeDuplicates([...duplicateSelection])}
-                    className="h-8 gap-1.5 px-3 text-xs font-medium rounded-lg border-rose-500/30 bg-rose-500/5 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300 shadow-2xs"
+              <div className="flex items-center rounded-lg border border-border/70 bg-muted/30 p-0.5">
+                {(["all", "new", "duplicate"] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setStatusFilter(f)}
+                    className={cn(
+                      "h-7 rounded-md px-2.5 text-[11px] font-medium capitalize transition-colors",
+                      statusFilter === f
+                        ? "bg-background shadow-2xs text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
                   >
-                    <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                    Remove Selected ({duplicateSelection.size})
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={paid || duplicateIds.length === 0}
-                  onClick={() => removeDuplicates(duplicateIds)}
-                  className={cn(
-                    "h-8 gap-1.5 px-3 text-xs font-medium rounded-lg shadow-2xs",
-                    duplicateIds.length > 0
-                      ? "border-rose-500/30 bg-rose-500/5 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300"
-                      : "text-muted-foreground"
-                  )}
-                >
-                  <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                  Remove All Duplicates {duplicateIds.length > 0 ? `(${duplicateIds.length})` : ""}
-                </Button>
-              </>
+                    {f === "all"
+                      ? "All"
+                      : f === "new"
+                      ? "New"
+                      : `Duplicate${duplicateIds.length > 0 ? ` (${duplicateIds.length})` : ""}`}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {onRemoveDuplicates && selectedDuplicateCount.length > 0 && !paid ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => removeDuplicates(selectedDuplicateCount)}
+                className="h-8 gap-1.5 px-3 text-xs font-medium rounded-lg border-rose-500/30 bg-rose-500/5 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300 shadow-2xs"
+              >
+                <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                Remove duplicates ({selectedDuplicateCount.length})
+              </Button>
+            ) : null}
+            {draftDirty ? (
+              <p className="w-full text-[11px] text-muted-foreground">
+                Apply to update this sheet. Select all uses the applied filters, not this draft.
+              </p>
             ) : null}
           </div>
 
           {/* Collections Table */}
-          <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/70 bg-card shadow-xs">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70 bg-card shadow-xs">
+            <div className="min-h-0 flex-1 overflow-auto">
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent border-b border-border/70">
-                  <TableHead className="w-12 px-3">
-                    <button
-                      type="button"
-                      onClick={toggleSelectAll}
-                      disabled={paid}
-                      className={cn(
-                        "flex h-4 w-4 items-center justify-center rounded border transition-colors",
-                        paid ? "cursor-not-allowed opacity-75" : "",
-                        selected.size > 0 && selected.size === visibleCollections.length
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : selected.size > 0
-                          ? "border-primary bg-primary/40 text-primary-foreground"
-                          : "border-border hover:border-primary/60"
-                      )}
-                    >
-                      {selected.size > 0 ? (
-                        <Check className="h-3 w-3 stroke-[3]" />
-                      ) : null}
-                    </button>
+                  <TableHead className="w-14 px-2">
+                    <div className={cn(paid && "pointer-events-none opacity-75")}>
+                      <TableSelectHeader
+                        allSelected={pageAllSelected}
+                        someSelected={pageSomeSelected}
+                        pageCount={pagedCollections.length}
+                        totalCount={visibleCollections.length}
+                        onTogglePage={togglePageSelection}
+                        onSelectPage={selectThisPage}
+                        onSelectAll={selectAllMatching}
+                        onClear={unselectAll}
+                      />
+                    </div>
                   </TableHead>
                   <TableHead className="text-xs font-semibold py-3 px-4">Collection Title</TableHead>
                   <TableHead className="text-xs font-semibold text-right py-3 px-4 w-32">Search Volume</TableHead>
@@ -550,7 +672,7 @@ export function StageCollectionSheet({
                     </TableCell>
                   </TableRow>
                 ) : (
-                  visibleCollections.map((row) => {
+                  pagedCollections.map((row) => {
                     const on = selected.has(row.id);
                     return (
                       <TableRow
@@ -621,53 +743,36 @@ export function StageCollectionSheet({
                         </TableCell>
                         <TableCell className="text-center py-3.5 px-4" onClick={(e) => e.stopPropagation()}>
                           {row.status === "duplicate" ? (
-                            <button
-                              type="button"
-                              disabled={paid}
-                              onClick={() => toggleDuplicateSelected(row.id)}
-                              className={cn(
-                                "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 text-[11px] font-semibold transition-colors",
-                                paid ? "cursor-not-allowed opacity-75" : "",
-                                duplicateSelection.has(row.id)
-                                  ? "bg-rose-500/25 text-rose-800 border-rose-500/50 dark:text-rose-200"
-                                  : "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 hover:bg-rose-500/25"
-                              )}
-                            >
-                              <span
-                                className={cn(
-                                  "flex h-3.5 w-3.5 items-center justify-center rounded border",
-                                  duplicateSelection.has(row.id)
-                                    ? "border-rose-700 bg-rose-600 text-white"
-                                    : "border-rose-400"
-                                )}
+                            row.duplicateMatches && row.duplicateMatches.length > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => setDuplicateMatchCollection(row)}
+                                className="inline-flex items-center rounded-md border border-rose-500/40 bg-rose-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-rose-800 hover:bg-rose-500/30 dark:text-rose-200"
                               >
-                                {duplicateSelection.has(row.id) ? (
-                                  <Check className="h-2.5 w-2.5 stroke-[3]" />
-                                ) : null}
+                                Duplicate
+                              </button>
+                            ) : (
+                              <span className="inline-flex items-center rounded-md border border-rose-500/40 bg-rose-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-rose-800 dark:text-rose-200">
+                                Duplicate
                               </span>
-                              Duplicate
-                            </button>
+                            )
                           ) : (
-                            <Badge
-                              variant="outline"
-                              className="text-[11px] font-semibold px-2.5 py-0.5 rounded-md bg-muted text-muted-foreground border-border/60"
-                            >
+                            <span className="inline-flex items-center rounded-md border border-lime-500/40 bg-lime-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-lime-800 dark:text-lime-200">
                               New
-                            </Badge>
+                            </span>
                           )}
                         </TableCell>
                         <TableCell className="text-center py-3.5 px-4">
-                          <Badge
-                            variant="outline"
+                          <span
                             className={cn(
-                              "text-[11px] font-semibold px-2.5 py-0.5 rounded-md",
+                              "inline-flex items-center rounded-md border px-2.5 py-0.5 text-[11px] font-semibold",
                               paid
-                                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                                : "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30"
+                                ? "border-emerald-600/40 bg-emerald-600/25 text-emerald-900 dark:text-emerald-100"
+                                : "border-sky-500/40 bg-sky-500/25 text-sky-900 dark:text-sky-100"
                             )}
                           >
                             {paid ? "Pushed" : "New"}
-                          </Badge>
+                          </span>
                         </TableCell>
                       </TableRow>
                     );
@@ -675,6 +780,20 @@ export function StageCollectionSheet({
                 )}
               </TableBody>
             </Table>
+            </div>
+            <WorksheetPaginationBar
+              pageIndex={safeCollectionPageIndex}
+              pageSize={collectionPageSize}
+              totalRows={visibleCollections.length}
+              readyCount={0}
+              colCount={7}
+              itemLabel="collections"
+              onPageChange={setCollectionPageIndex}
+              onPageSizeChange={(size) => {
+                setCollectionPageSize(size);
+                setCollectionPageIndex(0);
+              }}
+            />
           </div>
         </div>
       )}
@@ -704,7 +823,8 @@ export function StageCollectionSheet({
           </div>
 
           {/* Products Table */}
-          <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/70 bg-card">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70 bg-card">
+            <div className="min-h-0 flex-1 overflow-auto">
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
@@ -727,7 +847,7 @@ export function StageCollectionSheet({
                     </TableCell>
                   </TableRow>
                 ) : (
-                  visibleProducts.map((prod) => {
+                  pagedProducts.map((prod) => {
                     const candidates = semanticCandidatesByProductId.get(prod.id) ?? [];
                     const assigned = collectionsByProductId.get(prod.id) ?? [];
 
@@ -877,6 +997,20 @@ export function StageCollectionSheet({
                 )}
               </TableBody>
             </Table>
+            </div>
+            <WorksheetPaginationBar
+              pageIndex={safeProductPageIndex}
+              pageSize={productPageSize}
+              totalRows={visibleProducts.length}
+              readyCount={0}
+              colCount={5}
+              itemLabel="products"
+              onPageChange={setProductPageIndex}
+              onPageSizeChange={(size) => {
+                setProductPageSize(size);
+                setProductPageIndex(0);
+              }}
+            />
           </div>
         </div>
       )}
@@ -958,6 +1092,38 @@ export function StageCollectionSheet({
         onOpenChange={setProposalOpen}
         collections={collections.filter((c) => selected.has(c.id))}
       />
+
+      <Dialog
+        open={Boolean(duplicateMatchCollection)}
+        onOpenChange={(open) => {
+          if (!open) setDuplicateMatchCollection(null);
+        }}
+      >
+        <DialogContent className="max-w-md p-0 overflow-hidden">
+          <DialogHeader className="p-4 border-b border-border/70 bg-muted/20">
+            <DialogTitle className="text-base font-semibold">
+              Already covered in your store
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground mt-1">
+              {duplicateMatchCollection?.name} matches the shopper intent of{" "}
+              {duplicateMatchCollection?.duplicateMatches?.length === 1
+                ? "this live collection"
+                : "these live collections"}
+              .
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-4 space-y-2">
+            {(duplicateMatchCollection?.duplicateMatches ?? []).map((match) => (
+              <div
+                key={match.id}
+                className="rounded-xl border border-border/70 bg-card px-3 py-2.5"
+              >
+                <p className="text-sm font-semibold text-foreground">{match.name}</p>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ========================================================================= */}
       {/* MODAL POP-UP: CONFIRM STORE PUSH & WALLET DEDUCTION                      */}
@@ -1132,7 +1298,14 @@ export function StageCollectionSheet({
               <span>
                 Matched Products:{" "}
                 <strong className="text-primary font-semibold">
-                  {modalMatchingProducts.length}
+                  {modalMatchingProducts.length > 0
+                    ? modalMatchingProducts.length
+                    : modalProductsLoading
+                      ? (activeModalCollection?.matchedProductIds?.length ??
+                          activeModalCollection?.productMatches?.length ??
+                          activeModalCollection?.productCount ??
+                          0)
+                      : 0}
                 </strong>
               </span>
             </DialogDescription>
@@ -1142,7 +1315,9 @@ export function StageCollectionSheet({
           <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
             {modalMatchingProducts.length === 0 ? (
               <div className="p-8 text-center text-xs text-muted-foreground">
-                No matched products for this collection.
+                {modalProductsLoading
+                  ? "Loading matched products…"
+                  : "No matched products for this collection."}
               </div>
             ) : (
               modalMatchingProducts.map(({ product: p, score, rationale }) => (
