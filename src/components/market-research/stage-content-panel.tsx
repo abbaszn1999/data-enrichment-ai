@@ -861,8 +861,8 @@ export function StageContentPanel({
                 </span>
               </li>
             </ol>
-            <div className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-muted/40 px-2.5 py-2">
-              <code className="flex-1 truncate font-mono text-[11px] text-foreground">
+            <div className="flex min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-border/70 bg-muted/40 px-2.5 py-2">
+              <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
                 {sitemapExampleUrl}
               </code>
               <Button
