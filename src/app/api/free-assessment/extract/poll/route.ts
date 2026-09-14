@@ -100,11 +100,13 @@ export async function POST(request: NextRequest) {
       { headers: auth.headers }
     );
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to poll extract";
+    const message = error instanceof Error ? error.message : "";
     if (message === "Extract not found") return jsonError("Extract not found", 404);
+    // Never forward the raw provider error to the client — it can carry our
+    // vendor's name, actor ids, or request paths in its message.
+    console.error("[fa-extract] Failed to poll extract:", error);
     return NextResponse.json(
-      { error: message },
+      { error: "Failed to poll extraction progress." },
       { status: 500, headers: auth.headers }
     );
   }

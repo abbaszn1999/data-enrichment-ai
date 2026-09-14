@@ -1204,7 +1204,7 @@ export function MarketResearchShell() {
         status: stage4Status,
         detail:
           extracting
-            ? "Extracting phrase keywords from Apify…"
+            ? "Extracting phrase keywords…"
             : analyzeLoading
               ? "Classifying search intent with Gemini 3.7 Flash…"
               : extractedKeywords.length > 0
@@ -1323,7 +1323,7 @@ export function MarketResearchShell() {
         title: `Extracted · ${formatUsd(
           extractChargeByProject[activeProject.id] ?? selectionEstimate.usd
         )}`,
-        detail: `Wallet charge for Apify keyword rows in ${marketLabel(activeMarket)}`,
+        detail: `Wallet charge for keyword extraction in ${marketLabel(activeMarket)}`,
       });
     }
     if (extractedKeywords.length > 0) {
@@ -2422,7 +2422,7 @@ export function MarketResearchShell() {
       }
       toast.error("Extract failed", {
         description:
-          error instanceof Error ? error.message : "Could not start Apify.",
+          error instanceof Error ? error.message : "Could not start extraction.",
       });
     }
   };

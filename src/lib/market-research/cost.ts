@@ -1,7 +1,11 @@
-/** Actual Apify cost, no markup. Agent stages are not billed. */
+/**
+ * Extraction pricing. $5 per 1,000 keyword rows ($0.005/row) — discounted
+ * off our underlying data-provider rate, not a 1:1 pass-through. Agent
+ * stages (classification, clustering, on-page copy, etc.) are not billed.
+ */
 
 export const APIFY_SEED_PROBE_USD_PER_SEED = 0.002;
-export const APIFY_KEYWORD_USD_PER_ROW = 0.01;
+export const APIFY_KEYWORD_USD_PER_ROW = 0.005;
 export const COLLECTION_PUSH_USD = 5;
 
 export const KEYWORDS_PER_PAGE = 100;

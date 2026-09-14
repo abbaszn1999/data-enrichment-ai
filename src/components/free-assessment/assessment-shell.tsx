@@ -1091,7 +1091,7 @@ export function FreeAssessmentShell() {
       if (extractGen.current !== gen) return;
       setExtracting(false);
       toast.error("Extract failed", {
-        description: error instanceof Error ? error.message : "Could not start Apify.",
+        description: error instanceof Error ? error.message : "Could not start extraction.",
       });
     }
   };

@@ -150,11 +150,11 @@ export async function POST(request: NextRequest) {
       .from("mr_extracts")
       .update({ status: "failed", billing_status: "refunded" })
       .eq("id", extractId);
+    // Never forward the raw provider error to the client — it can carry our
+    // vendor's name, actor ids, or request paths in its message.
+    console.error("[mr-extract] Failed to start extract:", error);
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Failed to start extract",
-      },
+      { error: "Failed to start extraction. You have not been charged." },
       { status: 502, headers: auth.headers }
     );
   }

@@ -125,11 +125,11 @@ export async function GET(request: NextRequest) {
       { headers: auth.headers }
     );
   } catch (error) {
+    // Never forward the raw provider error to the client — it can carry our
+    // vendor's name, actor ids, or request paths in its message.
+    console.error("[fa-extract] Failed to load extract status:", error);
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Failed to load extract status",
-      },
+      { error: "Failed to load extraction status." },
       { status: 500, headers: auth.headers }
     );
   }

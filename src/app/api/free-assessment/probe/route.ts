@@ -123,11 +123,11 @@ export async function POST(request: NextRequest) {
       idempotencyKey: `fa_apify_seed_probe:refund:${parsed.data.attemptId}`,
       details: { projectId: parsed.data.projectId, failed: true },
     });
+    // Never forward the raw provider error to the client — it can carry our
+    // vendor's name, actor ids, or request paths in its message.
+    console.error("[fa-probe] Demand probe failed:", error);
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Demand probe failed",
-      },
+      { error: "Demand check failed. You have not been charged." },
       { status: 502, headers: auth.headers }
     );
   }

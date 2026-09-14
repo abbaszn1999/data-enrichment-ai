@@ -16,13 +16,13 @@ import { parseSeedMetricsItem } from "./providers/parse-seed-metrics";
 import type { KeywordRow } from "./providers/keyword-provider";
 
 describe("market-research cost", () => {
-  it("prices probe and extract at Apify list rates with no markup", () => {
+  it("prices probe at $0.002/seed and extract at $5 per 1,000 keyword rows", () => {
     expect(estimateProbeCostUsd(1)).toBe(0.002);
     expect(estimateProbeCostUsd(20)).toBe(0.04);
     expect(actualProbeCostUsd(3)).toBe(0.006);
-    expect(estimateExtractCostUsd(2400)).toBe(24);
-    expect(actualExtractCostUsd(1)).toBe(0.01);
-    expect(actualExtractCostUsd(1850)).toBe(18.5);
+    expect(estimateExtractCostUsd(2400)).toBe(12);
+    expect(actualExtractCostUsd(1)).toBe(0.005);
+    expect(actualExtractCostUsd(1850)).toBe(9.25);
     expect(collectionPushCostUsd(3)).toBe(15);
   });
 

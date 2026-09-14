@@ -883,7 +883,7 @@ export function StageSeedsPanel({
           <p className="text-[11px] text-muted-foreground leading-relaxed">
             Stages 1–3 of the agent are free. Select seeds and run a demand
             check ({formatUsd(APIFY_SEED_PROBE_USD_PER_SEED)} per seed, billed from your wallet) to see
-            raw keyword counts and what extract would cost at Apify’s rate —
+            raw keyword counts and what extract would cost —
             {formatUsd(APIFY_KEYWORD_USD_PER_ROW)} per keyword row, billed on rows returned.
           </p>
         ) : (
@@ -912,7 +912,7 @@ export function StageSeedsPanel({
             {estimate.usd > 0 ? (
               <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                Each selected seed starts its own Apify run. Overlapping
+                Each selected seed starts its own extraction run. Overlapping
                 synonyms are billed separately — deselect broad or duplicate
                 wording to keep the bill down. Filters after extract do not
                 change what you pay.
