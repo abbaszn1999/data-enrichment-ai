@@ -88,6 +88,9 @@ export interface VisualizerImagePlaceholder {
   index: number;
   visualBrief: string;
   alt: string;
+  /** Spec this slot proves (waterproof, UV protection, …). Optional on
+   *  rows saved before skill 01 required it. */
+  specClaim?: string;
   storagePath?: string | null;
 }
 
@@ -280,6 +283,7 @@ export function normalizeVisualizerWorksheet(
                 : placeholderIndex + 1,
             visualBrief: String(item.visualBrief || ""),
             alt: String(item.alt || ""),
+            specClaim: item.specClaim ? String(item.specClaim) : undefined,
             storagePath: item.storagePath ? String(item.storagePath) : null,
           }))
         : undefined,

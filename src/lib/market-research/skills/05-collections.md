@@ -20,9 +20,9 @@ not_for:
 
 For each term (a Stage 4-approved category-suitable keyword representing a proposed collection),
 you receive a shortlist of candidate products. A vector cosine similarity pass already built that
-shortlist: it embedded the term with its collection's name and description, embedded every product
-already scoped to that exact collection, and kept only the products whose embedding was close
-enough to the term's. Cosine similarity is good at "semantically close" but blind to "actually
+shortlist: it embedded the **bare search phrase**, embedded every product already scoped to that
+exact collection, and kept only the products whose embedding was close enough to the term's.
+Cosine similarity is good at "semantically close" but blind to "actually
 correct" — a phone **case** sits close to "phones" in the same vocabulary and domain while being
 the wrong product entirely. Your only job is the correctness check on top of that similarity
 check: for every candidate, run **one exclusion test**. There is no relevance score, no batch-level

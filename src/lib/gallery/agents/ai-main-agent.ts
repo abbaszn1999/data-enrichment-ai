@@ -3,7 +3,9 @@ import {
   createImageGenerationCost,
   type AiCallCost,
 } from "@/lib/ai-pricing";
+import type { GalleryShotBrief } from "@/lib/gallery/agents/ai-planner-agent";
 import { galleryLog } from "@/lib/gallery/log";
+import { loadGallerySkill } from "@/lib/gallery/skill-loader";
 import type { GalleryRow, GalleryWorksheetJson } from "@/lib/gallery/types";
 import {
   brandingInstruction,
@@ -19,19 +21,6 @@ import {
 } from "@/lib/gallery/agents/ai-shared";
 
 /**
- * Professional Main-shot variations when the user asks for more than one Main.
- * Same product identity — different commercial framing each time.
- */
-const MAIN_VARIATIONS = [
-  "straight-on front hero packshot, centered, catalog-ready",
-  "slight three-quarter angle that still reads as a primary hero shot",
-  "alternate lighting / soft shadow treatment while keeping a clean commercial look",
-  "tighter product-focused crop that still shows the full item clearly",
-  "subtle presentation change (stance, base, or prop-free staging) without changing the product",
-  "premium studio hero with a different camera height or distance",
-];
-
-/**
  * Output schema for the AI Main image agent (Gemini image response format).
  * Exported so Main generation never shares Gallery prompt/schema builders.
  */
@@ -44,33 +33,19 @@ export function buildAiMainPrompt(params: {
   worksheet: GalleryWorksheetJson;
   row: GalleryRow;
   referenceImages: AiReferenceImage[];
-  mainIndex: number;
-  mainTotal: number;
+  brief: GalleryShotBrief;
+  skillInstructions?: string;
 }): string {
   const settings = params.worksheet.settings.ai;
   const { hasSceneReference, hasLogo, hasBrandGuide, referenceList } =
     referenceFlags(params.referenceImages);
-  const mainCustom = settings.main?.instructions?.trim() || "";
-  const variation =
-    MAIN_VARIATIONS[params.mainIndex % MAIN_VARIATIONS.length];
-  const multiMain = params.mainTotal > 1;
 
   const shot = hasSceneReference
-    ? `Create Main image ${params.mainIndex + 1} of ${params.mainTotal}: a primary ecommerce hero featuring the exact product together with the referenced person/scene — not a solo product packshot. Variation focus: ${variation}.`
-    : `Create Main image ${params.mainIndex + 1} of ${params.mainTotal}: a clear primary product shot that accurately establishes the product identity (catalog / hero style). Variation focus: ${variation}.`;
-
-  const diversityRules = multiMain
-    ? [
-        "MULTIPLE MAIN IMAGES: the user requested several Main images for the SAME exact product.",
-        "Each Main image must be professionally distinct from the others — different angle, crop, distance, or lighting — while remaining a primary ecommerce hero / packshot (not a lifestyle gallery shot).",
-        "Do NOT repeat or near-duplicate a previous Main image. Identical or lookalike frames are unacceptable.",
-        params.mainIndex > 0
-          ? "A previous Main image may be attached as a product-identity reference only. Match the product exactly, but create a NEW professional Main variation — never copy that frame."
-          : "Later Main images will vary; make this first shot a strong, clean primary hero.",
-      ].join(" ")
-    : "";
+    ? "Create a primary ecommerce hero featuring the exact product together with the referenced person/scene — not a solo product packshot."
+    : "Create a clear primary product shot that accurately establishes the product identity (catalog / hero style).";
 
   return [
+    params.skillInstructions || "",
     "Create exactly one production-ready Main ecommerce image.",
     sceneInstruction(hasSceneReference),
     brandingInstruction({
@@ -82,13 +57,14 @@ export function buildAiMainPrompt(params: {
         settings.brandingEnabled && settings.brandGuideMode === "colors",
     }),
     shot,
-    diversityRules,
+    params.brief.specClaim
+      ? `This image must visually prove: ${params.brief.specClaim}`
+      : "",
+    "Follow the visual brief closely while keeping the real product as the hero subject.",
+    `Visual brief:\n${params.brief.visualBrief}`,
     "The product must be exact: preserve shape, construction, color, materials, markings, proportions, and distinctive details. Do not substitute a similar product.",
     styleInstruction(settings.style, hasSceneReference),
     "Use realistic lighting, physically plausible geometry, clean edges, and commercially useful framing. Do not add unrelated products, watermarks, captions, or invented text.",
-    mainCustom
-      ? `MAIN IMAGE CUSTOM INSTRUCTIONS — treat as mandatory unless unsafe: ${mainCustom}`
-      : "",
     referenceList,
     `Worksheet product data:\n${buildProductDescription(params.worksheet, params.row)}`,
   ]
@@ -97,8 +73,7 @@ export function buildAiMainPrompt(params: {
 }
 
 /**
- * AI Main agent: generates one Main product image.
- * Settings used: main.instructions, style, branding, aspect/resolution/format.
+ * AI Main agent: generates one Main product image from a planner brief.
  */
 export async function generateAiMainImage(params: {
   ai: GoogleGenAI;
@@ -106,8 +81,7 @@ export async function generateAiMainImage(params: {
   worksheet: GalleryWorksheetJson;
   row: GalleryRow;
   references: AiReferenceImage[];
-  mainIndex: number;
-  mainTotal: number;
+  brief: GalleryShotBrief;
 }): Promise<{
   buffer: Buffer;
   contentType: string;
@@ -116,12 +90,13 @@ export async function generateAiMainImage(params: {
   prompt: string;
 }> {
   const settings = params.worksheet.settings.ai;
+  const skill = await loadGallerySkill("image");
   const prompt = buildAiMainPrompt({
     worksheet: params.worksheet,
     row: params.row,
     referenceImages: params.references,
-    mainIndex: params.mainIndex,
-    mainTotal: params.mainTotal,
+    brief: params.brief,
+    skillInstructions: skill.instructions,
   });
   const responseFormat = buildAiImageResponseFormat(settings);
   const input: Array<Record<string, unknown>> = [
@@ -134,8 +109,7 @@ export async function generateAiMainImage(params: {
   galleryLog("ai-main:request", "Generating AI Main image", {
     rowId: params.row.id,
     model: params.model,
-    mainIndex: params.mainIndex,
-    mainTotal: params.mainTotal,
+    specClaim: params.brief.specClaim,
     referenceCount: params.references.length,
     aspectRatio: settings.aspectRatio,
     resolution: settings.resolution,

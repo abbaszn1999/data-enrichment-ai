@@ -354,9 +354,9 @@ export type ArchiveKeywordRow = KeywordRow & { seedId: string };
  * Rebuilds the complete paid keyword set from the chunk archive — every raw
  * row exactly as pulled, per seed, with no cross-seed merging.
  *
- * `keywords.json` only carries a display cache, so this archive is the
- * single source of truth for exports and for full-scale Stage 4/5
- * processing.
+ * `keywords.json` is the Extract-tab cache (full archive, capped at
+ * MAX_DISPLAY_ROWS). This chunk archive is the source of truth for CSV
+ * export and Stage 4/5 — rebuild the cache from here whenever it is short.
  *
  * `opts.dedupe` (default `true`) collapses rows that share the exact same
  * phrase across different seeds down to one entry, kept for the classify
@@ -723,7 +723,7 @@ export async function appendClassifiedShardAdmin(
   return manifest;
 }
 
-export async function loadClassifiedCategoryTerms(
+export async function loadClassifiedItemsAdmin(
   admin: SupabaseClient,
   workspaceId: string,
   projectId: string
@@ -744,10 +744,17 @@ export async function loadClassifiedCategoryTerms(
     );
     for (const list of shardLists) {
       if (!Array.isArray(list)) continue;
-      for (const item of list) {
-        if (item.sheet === "category") out.push(item);
-      }
+      out.push(...list);
     }
   }
   return out;
+}
+
+export async function loadClassifiedCategoryTerms(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<ClassifiedShardItem[]> {
+  const items = await loadClassifiedItemsAdmin(admin, workspaceId, projectId);
+  return items.filter((item) => item.sheet === "category");
 }

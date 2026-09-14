@@ -52,10 +52,9 @@ type Body = {
   originalImageColumn?: string | null;
   /**
    * Optional explicit phase. When omitted (or for mixed selections), each row
-   * independently resolves its own phase via resolveGalleryRunPhase: rows
-   * without a Main image (and no usable original image) get Main only and
-   * stop there; rows with an existing Main or a usable original image get
-   * Gallery only. A single row never runs Main and Gallery back-to-back.
+   * independently resolves its own phase via resolveGalleryRunPhase.
+   * Scraping: no Main and no original → Main only then stop.
+   * AI: no Main and no original → full (planner + 1 Main, then Gallery).
    */
   runPhase?: GalleryRunPhase;
 };
@@ -135,6 +134,12 @@ async function generateSynchronously(request: NextRequest) {
   if (provider === "scraping" && !process.env.OPENAI_API_KEY?.trim()) {
     return NextResponse.json(
       { error: "Scraping is temporarily unavailable. Contact your administrator." },
+      { status: 503 }
+    );
+  }
+  if (provider === "ai" && !process.env.OPENAI_API_KEY?.trim()) {
+    return NextResponse.json(
+      { error: "AI generation is temporarily unavailable. Contact your administrator." },
       { status: 503 }
     );
   }
@@ -287,7 +292,8 @@ async function generateSynchronously(request: NextRequest) {
     if (provider === "ai") {
       worksheet.settings.ai.main = {
         ...worksheet.settings.ai.main,
-        imagesPerRow: mainImagesPerRow,
+        imagesPerRow: 1,
+        instructions: "",
       };
     } else {
       worksheet.settings.scraping.main = {
@@ -359,6 +365,20 @@ async function generateSynchronously(request: NextRequest) {
           return typeof value === "string" && value.trim().length > 0;
         }).length
       : 0;
+  const generateMainCount =
+    provider === "ai"
+      ? targetIds.filter((id) => {
+          const row = rowsById.get(id)!;
+          return (
+            resolveGalleryRunPhase({
+              originalImageColumn: worksheet.originalImageColumn,
+              row,
+              requested: body.runPhase ?? null,
+              provider: "ai",
+            }) === "full"
+          );
+        }).length
+      : 0;
   const estimateRange =
     provider === "scraping"
       ? estimateScrapingCreditRange({
@@ -371,7 +391,7 @@ async function generateSynchronously(request: NextRequest) {
   const estimatedCredits =
     estimateRange?.max ??
     estimateGalleryCredits(provider, targetIds.length, worksheet.settings.ai, {
-      generateMainPerRow: provider === "ai" && !worksheet.originalImageColumn,
+      generateMainCount,
       searchDepth: worksheet.settings.scraping.searchDepth,
       rowsWithOriginal,
       tier: worksheet.settings.scraping.tier,
@@ -445,6 +465,7 @@ async function generateSynchronously(request: NextRequest) {
       originalImageColumn: worksheet.originalImageColumn,
       row,
       requested: body.runPhase ?? null,
+      provider,
     });
     targetPhases.set(rowId, targetPhase);
     row.status = "queued";

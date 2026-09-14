@@ -955,15 +955,16 @@ export function FreeAssessmentShell() {
             }, 2000);
             return;
           }
-          let finalSample = poll.sample ?? sample;
-          if (finalSample.length === 0) {
-            const status = await extractStatusApi(
-              input.workspaceId,
-              input.projectId,
-              input.extractId
-            ).catch(() => null);
-            if (status?.sample?.length) finalSample = status.sample;
-          }
+          const status = await extractStatusApi(
+            input.workspaceId,
+            input.projectId,
+            input.extractId
+          ).catch(() => null);
+          const archiveSample = status?.sample ?? poll.sample;
+          const finalSample =
+            (archiveSample?.length ?? 0) >= sample.length
+              ? (archiveSample ?? sample)
+              : sample;
           if (finalSample.length > 0) {
             setKeywordsByProject((prev) => ({
               ...prev,
@@ -1132,20 +1133,21 @@ export function FreeAssessmentShell() {
           return;
         }
         rememberExtractId(projectId, status.extract.id);
+        if (status.sample?.length) {
+          setKeywordsByProject((prev) => {
+            const current = prev[projectId] ?? [];
+            if (status.sample!.length <= current.length) return prev;
+            return {
+              ...prev,
+              [projectId]: status.sample as unknown as ExtractedKeyword[],
+            };
+          });
+        }
         const active =
           status.extract.status === "running" ||
           status.extract.billingStatus === "held";
         if (!active) {
           resumedExtract.current.add(projectId);
-          if (
-            status.sample?.length &&
-            status.sample.length > (keywordsByProject[projectId]?.length ?? 0)
-          ) {
-            setKeywordsByProject((prev) => ({
-              ...prev,
-              [projectId]: status.sample as unknown as ExtractedKeyword[],
-            }));
-          }
           if (status.extract.rowsReturned > 0) {
             settleExtractCharge(
               projectId,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -43,6 +43,14 @@ import { cn } from "@/lib/utils";
 import { formatUsd } from "@/lib/market-research/cost";
 import { sanitizeRichText, stripTags } from "@/lib/market-research/rich-text";
 import { OnPageShapePicker } from "@/components/customize/on-page-shape-picker";
+import { TableSelectHeader } from "@/components/table-select-header";
+import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
+import {
+  WORKSHEET_PAGE_SIZE,
+  pageSelectionState,
+  removeSelectedIds,
+  unionSelectedIds,
+} from "@/lib/market-research/collection-sheet";
 import {
   USD_PER_COLLECTION,
   type CollectionContent,
@@ -131,7 +139,7 @@ export function StageContentPanel({
   pushed: boolean;
   syncingSeo?: boolean;
   seoSynced?: boolean;
-  onStart: () => void;
+  onStart: (ids: string[]) => void;
   onPush?: () => void;
   onSyncSeo?: () => void;
   onNextStrategy: () => void;
@@ -139,6 +147,11 @@ export function StageContentPanel({
 }) {
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [openField, setOpenField] = useState<OnPageInstructionField | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>(() =>
+    collections.map((c) => c.id)
+  );
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(WORKSHEET_PAGE_SIZE);
 
   // Active modal views for FAQs and Links
   const [activeFaqColId, setActiveFaqColId] = useState<string | null>(null);
@@ -154,6 +167,51 @@ export function StageContentPanel({
   const fieldMeta = FIELD_META.find((f) => f.id === openField);
   const locked = generating || ready;
   const pushCost = pushCostUsd ?? collections.length * USD_PER_COLLECTION;
+  const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const idsKey = collections.map((c) => c.id).join(",");
+  const prevIdsKey = useRef(idsKey);
+
+  useEffect(() => {
+    const ids = idsKey ? idsKey.split(",") : [];
+    const previous = new Set(prevIdsKey.current ? prevIdsKey.current.split(",") : []);
+    prevIdsKey.current = idsKey;
+    setSelectedIds((prev) => {
+      if (ids.length === 0) return [];
+      if (prev.length === 0 && previous.size === 0) return ids;
+      const allowed = new Set(ids);
+      const kept = prev.filter((id) => allowed.has(id));
+      const added = ids.filter((id) => !previous.has(id));
+      return unionSelectedIds(kept, added);
+    });
+    setPageIndex(0);
+  }, [idsKey]);
+
+  useEffect(() => {
+    setPageIndex(0);
+  }, [pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(collections.length / pageSize) || 1);
+  const safePageIndex = Math.min(pageIndex, pageCount - 1);
+  const pagedCollections = collections.slice(
+    safePageIndex * pageSize,
+    (safePageIndex + 1) * pageSize
+  );
+  const pagedIds = pagedCollections.map((c) => c.id);
+  const { allSelected: pageAllSelected, someSelected: pageSomeSelected } =
+    pageSelectionState(pagedIds, selected);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+  const selectThisPage = () => setSelectedIds((prev) => unionSelectedIds(prev, pagedIds));
+  const selectAllOnSheet = () => setSelectedIds(collections.map((c) => c.id));
+  const unselectAll = () => setSelectedIds([]);
+  const togglePageSelection = () => {
+    if (pageAllSelected) setSelectedIds((prev) => removeSelectedIds(prev, pagedIds));
+    else selectThisPage();
+  };
 
   const activeFaqContent = activeFaqColId ? contentById[activeFaqColId] : null;
   const activeFaqCol = activeFaqColId ? collections.find((c) => c.id === activeFaqColId) : null;
@@ -238,13 +296,31 @@ export function StageContentPanel({
                     </>
                   )}
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs"
+                  disabled={generating || selected.size === 0}
+                  onClick={() => onStart(selectedIds)}
+                >
+                  {generating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {generating
+                    ? contentGenProgress
+                      ? `Writing Copy… ${contentGenProgress.processed.toLocaleString()}/${contentGenProgress.total.toLocaleString()}`
+                      : "Writing Copy & Links…"
+                    : "Start"}
+                </Button>
               </>
             ) : (
               <Button
                 size="sm"
                 className="h-8 gap-1.5 text-xs"
-                disabled={generating}
-                onClick={onStart}
+                disabled={generating || selected.size === 0}
+                onClick={() => onStart(selectedIds)}
               >
                 {generating ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -262,10 +338,25 @@ export function StageContentPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/70">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70">
+        <div className="min-h-0 flex-1 overflow-auto">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-14 px-2">
+                <div className={cn(generating && "pointer-events-none opacity-75")}>
+                  <TableSelectHeader
+                    allSelected={pageAllSelected}
+                    someSelected={pageSomeSelected}
+                    pageCount={pagedCollections.length}
+                    totalCount={collections.length}
+                    onTogglePage={togglePageSelection}
+                    onSelectPage={selectThisPage}
+                    onSelectAll={selectAllOnSheet}
+                    onClear={unselectAll}
+                  />
+                </div>
+              </TableHead>
               <TableHead className="text-xs min-w-[160px]">Collection</TableHead>
               {FIELD_META.map((field) => {
                 const filled = Boolean(instructions[field.id].trim());
@@ -302,12 +393,31 @@ export function StageContentPanel({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {collections.map((row) => {
+            {pagedCollections.map((row) => {
               const content = contentById[row.id];
               const filled = Boolean(content) && (ready || generating);
               const rowLinks = linksFor(row.id);
+              const rowGenerating = generating && selected.has(row.id) && !content;
+              const on = selected.has(row.id);
               return (
-                <TableRow key={row.id}>
+                <TableRow key={row.id} className={cn(on && "bg-primary/5")}>
+                  <TableCell className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => toggleSelect(row.id)}
+                      disabled={generating}
+                      className={cn(
+                        "flex h-4 w-4 items-center justify-center rounded border transition-colors",
+                        generating ? "cursor-not-allowed opacity-75" : "",
+                        on
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border hover:border-primary/60"
+                      )}
+                      aria-label={`Select ${row.name}`}
+                    >
+                      {on ? <Check className="h-3 w-3 stroke-[3]" /> : null}
+                    </button>
+                  </TableCell>
                   <TableCell className="text-sm font-medium whitespace-nowrap">
                     <button
                       type="button"
@@ -319,7 +429,7 @@ export function StageContentPanel({
                   </TableCell>
                   <ContentCell
                     ready={filled}
-                    generating={generating && !content}
+                    generating={rowGenerating}
                     text={content?.seoTitle}
                     onView={() =>
                       setActiveTextCell({ colId: row.id, field: "seoTitle" })
@@ -327,7 +437,7 @@ export function StageContentPanel({
                   />
                   <ContentCell
                     ready={filled}
-                    generating={generating && !content}
+                    generating={rowGenerating}
                     text={content?.seoDescription}
                     onView={() =>
                       setActiveTextCell({ colId: row.id, field: "seoDescription" })
@@ -335,7 +445,7 @@ export function StageContentPanel({
                   />
                   <ContentCell
                     ready={filled}
-                    generating={generating && !content}
+                    generating={rowGenerating}
                     text={content?.collectionDescription}
                     onView={() =>
                       setActiveTextCell({
@@ -356,7 +466,7 @@ export function StageContentPanel({
                         <HelpCircle className="h-3.5 w-3.5" />
                         <span>{content.faqs.length} questions</span>
                       </Button>
-                    ) : generating ? (
+                    ) : rowGenerating ? (
                       <Pulse />
                     ) : (
                       "—"
@@ -374,7 +484,7 @@ export function StageContentPanel({
                         <Link2 className="h-3.5 w-3.5" />
                         <span>{rowLinks.length} links</span>
                       </Button>
-                    ) : generating ? (
+                    ) : rowGenerating ? (
                       <Pulse />
                     ) : (
                       "—"
@@ -384,7 +494,7 @@ export function StageContentPanel({
                     <SyncStatusCell
                       content={content}
                       syncing={syncingSeo}
-                      generating={generating}
+                      generating={rowGenerating}
                     />
                   </TableCell>
                 </TableRow>
@@ -392,6 +502,20 @@ export function StageContentPanel({
             })}
           </TableBody>
         </Table>
+        </div>
+        <WorksheetPaginationBar
+          pageIndex={safePageIndex}
+          pageSize={pageSize}
+          totalRows={collections.length}
+          readyCount={0}
+          colCount={8}
+          itemLabel="collections"
+          onPageChange={setPageIndex}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPageIndex(0);
+          }}
+        />
       </div>
 
       {ready ? (

@@ -42,9 +42,9 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   try {
-    // Source of truth is the full chunk archive, not the UI's capped 1.5k
-    // display sample — otherwise classification (and everything downstream
-    // in Stage 5) silently stops at whatever the browser happened to keep.
+    // Source of truth is the full chunk archive, not a stale Extract-tab
+    // cache — otherwise classification (and everything downstream
+    // in Stage 5) silently stops at whatever keywords.json happened to keep.
     const archive = await loadExtractRowsAdmin(
       auth.admin,
       parsed.data.workspaceId,

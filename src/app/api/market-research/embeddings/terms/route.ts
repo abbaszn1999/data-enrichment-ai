@@ -9,30 +9,36 @@ import {
   loadEmbeddingsManifestAdmin,
   appendEmbeddingsShardAdmin,
   loadProjectSliceAdmin,
+  loadExtractRowsAdmin,
   type EmbeddingShardItem,
 } from "@/lib/market-research/storage-admin";
+import {
+  archiveRowsByPhrase,
+  filterClassifiedTerms,
+} from "@/lib/market-research/sheet-filters";
+import { normalizeKeywordFilters } from "@/components/market-research/workspace-data";
 import {
   contentHash,
   embedTexts,
   embeddingsAvailable,
   encodeVectorInt8,
+  termEmbedText,
   EMBEDDING_MODEL,
   EMBEDDING_DIMENSIONS,
 } from "@/lib/market-research/agent/embeddings";
 import { runWithConcurrency, chunk } from "@/lib/sync/core/batch-executor";
-import type { MockNiche, MockSeedRow } from "@/components/market-research/mock-data";
+import type { MockSeedRow } from "@/components/market-research/mock-data";
 
 export const maxDuration = 60;
 
-// A term is embedded together with its PLP's name/description, not the bare
-// term alone, so a term inherits its collection's context (see
-// `stage5-collection-clusterer.ts` Phase 1, which reads this same shape).
+// A term is embedded as the bare phrase. Collection lineage is a later
+// deterministic scope filter in `stage5-collection-clusterer.ts`, not part
+// of the vector text.
 const PAGE_SIZE = 2_000;
 const OPENAI_BATCH_SIZE = 256;
 const EMBED_CONCURRENCY = 5;
 
 type SeedsSlicePayload = { seedRows: MockSeedRow[]; manualSeeds: MockSeedRow[] };
-type NichesSlicePayload = { niches: unknown[]; structuredNiches: MockNiche[] };
 
 export async function POST(request: NextRequest) {
   let json: unknown;
@@ -58,7 +64,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const [terms, seedsSlice, nichesSlice] = await Promise.all([
+    const [terms, seedsSlice, archiveRows] = await Promise.all([
       loadClassifiedCategoryTerms(auth.admin, parsed.data.workspaceId, parsed.data.projectId),
       loadProjectSliceAdmin<SeedsSlicePayload>(
         auth.admin,
@@ -66,28 +72,26 @@ export async function POST(request: NextRequest) {
         parsed.data.projectId,
         "seeds"
       ).catch(() => null),
-      loadProjectSliceAdmin<NichesSlicePayload>(
+      loadExtractRowsAdmin(
         auth.admin,
         parsed.data.workspaceId,
-        parsed.data.projectId,
-        "niches"
-      ).catch(() => null),
+        parsed.data.projectId
+      ).catch(() => []),
     ]);
 
     const seedRowById = new Map<string, MockSeedRow>();
     for (const row of [...(seedsSlice?.seedRows ?? []), ...(seedsSlice?.manualSeeds ?? [])]) {
       seedRowById.set(row.id, row);
     }
-    const collectionDescById = new Map<string, string>();
-    for (const niche of nichesSlice?.structuredNiches ?? []) {
-      for (const col of niche.collections ?? []) {
-        if (col.description) collectionDescById.set(col.id, col.description);
-      }
-    }
 
-    const total = terms.length;
+    const surviving = filterClassifiedTerms(
+      terms,
+      archiveRowsByPhrase(archiveRows),
+      normalizeKeywordFilters(parsed.data.filters)
+    );
+    const total = surviving.length;
     const offset = Math.min(parsed.data.offset, total);
-    const page = terms.slice(offset, offset + PAGE_SIZE);
+    const page = surviving.slice(offset, offset + PAGE_SIZE);
     const nextOffset = offset + page.length;
     const done = nextOffset >= total;
 
@@ -111,11 +115,9 @@ export async function POST(request: NextRequest) {
         skipped += 1;
         continue;
       }
-      const collectionName = seedRow?.selectedCollection ?? "";
-      const description = collectionDescById.get(collectionId) ?? "";
-      const text = [collectionName, description, term.keyword].filter(Boolean).join(" ");
+      const text = termEmbedText(term.keyword);
       const hash = contentHash(text);
-      if (knownHashes[term.id] === hash) {
+      if (!text || knownHashes[term.id] === hash) {
         skipped += 1;
         continue;
       }

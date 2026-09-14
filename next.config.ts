@@ -6,8 +6,20 @@ const adminPublicPath =
 const nextConfig: NextConfig = {
   devIndicators: false,
   serverExternalPackages: ["@renderinc/sdk"],
+  // Skill prompts are read from disk at runtime (path.join(process.cwd(), …)),
+  // which Next.js cannot trace on its own — without these the .md files are
+  // missing from the traced build and every agent call throws ENOENT.
   outputFileTracingIncludes: {
     "/api/market-research/**": ["./src/lib/market-research/skills/*.md"],
+    "/api/website-restructure/**": ["./src/lib/website-restructure/skills/*.md"],
+    "/api/free-assessment/**": ["./src/lib/free-assessment/skills/*.md"],
+    "/api/growth-sync/**": ["./src/lib/growth-sync/skills/*.md"],
+    "/api/visualizer/**": ["./src/lib/visualizer/skills/*.md"],
+    "/api/gallery/**": ["./src/lib/gallery/skills/*.md"],
+    "/api/jobs/**": [
+      "./src/lib/visualizer/skills/*.md",
+      "./src/lib/gallery/skills/*.md",
+    ],
   },
   experimental: {
     proxyClientMaxBodySize: "10mb",

@@ -19,6 +19,8 @@ vi.mock("./storage-admin", () => ({
   saveExtractChunkAdmin: vi.fn(async () => undefined),
   loadExtractRowsAdmin: vi.fn(async () => []),
   saveProjectSliceAdmin: vi.fn(async () => undefined),
+  loadProjectSliceAdmin: vi.fn(async () => null),
+  loadClassifiedItemsAdmin: vi.fn(async () => []),
 }));
 
 const header = {

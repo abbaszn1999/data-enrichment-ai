@@ -39,6 +39,20 @@ describe("market-research project state", () => {
         productMatches: 0,
       },
     ];
+    persisted.sheetFiltersByProject[id] = {
+      category: {
+        minVolume: 10,
+        maxKd: 100,
+        questionsOnly: false,
+        query: "",
+      },
+      informational: {
+        minVolume: 0,
+        maxKd: 40,
+        questionsOnly: true,
+        query: "how",
+      },
+    };
 
     const slice = projectStateSlice(persisted, id);
     const back = rowsToPersisted(
@@ -66,6 +80,10 @@ describe("market-research project state", () => {
     expect(back.extractRowsByProject[id]).toBe(40);
     expect(back.extractIdByProject[id]).toBe(
       "44444444-4444-4444-8444-444444444444"
+    );
+    expect(back.sheetFiltersByProject[id]?.category.minVolume).toBe(10);
+    expect(back.sheetFiltersByProject[id]?.informational.questionsOnly).toBe(
+      true
     );
   });
 

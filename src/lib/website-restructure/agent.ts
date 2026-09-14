@@ -1,22 +1,34 @@
-// Website Restructure agent — three focused Gemini calls (vision → research →
-// generation) instead of one call that mixes 11 images with 4 web searches,
-// which would blow past the route's time budget and make the progress trace
-// dishonest. Edits reuse the generation call with the current code attached.
+// Website Restructure agent — four focused Gemini calls (vision → competitor
+// research → IA planning → code generation) instead of one call that mixes
+// images, web searches, and thousands of PLPs, which would blow past the
+// route's time budget and make the progress trace dishonest. Edits reuse the
+// generation call with the current code attached. Every call uses the same
+// model, `WR_MODEL`, and its skill/system instructions load from
+// `skills/*.md` via `skill-loader.ts`.
 
 import { aiJsonParse } from "ai-json-safe-parse";
 import { calculateCallCost, calculateGroundedCallCost, type AiCallCost } from "@/lib/ai-pricing";
 import { requireGeminiApiKey } from "@/lib/sync/agent/ai-utils";
-import {
-  WR_RECITATION_RETRY_HINT,
-  WR_SKILL_INSTRUCTIONS,
-  WR_VISION_INSTRUCTIONS,
-} from "./skill";
+import { loadWrSkill } from "./skill-loader";
+import { WR_NAV_DEPTH_RETRY_HINT, WR_RECITATION_RETRY_HINT } from "./constants";
 import { taxonomyTreeToPromptText } from "./taxonomy-tree";
+import { buildCatalogDigest, catalogDigestToPromptText } from "./plp-clustering";
+import {
+  NAV_PLAN_SCHEMA,
+  buildNavPlan,
+  computeCoverage,
+  exceedsMaxDepth,
+  flattenNavPlanDepth,
+  navPlanToPromptText,
+  normalizeNavPlan,
+  repairCoverageGaps,
+} from "./nav-plan";
 import type {
   WrBuildResult,
   WrChatMessage,
   WrCompetitorNote,
   WrDesignBrief,
+  WrNavPlan,
   WrTaxonomyTree,
 } from "./types";
 
@@ -32,14 +44,9 @@ async function getClient() {
   return new GoogleGenAI({ apiKey, httpOptions: { timeout: 180000 } });
 }
 
-async function mediumThinkingLevel() {
+async function thinkingLevelFor(level: "low" | "medium" | "high") {
   const { ThinkingLevel } = await import("@google/genai");
-  return ThinkingLevel.MEDIUM;
-}
-
-async function lowThinkingLevel() {
-  const { ThinkingLevel } = await import("@google/genai");
-  return ThinkingLevel.LOW;
+  return level === "high" ? ThinkingLevel.HIGH : level === "low" ? ThinkingLevel.LOW : ThinkingLevel.MEDIUM;
 }
 
 const BRIEF_SCHEMA: Record<string, unknown> = {
@@ -103,6 +110,7 @@ export async function runVisionBrief(
   input: WrVisionInput
 ): Promise<{ brief: WrDesignBrief; cost: AiCallCost }> {
   const ai = await getClient();
+  const skill = await loadWrSkill("vision");
 
   const promptLines = [
     `Analyze the ${input.images.length} attached screenshot${input.images.length === 1 ? "" : "s"} of this store's current header (some may show an opened dropdown/mega menu)${
@@ -136,10 +144,10 @@ export async function runVisionBrief(
     model: WR_MODEL,
     contents: [{ role: "user", parts }],
     config: {
-      systemInstruction: WR_VISION_INSTRUCTIONS,
+      systemInstruction: skill.instructions,
       responseMimeType: "application/json",
       responseJsonSchema: BRIEF_SCHEMA,
-      thinkingConfig: { thinkingLevel: await mediumThinkingLevel() },
+      thinkingConfig: { thinkingLevel: await thinkingLevelFor(skill.frontmatter.thinking) },
     },
   });
 
@@ -150,33 +158,30 @@ export async function runVisionBrief(
 }
 
 /** One web-search call per competitor — grounding and JSON output mode
- *  cannot be combined reliably, so this returns short plain text and the
- *  caller wraps it, mirroring `searchProduct` in `lib/gemini.ts`. */
+ *  cannot be combined reliably, so this returns short structured plain text
+ *  and the caller parses it, mirroring `searchProduct` in `lib/gemini.ts`. */
 export async function runCompetitorResearch(input: {
   competitor: string;
 }): Promise<{ note: WrCompetitorNote; cost: AiCallCost }> {
   const ai = await getClient();
+  const skill = await loadWrSkill("competitor-research");
 
-  const prompt = [
-    `Look up this competitor storefront: "${input.competitor}".`,
-    "Reply in exactly this two-line plain text format, nothing else:",
-    "Name: <the store/brand's real name>",
-    "Summary: <2-3 sentences on how their header/navigation is structured — what's in it, how the mega menu is organized, anything a header designer should borrow or avoid>",
-  ].join("\n");
+  const prompt = `Look up this competitor storefront: "${input.competitor}".`;
 
   const response = await ai.models.generateContent({
     model: WR_MODEL,
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: {
+      systemInstruction: skill.instructions,
       tools: [{ googleSearch: {} }],
-      // Two lines of prose off a web search does not need the default thinking
-      // budget, which otherwise costs several times the answer itself.
-      thinkingConfig: { thinkingLevel: await lowThinkingLevel() },
+      // Five lines of prose off a web search does not need the default
+      // thinking budget, which otherwise costs several times the answer itself.
+      thinkingConfig: { thinkingLevel: await thinkingLevelFor(skill.frontmatter.thinking) },
     },
   });
 
   const text = response.text || "";
-  const nameMatch = /Name:\s*(.+)/i.exec(text);
+  const field = (name: string) => new RegExp(`${name}:\\s*(.+)`, "i").exec(text)?.[1]?.trim();
   const summaryMatch = /Summary:\s*([\s\S]+)/i.exec(text);
 
   const executedQueries =
@@ -188,24 +193,144 @@ export async function runCompetitorResearch(input: {
   return {
     note: {
       input: input.competitor,
-      resolvedName: nameMatch?.[1]?.trim() || input.competitor,
+      resolvedName: field("Name") || input.competitor,
+      groupingModel: field("Grouping") || "",
+      columnNotes: field("Columns") || "",
+      excludedFromNav: field("Excluded") || "",
       summary: summaryMatch?.[1]?.trim() || text.trim() || "No summary available.",
     },
     cost,
   };
 }
 
+// ─── IA Planner ─────────────────────────────────────────────────────────────
+
+export type WrIaPlanInput = {
+  taxonomyTree: WrTaxonomyTree;
+  brief: WrDesignBrief;
+  competitorNotes: WrCompetitorNote[];
+};
+
+function competitorNotesToPromptText(notes: WrCompetitorNote[]): string {
+  if (notes.length === 0) return "(none provided)";
+  return notes
+    .map((n) => {
+      const bits = [
+        n.groupingModel ? `groups by ${n.groupingModel}` : "",
+        n.columnNotes ? `columns: ${n.columnNotes}` : "",
+        n.excludedFromNav ? `keeps out of nav: ${n.excludedFromNav}` : "",
+      ]
+        .filter(Boolean)
+        .join("; ");
+      return `- ${n.resolvedName}${bits ? ` (${bits})` : ""}`;
+    })
+    .join("\n");
+}
+
+async function runIaPlanCall(userPrompt: string, systemInstruction: string, thinking: "low" | "medium" | "high") {
+  const ai = await getClient();
+  const response = await ai.models.generateContent({
+    model: WR_MODEL,
+    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseJsonSchema: NAV_PLAN_SCHEMA,
+      thinkingConfig: { thinkingLevel: await thinkingLevelFor(thinking) },
+    },
+  });
+  const rawText = response.text || "{}";
+  const cost = calculateCallCost(WR_MODEL, response.usageMetadata);
+  return { rawText, cost };
+}
+
+/**
+ * Elects header entry points (departments/categories/subcategories) from the
+ * store's ENTIRE PLP catalog, pre-clustered by `plp-clustering.ts` — never
+ * raw titles pasted into the prompt. Validated and, if necessary, repaired
+ * deterministically in code rather than trusted outright: a depth violation
+ * earns one retry (mirroring the RECITATION retry used for header
+ * generation), and any coverage gap left after that is folded into a
+ * generated catch-all node so nothing from the catalog is silently dropped.
+ */
+export async function runIaPlan(input: WrIaPlanInput): Promise<{ plan: WrNavPlan; cost: AiCallCost }> {
+  const skill = await loadWrSkill("ia-planner");
+  const digest = buildCatalogDigest(input.taxonomyTree);
+
+  // Nothing to plan over: either a store with no PLPs at all, or a project
+  // whose taxonomy snapshot predates `allTaxonomies`. Asking the model to
+  // elect entry points from an empty catalog would burn a call to produce
+  // invented labels; an empty plan makes the builder fall back to the
+  // taxonomy tree text instead.
+  if (digest.allClusterRefs.length === 0) {
+    return { plan: buildNavPlan([], digest), cost: calculateCallCost(WR_MODEL, null) };
+  }
+
+  const basePrompt = [
+    "Elect this store's header entry points now, from its full PLP catalog below.",
+    "",
+    "DESIGN CONTEXT (for scale/market sense only — this does not decide the tree):",
+    `- Store visual notes: ${input.brief.notes || "(none)"}`,
+    "",
+    "COMPETITOR NAVIGATION PATTERNS (loose structural inspiration only):",
+    competitorNotesToPromptText(input.competitorNotes),
+    "",
+    "CATALOG DIGEST:",
+    catalogDigestToPromptText(digest),
+  ].join("\n");
+
+  let { rawText, cost } = await runIaPlanCall(basePrompt, skill.instructions, skill.frontmatter.thinking);
+  let nodes = normalizeNavPlan(safeJsonParse(rawText));
+
+  if (exceedsMaxDepth(nodes)) {
+    console.warn("[website-restructure] IA plan exceeded max depth; retrying with the flattening hint");
+    const retry = await runIaPlanCall(
+      `${basePrompt}\n\n${WR_NAV_DEPTH_RETRY_HINT}`,
+      skill.instructions,
+      skill.frontmatter.thinking
+    );
+    cost = addCosts(cost, retry.cost);
+    const retryNodes = normalizeNavPlan(safeJsonParse(retry.rawText));
+    nodes = exceedsMaxDepth(retryNodes) ? flattenNavPlanDepth(retryNodes) : retryNodes;
+  }
+
+  const orphanedRefs =
+    digest.allClusterRefs.length > 0 ? computeCoverage(nodes, digest).orphanedClusterRefs : [];
+  if (orphanedRefs.length > 0) {
+    console.warn(
+      `[website-restructure] IA plan left ${orphanedRefs.length} cluster(s) uncovered; folding into a catch-all node`
+    );
+    nodes = repairCoverageGaps(nodes, orphanedRefs);
+  }
+
+  return { plan: buildNavPlan(nodes, digest), cost };
+}
+
+// ─── Header generation / edit ──────────────────────────────────────────────
+
 type GenerationAttempt = { rawText: string; usageMetadata: unknown; finishReason: string };
 
 async function streamGeneration(input: {
   systemInstruction: string;
   userPrompt: string;
-  images?: AttachedEditImage[];
+  thinking: "low" | "medium" | "high";
+  headerScreenshots?: InlineImage[];
+  logoImage?: InlineImage | null;
+  attachedImages?: AttachedEditImage[];
 }): Promise<GenerationAttempt> {
   const ai = await getClient();
 
   const parts: GenerationPart[] = [{ text: input.userPrompt }];
-  for (const [i, img] of (input.images ?? []).entries()) {
+  const screenshots = input.headerScreenshots ?? [];
+  screenshots.forEach((img, i) => {
+    parts.push({ text: `ORIGINAL HEADER SCREENSHOT ${i + 1} of ${screenshots.length} (match this visual identity):` });
+    parts.push({ inlineData: img });
+  });
+  if (input.logoImage) {
+    parts.push({ text: "STORE LOGO IMAGE (use its colors/shape; src stays {{WR_LOGO_SRC}}):" });
+    parts.push({ inlineData: input.logoImage });
+  }
+  for (const [i, img] of (input.attachedImages ?? []).entries()) {
     const name = img.filename?.trim();
     parts.push({ text: name ? `ATTACHED IMAGE ${i + 1} (${name}):` : `ATTACHED IMAGE ${i + 1}:` });
     parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
@@ -218,7 +343,7 @@ async function streamGeneration(input: {
       systemInstruction: input.systemInstruction,
       responseMimeType: "application/json",
       responseJsonSchema: BUILD_RESULT_SCHEMA,
-      thinkingConfig: { thinkingLevel: await mediumThinkingLevel() },
+      thinkingConfig: { thinkingLevel: await thinkingLevelFor(input.thinking) },
     },
   });
 
@@ -279,7 +404,10 @@ function addCosts(a: AiCallCost, b: AiCallCost): AiCallCost {
 async function runGenerationCall(input: {
   systemInstruction: string;
   userPrompt: string;
-  images?: AttachedEditImage[];
+  thinking: "low" | "medium" | "high";
+  headerScreenshots?: InlineImage[];
+  logoImage?: InlineImage | null;
+  attachedImages?: AttachedEditImage[];
 }): Promise<{ result: WrBuildResult; cost: AiCallCost }> {
   const first = await streamGeneration(input);
   let cost = calculateCallCost(WR_MODEL, first.usageMetadata);
@@ -294,9 +422,8 @@ async function runGenerationCall(input: {
   );
 
   const second = await streamGeneration({
-    systemInstruction: input.systemInstruction,
+    ...input,
     userPrompt: `${input.userPrompt}\n\n${WR_RECITATION_RETRY_HINT}`,
-    images: input.images,
   });
   cost = addCosts(cost, calculateCallCost(WR_MODEL, second.usageMetadata));
 
@@ -315,19 +442,26 @@ export async function runGeneration(input: {
   brief: WrDesignBrief;
   competitorNotes: WrCompetitorNote[];
   taxonomyTree: WrTaxonomyTree;
+  navPlan: WrNavPlan;
+  headerScreenshots: InlineImage[];
+  logoImage: InlineImage | null;
 }): Promise<{ result: WrBuildResult; cost: AiCallCost }> {
+  const skill = await loadWrSkill("header-builder");
+
   const userPrompt = [
     "Build this store's header now, from scratch.",
     "",
-    "You are given three context blocks. When they disagree, this is the order of authority:",
-    "1. STORE CATEGORIES decide WHAT the header says. Every nav item and menu entry must",
-    "   come from this store's real category names. This header belongs to this store.",
-    "2. DESIGN BRIEF decides HOW it looks — colors, font stack, header height, menu layout.",
-    "   Ignore any element the brief lists that makes no sense for a store selling these",
-    "   categories (e.g. \"Book a demo\", \"Start for free\", \"Platform\", \"Pricing\", a",
-    "   theme switcher): those come from misreading the screenshots, not from the store.",
-    "3. COMPETITOR NOTES are loose inspiration for structure only. Never reuse their",
-    "   category names, wording, or brand.",
+    "You are given several context blocks. When they disagree, this is the order of authority:",
+    "1. NAV PLAN decides the header's STRUCTURE — implement it faithfully, do not re-derive your own.",
+    "2. DESIGN BRIEF and the attached screenshots/logo decide HOW it looks — colors, font stack,",
+    "   header height, menu layout, chrome. Ignore any element the brief lists that makes no sense",
+    "   for a store selling these categories (e.g. \"Book a demo\", \"Start for free\", \"Platform\",",
+    "   \"Pricing\", a theme switcher): those come from misreading the screenshots, not from the store.",
+    "3. COMPETITOR NOTES are loose inspiration for polish only. Never reuse their category names,",
+    "   wording, or brand.",
+    "",
+    "NAV PLAN (every href you output is still exactly \"#\", never a real link):",
+    navPlanToPromptText(input.navPlan),
     "",
     "DESIGN BRIEF:",
     JSON.stringify(input.brief, null, 2),
@@ -337,21 +471,33 @@ export async function runGeneration(input: {
       ? input.competitorNotes.map((n) => `- ${n.resolvedName}: ${n.summary}`).join("\n")
       : "(none provided)",
     "",
-    "STORE CATEGORIES (the nav labels to use — every href you output is still exactly \"#\", never a real link):",
-    taxonomyTreeToPromptText(input.taxonomyTree),
+    input.navPlan.nodes.length === 0
+      ? `STORE CATEGORIES (no nav plan was available, use these directly):\n${taxonomyTreeToPromptText(input.taxonomyTree)}`
+      : "",
   ].join("\n");
 
-  return runGenerationCall({ systemInstruction: WR_SKILL_INSTRUCTIONS, userPrompt });
+  return runGenerationCall({
+    systemInstruction: skill.instructions,
+    userPrompt,
+    thinking: skill.frontmatter.thinking,
+    headerScreenshots: input.headerScreenshots,
+    logoImage: input.logoImage,
+  });
 }
 
 export async function runEdit(input: {
   brief: WrDesignBrief;
   currentResult: WrBuildResult;
   taxonomyTree: WrTaxonomyTree;
+  navPlan: WrNavPlan;
+  headerScreenshots: InlineImage[];
+  logoImage: InlineImage | null;
   recentChat: WrChatMessage[];
   instruction: string;
   images?: AttachedEditImage[];
 }): Promise<{ result: WrBuildResult; cost: AiCallCost }> {
+  const skill = await loadWrSkill("header-builder");
+
   const historyText = input.recentChat
     .slice(-6)
     .map((m) => {
@@ -364,11 +510,11 @@ export async function runEdit(input: {
   const userPrompt = [
     "You previously built this header. Apply the requested edit and return the FULL updated html/css/js again (not a diff).",
     "",
+    "NAV PLAN (keep this structure unless the edit explicitly asks to change it; every href stays \"#\"):",
+    navPlanToPromptText(input.navPlan),
+    "",
     "DESIGN BRIEF (keep consistent with this unless the edit explicitly changes it):",
     JSON.stringify(input.brief, null, 2),
-    "",
-    "STORE CATEGORIES (the nav labels to use — every href you output is still exactly \"#\", never a real link):",
-    taxonomyTreeToPromptText(input.taxonomyTree),
     "",
     "CURRENT HTML:",
     input.currentResult.html,
@@ -379,7 +525,13 @@ export async function runEdit(input: {
     "CURRENT JS:",
     input.currentResult.js,
     "",
+    input.navPlan.nodes.length === 0
+      ? `STORE CATEGORIES (no nav plan was available, use these directly):\n${taxonomyTreeToPromptText(input.taxonomyTree)}`
+      : "",
+    "",
     historyText ? `RECENT CONVERSATION:\n${historyText}\n` : "",
+    "The original header screenshots and logo are attached again below as ground truth for the visual",
+    "identity — keep matching them unless the edit explicitly asks for a visual change.",
     attached.length > 0
       ? [
           `ATTACHED REFERENCE IMAGES: ${attached.length} image(s) follow this prompt, labeled ATTACHED IMAGE 1..${attached.length}.`,
@@ -395,8 +547,11 @@ export async function runEdit(input: {
   ].join("\n");
 
   return runGenerationCall({
-    systemInstruction: WR_SKILL_INSTRUCTIONS,
+    systemInstruction: skill.instructions,
     userPrompt,
-    images: attached.length > 0 ? attached : undefined,
+    thinking: skill.frontmatter.thinking,
+    headerScreenshots: input.headerScreenshots,
+    logoImage: input.logoImage,
+    attachedImages: attached.length > 0 ? attached : undefined,
   });
 }

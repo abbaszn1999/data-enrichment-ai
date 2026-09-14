@@ -6,6 +6,10 @@ import type {
 import { runGeminiMarketResearch } from "./gemini-runner";
 import { cosineSimilarity, contentHash } from "./embeddings";
 import { runWithConcurrency } from "@/lib/sync/core/batch-executor";
+import {
+  packGeminiTermBatches,
+  type GeminiTermPayload,
+} from "./gemini-term-batches";
 
 export interface KeywordToCluster {
   id: string;
@@ -266,8 +270,6 @@ export function computeCollectionProductMatches(
   );
 }
 
-const BATCH_SIZE = 10;
-
 /**
  * 5-Stage Pure Collection Opportunity Engine:
  * 1. Pure Vector Cosine Retrieval: Finds candidate products meeting threshold without artificial caps.
@@ -276,9 +278,6 @@ const BATCH_SIZE = 10;
  * 4. 1-to-1 Direct Mapping: Preserves exact volume, difficulty, Title Case name, and validated products.
  * 5. Storage & Output: Outputs final ProposedCollection array.
  */
-/** Candidates sent to Gemini per term — bounds request payload size regardless of retrieval method. */
-const MAX_CANDIDATES_TO_GEMINI = 50;
-
 // Kept short deliberately: `runGeminiMarketResearch` already prepends the
 // full 05-collections.md skill text to this string (see gemini-runner.ts),
 // so the framework and exclusion rules live there once, not twice. This is
@@ -415,71 +414,79 @@ export async function runStage5CollectionClustering(
     });
   }
 
-  // Step 2: Gemini 3.7 Flash exclusion pass, batches of 10 keywords run
-  // concurrently (5 at a time) — the batches are independent, so nothing
-  // about running them in parallel changes a single verdict.
+  // Step 2: Gemini 3.7 Flash exclusion pass. Every cosine survivor is sent
+  // (no top-50 cut). Batches prefer 10 terms but shrink by payload size, and
+  // a single oversized shortlist is chunked across calls then unioned.
   const aiApprovedMap = new Map<
     string,
     { matchedProductIds: string[]; rationale?: string }
   >();
+  const aiCoveredCandidateIds = new Map<string, Set<string>>();
 
-  const keywordChunks: KeywordToCluster[][] = [];
-  for (let i = 0; i < input.keywords.length; i += BATCH_SIZE) {
-    keywordChunks.push(input.keywords.slice(i, i + BATCH_SIZE));
-  }
+  const geminiPayloads: GeminiTermPayload[] = input.keywords.map((kw) => {
+    const meta = keywordCandidateMap.get(kw.id)!;
+    return {
+      keywordId: kw.id,
+      keyword: meta.rawKeyword,
+      collectionTitle: meta.title,
+      parentNiche: meta.parentNiche,
+      candidateProducts: meta.candidates.map((c) => {
+        const prod = productById.get(c.productId);
+        return {
+          id: c.productId,
+          title: prod?.title ?? "",
+          price: prod?.price?.priceFormatted ?? "",
+          shortDescription: prod?.shortDescription ?? "",
+          tags: prod?.tags ?? [],
+          attributes: prod?.attributes ?? [],
+          similarityScore: c.score,
+        };
+      }),
+    };
+  });
+
+  const keywordChunks = packGeminiTermBatches(geminiPayloads);
 
   const chunkRun = await runWithConcurrency(
     keywordChunks,
     async (batch) => {
-      const aiPayload = batch.map((kw) => {
-        const meta = keywordCandidateMap.get(kw.id)!;
-        const candidatesList = meta.candidates.slice(0, MAX_CANDIDATES_TO_GEMINI).map((c) => {
-          const prod = productById.get(c.productId);
-          return {
-            id: c.productId,
-            title: prod?.title ?? "",
-            price: prod?.price?.priceFormatted ?? "",
-            shortDescription: prod?.shortDescription ?? "",
-            tags: prod?.tags ?? [],
-            attributes: prod?.attributes ?? [],
-            similarityScore: c.score,
-          };
-        });
-
-        return {
-          keywordId: kw.id,
-          keyword: meta.rawKeyword,
-          collectionTitle: meta.title,
-          parentNiche: meta.parentNiche,
-          candidateProducts: candidatesList,
-        };
-      });
-
       const userPrompt = `Store Name: "${input.storeName || "Store"}"
 Total Store Products: ${products.length}
 
 Review each collection opportunity and run the exclusion test on every candidate product:
-${JSON.stringify(aiPayload, null, 2)}`;
+${JSON.stringify(batch, null, 2)}`;
 
       const geminiRes = await runGeminiMarketResearch<GeminiCurationResponse>({
         stage: 5,
         systemInstruction: CLUSTER_SYSTEM_INSTRUCTION,
         userPrompt,
       });
-      return geminiRes.data;
+      return { batch, data: geminiRes.data };
     },
     { concurrency: 5 }
   );
 
   let anyAiSucceeded = false;
-  for (const data of chunkRun.successes) {
+  for (const { batch, data } of chunkRun.successes) {
+    for (const piece of batch) {
+      const seen = aiCoveredCandidateIds.get(piece.keywordId) ?? new Set<string>();
+      for (const card of piece.candidateProducts) seen.add(card.id);
+      aiCoveredCandidateIds.set(piece.keywordId, seen);
+    }
     if (data && Array.isArray(data.collections)) {
       anyAiSucceeded = true;
       for (const item of data.collections) {
         if (item.keywordId && Array.isArray(item.matchedProductIds)) {
+          const existing = aiApprovedMap.get(item.keywordId);
+          const mergedIds = new Set([
+            ...(existing?.matchedProductIds ?? []),
+            ...item.matchedProductIds,
+          ]);
           aiApprovedMap.set(item.keywordId, {
-            matchedProductIds: item.matchedProductIds,
-            rationale: item.rationale,
+            matchedProductIds: Array.from(mergedIds),
+            rationale: [existing?.rationale, item.rationale]
+              .filter(Boolean)
+              .join(" "),
           });
         }
       }
@@ -504,7 +511,16 @@ ${JSON.stringify(aiPayload, null, 2)}`;
     let rationale: string | undefined;
 
     if (aiVal) {
-      finalProductIds = aiVal.matchedProductIds;
+      const covered = aiCoveredCandidateIds.get(kw.id);
+      const uncovered =
+        covered && covered.size < meta.candidates.length
+          ? meta.candidates
+              .map((c) => c.productId)
+              .filter((id) => !covered.has(id))
+          : [];
+      finalProductIds = Array.from(
+        new Set([...aiVal.matchedProductIds, ...uncovered])
+      );
       rationale = aiVal.rationale;
     } else {
       // Fallback only if the entire AI request failed/errored out
@@ -542,10 +558,8 @@ ${JSON.stringify(aiPayload, null, 2)}`;
       keywordCount: 1,
       status: "new",
       matchedProductIds: productMatches.map((m) => m.productId),
-      // Capped for display payload size — `matchedProductIds` above (which
-      // decides what actually pushes live) is never truncated.
-      productMatches: productMatches.slice(0, 50),
-      candidateMatches: meta.candidates.slice(0, 50),
+      productMatches,
+      candidateMatches: meta.candidates,
     });
   }
 

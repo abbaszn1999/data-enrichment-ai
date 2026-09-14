@@ -24,20 +24,133 @@ import {
 import { Progress } from "@/components/ui/progress";
 import {
   DEFAULT_FILTERS,
+  DEFAULT_SHEET_FILTERS,
   EXTRACT_CAP_PER_SEED,
   filterKeywords,
+  filtersEqual,
   pulledCountForSeed,
   type ExtractedKeyword,
   type KeywordFilters,
   type KeywordSheet,
   type SeedExtractProgress,
+  type SheetKeywordFilters,
 } from "./workspace-data";
 import type { MockSeedRow, SeedProbe } from "./mock-data";
 import { formatUsd } from "./mock-data";
 import { cn } from "@/lib/utils";
 
 type ExtractSheet = "all" | KeywordSheet;
+type FilterableSheet = "category" | "informational";
 const EXTRACT_PAGE_SIZE = 50;
+
+function isFilterableSheet(sheet: ExtractSheet): sheet is FilterableSheet {
+  return sheet === "category" || sheet === "informational";
+}
+
+function KeywordFilterBar({
+  filters,
+  onChange,
+  onApply,
+  onReset,
+  applyEnabled,
+  resetEnabled,
+  hint,
+}: {
+  filters: KeywordFilters;
+  onChange: (next: KeywordFilters) => void;
+  onApply?: () => void;
+  onReset?: () => void;
+  applyEnabled?: boolean;
+  resetEnabled?: boolean;
+  hint?: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card px-3 py-2 shrink-0">
+      <Input
+        value={filters.query}
+        onChange={(e) => onChange({ ...filters, query: e.target.value })}
+        placeholder="Include / exclude…"
+        className="h-8 w-[180px] text-xs"
+        aria-label="Filter keywords"
+      />
+      <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        Min volume
+        <Input
+          type="number"
+          min={0}
+          value={filters.minVolume}
+          onChange={(e) =>
+            onChange({
+              ...filters,
+              minVolume: Number(e.target.value) || 0,
+            })
+          }
+          className="h-8 w-[88px] text-xs"
+        />
+      </label>
+      <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        Max KD
+        <Input
+          type="number"
+          min={0}
+          max={100}
+          value={filters.maxKd}
+          onChange={(e) =>
+            onChange({
+              ...filters,
+              maxKd: Number(e.target.value) || 0,
+            })
+          }
+          className="h-8 w-[72px] text-xs"
+        />
+      </label>
+      <button
+        type="button"
+        aria-pressed={filters.questionsOnly}
+        onClick={() =>
+          onChange({
+            ...filters,
+            questionsOnly: !filters.questionsOnly,
+          })
+        }
+        className={cn(
+          "rounded-full border px-2.5 py-1 text-[11px] font-medium",
+          filters.questionsOnly
+            ? "border-primary/40 bg-primary/10 text-primary"
+            : "border-border/70 text-muted-foreground hover:text-foreground"
+        )}
+      >
+        Questions
+      </button>
+      {onApply ? (
+        <Button
+          type="button"
+          size="sm"
+          className="h-8 text-xs"
+          onClick={onApply}
+          disabled={!applyEnabled}
+        >
+          Apply
+        </Button>
+      ) : null}
+      {onReset ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-8 text-xs"
+          onClick={onReset}
+          disabled={!resetEnabled}
+        >
+          Reset
+        </Button>
+      ) : null}
+      {hint ? (
+        <p className="w-full text-[11px] text-muted-foreground">{hint}</p>
+      ) : null}
+    </div>
+  );
+}
 
 export function StageExtractPanel({
   seeds,
@@ -56,6 +169,8 @@ export function StageExtractPanel({
   clustering = false,
   onCancelExtract,
   csvHref,
+  appliedSheetFilters = DEFAULT_SHEET_FILTERS,
+  onApplySheetFilters,
 }: {
   seeds: MockSeedRow[];
   probes: Record<string, SeedProbe>;
@@ -80,8 +195,15 @@ export function StageExtractPanel({
   onCancelExtract?: () => void;
   /** Export of every pulled keyword. */
   csvHref?: string;
+  appliedSheetFilters?: SheetKeywordFilters;
+  onApplySheetFilters?: (
+    sheet: FilterableSheet,
+    filters: KeywordFilters
+  ) => void;
 }) {
-  const [filters, setFilters] = useState<KeywordFilters>(DEFAULT_FILTERS);
+  const [liveFilters, setLiveFilters] = useState<KeywordFilters>(DEFAULT_FILTERS);
+  const [draftFilters, setDraftFilters] =
+    useState<SheetKeywordFilters>(appliedSheetFilters);
   const [sheet, setSheet] = useState<ExtractSheet>("all");
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(EXTRACT_PAGE_SIZE);
@@ -89,15 +211,25 @@ export function StageExtractPanel({
   const activeSheet: ExtractSheet =
     classified && sheet === "all" && analyzeLoading ? "category" : sheet;
 
+  useEffect(() => {
+    setDraftFilters(appliedSheetFilters);
+  }, [appliedSheetFilters]);
+
   const visible = useMemo(() => {
-    const filtered = filterKeywords(keywords, filters);
-    if (!classified || activeSheet === "all") return filtered;
-    return filtered.filter((row) => row.sheet === activeSheet);
-  }, [keywords, filters, activeSheet, classified]);
+    if (!classified || activeSheet === "all") {
+      return filterKeywords(keywords, liveFilters);
+    }
+    if (activeSheet === "excluded") {
+      return filterKeywords(keywords, liveFilters).filter(
+        (row) => row.sheet === "excluded"
+      );
+    }
+    return filterKeywords(keywords, appliedSheetFilters[activeSheet], activeSheet);
+  }, [keywords, liveFilters, activeSheet, classified, appliedSheetFilters]);
 
   useEffect(() => {
     setPageIndex(0);
-  }, [filters, activeSheet, pageSize]);
+  }, [liveFilters, appliedSheetFilters, activeSheet, pageSize]);
 
   const pageCount = Math.max(1, Math.ceil(visible.length / pageSize) || 1);
   const safePageIndex = Math.min(pageIndex, pageCount - 1);
@@ -111,10 +243,19 @@ export function StageExtractPanel({
       ? 5
       : 6;
 
-  const filteredCategoryKeywords = useMemo(() => {
-    const filtered = filterKeywords(keywords, filters);
-    return filtered.filter((row) => row.sheet === "category");
-  }, [keywords, filters]);
+  const filteredCategoryKeywords = useMemo(
+    () => filterKeywords(keywords, appliedSheetFilters.category, "category"),
+    [keywords, appliedSheetFilters]
+  );
+  const filteredInformationalKeywords = useMemo(
+    () =>
+      filterKeywords(
+        keywords,
+        appliedSheetFilters.informational,
+        "informational"
+      ),
+    [keywords, appliedSheetFilters]
+  );
 
   const totalPulled = keywords.length > 0
     ? keywords.length
@@ -123,18 +264,44 @@ export function StageExtractPanel({
         0
       );
 
-  const categoryCount = useMemo(
+  const categoryTotal = useMemo(
     () => keywords.filter((k) => k.sheet === "category").length,
     [keywords]
   );
-  const informationalCount = useMemo(
+  const informationalTotal = useMemo(
     () => keywords.filter((k) => k.sheet === "informational").length,
     [keywords]
   );
+  const categoryCount = classified
+    ? filteredCategoryKeywords.length
+    : categoryTotal;
+  const informationalCount = classified
+    ? filteredInformationalKeywords.length
+    : informationalTotal;
   const excludedCount = useMemo(
     () => keywords.filter((k) => k.sheet === "excluded").length,
     [keywords]
   );
+
+  const activeDraft = isFilterableSheet(activeSheet)
+    ? draftFilters[activeSheet]
+    : liveFilters;
+  const draftDirty = isFilterableSheet(activeSheet)
+    ? !filtersEqual(draftFilters[activeSheet], appliedSheetFilters[activeSheet])
+    : false;
+  const appliedActive = isFilterableSheet(activeSheet)
+    ? !filtersEqual(appliedSheetFilters[activeSheet], DEFAULT_FILTERS)
+    : false;
+
+  const applyActiveSheet = () => {
+    if (!isFilterableSheet(activeSheet)) return;
+    onApplySheetFilters?.(activeSheet, draftFilters[activeSheet]);
+  };
+  const resetActiveSheet = () => {
+    if (!isFilterableSheet(activeSheet)) return;
+    setDraftFilters((prev) => ({ ...prev, [activeSheet]: DEFAULT_FILTERS }));
+    onApplySheetFilters?.(activeSheet, DEFAULT_FILTERS);
+  };
 
   if (extracting) {
     return (
@@ -221,8 +388,8 @@ export function StageExtractPanel({
             {(
               [
                 ["all", `All (${keywords.length})`],
-                ["category", `Suitable for categories (${categoryCount})`],
-                ["informational", `Informational (${informationalCount})`],
+                ["category", `Suitable for categories (${categoryCount}${classified && categoryCount !== categoryTotal ? `/${categoryTotal}` : ""})`],
+                ["informational", `Informational (${informationalCount}${classified && informationalCount !== informationalTotal ? `/${informationalTotal}` : ""})`],
                 ["excluded", `Excluded / Removed (${excludedCount})`],
               ] as const
             ).map(([id, label]) => (
@@ -244,66 +411,39 @@ export function StageExtractPanel({
         ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card px-3 py-2 shrink-0">
-        <Input
-          value={filters.query}
-          onChange={(e) =>
-            setFilters((prev) => ({ ...prev, query: e.target.value }))
+      {classified && isFilterableSheet(activeSheet) ? (
+        <KeywordFilterBar
+          filters={activeDraft}
+          onChange={(next) =>
+            setDraftFilters((prev) => ({ ...prev, [activeSheet]: next }))
           }
-          placeholder="Include / exclude…"
-          className="h-8 w-[180px] text-xs"
-          aria-label="Filter keywords"
+          onApply={applyActiveSheet}
+          onReset={resetActiveSheet}
+          applyEnabled={draftDirty}
+          resetEnabled={appliedActive || draftDirty}
+          hint={
+            draftDirty
+              ? `Apply to update this sheet. ${
+                  activeSheet === "category"
+                    ? "Next will send the applied category terms to collection matching."
+                    : "Applied informational terms are the ones that move to content strategy."
+                }`
+              : activeSheet === "category"
+                ? `Showing ${filteredCategoryKeywords.length.toLocaleString("en-US")} of ${categoryTotal.toLocaleString("en-US")} category terms. Next uses this applied set for collection matching.`
+                : `Showing ${filteredInformationalKeywords.length.toLocaleString("en-US")} of ${informationalTotal.toLocaleString("en-US")} informational terms. Content strategy uses this applied set.`
+          }
         />
-        <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          Min volume
-          <Input
-            type="number"
-            min={0}
-            value={filters.minVolume}
-            onChange={(e) =>
-              setFilters((prev) => ({
-                ...prev,
-                minVolume: Number(e.target.value) || 0,
-              }))
-            }
-            className="h-8 w-[88px] text-xs"
-          />
-        </label>
-        <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          Max KD
-          <Input
-            type="number"
-            min={0}
-            max={100}
-            value={filters.maxKd}
-            onChange={(e) =>
-              setFilters((prev) => ({
-                ...prev,
-                maxKd: Number(e.target.value) || 0,
-              }))
-            }
-            className="h-8 w-[72px] text-xs"
-          />
-        </label>
-        <button
-          type="button"
-          aria-pressed={filters.questionsOnly}
-          onClick={() =>
-            setFilters((prev) => ({
-              ...prev,
-              questionsOnly: !prev.questionsOnly,
-            }))
+      ) : (
+        <KeywordFilterBar
+          filters={liveFilters}
+          onChange={setLiveFilters}
+          hint={
+            classified
+              ? "Browse-only filters. Open Suitable for categories or Informational to Apply a set for the next stage."
+              : "Optional browse filters. They do not change the extract bill."
           }
-          className={cn(
-            "rounded-full border px-2.5 py-1 text-[11px] font-medium",
-            filters.questionsOnly
-              ? "border-primary/40 bg-primary/10 text-primary"
-              : "border-border/70 text-muted-foreground hover:text-foreground"
-          )}
-        >
-          Questions
-        </button>
-      </div>
+        />
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70">
         <div className="min-h-0 flex-1 overflow-auto">
@@ -454,13 +594,19 @@ export function StageExtractPanel({
         {analyzed ? (
           <>
             <p className="text-[11px] text-muted-foreground">
-              Informational queries and exclusions stay out. Next clusters the {filteredCategoryKeywords.length} active filtered category keywords into collection candidates.
+              {activeSheet === "category" && draftDirty
+                ? "Apply the category filters first so Next uses the set you see in this sheet."
+                : `Informational queries and exclusions stay out. Next sends the ${filteredCategoryKeywords.length.toLocaleString("en-US")} applied category terms to collection matching.`}
             </p>
             <Button
               size="sm"
               className="h-8 text-xs font-medium gap-1.5 transition-all"
               onClick={() => onNextCollections(filteredCategoryKeywords)}
-              disabled={filteredCategoryKeywords.length === 0 || clustering}
+              disabled={
+                filteredCategoryKeywords.length === 0 ||
+                clustering ||
+                (activeSheet === "category" && draftDirty)
+              }
             >
               {clustering ? (
                 <>

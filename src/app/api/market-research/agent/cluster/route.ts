@@ -15,6 +15,11 @@ import {
   saveProjectSliceAdmin,
   mergeById,
 } from "@/lib/market-research/storage-admin";
+import {
+  archiveRowsByPhrase,
+  filterClassifiedTerms,
+} from "@/lib/market-research/sheet-filters";
+import { normalizeKeywordFilters } from "@/components/market-research/workspace-data";
 import type { ProposedCollection } from "@/components/market-research/workspace-data";
 import type { MockNiche, MockSeedRow, NicheReading } from "@/components/market-research/mock-data";
 
@@ -72,13 +77,18 @@ export async function POST(request: NextRequest) {
       loadProjectProducts(auth.admin, parsed.data.workspaceId, parsed.data.projectId),
     ]);
 
-    const total = terms.length;
+    const byPhrase = archiveRowsByPhrase(archiveRows);
+    const surviving = filterClassifiedTerms(
+      terms,
+      byPhrase,
+      normalizeKeywordFilters(parsed.data.filters)
+    );
+    const total = surviving.length;
     const offset = Math.min(parsed.data.offset, total);
-    const page = terms.slice(offset, offset + PAGE_SIZE);
+    const page = surviving.slice(offset, offset + PAGE_SIZE);
     const nextOffset = offset + page.length;
     const done = nextOffset >= total;
 
-    const byPhrase = new Map(archiveRows.map((r) => [r.phrase, r]));
     const seedRows = [...(seedsSlice?.seedRows ?? []), ...(seedsSlice?.manualSeeds ?? [])];
     const seedRowById = new Map(seedRows.map((r) => [r.id, r]));
     const parentNiches = (nichesSlice?.structuredNiches ?? []).map((n) => n.name);
@@ -116,7 +126,9 @@ export async function POST(request: NextRequest) {
         products,
         seedRows,
         keywords: page.map((term) => {
-          const archiveRow = byPhrase.get(term.id);
+          const archiveRow =
+            byPhrase.get(term.id.trim().toLowerCase()) ??
+            byPhrase.get(term.keyword.trim().toLowerCase());
           return {
             id: term.id,
             keyword: term.keyword,

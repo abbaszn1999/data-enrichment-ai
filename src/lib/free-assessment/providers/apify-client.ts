@@ -195,7 +195,7 @@ export async function listDatasetItems<T>(
   const safeOffset = Math.max(0, Math.floor(offset));
   const safeLimit = Math.min(1000, Math.max(1, Math.floor(limit)));
   const items = await apifyFetch<T[]>(
-    `/datasets/${encodeURIComponent(datasetId)}/items?offset=${safeOffset}&limit=${safeLimit}&clean=true`
+    `/datasets/${encodeURIComponent(datasetId)}/items?offset=${safeOffset}&limit=${safeLimit}`
   );
   return Array.isArray(items) ? items : [];
 }

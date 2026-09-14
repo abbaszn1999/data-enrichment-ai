@@ -67,16 +67,30 @@ export async function POST(request: NextRequest) {
     }
 
     let duplicateIds = new Set<string>();
+    let matchesById = new Map<string, Array<{ id: string; name: string }>>();
     if (existingCollections.length > 0) {
       const newCollections = collections
         .filter((c) => c.status === "new")
         .map((c) => ({ id: c.id, name: c.name }));
-      duplicateIds = await runDuplicateCollectionExclusion(newCollections, existingCollections);
+      const result = await runDuplicateCollectionExclusion(
+        newCollections,
+        existingCollections
+      );
+      duplicateIds = result.duplicateIds;
+      matchesById = result.matchesById;
     }
 
-    const updated: ProposedCollection[] = collections.map((c) =>
-      duplicateIds.has(c.id) ? { ...c, status: "duplicate" as const } : c
-    );
+    const updated: ProposedCollection[] = collections.map((c) => {
+      if (!duplicateIds.has(c.id)) return c;
+      const matches = matchesById.get(c.id) ?? [];
+      return {
+        ...c,
+        status: "duplicate" as const,
+        ...(matches.length > 0
+          ? { duplicateMatches: matches, existingName: matches[0].name }
+          : {}),
+      };
+    });
 
     await saveProjectSliceAdmin(
       auth.admin,

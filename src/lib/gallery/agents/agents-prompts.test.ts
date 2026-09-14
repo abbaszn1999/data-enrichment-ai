@@ -87,7 +87,7 @@ describe("separated agent prompts and schemas", () => {
     expect(AI_GALLERY_RESPONSE_SCHEMA).toEqual({ type: "image", role: "gallery" });
   });
 
-  it("builds separate AI Main and Gallery prompts", () => {
+  it("builds separate AI Main and Gallery prompts from planner briefs", () => {
     const worksheet = {
       sessionId: "s",
       columns: ["SKU"],
@@ -98,7 +98,6 @@ describe("separated agent prompts and schemas", () => {
         scraping: DEFAULT_SCRAPING_SETTINGS,
         ai: {
           ...DEFAULT_AI_SETTINGS,
-          main: { imagesPerRow: 1, instructions: "Studio hero only" },
           instructions: "Show packaging",
         },
       },
@@ -118,15 +117,11 @@ describe("separated agent prompts and schemas", () => {
       worksheet,
       row,
       referenceImages: [],
-      mainIndex: 0,
-      mainTotal: 1,
-    });
-    const multiMainPrompt = buildAiMainPrompt({
-      worksheet,
-      row,
-      referenceImages: [],
-      mainIndex: 1,
-      mainTotal: 3,
+      brief: {
+        specClaim: "catalog identity",
+        visualBrief: "Clean centered hero on seamless studio sweep",
+        alt: "Product hero",
+      },
     });
     const galleryPrompt = buildAiGalleryPrompt({
       worksheet,
@@ -138,19 +133,23 @@ describe("separated agent prompts and schemas", () => {
           contentType: "image/jpeg",
         },
       ],
+      brief: {
+        specClaim: "waterproof shell",
+        visualBrief: "Water beading on the shell under hard light",
+        alt: "Waterproof proof",
+      },
       galleryIndex: 0,
     });
 
     expect(mainPrompt).toContain("Main ecommerce image");
-    expect(mainPrompt).toContain("Studio hero only");
-    expect(mainPrompt).not.toContain("Show packaging");
-    expect(mainPrompt).not.toContain("MULTIPLE MAIN IMAGES");
-    expect(multiMainPrompt).toContain("MULTIPLE MAIN IMAGES");
-    expect(multiMainPrompt).toContain("professionally distinct");
-    expect(multiMainPrompt).toContain("Main image 2 of 3");
+    expect(mainPrompt).toContain("catalog identity");
+    expect(mainPrompt).toContain("Clean centered hero on seamless studio sweep");
+    expect(mainPrompt).not.toContain("three-quarter front view");
     expect(galleryPrompt).toContain("Gallery ecommerce image");
-    expect(galleryPrompt).toContain("Show packaging");
-    expect(galleryPrompt).not.toContain("Studio hero only");
+    expect(galleryPrompt).toContain("waterproof shell");
+    expect(galleryPrompt).toContain("Water beading on the shell under hard light");
+    expect(galleryPrompt).not.toContain("three-quarter front view");
+    expect(galleryPrompt).toContain("canonical main product image");
   });
 
   it("sends manual brand colors only in colors mode", () => {
@@ -184,8 +183,11 @@ describe("separated agent prompts and schemas", () => {
       worksheet,
       row,
       referenceImages: [],
-      mainIndex: 0,
-      mainTotal: 1,
+      brief: {
+        specClaim: "identity",
+        visualBrief: "Studio hero",
+        alt: "Hero",
+      },
     });
     expect(colorsPrompt).toContain("Brand palette");
     expect(colorsPrompt).toContain("#111111");
@@ -209,8 +211,11 @@ describe("separated agent prompts and schemas", () => {
           contentType: "image/png",
         },
       ],
-      mainIndex: 0,
-      mainTotal: 1,
+      brief: {
+        specClaim: "identity",
+        visualBrief: "Studio hero",
+        alt: "Hero",
+      },
     });
     expect(imageModePrompt).not.toContain("Brand palette");
     expect(imageModePrompt).toContain("brand-guide");

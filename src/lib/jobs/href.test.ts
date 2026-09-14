@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { jobHref, jobKindLabel } from "./href";
-import { JOB_BATCH_SIZE, JOB_TASK_PLAN, SESSION_TIMEOUT_SECONDS } from "./config";
+import { JOB_BATCH_SIZE, GALLERY_ROW_TIMEOUT_SECONDS, JOB_TASK_PLAN, SESSION_TIMEOUT_SECONDS } from "./config";
 
 describe("jobHref", () => {
   it("builds catalog, gallery, and visualizer deep links", () => {
@@ -51,7 +51,8 @@ describe("jobHref", () => {
 
 describe("job scale knobs", () => {
   it("keeps startup-safe defaults that can be raised later", () => {
-    expect(JOB_BATCH_SIZE).toBeGreaterThanOrEqual(4);
+    expect(JOB_BATCH_SIZE).toBe(8);
+    expect(GALLERY_ROW_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(1_500);
     expect(JOB_TASK_PLAN).toBe("flex");
     expect(SESSION_TIMEOUT_SECONDS).toBe(86_400);
   });

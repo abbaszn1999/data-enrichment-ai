@@ -2,7 +2,7 @@ import type { WrStoreLinks } from "./types";
 
 /**
  * Real store link facts. NOT sent to the agent — every header link it
- * outputs must be a bare "#" (see WR_SKILL_INSTRUCTIONS), so handing it real
+ * outputs must be a bare "#" (see `skills/04-header-builder.md`), so handing it real
  * URLs would only invite it to use one, which is exactly the contradiction
  * this used to create (the taxonomy/store-links prompt text said "use this
  * real URL" while the system instruction said "always use #"). These are

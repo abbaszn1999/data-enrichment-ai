@@ -9,6 +9,7 @@ import {
   styleInstruction,
 } from "@/lib/gallery/agents/ai-shared";
 import { visualizerLog } from "@/lib/visualizer/log";
+import { loadVisualizerSkill } from "@/lib/visualizer/skill-loader";
 import {
   resolveVisualizerImageModel,
   type VisualizerBrandSettings,
@@ -46,6 +47,10 @@ export function buildVisualizerImagePrompt(params: {
   hasLogo: boolean;
   hasBrandGuide: boolean;
   referenceList: string;
+  /** Spec this slot must prove. Optional on older saved rows. */
+  specClaim?: string;
+  /** Skill 02 body, prepended when the caller loaded it. */
+  skillInstructions?: string;
 }): string {
   const useManualColors =
     params.images.brandingEnabled &&
@@ -57,7 +62,8 @@ export function buildVisualizerImagePrompt(params: {
     : [];
 
   return [
-    "Create exactly one production-ready ecommerce lifestyle or feature image.",
+    params.skillInstructions || "",
+    "Create exactly one production-ready 1:1 ecommerce still.",
     brandingInstruction({
       brandingEnabled: params.images.brandingEnabled,
       brandColors: colors,
@@ -65,8 +71,11 @@ export function buildVisualizerImagePrompt(params: {
       hasLogo: params.hasLogo,
       hasBrandGuide: params.hasBrandGuide,
     }),
-    "The attached product photo is the canonical product identity — preserve shape, color, materials, markings, and proportions exactly.",
+    "Identity lock: the attached product photo is the only allowed product identity — preserve shape, color, materials, markings, and proportions exactly.",
     `This image illustrates placeholder ${params.placeholderIndex} in a product description.`,
+    params.specClaim
+      ? `This image must visually prove: ${params.specClaim}`
+      : "",
     "Follow the visual brief closely while keeping the real product as the hero subject.",
     `Visual brief:\n${params.visualBrief}`,
     styleInstruction(params.images.style, false),
@@ -99,6 +108,7 @@ export async function generateVisualizerLifestyleImage(params: {
   product: Record<string, string>;
   visualBrief: string;
   placeholderIndex: number;
+  specClaim?: string;
   productReference?: VisualizerProductReference | null;
   supportingReferences?: VisualizerProductReference[];
 }): Promise<{
@@ -127,10 +137,13 @@ export async function generateVisualizerLifestyleImage(params: {
     .filter(Boolean)
     .join("\n");
 
+  const skill = await loadVisualizerSkill("image");
   const prompt = buildVisualizerImagePrompt({
     product: params.product,
     visualBrief: params.visualBrief,
     placeholderIndex: params.placeholderIndex,
+    specClaim: params.specClaim,
+    skillInstructions: skill.instructions,
     brand: params.brand,
     images: params.images,
     hasLogo,

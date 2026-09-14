@@ -262,6 +262,7 @@ function generationStageLabel(
   if (stage === "planning") {
     if (target === "gallery") return "Preparing gallery";
     if (target === "main") return "Preparing main images";
+    if (target === "full") return "Planning images";
     return "Preparing";
   }
   if (target === "gallery") return "Gallery images";
@@ -325,8 +326,6 @@ export default function ProductsGalleryPage() {
   ] = useState(false);
   const [scrapingMainImages, setScrapingMainImages] = useState("1");
   const [scrapingMainInstructions, setScrapingMainInstructions] = useState("");
-  const [aiMainImages, setAiMainImages] = useState("1");
-  const [aiMainInstructions, setAiMainInstructions] = useState("");
   const [scrapingImages, setScrapingImages] = useState("4");
   const [scrapingInstructions, setScrapingInstructions] = useState("");
   const [scrapingModel, setScrapingModel] = useState<"standard" | "pro">("standard");
@@ -492,8 +491,6 @@ export default function ProductsGalleryPage() {
     setScrapingAspectRatio(g.aspectRatio || "any");
 
     const a = ws.settings.ai ?? DEFAULT_AI_SETTINGS;
-    setAiMainImages(String(a.main?.imagesPerRow ?? 1));
-    setAiMainInstructions(a.main?.instructions || "");
     setAiModel(a.tier === "premium" ? "pro" : "standard");
     setAiImages(String(a.imagesPerRow ?? 4));
     setAiAspectRatio(a.aspectRatio || "1:1");
@@ -605,8 +602,8 @@ export default function ProductsGalleryPage() {
     };
     const ai: GalleryAiSettings = {
       main: {
-        imagesPerRow: Number(aiMainImages) || 1,
-        instructions: aiMainInstructions.slice(0, 2_000),
+        imagesPerRow: 1,
+        instructions: "",
       },
       tier: aiModel === "pro" ? "premium" : "standard",
       imagesPerRow: Number(aiImages) || 4,
@@ -647,8 +644,6 @@ export default function ProductsGalleryPage() {
     };
   }, [
     activeTab,
-    aiMainImages,
-    aiMainInstructions,
     aiAspectRatio,
     aiImages,
     aiInstructions,
@@ -1642,6 +1637,7 @@ export default function ProductsGalleryPage() {
     const selectionPhase = resolveSelectionRunPhase({
       originalImageColumn: originalCol,
       rows: selectedRowsForPhase,
+      provider: activeTab,
     });
     setGenerationRun({ total: rowIds.length, completed: 0 });
     setWorksheet((current) =>
@@ -1670,6 +1666,7 @@ export default function ProductsGalleryPage() {
                   selectionPhase.phase === "mixed"
                     ? null
                     : selectionPhase.phase,
+                provider: activeTab,
               });
               return {
                 ...row,
@@ -1696,8 +1693,7 @@ export default function ProductsGalleryPage() {
         imagesPerRow:
           Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4,
         mainImagesPerRow:
-          Number(activeTab === "scraping" ? scrapingMainImages : aiMainImages) ||
-          1,
+          Number(activeTab === "scraping" ? scrapingMainImages : "1") || 1,
         // Mixed selections omit runPhase so the server resolves per row.
         ...(selectionPhase.phase === "mixed"
           ? {}
@@ -1821,6 +1817,7 @@ export default function ProductsGalleryPage() {
     const retryPhase = resolveSelectionRunPhase({
       originalImageColumn: originalCol,
       rows: targetRow ? [targetRow] : [],
+      provider: activeTab,
     });
     setWorksheet((current) =>
       current
@@ -1846,6 +1843,7 @@ export default function ProductsGalleryPage() {
                 row,
                 requested:
                   retryPhase.phase === "mixed" ? null : retryPhase.phase,
+                provider: activeTab,
               });
               return {
                 ...row,
@@ -1873,8 +1871,7 @@ export default function ProductsGalleryPage() {
         imagesPerRow:
           Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4,
         mainImagesPerRow:
-          Number(activeTab === "scraping" ? scrapingMainImages : aiMainImages) ||
-          1,
+          Number(activeTab === "scraping" ? scrapingMainImages : "1") || 1,
         ...(retryPhase.phase === "mixed"
           ? {}
           : { runPhase: retryPhase.phase }),
@@ -2447,7 +2444,7 @@ export default function ProductsGalleryPage() {
       : 0);
   const expectedMainSlots = Math.max(
     1,
-    Number(activeTab === "scraping" ? scrapingMainImages : aiMainImages) || 1
+    Number(activeTab === "scraping" ? scrapingMainImages : "1") || 1
   );
   const expectedGallerySlots = Math.max(
     1,
@@ -2487,6 +2484,7 @@ export default function ProductsGalleryPage() {
       originalImageColumn:
         originalImageColumn === "none" ? null : originalImageColumn,
       rows: selectedRowsForPhase,
+      provider: activeTab,
     });
     const generateButtonLabel =
       isGenerating || generationRun
@@ -2652,14 +2650,12 @@ export default function ProductsGalleryPage() {
                       : "No URL columns detected in this sheet. Use “Find a new main image” or add a column with image/page links."}
                   </p>
                 ) : null}
-                {originalImageColumn === "none" ? (
+                {originalImageColumn === "none" && activeTab === "scraping" ? (
                   <>
                     <ConfigSelect
                       label="Main images per product"
-                      value={activeTab === "scraping" ? scrapingMainImages : aiMainImages}
-                      onChange={
-                        activeTab === "scraping" ? setScrapingMainImages : setAiMainImages
-                      }
+                      value={scrapingMainImages}
+                      onChange={setScrapingMainImages}
                       options={[
                         { value: "1", label: "1 image" },
                         { value: "2", label: "2 images" },
@@ -2674,15 +2670,9 @@ export default function ProductsGalleryPage() {
                         Main · Custom instructions
                       </span>
                       <textarea
-                        value={
-                          activeTab === "scraping"
-                            ? scrapingMainInstructions
-                            : aiMainInstructions
-                        }
+                        value={scrapingMainInstructions}
                         onChange={(event) =>
-                          activeTab === "scraping"
-                            ? setScrapingMainInstructions(event.target.value)
-                            : setAiMainInstructions(event.target.value)
+                          setScrapingMainInstructions(event.target.value)
                         }
                         className="min-h-28 w-full resize-none rounded-md border bg-background p-3 text-xs leading-relaxed outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
                         placeholder="Prefer clean white-background packshots, front-facing product shots, official brand photography..."

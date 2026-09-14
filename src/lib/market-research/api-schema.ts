@@ -162,12 +162,21 @@ export const embeddingsProductsBodySchema = z.object({
   offset: z.number().int().nonnegative(),
 });
 
+export const keywordSheetFiltersSchema = z.object({
+  minVolume: z.number().nonnegative().optional(),
+  maxKd: z.number().min(0).max(100).optional(),
+  questionsOnly: z.boolean().optional(),
+  query: z.string().max(200).optional(),
+});
+
 // Embeds surviving category terms with their PLP context (Tab 4 -> 5
-// loading). Cursor job over the classified archive.
+// loading). Cursor job over the classified archive after Tab 4 Apply.
 export const embeddingsTermsBodySchema = z.object({
   workspaceId: workspaceIdSchema,
   projectId: projectIdSchema,
   offset: z.number().int().nonnegative(),
+  /** Applied "Suitable for categories" sheet filters from Tab 4. */
+  filters: keywordSheetFiltersSchema.optional(),
 });
 
 export const agentSeedsBodySchema = z.object({
@@ -219,6 +228,8 @@ export const agentClusterBodySchema = z.object({
   projectId: projectIdSchema,
   mode: z.literal("archive"),
   offset: z.number().int().nonnegative(),
+  /** Applied "Suitable for categories" sheet filters from Tab 4. */
+  filters: keywordSheetFiltersSchema.optional(),
 });
 
 // Stage 5 Phase 3 (duplicate-collection exclusion) runs once, after the

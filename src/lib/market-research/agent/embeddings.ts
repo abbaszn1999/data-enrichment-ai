@@ -15,6 +15,11 @@ const MAX_BATCH_SIZE = 256;
 const MAX_CHARS_PER_INPUT = 2000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Text embedded for a category term. Phrase only — collection context is a later scope filter. */
+export function termEmbedText(keyword: string): string {
+  return keyword.trim();
+}
+
 /** Cheap content hash used to skip re-embedding text that hasn't changed. */
 export function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");

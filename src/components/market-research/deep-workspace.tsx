@@ -12,12 +12,14 @@ import type {
   CollectionLink,
   ExtractedKeyword,
   FlowTab,
+  KeywordFilters,
   MarketResearchProduct,
   OnPageInstructionField,
   OnPageInstructions,
   GeneratedArticle,
   ProposedCollection,
   SeedExtractProgress,
+  SheetKeywordFilters,
   StoreBlog,
   StrategyArticle,
   WorkspaceTab,
@@ -47,8 +49,12 @@ export function DeepWorkspace({
   onNextCollections,
   onCancelExtract,
   keywordsCsvHref,
+  appliedSheetFilters,
+  onApplySheetFilters,
   collections,
   products,
+  workspaceId,
+  projectId,
   clustering,
   clusterProgress,
   termEmbedProgress,
@@ -116,8 +122,15 @@ export function DeepWorkspace({
   onNextCollections: (filteredCategoryKeywords?: ExtractedKeyword[]) => void;
   onCancelExtract?: () => void;
   keywordsCsvHref?: string;
+  appliedSheetFilters?: SheetKeywordFilters;
+  onApplySheetFilters?: (
+    sheet: "category" | "informational",
+    filters: KeywordFilters
+  ) => void;
   collections: ProposedCollection[];
   products?: MarketResearchProduct[];
+  workspaceId?: string;
+  projectId?: string;
   clustering: boolean;
   /** Live progress across the Stage 5 cluster cursor job's offset pages. */
   clusterProgress?: { processed: number; total: number } | null;
@@ -145,7 +158,7 @@ export function DeepWorkspace({
   pushed: boolean;
   syncingSeo?: boolean;
   seoSynced?: boolean;
-  onStartContent: () => void;
+  onStartContent: (ids: string[]) => void;
   onPush: () => void;
   onSyncSeo?: () => void;
   pushCostUsd?: number;
@@ -216,12 +229,16 @@ export function DeepWorkspace({
             clustering={clustering}
             onCancelExtract={onCancelExtract}
             csvHref={keywordsCsvHref}
+            appliedSheetFilters={appliedSheetFilters}
+            onApplySheetFilters={onApplySheetFilters}
           />
         ) : null}
         {tab === "collections" ? (
           <StageCollectionSheet
             collections={collections}
             products={products}
+            workspaceId={workspaceId}
+            projectId={projectId}
             loading={clustering}
             loadingProgress={clusterProgress}
             termEmbedProgress={termEmbedProgress}

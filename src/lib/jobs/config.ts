@@ -16,5 +16,10 @@ export const ENRICH_CHECKPOINT_MS = 30_000;
 export const WORKSHEET_CHECKPOINT_ROWS = 20;
 export const WORKSHEET_CHECKPOINT_MS = 30_000;
 export const ENRICH_ROW_TIMEOUT_SECONDS = 600;
+/**
+ * Gallery AI Full = planner (≤180s) + 1 Main (≤90s) + up to 8 Gallery (≤90s
+ * each) plus uploads. 600s would kill a slow Full row on Render.
+ */
+export const GALLERY_ROW_TIMEOUT_SECONDS = 1_500;
 export const SESSION_TIMEOUT_SECONDS = 86_400;
 export const JOB_TASK_PLAN = "flex" as const;

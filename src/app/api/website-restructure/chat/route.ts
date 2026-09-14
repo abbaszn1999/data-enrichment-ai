@@ -15,6 +15,7 @@ import {
   downloadWrImageAsInline,
   isWrChatAttachmentPath,
   loadWrBriefAdmin,
+  loadWrNavPlanAdmin,
   loadWrTaxonomyAdmin,
   loadWrVersionAdmin,
   saveWrVersionAdmin,
@@ -22,7 +23,13 @@ import {
 } from "@/lib/website-restructure/storage";
 import { runEdit } from "@/lib/website-restructure/agent";
 import { WR_MAX_EDIT_MESSAGES } from "@/lib/website-restructure/types";
-import type { WrChatAttachment, WrChatMessage, WrUploadedImage, WrVersion } from "@/lib/website-restructure/types";
+import type {
+  WrChatAttachment,
+  WrChatMessage,
+  WrNavPlan,
+  WrUploadedImage,
+  WrVersion,
+} from "@/lib/website-restructure/types";
 import {
   resolveWrEditInstruction,
   wrEditWantsLogoFromAttachments,
@@ -100,14 +107,47 @@ export async function POST(request: NextRequest) {
 
   const stream = createNdjsonStream(async (push) => {
     try {
-      const [brief, tree, currentVersion] = await Promise.all([
+      const [brief, tree, currentVersion, navPlan] = await Promise.all([
         loadWrBriefAdmin(auth.admin, workspaceId, projectId),
         loadWrTaxonomyAdmin(auth.admin, workspaceId, projectId),
         loadWrVersionAdmin(auth.admin, workspaceId, projectId, project.activeVersion),
+        loadWrNavPlanAdmin(auth.admin, workspaceId, projectId),
       ]);
       if (!brief || !tree || !currentVersion) {
         throw new Error("Missing prior build data — this project needs a fresh build.");
       }
+      // Older projects built before the IA planner existed have no saved nav
+      // plan — fall back to an empty one so the edit prompt uses the raw
+      // taxonomy tree directly instead of failing.
+      const effectiveNavPlan: WrNavPlan = navPlan ?? {
+        nodes: [],
+        maxDepth: 0,
+        coverage: { totalClusters: 0, coveredClusters: 0, orphanedClusterRefs: [] },
+        generatedAt: new Date(0).toISOString(),
+      };
+
+      // The original header screenshots + logo go back to the model on every
+      // edit too, so its visual identity stays anchored across edits instead
+      // of drifting from just the current HTML/CSS.
+      const [downloadedScreenshots, logoImage] = await Promise.all([
+        Promise.all(
+          project.state.images.map(async (img) => {
+            const inline = await downloadWrImageAsInline(auth.admin, img.storagePath);
+            if (!inline) {
+              console.warn(
+                `[website-restructure/chat] original screenshot ${img.storagePath} could not be re-read for this edit`
+              );
+            }
+            return inline;
+          })
+        ),
+        project.state.logo
+          ? downloadWrImageAsInline(auth.admin, project.state.logo.storagePath)
+          : Promise.resolve(null),
+      ]);
+      const headerScreenshots = downloadedScreenshots.filter(
+        (img): img is { mimeType: string; data: string } => img !== null
+      );
 
       const editImages: Array<{ mimeType: string; data: string; filename: string }> = [];
       if (attachments.length > 0) {
@@ -116,18 +156,23 @@ export async function POST(request: NextRequest) {
           message:
             attachments.length === 1 ? "Reading your attached image" : `Reading ${attachments.length} attached images`,
         });
-        for (const att of attachments) {
-          const inline = await downloadWrImageAsInline(auth.admin, att.storagePath);
-          if (!inline) {
-            console.warn(
-              `[website-restructure/chat] attachment "${att.filename}" (${att.storagePath}) could not be read`
-            );
-            continue;
-          }
-          const mimeType = inline.mimeType.toLowerCase().startsWith("image/")
-            ? inline.mimeType
-            : att.mimeType || "image/png";
-          editImages.push({ mimeType, data: inline.data, filename: att.filename });
+        const downloaded = await Promise.all(
+          attachments.map(async (att) => {
+            const inline = await downloadWrImageAsInline(auth.admin, att.storagePath);
+            if (!inline) {
+              console.warn(
+                `[website-restructure/chat] attachment "${att.filename}" (${att.storagePath}) could not be read`
+              );
+              return null;
+            }
+            const mimeType = inline.mimeType.toLowerCase().startsWith("image/")
+              ? inline.mimeType
+              : att.mimeType || "image/png";
+            return { mimeType, data: inline.data, filename: att.filename };
+          })
+        );
+        for (const img of downloaded) {
+          if (img) editImages.push(img);
         }
         if (editImages.length === 0) {
           throw new Error("Could not read the attached image. Try uploading it again.");
@@ -147,6 +192,9 @@ export async function POST(request: NextRequest) {
         brief,
         currentResult: currentVersion.result,
         taxonomyTree: tree,
+        navPlan: effectiveNavPlan,
+        headerScreenshots,
+        logoImage,
         recentChat,
         instruction,
         images: editImages,

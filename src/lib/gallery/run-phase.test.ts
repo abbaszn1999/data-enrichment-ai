@@ -107,6 +107,54 @@ describe("resolveGalleryRunPhase", () => {
       })
     ).toBe("gallery");
   });
+
+  it("AI remaps requested main to full so Generate never stops after Main", () => {
+    expect(
+      resolveGalleryRunPhase({
+        originalImageColumn: null,
+        row: { mainImagePath: null, mainImagePaths: [] },
+        requested: "main",
+        provider: "ai",
+      })
+    ).toBe("full");
+  });
+
+  it("AI auto-selects full when creating Main with AI", () => {
+    expect(
+      resolveGalleryRunPhase({
+        originalImageColumn: null,
+        row: { mainImagePath: null, mainImagePaths: [] },
+        provider: "ai",
+      })
+    ).toBe("full");
+  });
+
+  it("AI auto-selects gallery when a sheet photo exists", () => {
+    expect(
+      resolveGalleryRunPhase({
+        originalImageColumn: "Image",
+        row: {
+          mainImagePath: null,
+          mainImagePaths: [],
+          originalData: { Image: "https://cdn.example/original.png" },
+        },
+        provider: "ai",
+      })
+    ).toBe("gallery");
+  });
+
+  it("AI auto-selects gallery when Main already exists", () => {
+    expect(
+      resolveGalleryRunPhase({
+        originalImageColumn: null,
+        row: {
+          mainImagePath: "stored/main.png",
+          mainImagePaths: ["stored/main.png"],
+        },
+        provider: "ai",
+      })
+    ).toBe("gallery");
+  });
 });
 
 describe("resolveSelectionRunPhase", () => {
@@ -136,6 +184,30 @@ describe("resolveSelectionRunPhase", () => {
       ],
     });
     expect(result).toEqual({ phase: "main", label: "Generate main" });
+  });
+
+  it("labels Generate full on the AI tab when creating Main", () => {
+    const result = resolveSelectionRunPhase({
+      originalImageColumn: null,
+      rows: [{ mainImagePath: null, mainImagePaths: [] }],
+      provider: "ai",
+    });
+    expect(result).toEqual({ phase: "full", label: "Generate full" });
+  });
+
+  it("labels Generate gallery on the AI tab when a sheet photo exists", () => {
+    const result = resolveSelectionRunPhase({
+      originalImageColumn: "Image",
+      rows: [
+        {
+          mainImagePath: null,
+          mainImagePaths: [],
+          originalData: { Image: "https://cdn.example/a.png" },
+        },
+      ],
+      provider: "ai",
+    });
+    expect(result).toEqual({ phase: "gallery", label: "Generate gallery" });
   });
 
   it("marks mixed selections so the server can resolve per row", () => {

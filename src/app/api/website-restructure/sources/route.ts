@@ -3,11 +3,51 @@ import { requireWrAuth } from "@/lib/website-restructure/auth";
 import { jsonError, projectIdSchema, workspaceIdSchema } from "@/lib/website-restructure/api-schema";
 import { loadIntegration } from "@/lib/growth-sync/repo";
 import { getProvider, isProviderSupported } from "@/lib/sync/core/registry";
-import type { IntegrationRecord } from "@/lib/sync/core/types";
+import type { IntegrationRecord, TaxonomySummary } from "@/lib/sync/core/types";
+import { fetchShopifyVendorBrands, fetchWooBrandTaxonomy } from "@/lib/sync/brand-taxonomy";
 import { buildWrStoreLinks } from "@/lib/website-restructure/provider-links";
 import { buildWrTaxonomyTree } from "@/lib/website-restructure/taxonomy-tree";
 import { getWrProjectRow, setWrPhase } from "@/lib/website-restructure/server-persist";
 import { saveWrTaxonomyAdmin } from "@/lib/website-restructure/storage";
+
+/**
+ * Real brand/vendor PLPs, synthesized alongside the normal taxonomy list so
+ * the IA planner can elect brand pillars (e.g. "Gucci") from real store data
+ * instead of guessing from collection titles alone.
+ *
+ * Time-boxed well inside this route's own `maxDuration`, and never thrown on
+ * failure: Shopify's vendor roster is derived by walking every product, which
+ * on a large store takes longer than the whole request is allowed to live.
+ * Loading the store's categories must not hinge on finishing that walk, so a
+ * slow store yields a partial (or empty) brand roster instead of a timeout.
+ */
+const WR_BRAND_FETCH_BUDGET_MS = 25_000;
+
+async function fetchWrBrandTaxonomies(
+  providerId: string,
+  integration: IntegrationRecord
+): Promise<TaxonomySummary[]> {
+  try {
+    const options = { timeBudgetMs: WR_BRAND_FETCH_BUDGET_MS };
+    const brands =
+      providerId === "woocommerce"
+        ? await fetchWooBrandTaxonomy(integration, options)
+        : providerId === "shopify"
+          ? await fetchShopifyVendorBrands(integration, options)
+          : [];
+    return brands.map((b) => ({
+      id: b.id,
+      title: b.name,
+      handle: b.handle,
+      productCount: b.productCount,
+      manual: true,
+      kind: "brand" as const,
+    }));
+  } catch (error) {
+    console.error("[website-restructure/sources] Failed to fetch brand taxonomies:", error);
+    return [];
+  }
+}
 
 export const maxDuration = 60;
 
@@ -45,8 +85,9 @@ export async function GET(request: NextRequest) {
     const provider = getProvider(integrationRow.provider);
     const integration = integrationRow as IntegrationRecord;
 
-    const [taxonomies, navResult, workspaceRow] = await Promise.all([
+    const [taxonomies, brandTaxonomies, navResult, workspaceRow] = await Promise.all([
       provider.taxonomy?.list ? provider.taxonomy.list({ integration }) : Promise.resolve([]),
+      fetchWrBrandTaxonomies(provider.id, integration),
       provider.navigation ? provider.navigation.list({ integration }) : Promise.resolve(null),
       auth.admin
         .from("workspaces")
@@ -57,12 +98,12 @@ export async function GET(request: NextRequest) {
 
     const storeLinks = buildWrStoreLinks(provider.id, integrationRow.base_url ?? "");
     const tree = buildWrTaxonomyTree({
-      taxonomies,
+      taxonomies: [...taxonomies, ...brandTaxonomies],
       navigationMenus: navResult?.menus ?? null,
       navigationUnavailableReason: navResult?.unavailableReason,
       storeLinks,
       // Same default as the Market Research push route, so the collections it
-      // created are recognized and left out of the header's category list.
+      // created are tagged growth-engine and kept out of the vision slice.
       generatedCollectionPrefix:
         (workspaceRow.data?.collection_prefix as string | null)?.trim() || "AI",
     });

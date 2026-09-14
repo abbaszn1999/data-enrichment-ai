@@ -7,6 +7,7 @@ import {
   LineChart,
   Percent,
   TrendingUp,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,11 +23,11 @@ import { formatUsd } from "./mock-data";
 import { USD_PER_COLLECTION, type ProposedCollection } from "./workspace-data";
 import { cn } from "@/lib/utils";
 
-/** Conservative share of monthly search volume modeled as organic sessions. */
-export const TRAFFIC_HORIZONS = [
-  { months: 3, capture: 0.1, label: "3 months", note: "Index & early ranks" },
-  { months: 6, capture: 0.2, label: "6 months", note: "Compounding ranks" },
-  { months: 12, capture: 0.35, label: "12 months", note: "Mature capture" },
+/** Share of selected monthly search volume modeled as organic sessions. */
+export const CAPTURE_SCENARIOS = [
+  { capture: 0.05, label: "5%", note: "Weak ranks" },
+  { capture: 0.12, label: "12%", note: "Typical page 1" },
+  { capture: 0.25, label: "25%", note: "Strong #1–2" },
 ] as const;
 
 const DEFAULT_AOV = 80;
@@ -76,6 +77,45 @@ export function projectHorizon(params: {
   return { sessions, orders, revenue };
 }
 
+export function proposalRoi(monthlySales: number, publishCost: number) {
+  if (!(publishCost > 0) || !Number.isFinite(monthlySales)) return null;
+  return {
+    multiple: monthlySales / publishCost,
+    pct: ((monthlySales - publishCost) / publishCost) * 100,
+  };
+}
+
+export function formatRoiMultiple(value: number) {
+  if (value >= 10) return value.toFixed(0);
+  if (value >= 1) return value.toFixed(1);
+  return value.toFixed(2);
+}
+
+export function formatProposalRoiBrief(params: {
+  scenarios: Array<{
+    capture: number;
+    label: string;
+    note: string;
+    revenue: number;
+  }>;
+  publishCost: number;
+}) {
+  const { scenarios, publishCost } = params;
+  const percents = scenarios.map((s) => s.label).join(", ").replace(/, ([^,]*)$/, ", or $1");
+  const sales = scenarios.map((s) => formatUsd(s.revenue)).join(", ");
+  if (!(publishCost > 0)) {
+    return `If these collections capture ${percents} of their search volume, estimated monthly sales are ${sales}.`;
+  }
+  const multiples = scenarios
+    .map((s) => {
+      const roi = proposalRoi(s.revenue, publishCost);
+      return roi ? `${formatRoiMultiple(roi.multiple)}×` : "—";
+    })
+    .join(", ")
+    .replace(/, ([^,]*)$/, ", and $1");
+  return `Publishing this selection costs ${formatUsd(publishCost)}. If these collections capture ${percents} of their search volume, estimated monthly sales are ${sales} — about ${multiples} the one-time publish cost.`;
+}
+
 function formatCount(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 10_000) return `${Math.round(value / 1_000).toLocaleString("en-US")}K`;
@@ -109,21 +149,19 @@ export function CollectionProposalDialog({
   const stats = useMemo(() => summarizeSelection(collections), [collections]);
   const publishCost = stats.count * USD_PER_COLLECTION;
 
-  const horizons = useMemo(
+  const scenarios = useMemo(
     () =>
-      TRAFFIC_HORIZONS.map((horizon) => ({
-        ...horizon,
+      CAPTURE_SCENARIOS.map((scenario) => ({
+        ...scenario,
         ...projectHorizon({
           monthlyVolume: stats.totalVolume,
-          capture: horizon.capture,
+          capture: scenario.capture,
           croPct,
           aov,
         }),
       })),
     [stats.totalVolume, croPct, aov]
   );
-
-  const yearRunRate = horizons[2]?.revenue ?? 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -157,7 +195,7 @@ export function CollectionProposalDialog({
               icon={Layers}
               label="Collections selected"
               value={stats.count.toLocaleString("en-US")}
-              hint={`${formatUsd(publishCost)} to publish`}
+              hint="Checked on this sheet"
             />
             <StatCard
               icon={TrendingUp}
@@ -171,6 +209,28 @@ export function CollectionProposalDialog({
               value={stats.avgKd.toFixed(0)}
               hint="Volume-weighted difficulty"
             />
+          </div>
+
+          <div className="relative overflow-hidden rounded-2xl border border-[#400095]/20 bg-gradient-to-r from-[#400095]/[0.08] via-card to-[#F76D01]/[0.07] px-5 py-4 dark:border-[#F76D01]/25">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#400095] text-white shadow-[0_8px_20px_rgba(64,0,149,.18)] dark:bg-[#F76D01]">
+                  <Wallet className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Cost to publish
+                  </p>
+                  <p className="mt-1 text-[1.65rem] font-black leading-none tracking-tight tabular-nums text-foreground">
+                    {formatUsd(publishCost)}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground sm:max-w-[220px] sm:text-right">
+                {formatUsd(USD_PER_COLLECTION)} each · {stats.count.toLocaleString("en-US")} collection
+                {stats.count === 1 ? "" : "s"} · one-time
+              </p>
+            </div>
           </div>
 
           <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
@@ -236,9 +296,9 @@ export function CollectionProposalDialog({
               Projected monthly run-rate
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              {horizons.map((horizon, index) => (
+              {scenarios.map((scenario, index) => (
                 <div
-                  key={horizon.months}
+                  key={scenario.label}
                   className={cn(
                     "flex flex-col rounded-2xl border p-4",
                     index === 2
@@ -247,11 +307,10 @@ export function CollectionProposalDialog({
                   )}
                 >
                   <p className="text-[11px] font-bold uppercase tracking-wider text-foreground">
-                    After {horizon.label}
+                    If we capture {scenario.label}
                   </p>
                   <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                    {horizon.note} · capturing {Math.round(horizon.capture * 100)}% of
-                    search volume
+                    {scenario.note} · {scenario.label} of selected search volume
                   </p>
 
                   <div className="mt-4 rounded-xl bg-background/80 px-3 py-3 ring-1 ring-border/60">
@@ -259,7 +318,7 @@ export function CollectionProposalDialog({
                       Sales / month
                     </p>
                     <p className="mt-1 text-[1.65rem] font-black leading-none tracking-tight tabular-nums text-primary">
-                      {formatUsd(horizon.revenue)}
+                      {formatUsd(scenario.revenue)}
                     </p>
                   </div>
 
@@ -269,7 +328,7 @@ export function CollectionProposalDialog({
                         Orders
                       </p>
                       <p className="mt-1 text-lg font-bold leading-none tabular-nums text-foreground">
-                        {formatOrders(horizon.orders)}
+                        {formatOrders(scenario.orders)}
                       </p>
                       <p className="mt-1 text-[10px] text-muted-foreground">
                         / month
@@ -280,7 +339,7 @@ export function CollectionProposalDialog({
                         Sessions
                       </p>
                       <p className="mt-1 text-lg font-bold leading-none tabular-nums text-foreground">
-                        {formatCount(horizon.sessions)}
+                        {formatCount(scenario.sessions)}
                       </p>
                       <p className="mt-1 text-[10px] text-muted-foreground">
                         / month
@@ -293,12 +352,7 @@ export function CollectionProposalDialog({
           </div>
 
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            At the 12-month capture rate, this selection is a{" "}
-            <span className="font-semibold text-foreground">
-              {formatUsd(yearRunRate)}
-            </span>{" "}
-            monthly sales run-rate on your AOV and conversion — not a guarantee.
-            Rankings, inventory, and on-page work still have to earn the click.
+            {formatProposalRoiBrief({ scenarios, publishCost })}
           </p>
         </div>
 

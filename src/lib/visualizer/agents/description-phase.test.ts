@@ -10,6 +10,7 @@ import {
 import { estimateDescriptionCredits } from "@/lib/visualizer/pricing";
 import { validateVisualizerSettings } from "@/lib/visualizer/row-fields";
 import { buildVisualizerResultsHeaders } from "@/lib/visualizer/results-xlsx";
+import { loadVisualizerSkill } from "@/lib/visualizer/skill-loader";
 import {
   createEmptyVisualizerWorksheet,
   DEFAULT_VISUALIZER_SETTINGS,
@@ -67,7 +68,7 @@ describe("visualizer description phase helpers", () => {
     ).toMatch(/image URLs/i);
   });
 
-  it("builds the elite prompt with analysis phases and brand colors", () => {
+  it("injects layout, product, and brand colors — craft lives in skill 01, not the runtime blob", async () => {
     const prompt = buildDescriptionUserPrompt({
       product: { productName: "Leather bag" },
       layoutId: "zigzag",
@@ -78,8 +79,6 @@ describe("visualizer description phase helpers", () => {
         colorSecondary: "#F06E3C",
       },
     });
-    expect(prompt).toContain("PHASE 1: VISUAL PRODUCT ANALYSIS");
-    expect(prompt).toContain("PHASE 5: PROFESSIONAL E-COMMERCE VISUAL PROMPT ENGINEERING");
     expect(prompt).toContain("[imageplaceholder-1]");
     expect(prompt).toContain("[imageplaceholder-3]");
     expect(prompt).toContain("SELECTED LAYOUT: Zigzag");
@@ -88,10 +87,18 @@ describe("visualizer description phase helpers", () => {
     expect(prompt).toContain("#111827");
     expect(prompt).toContain("#F06E3C");
     expect(prompt).toContain("Leather bag");
-    expect(prompt).toContain("CONTEXT-DRIVEN VISUAL STORYTELLING");
+    expect(prompt).not.toContain("PHASE 1: VISUAL PRODUCT ANALYSIS");
+    expect(prompt).not.toContain("8K");
     expect(prompt).not.toContain("BRAND COLOR PALETTE");
     expect(prompt).not.toContain("BRAND LOGO REFERENCE");
     expect(prompt).not.toContain("SCENE / MODEL REFERENCE");
+
+    const skill = await loadVisualizerSkill("description");
+    expect(skill.frontmatter.thinking).toBe("high");
+    expect(skill.instructions).toMatch(/Inventory every specification/i);
+    expect(skill.instructions).toMatch(/One slot = one visual proof/i);
+    expect(skill.instructions).toMatch(/Identity lock/i);
+    expect(skill.instructions).toMatch(/quality spam/i);
   });
 
   it("embeds the exact selected layout rules for feature-grid", () => {
@@ -222,6 +229,12 @@ describe("visualizer description phase helpers", () => {
       "description",
       "imagePlaceholders",
       "notes",
+    ]);
+    expect(schema.properties.imagePlaceholders.items.required).toEqual([
+      "index",
+      "specClaim",
+      "visualBrief",
+      "alt",
     ]);
     expect(schema.properties.imagePlaceholders.maxItems).toBe(4);
     expect(schema.properties.imagePlaceholders.minItems).toBe(4);
