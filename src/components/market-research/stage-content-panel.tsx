@@ -825,7 +825,7 @@ export function StageContentPanel({
           if (!open) setSitemapUrlCopied(false);
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="overflow-hidden sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
               <MapPinned className="h-4 w-4 text-primary" />
@@ -838,7 +838,7 @@ export function StageContentPanel({
               ready for Google Search Console.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 py-1">
+          <div className="min-w-0 space-y-3 overflow-hidden py-1">
             <ol className="space-y-2.5 text-xs text-muted-foreground">
               <li className="flex gap-2">
                 <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
@@ -909,7 +909,7 @@ export function StageContentPanel({
               on purpose.
             </p>
           </div>
-          <DialogFooter className="gap-2 sm:gap-2">
+          <DialogFooter className="flex-wrap gap-2 sm:gap-2">
             <Button
               size="sm"
               variant="outline"
