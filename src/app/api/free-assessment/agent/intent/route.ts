@@ -10,11 +10,14 @@ import {
   appendClassifiedShardAdmin,
   loadClassifiedManifestAdmin,
   loadProjectSliceAdmin,
-  saveProjectSliceAdmin,
   type ClassifiedShardItem,
 } from "@/lib/free-assessment/storage-admin";
 import type { ExtractedKeyword } from "@/components/free-assessment/workspace-data";
-import { applyKeywordClassifications } from "@/lib/free-assessment/map-keywords";
+import {
+  MAX_DISPLAY_ROWS,
+  toExtractedKeyword,
+} from "@/lib/free-assessment/map-keywords";
+import { overlayAndPersistKeywordClassifications } from "@/lib/free-assessment/extract-advance";
 
 export const maxDuration = 60;
 
@@ -87,27 +90,26 @@ export async function POST(request: NextRequest) {
         { done }
       );
 
-      // Overlay the same verdicts onto the UI's capped display sample by
-      // keyword text, so the table keeps showing sheet/reason for whatever
-      // it already has — archive rows and UI sample rows don't share an id
-      // space, so text is the only stable join key here.
-      const stored = await loadProjectSliceAdmin<ExtractedKeyword[]>(
+      // Classified shards are the source of truth. Re-apply the full archive
+      // onto the Extract sample every page so Tab 4 cannot keep the extract
+      // default (`sheet: "category"`) after Gemini has already classified.
+      let stored = await loadProjectSliceAdmin<ExtractedKeyword[]>(
         auth.admin,
         parsed.data.workspaceId,
         parsed.data.projectId,
         "keywords"
       ).catch(() => null);
-
-      if (Array.isArray(stored) && stored.length > 0) {
-        const updated = applyKeywordClassifications(stored, items);
-        await saveProjectSliceAdmin(
-          auth.admin,
-          parsed.data.workspaceId,
-          parsed.data.projectId,
-          "keywords",
-          updated
-        ).catch((err) => console.error("[fa-intent] Error saving keywords slice:", err));
+      if (!Array.isArray(stored) || stored.length === 0) {
+        stored = archive.slice(0, MAX_DISPLAY_ROWS).map((row, index) =>
+          toExtractedKeyword(row, row.seedId || row.seed || "seed", index)
+        );
       }
+      await overlayAndPersistKeywordClassifications(
+        auth.admin,
+        parsed.data.workspaceId,
+        parsed.data.projectId,
+        stored
+      );
     }
 
     const manifest = await loadClassifiedManifestAdmin(

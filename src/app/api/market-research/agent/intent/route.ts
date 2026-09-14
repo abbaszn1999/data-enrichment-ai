@@ -8,13 +8,17 @@ import { runStage4IntentClassification } from "@/lib/market-research/agent/stage
 import {
   loadExtractRowsAdmin,
   appendClassifiedShardAdmin,
+  clearClassifiedShardsAdmin,
   loadClassifiedManifestAdmin,
   loadProjectSliceAdmin,
-  saveProjectSliceAdmin,
   type ClassifiedShardItem,
 } from "@/lib/market-research/storage-admin";
 import type { ExtractedKeyword } from "@/components/market-research/workspace-data";
-import { applyKeywordClassifications } from "@/lib/market-research/map-keywords";
+import {
+  MAX_DISPLAY_ROWS,
+  toExtractedKeyword,
+} from "@/lib/market-research/map-keywords";
+import { overlayAndPersistKeywordClassifications } from "@/lib/market-research/extract-advance";
 
 export const maxDuration = 60;
 
@@ -56,7 +60,22 @@ export async function POST(request: NextRequest) {
     const nextOffset = offset + batchRows.length;
     const done = nextOffset >= total;
 
+    // A fresh pass starting at offset 0 must not append onto whatever a
+    // previous classify run (or a re-analyze after a new Extract) already
+    // wrote — shards are append-only, so without this every re-run would
+    // double-count keywords and resurrect stale classifications forever.
+    if (offset === 0) {
+      await clearClassifiedShardsAdmin(
+        auth.admin,
+        parsed.data.workspaceId,
+        parsed.data.projectId
+      ).catch((err) =>
+        console.error("[intent] Failed to clear classified shards for fresh pass:", err)
+      );
+    }
+
     let isAiGenerated = false;
+    let degradedCount = 0;
     let classifications: ClassifiedShardItem[] = [];
 
     if (batchRows.length > 0) {
@@ -68,6 +87,7 @@ export async function POST(request: NextRequest) {
         keywords: batchRows.map((r) => ({ id: r.phrase, keyword: r.phrase })),
       });
       isAiGenerated = result.isAiGenerated;
+      degradedCount = result.degradedCount;
 
       const items: ClassifiedShardItem[] = result.classified.map((c) => ({
         id: c.id,
@@ -87,27 +107,26 @@ export async function POST(request: NextRequest) {
         { done }
       );
 
-      // Overlay the same verdicts onto the UI's capped display sample by
-      // keyword text, so Tab 4's table keeps showing sheet/reason for
-      // whatever it already has — archive rows and UI sample rows don't
-      // share an id space, so text is the only stable join key here.
-      const stored = await loadProjectSliceAdmin<ExtractedKeyword[]>(
+      // Classified shards are the source of truth. Re-apply the full archive
+      // onto the Extract sample every page so Tab 4 cannot keep the extract
+      // default (`sheet: "category"`) after Gemini has already classified.
+      let stored = await loadProjectSliceAdmin<ExtractedKeyword[]>(
         auth.admin,
         parsed.data.workspaceId,
         parsed.data.projectId,
         "keywords"
       ).catch(() => null);
-
-      if (Array.isArray(stored) && stored.length > 0) {
-        const updated = applyKeywordClassifications(stored, items);
-        await saveProjectSliceAdmin(
-          auth.admin,
-          parsed.data.workspaceId,
-          parsed.data.projectId,
-          "keywords",
-          updated
-        ).catch((err) => console.error("[intent] Error saving keywords slice:", err));
+      if (!Array.isArray(stored) || stored.length === 0) {
+        stored = archive.slice(0, MAX_DISPLAY_ROWS).map((row, index) =>
+          toExtractedKeyword(row, row.seedId || row.seed || "seed", index)
+        );
       }
+      await overlayAndPersistKeywordClassifications(
+        auth.admin,
+        parsed.data.workspaceId,
+        parsed.data.projectId,
+        stored
+      );
     }
 
     const manifest = await loadClassifiedManifestAdmin(
@@ -127,6 +146,7 @@ export async function POST(request: NextRequest) {
         informationalCount: manifest?.informationalCount ?? 0,
         excludedCount: manifest?.excludedCount ?? 0,
         isAiGenerated,
+        degradedCount,
         classifications,
       },
       { headers: auth.headers }

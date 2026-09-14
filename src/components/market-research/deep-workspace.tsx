@@ -60,10 +60,12 @@ export function DeepWorkspace({
   termEmbedProgress,
   selectedCollectionIds,
   onChangeSelected,
-  collectionsPaid,
+  paidCollectionIds,
   onStartWorking,
   onPushToStore,
   onRemoveDuplicates,
+  onRecheckDuplicates,
+  recheckingDuplicates = false,
   pushingCollections = false,
   walletBalance = null,
   walletHref,
@@ -138,10 +140,13 @@ export function DeepWorkspace({
   termEmbedProgress?: { embedded: number; total: number; done: boolean } | null;
   selectedCollectionIds: string[];
   onChangeSelected: (ids: string[]) => void;
-  collectionsPaid: boolean;
+  /** Collection ids already successfully pushed and paid for in this project. */
+  paidCollectionIds: string[];
   onStartWorking: () => void;
   onPushToStore?: (selectedIds: string[]) => Promise<void> | void;
   onRemoveDuplicates?: (ids: string[]) => void;
+  onRecheckDuplicates?: () => void;
+  recheckingDuplicates?: boolean;
   pushingCollections?: boolean;
   walletBalance?: number | null;
   walletHref?: string;
@@ -244,10 +249,12 @@ export function DeepWorkspace({
             termEmbedProgress={termEmbedProgress}
             selectedIds={selectedCollectionIds}
             onChangeSelected={onChangeSelected}
-            paid={collectionsPaid}
+            paidCollectionIds={paidCollectionIds}
             onStart={onStartWorking}
             onPushToStore={onPushToStore}
             onRemoveDuplicates={onRemoveDuplicates}
+            onRecheckDuplicates={onRecheckDuplicates}
+            recheckingDuplicates={recheckingDuplicates}
             pushing={pushingCollections}
             walletBalance={walletBalance}
             walletHref={walletHref}

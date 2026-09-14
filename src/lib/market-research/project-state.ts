@@ -42,7 +42,10 @@ export type MrProjectStateJson = {
   clusterSelection?: string[];
   proposedCollections?: ProposedCollection[];
   contentById?: Record<string, CollectionContent>;
+  /** @deprecated Legacy whole-project paid flag; paidCollectionIds is now authoritative. */
   paidCollections?: boolean;
+  /** Collection ids actually confirmed pushed and paid for. */
+  paidCollectionIds?: string[];
   contentReady?: boolean;
   pushed?: boolean;
   analyzed?: boolean;
@@ -162,6 +165,14 @@ export function rowsToPersisted(
       next.contentByIdByProject[id] = state.contentById;
     }
     if (state.paidCollections) next.paidCollectionProjectIds.push(id);
+    if (Array.isArray(state.paidCollectionIds) && state.paidCollectionIds.length > 0) {
+      next.paidCollectionIdsByProject[id] = state.paidCollectionIds;
+    } else if (state.paidCollections && Array.isArray(state.proposedCollections)) {
+      // Legacy projects recorded "paid" as a whole-project boolean before
+      // per-collection tracking existed. Preserve prior behavior for them by
+      // treating every collection proposed at that time as paid.
+      next.paidCollectionIdsByProject[id] = state.proposedCollections.map((c) => c.id);
+    }
     if (state.contentReady) next.contentReadyIds.push(id);
     if (state.pushed) next.pushedIds.push(id);
     if (state.analyzed) next.analyzedProjectIds.push(id);
@@ -229,7 +240,10 @@ export function projectStateSlice(
     clusterSelection: persisted.clusterSelectionByProject[projectId] ?? [],
     proposedCollections: persisted.proposedCollectionsByProject[projectId] ?? [],
     contentById: persisted.contentByIdByProject[projectId] ?? {},
-    paidCollections: persisted.paidCollectionProjectIds.includes(projectId),
+    paidCollectionIds: persisted.paidCollectionIdsByProject?.[projectId] ?? [],
+    paidCollections:
+      (persisted.paidCollectionIdsByProject?.[projectId] ?? []).length > 0 ||
+      persisted.paidCollectionProjectIds.includes(projectId),
     contentReady: persisted.contentReadyIds.includes(projectId),
     pushed: persisted.pushedIds.includes(projectId),
     analyzed: persisted.analyzedProjectIds.includes(projectId),
@@ -282,6 +296,9 @@ export function remapPersistedIds(
     openedWorkspaceByProject: remapRecord(persisted.openedWorkspaceByProject),
     clusterSelectionByProject: remapRecord(persisted.clusterSelectionByProject),
     paidCollectionProjectIds: remapIds(persisted.paidCollectionProjectIds),
+    paidCollectionIdsByProject: remapRecord(
+      persisted.paidCollectionIdsByProject ?? {}
+    ),
     contentReadyIds: remapIds(persisted.contentReadyIds),
     pushedIds: remapIds(persisted.pushedIds),
     customInstructionByProject: remapRecord(
@@ -297,6 +314,9 @@ export function remapPersistedIds(
     sheetFiltersByProject: remapRecord(persisted.sheetFiltersByProject ?? {}),
     strategyByProject: remapRecord(persisted.strategyByProject ?? {}),
     articlesByProject: remapRecord(persisted.articlesByProject ?? {}),
+    internalLinksByProject: remapRecord(
+      persisted.internalLinksByProject ?? {}
+    ),
   };
 }
 

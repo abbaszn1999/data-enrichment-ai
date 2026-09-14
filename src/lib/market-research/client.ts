@@ -241,8 +241,13 @@ export async function pushCollectionsApi(
   projectId: string,
   collectionIds: string[]
 ): Promise<{
+  ok?: boolean;
   chargedUsd: number;
+  refundedUsd?: number;
   duplicate?: boolean;
+  pushedCount?: number;
+  failedCount?: number;
+  pushedIds?: string[];
   storeResults?: PushCollectionsStoreResult[];
 }> {
   const response = await fetch("/api/market-research/push", {
@@ -632,26 +637,56 @@ export async function classifyArchivePageApi(
   return readJson<ClassifyArchiveResponse>(response);
 }
 
+/**
+ * Runs a cursor-paginated agent job (classify, cluster, on-page, …) to
+ * completion. `MAX_CALLS_PER_ROUND` exists only as a safety net against a
+ * server bug where `nextOffset` never advances or `done` never arrives — it
+ * must never be the reason a real, still-in-progress job gets treated as
+ * finished. So when the guard trips, the loop resumes automatically from the
+ * last `nextOffset` for a few more rounds instead of silently stopping; only
+ * if it's still not `done` after every round does this throw, so a caller
+ * can never mistake a truncated pass for a completed one.
+ */
+async function runCursorLoop<TState extends { done: boolean; nextOffset: number }>(
+  fetchPage: (offset: number) => Promise<TState>,
+  onProgress: ((state: TState) => void) | undefined,
+  isCancelled: (() => boolean) | undefined,
+  label: string
+): Promise<TState | null> {
+  const MAX_CALLS_PER_ROUND = 500;
+  const MAX_ROUNDS = 4;
+  let offset = 0;
+  let last: TState | null = null;
+  for (let round = 0; round < MAX_ROUNDS; round += 1) {
+    let guard = 0;
+    for (;;) {
+      if (isCancelled?.()) return last;
+      if (guard >= MAX_CALLS_PER_ROUND) break;
+      const res = await fetchPage(offset);
+      last = res;
+      onProgress?.(res);
+      guard += 1;
+      if (res.done) return last;
+      offset = res.nextOffset;
+    }
+  }
+  throw new Error(
+    `${label} did not finish after ${MAX_ROUNDS * MAX_CALLS_PER_ROUND} calls. Please retry.`
+  );
+}
+
 export async function runClassifyArchiveLoop(
   workspaceId: string,
   projectId: string,
   onProgress?: (state: ClassifyArchiveResponse) => void,
   isCancelled?: () => boolean
 ): Promise<ClassifyArchiveResponse | null> {
-  let offset = 0;
-  let guard = 0;
-  const MAX_CALLS = 500;
-  let last: ClassifyArchiveResponse | null = null;
-  for (;;) {
-    if (isCancelled?.() || guard >= MAX_CALLS) break;
-    const res = await classifyArchivePageApi(workspaceId, projectId, offset);
-    last = res;
-    onProgress?.(res);
-    guard += 1;
-    if (res.done) break;
-    offset = res.nextOffset;
-  }
-  return last;
+  return runCursorLoop(
+    (offset) => classifyArchivePageApi(workspaceId, projectId, offset),
+    onProgress,
+    isCancelled,
+    "Classification"
+  );
 }
 
 // ─── Stage 5 clustering as a cursor job ───────────────────────────────────
@@ -710,25 +745,12 @@ export async function runClusterCollectionsLoop(
     query?: string;
   }
 ): Promise<ClusterPageResponse | null> {
-  let offset = 0;
-  let guard = 0;
-  const MAX_CALLS = 500;
-  let last: ClusterPageResponse | null = null;
-  for (;;) {
-    if (isCancelled?.() || guard >= MAX_CALLS) break;
-    const res = await clusterCollectionsPageApi(
-      workspaceId,
-      projectId,
-      offset,
-      filters
-    );
-    last = res;
-    onProgress?.(res);
-    guard += 1;
-    if (res.done) break;
-    offset = res.nextOffset;
-  }
-  return last;
+  return runCursorLoop(
+    (offset) => clusterCollectionsPageApi(workspaceId, projectId, offset, filters),
+    onProgress,
+    isCancelled,
+    "Clustering"
+  );
 }
 
 // ─── Stage 5 Phase 3: duplicate-collection exclusion (runs once, after the
@@ -737,6 +759,8 @@ export async function runClusterCollectionsLoop(
 export type DedupeCollectionsResponse = {
   collections: ProposedCollection[];
   duplicateCount: number;
+  /** True when the live-catalog fetch or the Gemini comparison failed — some "new" collections may really be unflagged duplicates. */
+  dedupeCheckFailed: boolean;
 };
 
 export async function dedupeCollectionsApi(
@@ -825,6 +849,8 @@ export type OnPageGenerationPageResponse = {
   total: number;
   contentById: Record<string, CollectionContent>;
   isAiGenerated: boolean;
+  /** Collections in this page whose Gemini batch failed and fell back to the heuristic writer. */
+  degradedCount: number;
 };
 
 export async function generateOnPagePageApi(
@@ -863,26 +889,13 @@ export async function runOnPageGenerationLoop(
   onProgress?: (state: OnPageGenerationPageResponse) => void,
   isCancelled?: () => boolean
 ): Promise<OnPageGenerationPageResponse | null> {
-  let offset = 0;
-  let guard = 0;
-  const MAX_CALLS = 500;
-  let last: OnPageGenerationPageResponse | null = null;
-  for (;;) {
-    if (isCancelled?.() || guard >= MAX_CALLS) break;
-    const res = await generateOnPagePageApi(
-      workspaceId,
-      projectId,
-      collectionIds,
-      offset,
-      context
-    );
-    last = res;
-    onProgress?.(res);
-    guard += 1;
-    if (res.done) break;
-    offset = res.nextOffset;
-  }
-  return last;
+  return runCursorLoop(
+    (offset) =>
+      generateOnPagePageApi(workspaceId, projectId, collectionIds, offset, context),
+    onProgress,
+    isCancelled,
+    "On-page generation"
+  );
 }
 
 // ─── Stage 7: content plan and articles ──────────────────────────────────────
@@ -892,6 +905,7 @@ export type AgentStrategyResponse = {
   isAiGenerated: boolean;
   droppedByCap: number;
   mergedByIntent: number;
+  degradedCount: number;
 };
 
 export async function buildContentPlanApi(

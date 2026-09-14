@@ -73,6 +73,8 @@ export interface Stage7PlanResult {
   droppedByCap: number;
   /** How many near-duplicate keywords were folded into another article. */
   mergedByIntent: number;
+  /** Selected keywords whose Gemini titling batch failed and fell back to the deterministic title. */
+  degradedCount: number;
 }
 
 type IntentMerge = { count: number; volume: number };
@@ -248,6 +250,7 @@ export async function runStage7ContentPlan(
       isAiGenerated: false,
       droppedByCap: 0,
       mergedByIntent: 0,
+      degradedCount: 0,
     };
   }
 
@@ -323,10 +326,19 @@ export async function runStage7ContentPlan(
     };
   });
 
+  // A batch's Gemini call can fail independently of the others (see
+  // titleBatchWithAi's catch), silently leaving those keywords with the
+  // deterministic fallback title. Count them so isAiGenerated reflects a
+  // fully-clean AI pass rather than "at least one title came from Gemini."
+  const degradedCount = useAi
+    ? selected.filter((row) => !planById.has(row.id)).length
+    : selected.length;
+
   return {
     articles,
-    isAiGenerated: planById.size > 0,
+    isAiGenerated: useAi && degradedCount === 0,
     droppedByCap: Math.max(0, collapsed.length - selected.length),
     mergedByIntent: Math.max(0, unique.length - collapsed.length),
+    degradedCount,
   };
 }

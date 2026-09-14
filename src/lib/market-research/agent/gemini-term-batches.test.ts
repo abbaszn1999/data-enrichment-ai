@@ -14,6 +14,8 @@ function card(id: string, pad = 8): GeminiCandidateCard {
     title: "T".repeat(pad),
     price: "$1.00",
     shortDescription: "D".repeat(pad),
+    productType: "Type",
+    vendor: "Vendor",
     tags: ["tag"],
     attributes: [{ name: "Color", value: "Black" }],
     similarityScore: 0.7,

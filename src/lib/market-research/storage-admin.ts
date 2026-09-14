@@ -723,6 +723,44 @@ export async function appendClassifiedShardAdmin(
   return manifest;
 }
 
+/**
+ * Wipes the classified/ shard set for a fresh classify pass. Shards are
+ * append-only (see appendClassifiedShardAdmin), so restarting a classify
+ * loop at offset 0 without this first would append a second copy of every
+ * keyword on top of the previous pass's shards — doubling the manifest
+ * counts and returning duplicate rows from loadClassifiedItemsAdmin.
+ */
+export async function clearClassifiedShardsAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<void> {
+  const manifest = await loadClassifiedManifestAdmin(admin, workspaceId, projectId);
+  if (manifest && manifest.shards.length > 0) {
+    const paths = manifest.shards.map((shard) =>
+      mrClassifiedShardPath(workspaceId, projectId, shard)
+    );
+    for (let i = 0; i < paths.length; i += REMOVE_BATCH_SIZE) {
+      const batch = paths.slice(i, i + REMOVE_BATCH_SIZE);
+      const { error } = await admin.storage
+        .from(MARKET_RESEARCH_STORAGE_BUCKET)
+        .remove(batch);
+      if (error) {
+        console.error("[clearClassifiedShardsAdmin] Failed to remove shard batch:", error);
+      }
+    }
+  }
+  await saveMrJsonAdmin(admin, mrClassifiedManifestPath(workspaceId, projectId), {
+    shards: [],
+    totalCount: 0,
+    categoryCount: 0,
+    informationalCount: 0,
+    excludedCount: 0,
+    done: false,
+    updatedAt: new Date().toISOString(),
+  } satisfies ClassifiedManifest);
+}
+
 export async function loadClassifiedItemsAdmin(
   admin: SupabaseClient,
   workspaceId: string,

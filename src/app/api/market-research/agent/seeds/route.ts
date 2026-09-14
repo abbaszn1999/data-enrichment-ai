@@ -7,6 +7,7 @@ import {
 import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { runStage3SeedGeneration } from "@/lib/market-research/agent/stage3-seed-generator";
 import { saveProjectSliceAdmin } from "@/lib/market-research/storage-admin";
+import { markSliceSavedAdmin } from "@/lib/market-research/server-persist";
 
 export const maxDuration = 60;
 
@@ -36,16 +37,19 @@ export async function POST(request: NextRequest) {
     });
 
     if (parsed.data.projectId) {
+      const seedsPayload = { seedRows: result.seedRows, manualSeeds: [] };
       await saveProjectSliceAdmin(
         auth.admin,
         parsed.data.workspaceId,
         parsed.data.projectId,
         "seeds",
-        {
-          seedRows: result.seedRows,
-          manualSeeds: [],
-        }
+        seedsPayload
       ).catch((err) => console.error("[seeds] Error saving seeds slice:", err));
+
+      // Written directly here, outside the client autosave path — record the
+      // fingerprint now so the next autosave doesn't compare these fresh
+      // seeds against a stale hash and re-upload an older in-memory copy.
+      await markSliceSavedAdmin(auth.admin, parsed.data.projectId, "seeds", seedsPayload);
     }
 
     // Rich product records are no longer fetched here: a selected collection

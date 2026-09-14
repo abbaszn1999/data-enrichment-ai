@@ -369,6 +369,17 @@ export function MarketResearchShell() {
   const [paidCollectionProjectIds, setPaidCollectionProjectIds] = useState<
     Set<string>
   >(() => new Set());
+  /**
+   * Which collection ids inside each project have actually been pushed and
+   * paid for. Per-collection, not per-project: a partial push failure must
+   * not lock out retrying the ones that failed, or publishing collections
+   * added to the project afterward. `paidCollectionProjectIds` above is kept
+   * only so already-migrated projects (pre-dating this field) still read as
+   * fully paid; new writes always go through this map.
+   */
+  const [paidCollectionIdsByProject, setPaidCollectionIdsByProject] = useState<
+    Record<string, string[]>
+  >({});
   const [contentReadyIds, setContentReadyIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -454,6 +465,8 @@ export function MarketResearchShell() {
   } | null>(null);
   const [pushingCollectionsByProject, setPushingCollectionsByProject] =
     useState<Record<string, boolean>>({});
+  const [recheckingDuplicatesByProject, setRecheckingDuplicatesByProject] =
+    useState<Record<string, boolean>>({});
   const [syncingSeoByProject, setSyncingSeoByProject] = useState<
     Record<string, boolean>
   >({});
@@ -511,7 +524,9 @@ export function MarketResearchShell() {
     setContentByIdByProject(saved.contentByIdByProject ?? {});
     setStrategyByProject(saved.strategyByProject ?? {});
     setArticlesByProject(saved.articlesByProject ?? {});
+    setInternalLinksByProject(saved.internalLinksByProject ?? {});
     setPaidCollectionProjectIds(new Set(saved.paidCollectionProjectIds ?? []));
+    setPaidCollectionIdsByProject(saved.paidCollectionIdsByProject ?? {});
     setContentReadyIds(new Set(saved.contentReadyIds ?? []));
     setPushedIds(new Set(saved.pushedIds ?? []));
     setAnalyzedProjectIds(new Set(saved.analyzedProjectIds ?? []));
@@ -640,7 +655,13 @@ export function MarketResearchShell() {
       contentByIdByProject,
       strategyByProject,
       articlesByProject,
+      // Server-owned (written by the background link-build job and by
+      // Stage 6/7 generation, loaded fresh in loadMrPersistedState) — kept
+      // here only so it round-trips through the localStorage cache; never
+      // written back through saveMrPersistedState's heavySlices.
+      internalLinksByProject,
       paidCollectionProjectIds: Array.from(paidCollectionProjectIds),
+      paidCollectionIdsByProject,
       contentReadyIds: Array.from(contentReadyIds),
       pushedIds: Array.from(pushedIds),
       analyzedProjectIds: Array.from(analyzedProjectIds),
@@ -677,7 +698,9 @@ export function MarketResearchShell() {
       contentByIdByProject,
       strategyByProject,
       articlesByProject,
+      internalLinksByProject,
       paidCollectionProjectIds,
+      paidCollectionIdsByProject,
       contentReadyIds,
       pushedIds,
       analyzedProjectIds,
@@ -807,9 +830,24 @@ export function MarketResearchShell() {
       cancelAnimationFrame(inner);
     };
   }, [hydrated, showWorkspace]);
-  const collectionsPaid = Boolean(
-    activeProject && paidCollectionProjectIds.has(activeProject.id)
-  );
+  // Legacy projects recorded "paid" as a whole-project boolean before this
+  // field existed. Treat those as every collection currently proposed being
+  // paid so nothing regresses for existing customers; new pushes always
+  // write into paidCollectionIdsByProject directly.
+  const paidCollectionIds = useMemo(() => {
+    if (!activeProject) return [] as string[];
+    const explicit = paidCollectionIdsByProject[activeProject.id];
+    if (explicit && explicit.length > 0) return explicit;
+    if (paidCollectionProjectIds.has(activeProject.id)) {
+      return (proposedCollectionsByProject[activeProject.id] ?? []).map((c) => c.id);
+    }
+    return [] as string[];
+  }, [
+    activeProject,
+    paidCollectionIdsByProject,
+    paidCollectionProjectIds,
+    proposedCollectionsByProject,
+  ]);
   const contentReady = Boolean(
     activeProject && contentReadyIds.has(activeProject.id)
   );
@@ -1519,8 +1557,21 @@ export function MarketResearchShell() {
         } catch (err) {
           if (analysisGen.current !== gen) return;
           console.error("[startAnalysis] Failed to run agent:", err);
-          setAnalysisProgress(1);
-          completeAnalysis(projectId, storeLabel);
+          // A failed analyze must never mark Stage 1 "done" on the
+          // hard-coded demo eyewear niches — that would silently hand the
+          // customer someone else's catalog read and let them pay for
+          // Stage 3+ against niches that were never actually theirs.
+          // Surface the error and leave Stage 1 retryable instead.
+          setAnalysisProgress(0);
+          setAnalyzing(false);
+          appendAgent(
+            projectId,
+            `I couldn't analyze ${storeLabel} — the request failed, so I'm not going to guess at your catalog with placeholder niches. Press Analyze again to retry.`
+          );
+          toast.error("Store analysis failed", {
+            description:
+              err instanceof Error ? err.message : "Please try again.",
+          });
         }
       })();
     },
@@ -1734,6 +1785,10 @@ export function MarketResearchShell() {
         } catch (err) {
           if (stage3Gen.current !== gen) return;
           console.error("[startStage3Prep] Failed to generate seeds:", err);
+          // The AI seed generation call failed — the basic heuristic below
+          // covers the customer so Stage 3 isn't a hard dead end, but it
+          // must never be presented as the normal AI-generated read. Both
+          // the chat message and a toast name the degradation explicitly.
           const fallbackRows = getSeedRowsForCollections(
             collectionIds,
             currentStructured
@@ -1761,8 +1816,12 @@ export function MarketResearchShell() {
           });
           appendAgent(
             projectId,
-            stage3AgentReady(collectionIds.length, fallbackRows.length)
+            `The seed-generation agent call failed, so I fell back to a basic keyword pattern instead of a real AI read (${fallbackRows.length} seed${fallbackRows.length === 1 ? "" : "s"} from ${collectionIds.length} collection${collectionIds.length === 1 ? "" : "s"}). Review these carefully, or retry Stage 3 for a proper agent pass.`
           );
+          toast.warning("Seed generation degraded", {
+            description:
+              "The AI agent call failed — using a basic fallback instead. Retry Stage 3 for a full agent pass.",
+          });
         }
       })();
     },
@@ -2069,6 +2128,18 @@ export function MarketResearchShell() {
       pulled: 0,
     }));
     let sample: ExtractedKeyword[] = input.initialSample ?? [];
+    // Safety caps so a stuck billing settlement or a persistently unreachable
+    // poll endpoint can't spin this loop forever in an open tab — both used
+    // to retry indefinitely with no failure cap.
+    let billingPendingAttempts = 0;
+    const MAX_BILLING_PENDING_ATTEMPTS = 60; // 60 * 2s = 2 minutes
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 20; // 20 * 800ms = 16s of unbroken failures
+
+    const giveUp = (message: string) => {
+      setExtractingProjectId((id) => (id === input.projectId ? null : id));
+      toast.error("Extract status unknown", { description: message });
+    };
 
     const tick = async () => {
       if (extractGen.current !== input.gen) return;
@@ -2084,6 +2155,7 @@ export function MarketResearchShell() {
           }))
         );
         if (extractGen.current !== input.gen) return;
+        consecutiveFailures = 0;
 
         for (const row of poll.seeds) {
           const local = pollState.find((seed) => seed.id === row.seedId);
@@ -2124,6 +2196,13 @@ export function MarketResearchShell() {
 
         if (poll.allDone) {
           if (poll.billingPending) {
+            billingPendingAttempts += 1;
+            if (billingPendingAttempts >= MAX_BILLING_PENDING_ATTEMPTS) {
+              giveUp(
+                "Billing settlement is taking longer than expected. Your keywords are safe — refresh the page in a moment to see the final charge."
+              );
+              return;
+            }
             window.setTimeout(() => {
               void tick();
             }, 2000);
@@ -2155,8 +2234,16 @@ export function MarketResearchShell() {
           );
           return;
         }
-      } catch {
+      } catch (err) {
         if (extractGen.current !== input.gen) return;
+        consecutiveFailures += 1;
+        console.error("[runExtractPollLoop] Poll failed:", err);
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          giveUp(
+            "Couldn't reach the extract status endpoint. Your keywords collected so far were kept — refresh the page to check the latest status."
+          );
+          return;
+        }
       }
 
       window.setTimeout(() => {
@@ -2269,8 +2356,13 @@ export function MarketResearchShell() {
       ).catch((err) => console.error("[handleExtract] Product embedding pass failed:", err));
     }
 
+    // Tracks whether the Apify job actually started on the server. Only
+    // then is committedProjectIds a durable fact (real billed work is now
+    // running) — if startExtractApi itself never succeeds, the catch below
+    // rolls the speculative commitment back so the customer can retry.
+    let started: Awaited<ReturnType<typeof startExtractApi>> | undefined;
     try {
-      const started = await startExtractApi(
+      started = await startExtractApi(
         workspaceId,
         projectId,
         activeMarket,
@@ -2308,6 +2400,20 @@ export function MarketResearchShell() {
     } catch (error) {
       if (extractGen.current !== gen) return;
       setExtractingProjectId((id) => (id === projectId ? null : id));
+      if (!started) {
+        // The Apify job never actually started — no billed work is running,
+        // so the speculative commitment and stage-4 navigation above must
+        // be rolled back, or the customer is locked out of ever retrying
+        // Extract for this project again.
+        setCommittedProjectIds((prev) => {
+          if (!prev.has(projectId)) return prev;
+          const next = new Set(prev);
+          next.delete(projectId);
+          return next;
+        });
+        setStageByProject((prev) => ({ ...prev, [projectId]: 3 }));
+        setStage(3);
+      }
       toast.error("Extract failed", {
         description:
           error instanceof Error ? error.message : "Could not start Apify.",
@@ -2651,9 +2757,10 @@ export function MarketResearchShell() {
       // Stage 5 Phase 3 — one extra pass, still inside the same loading
       // state, that flags any of the collections just proposed above whose
       // shopper-intent coverage duplicates something already live in the
-      // merchant's store. Never blocks or fails the tab: a failure here
-      // just leaves every collection tagged "new", same as before this
-      // step existed.
+      // merchant's store. Never blocks or fails the tab, but a failed check
+      // is never silently treated as "cleared" either — those collections
+      // come back stamped dedupeCheckStatus "unknown" and publish is
+      // blocked server-side until the merchant retries.
       try {
         const dedupeResult = await dedupeCollectionsApi(workspaceId, projectId);
         if (clusterGen.current !== gen) return;
@@ -2663,8 +2770,18 @@ export function MarketResearchShell() {
             [projectId]: dedupeResult.collections,
           }));
         }
+        if (dedupeResult.dedupeCheckFailed) {
+          toast.warning("Couldn't fully verify duplicates", {
+            description:
+              "The live catalog or AI comparison failed for some collections. They won't be publishable until you retry the duplicate check.",
+          });
+        }
       } catch (dedupeErr) {
         console.error("[handleNextCollections] Duplicate-collection check failed:", dedupeErr);
+        toast.warning("Couldn't verify duplicates", {
+          description:
+            "The duplicate check request failed. Please retry it from Tab 5 before publishing.",
+        });
       }
       void hydrateProjectProducts(projectId, true);
     } catch (err) {
@@ -2677,6 +2794,40 @@ export function MarketResearchShell() {
       if (clusterGen.current === gen) {
         setClustering(false);
       }
+    }
+  };
+
+  // Manual retry for collections stamped dedupeCheckStatus "unknown" (the
+  // live catalog fetch or the Gemini comparison failed on the automatic
+  // pass in handleNextCollections). Publishing stays blocked server-side
+  // until this clears them.
+  const handleRecheckDuplicates = async () => {
+    if (!canEdit || !activeProject || !workspaceId) return;
+    const projectId = activeProject.id;
+    setRecheckingDuplicatesByProject((prev) => ({ ...prev, [projectId]: true }));
+    try {
+      const dedupeResult = await dedupeCollectionsApi(workspaceId, projectId);
+      if (dedupeResult.collections.length > 0) {
+        setProposedCollectionsByProject((prev) => ({
+          ...prev,
+          [projectId]: dedupeResult.collections,
+        }));
+      }
+      if (dedupeResult.dedupeCheckFailed) {
+        toast.warning("Still couldn't verify duplicates", {
+          description:
+            "The live catalog or AI comparison failed again. Please try again shortly.",
+        });
+      } else {
+        toast.success("Duplicate check complete");
+      }
+    } catch (err) {
+      console.error("[handleRecheckDuplicates] Error:", err);
+      toast.error("Duplicate check failed", {
+        description: err instanceof Error ? err.message : "Please try again.",
+      });
+    } finally {
+      setRecheckingDuplicatesByProject((prev) => ({ ...prev, [projectId]: false }));
     }
   };
 
@@ -2707,16 +2858,32 @@ export function MarketResearchShell() {
       const pushResult = await pushCollectionsApi(workspaceId, projectId, targetIds);
       invalidateWallet();
 
-      setPaidCollectionProjectIds((prev) => {
-        const next = new Set(prev);
-        next.add(projectId);
-        return next;
-      });
-      setPushedIds((prev) => {
-        const next = new Set(prev);
-        next.add(projectId);
-        return next;
-      });
+      // Only the collections the store actually confirmed creating are paid.
+      // A partial failure must not lock the failed ones out of a retry, and
+      // must not falsely mark unrelated/never-attempted ids as pushed.
+      const successfulIds =
+        pushResult.pushedIds ??
+        (pushResult.storeResults ?? []).filter((r) => r.success).map((r) => r.id);
+      if (successfulIds.length > 0) {
+        setPaidCollectionIdsByProject((prev) => {
+          const existing = prev[projectId] ?? [];
+          const next = Array.from(new Set([...existing, ...successfulIds]));
+          return { ...prev, [projectId]: next };
+        });
+        setPushedIds((prev) => {
+          const next = new Set(prev);
+          next.add(projectId);
+          return next;
+        });
+      }
+      if ((pushResult.failedCount ?? 0) > 0) {
+        toast.error(
+          `${pushResult.failedCount} collection${pushResult.failedCount === 1 ? "" : "s"} failed to publish`,
+          {
+            description: "You were not charged for the ones that failed. Select them again to retry.",
+          }
+        );
+      }
 
       // The server just assigned real store handles to these collections; mirror
       // that into local state before using it, otherwise the link graph would
@@ -2749,45 +2916,59 @@ export function MarketResearchShell() {
       // A resumable cursor loop rather than one call, so a 10k-collection push
       // keeps filling the Links column instead of dying at 60 seconds. A
       // second push for the same project supersedes an in-flight build.
-      const gen = (linksGen.current[projectId] = (linksGen.current[projectId] ?? 0) + 1);
-      setLinksBuildProgressByProject((prev) => ({
+      if (successfulIds.length > 0) {
+        const gen = (linksGen.current[projectId] = (linksGen.current[projectId] ?? 0) + 1);
+        setLinksBuildProgressByProject((prev) => ({
+          ...prev,
+          [projectId]: { processed: 0, total: successfulIds.length },
+        }));
+        runBuildInternalLinksLoop(
+          workspaceId,
+          projectId,
+          successfulIds,
+          (page) => {
+            if (linksGen.current[projectId] !== gen) return;
+            setInternalLinksByProject((prev) => ({
+              ...prev,
+              [projectId]: {
+                ...(prev[projectId] ?? {}),
+                ...page.linksByCollectionId,
+              },
+            }));
+            setLinksBuildProgressByProject((prev) => ({
+              ...prev,
+              [projectId]: page.done
+                ? null
+                : { processed: page.nextOffset, total: page.total },
+            }));
+          },
+          () => linksGen.current[projectId] !== gen
+        ).catch((err) => {
+          console.error("[handlePushToStore] Internal link build failed:", err);
+          if (linksGen.current[projectId] === gen) {
+            setLinksBuildProgressByProject((prev) => ({ ...prev, [projectId]: null }));
+          }
+        });
+      }
+
+      // Only clear the selection down to the ids that actually failed, so a
+      // partial failure leaves the failed collections selected and ready to
+      // retry instead of silently dropping them from view.
+      setClusterSelectionByProject((prev) => ({
         ...prev,
-        [projectId]: { processed: 0, total: targetIds.length },
+        [projectId]: (prev[projectId] ?? []).filter(
+          (id) => !successfulIds.includes(id)
+        ),
       }));
-      runBuildInternalLinksLoop(
-        workspaceId,
-        projectId,
-        targetIds,
-        (page) => {
-          if (linksGen.current[projectId] !== gen) return;
-          setInternalLinksByProject((prev) => ({
-            ...prev,
-            [projectId]: {
-              ...(prev[projectId] ?? {}),
-              ...page.linksByCollectionId,
-            },
-          }));
-          setLinksBuildProgressByProject((prev) => ({
-            ...prev,
-            [projectId]: page.done
-              ? null
-              : { processed: page.nextOffset, total: page.total },
-          }));
-        },
-        () => linksGen.current[projectId] !== gen
-      ).catch((err) => {
-        console.error("[handlePushToStore] Internal link build failed:", err);
-        if (linksGen.current[projectId] === gen) {
-          setLinksBuildProgressByProject((prev) => ({ ...prev, [projectId]: null }));
-        }
-      });
 
       window.setTimeout(() => {
         setPushingCollectionsByProject((prev) => ({
           ...prev,
           [projectId]: false,
         }));
-        unlockWorkspaceTab(projectId, "content");
+        if (successfulIds.length > 0) {
+          unlockWorkspaceTab(projectId, "content");
+        }
       }, 3200);
     } catch (error) {
       setPushingCollectionsByProject((prev) => ({
@@ -2843,11 +3024,14 @@ export function MarketResearchShell() {
 
     // A collection with no content by the time the loop ends — whether from a
     // network failure or the guard tripping — still needs something to show
-    // rather than staying blank forever.
-    const fillMissingWithFallback = () => {
+    // rather than staying blank forever. Returns how many rows were filled so
+    // the caller can decide whether the degradation needs to be surfaced.
+    const fillMissingWithFallback = (): number => {
+      let missingCount = 0;
       setContentByIdByProject((prev) => {
         const current = prev[projectId] ?? {};
         const missing = selected.filter((row) => !current[row.id]);
+        missingCount = missing.length;
         if (missing.length === 0) return prev;
         const filled = { ...current };
         for (const row of missing) {
@@ -2855,7 +3039,10 @@ export function MarketResearchShell() {
         }
         return { ...prev, [projectId]: filled };
       });
+      return missingCount;
     };
+
+    let totalDegraded = 0;
 
     try {
       const parentNiches = (nichesByProject[projectId] ?? activeNiches).map(
@@ -2877,6 +3064,7 @@ export function MarketResearchShell() {
         },
         (page) => {
           if (contentGen.current !== gen) return;
+          totalDegraded += page.degradedCount ?? 0;
           setContentByIdByProject((prev) => ({
             ...prev,
             [projectId]: {
@@ -2893,13 +3081,22 @@ export function MarketResearchShell() {
 
       if (contentGen.current !== gen) return;
 
-      fillMissingWithFallback();
+      const missingCount = fillMissingWithFallback();
 
       setContentReadyIds((prev) => {
         const next = new Set(prev);
         next.add(projectId);
         return next;
       });
+
+      // Some collections never got a real AI pass — surface this instead of
+      // quietly shipping templated copy as if it were the normal AI result.
+      if (totalDegraded > 0 || missingCount > 0) {
+        const degradedTotal = totalDegraded + missingCount;
+        toast.warning("Some collections used fallback copy", {
+          description: `${degradedTotal} of ${selected.length} collection${selected.length === 1 ? "" : "s"} fell back to a standard template because the AI writer failed for them. Review and regenerate those before publishing.`,
+        });
+      }
     } catch (err) {
       if (contentGen.current !== gen) return;
       console.error("[handleStartContent] Error:", err);
@@ -2977,21 +3174,36 @@ export function MarketResearchShell() {
 
   const handlePush = async () => {
     if (!canEdit || !activeProject || !workspaceId) return;
+    const projectId = activeProject.id;
     const ids = [...clusterSelection].sort();
     if (ids.length === 0) return;
     const usd = collectionPushCostUsd(ids.length);
     try {
-      const charged = await pushCollectionsApi(
-        workspaceId,
-        activeProject.id,
-        ids
-      );
+      const pushResult = await pushCollectionsApi(workspaceId, projectId, ids);
       invalidateWallet();
-      setPushedIds((prev) => {
-        const next = new Set(prev);
-        next.add(activeProject.id);
-        return next;
-      });
+      const successfulIds =
+        pushResult.pushedIds ??
+        (pushResult.storeResults ?? []).filter((r) => r.success).map((r) => r.id);
+      if (successfulIds.length > 0) {
+        setPaidCollectionIdsByProject((prev) => {
+          const existing = prev[projectId] ?? [];
+          const next = Array.from(new Set([...existing, ...successfulIds]));
+          return { ...prev, [projectId]: next };
+        });
+        setPushedIds((prev) => {
+          const next = new Set(prev);
+          next.add(projectId);
+          return next;
+        });
+      }
+      if ((pushResult.failedCount ?? 0) > 0) {
+        toast.error(
+          `${pushResult.failedCount} collection${pushResult.failedCount === 1 ? "" : "s"} failed to publish`,
+          {
+            description: "You were not charged for the ones that failed. Select them again to retry.",
+          }
+        );
+      }
     } catch (error) {
       toast.error("Not enough wallet balance", {
         description:
@@ -3075,6 +3287,15 @@ export function MarketResearchShell() {
         }
         toast.info(`Planned ${res.articles.length} articles`, {
           description: `${notes.join(" · ")}.`,
+        });
+      }
+
+      // Titles that fell back to the deterministic form because the Gemini
+      // titling batch failed must be called out — they're weaker than a real
+      // AI title and shouldn't be mistaken for one.
+      if (res.degradedCount > 0) {
+        toast.warning("Some article titles used a fallback", {
+          description: `${res.degradedCount} of ${res.articles.length} article title${res.degradedCount === 1 ? "" : "s"} couldn't be generated by AI and used a plain fallback title instead.`,
         });
       }
     } catch (err) {
@@ -3596,11 +3817,15 @@ export function MarketResearchShell() {
           }));
         }
       } catch (err) {
+        console.error("[handleSendMessage] Chat agent call failed:", err);
         setChatBusy(false);
         appendAgent(
           projectId,
-          mockAgentReply(text, activeProject.storeLabel, stage)
+          `${mockAgentReply(text, activeProject.storeLabel, stage)}\n\n(The AI chat call failed, so this is a generic placeholder reply, not a real agent response — your niches were not changed. Try again in a moment.)`
         );
+        toast.error("Chat agent call failed", {
+          description: "Showing a placeholder reply. Please try again.",
+        });
       }
     })();
   };
@@ -4170,7 +4395,7 @@ export function MarketResearchShell() {
                         [activeProject.id]: ids,
                       }))
                     }
-                    collectionsPaid={collectionsPaid}
+                    paidCollectionIds={paidCollectionIds}
                     onStartWorking={handleStartWorking}
                     onPushToStore={handlePushToStore}
                     onRemoveDuplicates={(ids) => {
@@ -4189,6 +4414,10 @@ export function MarketResearchShell() {
                         ),
                       }));
                     }}
+                    onRecheckDuplicates={handleRecheckDuplicates}
+                    recheckingDuplicates={Boolean(
+                      recheckingDuplicatesByProject[activeProject.id]
+                    )}
                     pushingCollections={Boolean(
                       pushingCollectionsByProject[activeProject.id]
                     )}

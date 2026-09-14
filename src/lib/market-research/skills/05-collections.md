@@ -63,6 +63,8 @@ Each call receives one batch of up to 10 keyword/candidate groups, in this shape
       "title": "Bass Pro Wireless Over-Ear Headphones",
       "price": "$129.00",
       "shortDescription": "...",
+      "productType": "Headphones",
+      "vendor": "Bass Pro Audio",
       "tags": ["wireless", "over-ear", "audio"],
       "attributes": [{ "name": "Battery Life", "value": "40 Hours" }],
       "similarityScore": 0.61
@@ -75,6 +77,14 @@ Each call receives one batch of up to 10 keyword/candidate groups, in this shape
 to keep or exclude. The shortlist was already threshold-filtered upstream; your question is
 correctness, not degree of similarity. A candidate with a lower score that is genuinely the right
 product stays in; a candidate with a higher score that is the wrong product type still goes.
+
+`productType` and `vendor` are store-assigned fields, present whenever the merchant's catalog sets
+them — read them before `tags`/`attributes` when judging reasons 1 (wrong product type) and 4
+(wrong audience/brand line): a mismatched `productType` is usually the fastest, most reliable
+signal that a candidate is a different kind of item, and `vendor` can immediately confirm a
+brand/line-specific term (e.g. "Men's Only Heritage" as a vendor) without relying on the title
+alone. Either field may be an empty string when the store never set it — fall back to title, tags,
+and attributes exactly as before.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 id: 08-duplicate-collections
 stage: 8
-thinking: low
+thinking: medium
 tools: [flag_duplicate_collections]
 output: DuplicateExclusionOutput
 triggers:
@@ -188,18 +188,7 @@ Before returning, verify:
 
 ## Worked Examples
 
-### Example A — Category/specific synonym, flag as duplicate
-
-**New:** "Women's Gucci Sunglasses". **Existing:** "Women's Gucci Eyewear".
-
-**Reasoning:** "Eyewear" is the umbrella term already covering sunglasses for this exact
-audience/brand combination — a shopper searching either term sees the same products.
-
-**Output:** `{ "id": "col-1", "status": "duplicate", "existingId": "ex-1", "existingName": "Women's Gucci Eyewear" }`
-
----
-
-### Example B — Added attribute narrows intent, not a duplicate
+### Example A — Added attribute narrows intent, not a duplicate
 
 **New:** "Women's Red Gucci Sunglasses". **Existing:** "Women's Gucci Sunglasses".
 
@@ -210,7 +199,7 @@ distinct, more specific search than the existing broader collection.
 
 ---
 
-### Example C — Different audience, not a duplicate
+### Example B — Different audience, not a duplicate
 
 **New:** "Men's Gucci Sunglasses". **Existing:** "Women's Gucci Sunglasses".
 
@@ -220,7 +209,7 @@ distinct, more specific search than the existing broader collection.
 
 ---
 
-### Example D — Different product type despite shared words, not a duplicate
+### Example C — Different product type despite shared words, not a duplicate
 
 **New:** "Women's Gucci Handbags". **Existing:** "Women's Gucci Sunglasses".
 

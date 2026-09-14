@@ -382,9 +382,21 @@ export async function runStage5CollectionClustering(
         defaultNiche;
     }
 
+    // `collectionIdByKeywordId` is a deterministic lineage map, not a
+    // similarity call: an entry with an empty/falsy collection id means the
+    // caller resolved this term's lineage and found none — that must yield
+    // zero candidates, never a silent widen to the entire catalog. Only the
+    // total ABSENCE of an entry (a legacy/manual-seed caller that never
+    // passed this map at all) falls back to the full `products` array.
+    const hasScopeEntry = Object.prototype.hasOwnProperty.call(
+      collectionIdByKeywordId,
+      kw.id
+    );
     const scopedCollectionId = collectionIdByKeywordId[kw.id];
-    const scopedProducts = scopedCollectionId
-      ? productsByCollectionId.get(scopedCollectionId) ?? []
+    const scopedProducts = hasScopeEntry
+      ? scopedCollectionId
+        ? productsByCollectionId.get(scopedCollectionId) ?? []
+        : []
       : products;
 
     const termVector = termVectors.get(kw.id);
@@ -396,7 +408,7 @@ export async function runStage5CollectionClustering(
       // keyword's collection-scoped products (cheap map lookups) instead of
       // re-tokenizing product text per keyword, while still never scoring
       // outside the term's exact collection lineage.
-      const scopedIndex = scopedCollectionId
+      const scopedIndex = hasScopeEntry
         ? scopedProducts
             .map((p) => productIndexById.get(p.id))
             .filter((v): v is NonNullable<typeof v> => Boolean(v))
@@ -437,6 +449,8 @@ export async function runStage5CollectionClustering(
           title: prod?.title ?? "",
           price: prod?.price?.priceFormatted ?? "",
           shortDescription: prod?.shortDescription ?? "",
+          productType: prod?.productType ?? "",
+          vendor: prod?.vendor ?? "",
           tags: prod?.tags ?? [],
           attributes: prod?.attributes ?? [],
           similarityScore: c.score,
@@ -456,12 +470,25 @@ Total Store Products: ${products.length}
 Review each collection opportunity and run the exclusion test on every candidate product:
 ${JSON.stringify(batch, null, 2)}`;
 
-      const geminiRes = await runGeminiMarketResearch<GeminiCurationResponse>({
-        stage: 5,
-        systemInstruction: CLUSTER_SYSTEM_INSTRUCTION,
-        userPrompt,
-      });
-      return { batch, data: geminiRes.data };
+      const callGemini = () =>
+        runGeminiMarketResearch<GeminiCurationResponse>({
+          stage: 5,
+          systemInstruction: CLUSTER_SYSTEM_INSTRUCTION,
+          userPrompt,
+        });
+
+      // One retry (short backoff) before this chunk counts as failed — a
+      // transient/rate-limit blip must not downgrade its candidates to
+      // "unreviewed" when a second attempt would have succeeded.
+      try {
+        const geminiRes = await callGemini();
+        return { batch, data: geminiRes.data };
+      } catch (err) {
+        console.error("[Stage 5] Gemini validation batch failed, retrying once:", err);
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        const geminiRes = await callGemini();
+        return { batch, data: geminiRes.data };
+      }
     },
     { concurrency: 5 }
   );
@@ -493,8 +520,12 @@ ${JSON.stringify(batch, null, 2)}`;
     }
   }
   if (chunkRun.errors.length > 0) {
+    // These candidates never got a successful AI review even after the
+    // retry above. They are dropped below, not trusted unreviewed — Gemini
+    // approving zero candidates and Gemini never seeing a candidate must
+    // never look the same to the storefront.
     console.warn(
-      `[Stage 5] ${chunkRun.errors.length}/${keywordChunks.length} Gemini validation batches failed; those keywords fall back to their raw candidate list.`
+      `[Stage 5] ${chunkRun.errors.length}/${keywordChunks.length} Gemini validation batches failed after retry; their candidates are excluded rather than published unreviewed.`
     );
   }
 
@@ -506,28 +537,36 @@ ${JSON.stringify(batch, null, 2)}`;
     const meta = keywordCandidateMap.get(kw.id)!;
     const aiVal = aiApprovedMap.get(kw.id);
 
-    // If AI evaluated this keyword, trust AI validated IDs (even if empty)
+    // If AI evaluated this keyword, trust AI validated IDs (even if empty).
+    // A candidate Gemini never actually reviewed (its chunk failed even
+    // after retry) is EXCLUDED, never unioned back in as approved — a
+    // failed review must never publish unreviewed products.
     let finalProductIds: string[];
     let rationale: string | undefined;
+    const covered = aiCoveredCandidateIds.get(kw.id);
+    const unreviewedCount = covered
+      ? meta.candidates.filter((c) => !covered.has(c.productId)).length
+      : meta.candidates.length;
 
     if (aiVal) {
-      const covered = aiCoveredCandidateIds.get(kw.id);
-      const uncovered =
-        covered && covered.size < meta.candidates.length
-          ? meta.candidates
-              .map((c) => c.productId)
-              .filter((id) => !covered.has(id))
-          : [];
-      finalProductIds = Array.from(
-        new Set([...aiVal.matchedProductIds, ...uncovered])
-      );
-      rationale = aiVal.rationale;
+      finalProductIds = aiVal.matchedProductIds;
+      rationale =
+        unreviewedCount > 0
+          ? `${aiVal.rationale ?? "AI-reviewed matches kept."} ${unreviewedCount} of ${meta.candidates.length} candidate${meta.candidates.length === 1 ? "" : "s"} could not be reviewed by AI and were excluded rather than published unreviewed.`
+          : aiVal.rationale;
+    } else if (covered && covered.size > 0) {
+      // Gemini reviewed this keyword's candidates (across one or more
+      // successful chunks) but its response omitted this keywordId
+      // entirely — treat that as an explicit "approved none", not a
+      // license to reinstate the raw, unvalidated candidate list.
+      finalProductIds = [];
+      rationale = "AI reviewed this collection's candidates and approved none.";
     } else {
-      // Fallback only if the entire AI request failed/errored out
-      finalProductIds = meta.candidates.map((c) => c.productId);
-      rationale = useVectors
-        ? "Matched via semantic vector retrieval."
-        : "Matched via lexical similarity retrieval.";
+      // The entire AI request failed/errored for this keyword even after
+      // retry — no review happened at all. Do not publish unreviewed
+      // candidates.
+      finalProductIds = [];
+      rationale = `AI validation failed for this collection; ${meta.candidates.length} unreviewed candidate${meta.candidates.length === 1 ? "" : "s"} were excluded rather than published unreviewed.`;
     }
 
     const candidateScoreMap = new Map<string, number>(

@@ -11,6 +11,7 @@ import {
   normalizeOnPageInstructions,
   normalizeSheetFilters,
   type CollectionContent,
+  type CollectionLink,
   type ExtractedKeyword,
   type GeneratedArticle,
   type MarketResearchProduct,
@@ -55,7 +56,10 @@ export type MarketResearchPersisted = {
   clusterSelectionByProject: Record<string, string[]>;
   proposedCollectionsByProject: Record<string, ProposedCollection[]>;
   contentByIdByProject: Record<string, Record<string, CollectionContent>>;
+  /** @deprecated Legacy whole-project paid flag, superseded by paidCollectionIdsByProject. Kept only to migrate old projects. */
   paidCollectionProjectIds: string[];
+  /** Collection ids actually confirmed pushed and paid for, per project. */
+  paidCollectionIdsByProject: Record<string, string[]>;
   contentReadyIds: string[];
   pushedIds: string[];
   customInstructionByProject: Record<string, OnPageInstructions>;
@@ -74,6 +78,13 @@ export type MarketResearchPersisted = {
   strategyByProject: Record<string, StrategyArticle[]>;
   /** Stage 7 generated article bodies keyed by article id. */
   articlesByProject: Record<string, Record<string, GeneratedArticle>>;
+  /**
+   * Internal-link graph built after push (keyed by collection id), so the
+   * Links column in Tab 6 has something to show. Written by the background
+   * link-build job and by Stage 6/7 generation; loaded server-side from the
+   * "internal-links" object-storage slice so it survives a refresh.
+   */
+  internalLinksByProject: Record<string, Record<string, CollectionLink[]>>;
 };
 
 function storageKey(workspaceSlug: string) {
@@ -108,6 +119,7 @@ export function emptyMarketResearchState(): MarketResearchPersisted {
     proposedCollectionsByProject: {},
     contentByIdByProject: {},
     paidCollectionProjectIds: [],
+    paidCollectionIdsByProject: {},
     contentReadyIds: [],
     pushedIds: [],
     customInstructionByProject: {},
@@ -121,6 +133,7 @@ export function emptyMarketResearchState(): MarketResearchPersisted {
     extractIdByProject: {},
     strategyByProject: {},
     articlesByProject: {},
+    internalLinksByProject: {},
   };
 }
 
@@ -191,6 +204,7 @@ export function loadMarketResearchState(
         proposedCollectionsByProject: {},
         contentByIdByProject: {},
         paidCollectionProjectIds: [],
+        paidCollectionIdsByProject: {},
         contentReadyIds: [],
         pushedIds: [],
         customInstructionByProject: {},
@@ -204,6 +218,7 @@ export function loadMarketResearchState(
         extractIdByProject: {},
         strategyByProject: {},
         articlesByProject: {},
+        internalLinksByProject: {},
       };
     }
     const parsed = JSON.parse(raw) as MarketResearchPersisted;
@@ -237,6 +252,9 @@ export function loadMarketResearchState(
       paidCollectionProjectIds: Array.isArray(parsed.paidCollectionProjectIds)
         ? parsed.paidCollectionProjectIds
         : [],
+      paidCollectionIdsByProject: isArrayMap<string>(
+        parsed.paidCollectionIdsByProject
+      ),
       contentReadyIds: Array.isArray(parsed.contentReadyIds)
         ? parsed.contentReadyIds
         : [],
@@ -271,6 +289,7 @@ export function loadMarketResearchState(
       extractIdByProject: isStringMap(parsed.extractIdByProject),
       strategyByProject: isArrayMap<StrategyArticle>(parsed.strategyByProject),
       articlesByProject: isObjectMap<GeneratedArticle>(parsed.articlesByProject),
+      internalLinksByProject: parsed.internalLinksByProject ?? {},
     };
   } catch {
     return null;

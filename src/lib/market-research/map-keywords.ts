@@ -81,26 +81,68 @@ export type KeywordClassificationPatch = {
   sheet: DisplayKeyword["sheet"];
   reason?: string;
   plpConcept?: string;
+  id?: string;
 };
 
-/** Overlay Stage 4 verdicts onto display rows by keyword text (case-insensitive). */
+/** One Stage 4 classified-archive row (or a Gemini log item). */
+export type ClassifiedVerdict = {
+  id?: string;
+  keyword?: string;
+  sheet: DisplayKeyword["sheet"];
+  reason?: string;
+  plpConcept?: string;
+};
+
+function classificationKey(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+/** Join key is the phrase; Gemini sometimes puts that phrase in `id` instead. */
+export function classifiedVerdictsToPatches(
+  items: ClassifiedVerdict[]
+): KeywordClassificationPatch[] {
+  const patches: KeywordClassificationPatch[] = [];
+  for (const item of items) {
+    const keyword = (item.keyword || item.id || "").trim();
+    if (!keyword || !item.sheet) continue;
+    patches.push({
+      id: item.id,
+      keyword,
+      sheet: item.sheet,
+      reason: item.reason,
+      plpConcept: item.plpConcept,
+    });
+  }
+  return patches;
+}
+
+/**
+ * Overlay Stage 4 verdicts onto display rows. Match by phrase first, then by
+ * id — archive rows and the Extract sample do not share an id space, but
+ * Gemini often echoes the phrase as `id`.
+ */
 export function applyKeywordClassifications<
   T extends {
     keyword: string;
     sheet: DisplayKeyword["sheet"];
     exclusionReason?: string;
     plpConcept?: string;
+    id?: string;
   },
 >(rows: T[], patches: KeywordClassificationPatch[]): T[] {
   if (rows.length === 0 || patches.length === 0) return rows;
   const byText = new Map<string, KeywordClassificationPatch>();
   for (const patch of patches) {
-    const key = patch.keyword.trim().toLowerCase();
-    if (key) byText.set(key, patch);
+    const phrase = classificationKey(patch.keyword);
+    const id = classificationKey(patch.id);
+    if (phrase) byText.set(phrase, patch);
+    if (id) byText.set(id, patch);
   }
   if (byText.size === 0) return rows;
   return rows.map((row) => {
-    const match = byText.get(row.keyword.trim().toLowerCase());
+    const match =
+      byText.get(classificationKey(row.keyword)) ??
+      byText.get(classificationKey(row.id));
     if (!match) return row;
     return {
       ...row,
@@ -109,4 +151,33 @@ export function applyKeywordClassifications<
       plpConcept: match.plpConcept,
     };
   });
+}
+
+/** Re-apply the classified archive onto an Extract sample. Classified wins. */
+export function overlayKeywordSampleWithClassified<T extends {
+  keyword: string;
+  sheet: DisplayKeyword["sheet"];
+  exclusionReason?: string;
+  plpConcept?: string;
+  id?: string;
+}>(rows: T[], classified: ClassifiedVerdict[]): T[] {
+  return applyKeywordClassifications(rows, classifiedVerdictsToPatches(classified));
+}
+
+export function keywordClassificationOverlayChanged<
+  T extends {
+    sheet: DisplayKeyword["sheet"];
+    exclusionReason?: string;
+    plpConcept?: string;
+  },
+>(before: T[], after: T[]): boolean {
+  if (before.length !== after.length) return true;
+  for (let i = 0; i < after.length; i += 1) {
+    const prev = before[i]!;
+    const next = after[i]!;
+    if (prev.sheet !== next.sheet) return true;
+    if ((prev.exclusionReason ?? "") !== (next.exclusionReason ?? "")) return true;
+    if ((prev.plpConcept ?? "") !== (next.plpConcept ?? "")) return true;
+  }
+  return false;
 }

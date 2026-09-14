@@ -16,7 +16,9 @@ import {
 import {
   MAX_DISPLAY_ROWS,
   applyKeywordClassifications,
+  keywordClassificationOverlayChanged,
   keywordSampleNeedsRebuild,
+  overlayKeywordSampleWithClassified,
   toExtractedKeyword,
   type DisplayKeyword,
 } from "@/lib/free-assessment/map-keywords";
@@ -371,15 +373,7 @@ export async function persistExtractKeywordSample(
     params.projectId
   ).catch(() => []);
   if (classified.length > 0) {
-    sample = applyKeywordClassifications(
-      sample,
-      classified.map((row) => ({
-        keyword: row.keyword,
-        sheet: row.sheet,
-        reason: row.reason,
-        plpConcept: row.plpConcept,
-      }))
-    );
+    sample = overlayKeywordSampleWithClassified(sample, classified);
   }
   await saveProjectSliceAdmin(
     admin,
@@ -394,8 +388,41 @@ export async function persistExtractKeywordSample(
 }
 
 /**
+ * Classified shards are the source of truth for sheet/reason/plpConcept.
+ * Re-apply them onto the Extract sample and persist when the table would
+ * otherwise keep the extract default (`sheet: "category"`).
+ */
+export async function overlayAndPersistKeywordClassifications(
+  admin: Admin,
+  workspaceId: string,
+  projectId: string,
+  sample: DisplayKeyword[]
+): Promise<DisplayKeyword[]> {
+  if (sample.length === 0) return sample;
+  const classified = await loadClassifiedItemsAdmin(
+    admin,
+    workspaceId,
+    projectId
+  ).catch(() => []);
+  if (classified.length === 0) return sample;
+  const next = overlayKeywordSampleWithClassified(sample, classified);
+  if (!keywordClassificationOverlayChanged(sample, next)) return sample;
+  await saveProjectSliceAdmin(
+    admin,
+    workspaceId,
+    projectId,
+    "keywords",
+    next
+  ).catch((err) =>
+    console.error("[extract] Error saving classified keyword overlay:", err)
+  );
+  return next;
+}
+
+/**
  * If keywords.json is shorter than the chunk archive (stale Extract cache),
- * rebuild it so refresh shows every row the actor returned.
+ * rebuild it so refresh shows every row the actor returned. Always re-apply
+ * Stage 4 classified shards so Extract cannot stay all-category after Analyze.
  */
 export async function syncKeywordSampleFromArchive(
   admin: Admin,
@@ -423,14 +450,20 @@ export async function syncKeywordSampleFromArchive(
     { dedupe: false }
   );
   if (
-    !keywordSampleNeedsRebuild(
+    keywordSampleNeedsRebuild(
       Array.isArray(stored) ? stored.length : 0,
       rows.length
     )
   ) {
-    return Array.isArray(stored) && stored.length > 0 ? stored : [];
+    return persistExtractKeywordSample(admin, params);
   }
-  return persistExtractKeywordSample(admin, params);
+  const sample = Array.isArray(stored) && stored.length > 0 ? stored : [];
+  return overlayAndPersistKeywordClassifications(
+    admin,
+    params.workspaceId,
+    params.projectId,
+    sample
+  );
 }
 
 export async function abortActiveMrExtractRuns(

@@ -55,7 +55,10 @@ export interface Stage6OnPageInput {
 
 export interface Stage6OnPageResult {
   contentById: Record<string, CollectionContent>;
+  /** True only when every collection in this call was actually written by Gemini. */
   isAiGenerated: boolean;
+  /** Collections in this call that fell back to the heuristic writer because their Gemini batch failed. */
+  degradedCount: number;
 }
 
 interface GeminiCollectionContentItem {
@@ -152,6 +155,7 @@ export function runHeuristicStage6OnPage(
   return {
     contentById,
     isAiGenerated: false,
+    degradedCount: Object.keys(contentById).length,
   };
 }
 
@@ -331,21 +335,21 @@ export async function runStage6OnPageGeneration(
   }
 
   const finalContentById: Record<string, CollectionContent> = {};
-  let anyAiGenerated = false;
+  let degradedCount = 0;
 
   const chunkResults = await runWithConcurrency(
     chunks,
     async (chunk) => {
       try {
         const batchResult = await generateBatchStage6(enrichedInput, chunk);
-        return { contentById: batchResult, aiGenerated: true };
+        return { contentById: batchResult, degraded: 0 };
       } catch (err) {
         console.error("[runStage6OnPageGeneration] Batch error, falling back to heuristic for chunk:", err);
         const fallback = runHeuristicStage6OnPage({
           ...enrichedInput,
           collections: chunk,
         });
-        return { contentById: fallback.contentById, aiGenerated: false };
+        return { contentById: fallback.contentById, degraded: chunk.length };
       }
     },
     { concurrency: CHUNK_CONCURRENCY }
@@ -353,11 +357,15 @@ export async function runStage6OnPageGeneration(
 
   for (const result of chunkResults.successes) {
     Object.assign(finalContentById, result.contentById);
-    if (result.aiGenerated) anyAiGenerated = true;
+    degradedCount += result.degraded;
   }
 
   return {
     contentById: finalContentById,
-    isAiGenerated: anyAiGenerated,
+    // Only claim a full AI pass when every chunk actually succeeded — one
+    // chunk's Gemini failure silently falling back to the heuristic writer
+    // must never be reported the same as a clean AI-generated pass.
+    isAiGenerated: degradedCount === 0 && Object.keys(finalContentById).length > 0,
+    degradedCount,
   };
 }

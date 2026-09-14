@@ -73,13 +73,15 @@ export function StageCollectionSheet({
   termEmbedProgress = null,
   selectedIds,
   onChangeSelected,
-  paid,
+  paidCollectionIds,
   onStart,
   onPushToStore,
   walletBalance = null,
   walletHref,
   pushing = false,
   onRemoveDuplicates,
+  onRecheckDuplicates,
+  recheckingDuplicates = false,
   workspaceId,
   projectId,
 }: {
@@ -92,7 +94,8 @@ export function StageCollectionSheet({
   termEmbedProgress?: { embedded: number; total: number; done: boolean } | null;
   selectedIds: string[];
   onChangeSelected: (ids: string[]) => void;
-  paid: boolean;
+  /** Collection ids already successfully pushed and paid for. */
+  paidCollectionIds: string[];
   onStart: () => void;
   onPushToStore?: (selectedIds: string[]) => Promise<void> | void;
   walletBalance?: number | null;
@@ -106,6 +109,14 @@ export function StageCollectionSheet({
    * merchant via the "Remove Duplicates" button.
    */
   onRemoveDuplicates?: (ids: string[]) => void;
+  /**
+   * Re-runs the Stage 5 Phase 3 duplicate check for collections whose
+   * dedupeCheckStatus came back "unknown" (the live catalog fetch or the
+   * Gemini comparison failed). Those collections can't be pushed until this
+   * clears them one way or the other.
+   */
+  onRecheckDuplicates?: () => void;
+  recheckingDuplicates?: boolean;
   workspaceId?: string;
   projectId?: string;
 }) {
@@ -139,6 +150,23 @@ export function StageCollectionSheet({
   const [productPageSize, setProductPageSize] = useState(SHEET_PAGE_SIZE);
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const paidIds = useMemo(() => new Set(paidCollectionIds), [paidCollectionIds]);
+  // "unknown" means the live-catalog fetch or the Gemini comparison failed
+  // for this collection — it could really be an unflagged duplicate, so the
+  // server blocks publishing it until the check is retried.
+  const unverifiedIds = useMemo(
+    () =>
+      new Set(
+        collections
+          .filter((c) => c.status !== "duplicate" && c.dedupeCheckStatus === "unknown")
+          .map((c) => c.id)
+      ),
+    [collections]
+  );
+  const selectedUnverifiedCount = useMemo(
+    () => Array.from(selected).filter((id) => unverifiedIds.has(id)).length,
+    [selected, unverifiedIds]
+  );
 
   // Product map by ID for fast lookup
   const productMap = useMemo(() => {
@@ -247,8 +275,10 @@ export function StageCollectionSheet({
     (safeCollectionPageIndex + 1) * collectionPageSize
   );
   const pagedIds = pagedCollections.map((c) => c.id);
+  /** Already-pushed rows can never be (re)selected — exclude them from the page's selection math. */
+  const selectablePagedIds = pagedIds.filter((id) => !paidIds.has(id));
   const { allSelected: pageAllSelected, someSelected: pageSomeSelected } =
-    pageSelectionState(pagedIds, selected);
+    pageSelectionState(selectablePagedIds, selected);
 
   const duplicateIds = useMemo(
     () => collections.filter((c) => c.status === "duplicate").map((c) => c.id),
@@ -293,7 +323,7 @@ export function StageCollectionSheet({
   );
 
   const toggleSelect = (id: string) => {
-    if (paid) return;
+    if (paidIds.has(id)) return;
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -301,24 +331,22 @@ export function StageCollectionSheet({
   };
 
   const selectThisPage = () => {
-    if (paid) return;
-    onChangeSelected(unionSelectedIds(selectedIds, pagedIds));
+    onChangeSelected(unionSelectedIds(selectedIds, selectablePagedIds));
   };
 
   const selectAllMatching = () => {
-    if (paid) return;
-    onChangeSelected(visibleCollections.map((c) => c.id));
+    onChangeSelected(
+      visibleCollections.filter((c) => !paidIds.has(c.id)).map((c) => c.id)
+    );
   };
 
   const unselectAll = () => {
-    if (paid) return;
     onChangeSelected([]);
   };
 
   const togglePageSelection = () => {
-    if (paid) return;
     if (pageAllSelected) {
-      onChangeSelected(removeSelectedIds(selectedIds, pagedIds));
+      onChangeSelected(removeSelectedIds(selectedIds, selectablePagedIds));
     } else {
       selectThisPage();
     }
@@ -618,7 +646,7 @@ export function StageCollectionSheet({
                 ))}
               </div>
             ) : null}
-            {onRemoveDuplicates && selectedDuplicateCount.length > 0 && !paid ? (
+            {onRemoveDuplicates && selectedDuplicateCount.length > 0 ? (
               <Button
                 size="sm"
                 variant="outline"
@@ -627,6 +655,22 @@ export function StageCollectionSheet({
               >
                 <Trash2 className="h-3.5 w-3.5 shrink-0" />
                 Remove duplicates ({selectedDuplicateCount.length})
+              </Button>
+            ) : null}
+            {onRecheckDuplicates && unverifiedIds.size > 0 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onRecheckDuplicates}
+                disabled={recheckingDuplicates}
+                className="h-8 gap-1.5 px-3 text-xs font-medium rounded-lg border-amber-500/30 bg-amber-500/5 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300 shadow-2xs"
+              >
+                {recheckingDuplicates ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                ) : (
+                  <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                )}
+                Recheck duplicates ({unverifiedIds.size})
               </Button>
             ) : null}
             {draftDirty ? (
@@ -643,7 +687,12 @@ export function StageCollectionSheet({
               <TableHeader>
                 <TableRow className="hover:bg-transparent border-b border-border/70">
                   <TableHead className="w-14 px-2">
-                    <div className={cn(paid && "pointer-events-none opacity-75")}>
+                    <div
+                      className={cn(
+                        selectablePagedIds.length === 0 &&
+                          "pointer-events-none opacity-75"
+                      )}
+                    >
                       <TableSelectHeader
                         allSelected={pageAllSelected}
                         someSelected={pageSomeSelected}
@@ -674,27 +723,28 @@ export function StageCollectionSheet({
                 ) : (
                   pagedCollections.map((row) => {
                     const on = selected.has(row.id);
+                    const rowPushed = paidIds.has(row.id);
                     return (
                       <TableRow
                         key={row.id}
                         className={cn(
-                          paid
+                          rowPushed
                             ? "cursor-default border-b border-border/40"
                             : "cursor-pointer transition-colors border-b border-border/40",
                           on ? "bg-primary/5 hover:bg-primary/10" : "hover:bg-muted/40"
                         )}
                         onClick={() => {
-                          if (!paid) toggleSelect(row.id);
+                          if (!rowPushed) toggleSelect(row.id);
                         }}
                       >
                         <TableCell className="px-3 py-3.5" onClick={(e) => e.stopPropagation()}>
                           <button
                             type="button"
                             onClick={() => toggleSelect(row.id)}
-                            disabled={paid}
+                            disabled={rowPushed}
                             className={cn(
                               "flex h-4 w-4 items-center justify-center rounded border transition-colors",
-                              paid ? "cursor-not-allowed opacity-75" : "",
+                              rowPushed ? "cursor-not-allowed opacity-75" : "",
                               on
                                 ? "border-primary bg-primary text-primary-foreground"
                                 : "border-border hover:border-primary/60"
@@ -756,6 +806,13 @@ export function StageCollectionSheet({
                                 Duplicate
                               </span>
                             )
+                          ) : unverifiedIds.has(row.id) ? (
+                            <span
+                              title="The live catalog or AI comparison failed for this collection. Recheck before publishing."
+                              className="inline-flex items-center rounded-md border border-amber-500/40 bg-amber-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200"
+                            >
+                              Unverified
+                            </span>
                           ) : (
                             <span className="inline-flex items-center rounded-md border border-lime-500/40 bg-lime-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-lime-800 dark:text-lime-200">
                               New
@@ -766,12 +823,12 @@ export function StageCollectionSheet({
                           <span
                             className={cn(
                               "inline-flex items-center rounded-md border px-2.5 py-0.5 text-[11px] font-semibold",
-                              paid
+                              rowPushed
                                 ? "border-emerald-600/40 bg-emerald-600/25 text-emerald-900 dark:text-emerald-100"
                                 : "border-sky-500/40 bg-sky-500/25 text-sky-900 dark:text-sky-100"
                             )}
                           >
-                            {paid ? "Pushed" : "New"}
+                            {rowPushed ? "Pushed" : "New"}
                           </span>
                         </TableCell>
                       </TableRow>
@@ -1034,12 +1091,14 @@ export function StageCollectionSheet({
           <span className="font-bold text-primary">
             Total: {formatUsd(pushTotalCost)}
           </span>
-          {paid ? (
+          {paidIds.size > 0 ? (
             <>
               <span>·</span>
               <span className="inline-flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                <span>Pushed to Store</span>
+                <span>
+                  {paidIds.size} of {collections.length} pushed
+                </span>
               </span>
             </>
           ) : null}
@@ -1060,32 +1119,28 @@ export function StageCollectionSheet({
           <Button
             size="sm"
             onClick={() => setConfirmPushOpen(true)}
-            disabled={selected.size === 0 || pushing || paid}
-            className={cn(
-              "h-8 gap-1.5 px-4 text-xs font-semibold shadow-xs transition-all",
-              paid
-                ? "bg-muted text-muted-foreground cursor-not-allowed border border-border/70 hover:bg-muted"
-                : "bg-primary hover:bg-primary/90 text-primary-foreground"
-            )}
+            disabled={selected.size === 0 || pushing || selectedUnverifiedCount > 0}
+            title={
+              selectedUnverifiedCount > 0
+                ? "Recheck duplicates before publishing — the check failed for some selected collections."
+                : undefined
+            }
+            className="h-8 gap-1.5 px-4 text-xs font-semibold shadow-xs transition-all bg-primary hover:bg-primary/90 text-primary-foreground"
           >
-            {paid ? (
-              <>
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                <span>Pushed to Store</span>
-              </>
-            ) : (
-              <>
-                <Store className="h-3.5 w-3.5" />
-                <span>Push to Store</span>
-                <span className="opacity-90 font-mono">
-                  ({formatUsd(pushTotalCost)})
-                </span>
-                <ArrowRight className="h-3.5 w-3.5 ml-0.5" />
-              </>
-            )}
+            <Store className="h-3.5 w-3.5" />
+            <span>Push to Store</span>
+            <span className="opacity-90 font-mono">
+              ({formatUsd(pushTotalCost)})
+            </span>
+            <ArrowRight className="h-3.5 w-3.5 ml-0.5" />
           </Button>
         </div>
       </div>
+      {selectedUnverifiedCount > 0 ? (
+        <p className="text-[11px] text-amber-700 dark:text-amber-400 -mt-1">
+          {selectedUnverifiedCount} selected collection{selectedUnverifiedCount === 1 ? "" : "s"} couldn&apos;t be verified against your live catalog. Recheck duplicates before publishing.
+        </p>
+      ) : null}
 
       <CollectionProposalDialog
         open={proposalOpen}

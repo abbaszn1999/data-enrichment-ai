@@ -7,6 +7,7 @@ import {
 import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { runStage1NicheDiscovery } from "@/lib/market-research/agent/stage1-niche-discovery";
 import { saveProjectSliceAdmin } from "@/lib/market-research/storage-admin";
+import { markSliceSavedAdmin } from "@/lib/market-research/server-persist";
 
 export const maxDuration = 60;
 
@@ -50,6 +51,15 @@ export async function POST(request: NextRequest) {
           structuredNiches: discovery.structuredNiches,
         }).catch((err) => console.error("[analyze] Error saving niches slice:", err)),
       ]);
+
+      // Written directly here, outside the client autosave path — record the
+      // fingerprint now so the next autosave doesn't compare a fresh niches
+      // slice against a stale hash and re-upload an older in-memory copy
+      // over it.
+      await markSliceSavedAdmin(auth.admin, projectId, "niches", {
+        niches: discovery.niches,
+        structuredNiches: discovery.structuredNiches,
+      });
     }
 
     return NextResponse.json(

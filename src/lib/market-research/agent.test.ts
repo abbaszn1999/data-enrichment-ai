@@ -248,7 +248,13 @@ describe("Market Research Agent - Stage 4 Batching and Concurrency", () => {
 
       const result = await runStage4IntentClassification({ keywords });
 
-      expect(result.isAiGenerated).toBe(true);
+      // One batch (100 keywords) persistently failed even after retry and
+      // fell back to the regex heuristic. isAiGenerated must reflect that
+      // truthfully — claiming "true" here is the exact class of bug this
+      // fix closes: heuristic guesses must never be presented as agent
+      // verdicts. degradedCount names exactly how many keywords fell back.
+      expect(result.isAiGenerated).toBe(false);
+      expect(result.degradedCount).toBe(100);
       expect(result.classified.length).toBe(TOTAL);
 
       // Every keyword got exactly one classification, matched by its own id —
@@ -745,6 +751,153 @@ describe("Market Research Agent - Stage 5 Gemini receives the full cosine shortl
     expect(result.collections[0].matchedProductIds).toHaveLength(COUNT);
     expect(result.collections[0].productMatches).toHaveLength(COUNT);
     expect(result.collections[0].candidateMatches).toHaveLength(COUNT);
+  });
+});
+
+describe("Market Research Agent - Stage 5 scoped-lineage safety (go-live blockers)", () => {
+  afterEach(() => {
+    vi.mocked(runGeminiMarketResearch).mockReset();
+  });
+
+  const makeProduct = (id: string, collectionIds: string[]): MarketResearchProduct => ({
+    id,
+    title: id,
+    handle: id,
+    url: `/products/${id}`,
+    images: [],
+    price: { amount: 10, currency: "USD", priceFormatted: "$10.00" },
+    tags: [],
+    attributes: [],
+    collectionIds,
+    collectionNames: [],
+    inStock: true,
+  });
+
+  it("never widens to the whole catalog when a term's resolved collection lineage is empty", async () => {
+    vi.mocked(runGeminiMarketResearch).mockImplementation(
+      async (): Promise<GeminiRunResult<unknown>> => ({
+        data: { collections: [] },
+        rawText: "",
+        cost: {} as GeminiRunResult<unknown>["cost"],
+        credits: 0,
+        model: "gemini-3.7-flash",
+        thinkingLevel: "low",
+      })
+    );
+
+    const { runStage5CollectionClustering } = await import(
+      "./agent/stage5-collection-clusterer"
+    );
+
+    // Two products in an unrelated collection. The term's own seed row
+    // resolved to no collection at all (empty string) — the caller always
+    // writes an entry, just with a falsy value, when a seed's collection
+    // could not be resolved.
+    const products = [
+      makeProduct("prod-unrelated-1", ["col-unrelated"]),
+      makeProduct("prod-unrelated-2", ["col-unrelated"]),
+    ];
+
+    const result = await runStage5CollectionClustering({
+      storeName: "Tech Store",
+      keywords: [{ id: "k1", keyword: "orphan term", volume: 50, difficulty: 10 }],
+      products,
+      collectionIdByKeywordId: { k1: "" },
+    });
+
+    // Zero-Product Suppression drops it entirely rather than matching the
+    // whole catalog — no collection, not a collection full of unrelated
+    // products.
+    expect(result.collections).toHaveLength(0);
+  });
+
+  it("still matches when the term's lineage resolves to a real collection, proving the empty-scope fix does not break normal scoping", async () => {
+    vi.mocked(runGeminiMarketResearch).mockImplementation(
+      async (opts: GeminiRunOptions): Promise<GeminiRunResult<unknown>> => {
+        const jsonStart = opts.userPrompt.indexOf("[");
+        const batch = JSON.parse(opts.userPrompt.slice(jsonStart)) as Array<{
+          keywordId: string;
+          candidateProducts: Array<{ id: string }>;
+        }>;
+        return {
+          data: {
+            collections: batch.map((piece) => ({
+              keywordId: piece.keywordId,
+              matchedProductIds: piece.candidateProducts.map((c) => c.id),
+              rationale: "kept",
+            })),
+          },
+          rawText: "",
+          cost: {} as GeminiRunResult<unknown>["cost"],
+          credits: 0,
+          model: "gemini-3.7-flash",
+          thinkingLevel: "low",
+        };
+      }
+    );
+
+    const { runStage5CollectionClustering } = await import(
+      "./agent/stage5-collection-clusterer"
+    );
+
+    const products = [
+      makeProduct("prod-tablet-1", ["col-tablets"]),
+      makeProduct("prod-unrelated", ["col-unrelated"]),
+    ];
+    const termVector = [1, 0, 0, 0];
+
+    const result = await runStage5CollectionClustering({
+      storeName: "Tech Store",
+      keywords: [{ id: "k1", keyword: "tablets", volume: 50, difficulty: 10 }],
+      products,
+      collectionIdByKeywordId: { k1: "col-tablets" },
+      termVectors: new Map([["k1", termVector]]),
+      productVectors: new Map([
+        ["prod-tablet-1", termVector],
+        ["prod-unrelated", termVector],
+      ]),
+    });
+
+    expect(result.collections).toHaveLength(1);
+    expect(result.collections[0].matchedProductIds).toEqual(["prod-tablet-1"]);
+  });
+
+  it("drops candidates a failed Gemini chunk never reviewed instead of publishing them unreviewed, and records the shortfall", async () => {
+    let call = 0;
+    vi.mocked(runGeminiMarketResearch).mockImplementation(
+      async (): Promise<GeminiRunResult<unknown>> => {
+        call += 1;
+        // Every attempt for this single oversized term fails, including the
+        // one built-in retry — so this keyword ends up with zero AI-covered
+        // candidates.
+        throw new Error(`simulated persistent Gemini failure #${call}`);
+      }
+    );
+
+    const { runStage5CollectionClustering } = await import(
+      "./agent/stage5-collection-clusterer"
+    );
+
+    const products = [makeProduct("prod-1", ["col-tablets"]), makeProduct("prod-2", ["col-tablets"])];
+    const termVector = [1, 0, 0, 0];
+
+    const result = await runStage5CollectionClustering({
+      storeName: "Tech Store",
+      keywords: [{ id: "k1", keyword: "tablets", volume: 50, difficulty: 10 }],
+      products,
+      collectionIdByKeywordId: { k1: "col-tablets" },
+      termVectors: new Map([["k1", termVector]]),
+      productVectors: new Map([
+        ["prod-1", termVector],
+        ["prod-2", termVector],
+      ]),
+    });
+
+    // A total review failure must suppress the collection rather than
+    // silently publish the raw, unreviewed cosine matches.
+    expect(result.collections).toHaveLength(0);
+    // Exactly one retry per chunk, not unbounded retries.
+    expect(call).toBe(2);
   });
 });
 

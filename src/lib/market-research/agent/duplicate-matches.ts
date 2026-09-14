@@ -3,6 +3,13 @@ export type DuplicateMatch = { id: string; name: string };
 export type DuplicateExclusionResult = {
   duplicateIds: Set<string>;
   matchesById: Map<string, DuplicateMatch[]>;
+  /**
+   * False only when the Gemini call itself failed (network/parse error) —
+   * i.e. the comparison never actually happened, so an empty duplicateIds
+   * here must not be read as "nothing is a duplicate." True whenever a
+   * response — even an empty or malformed one — was actually parsed.
+   */
+  checked: boolean;
 };
 
 type RawDuplicateItem = {
@@ -55,11 +62,11 @@ export function parseDuplicateExclusionResponse(
   const duplicateIds = new Set<string>();
   const matchesById = new Map<string, DuplicateMatch[]>();
   if (!data || typeof data !== "object") {
-    return { duplicateIds, matchesById };
+    return { duplicateIds, matchesById, checked: true };
   }
   const duplicates = (data as { duplicates?: unknown }).duplicates;
   if (!Array.isArray(duplicates)) {
-    return { duplicateIds, matchesById };
+    return { duplicateIds, matchesById, checked: true };
   }
 
   for (const raw of duplicates) {
@@ -102,5 +109,5 @@ export function parseDuplicateExclusionResponse(
     }
   }
 
-  return { duplicateIds, matchesById };
+  return { duplicateIds, matchesById, checked: true };
 }

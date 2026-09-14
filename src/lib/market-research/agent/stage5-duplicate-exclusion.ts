@@ -56,9 +56,12 @@ export async function runDuplicateCollectionExclusion(
   newCollections: NewCollectionForDuplicateCheck[],
   existingCollections: ExistingCollectionForDuplicateCheck[]
 ): Promise<DuplicateExclusionResult> {
+  // Nothing to check is a known state, not a failure — only the try/catch
+  // below (an actual Gemini failure) may report checked: false.
   const empty: DuplicateExclusionResult = {
     duplicateIds: new Set(),
     matchesById: new Map(),
+    checked: true,
   };
   if (newCollections.length === 0 || existingCollections.length === 0) {
     return empty;
@@ -96,9 +99,9 @@ ${JSON.stringify(
     return parseDuplicateExclusionResponse(geminiRes.data, newIds, existingById);
   } catch (error) {
     console.warn(
-      "[Stage 5 Phase 3] Duplicate-collection exclusion call failed; keeping every collection as \"new\":",
+      "[Stage 5 Phase 3] Duplicate-collection exclusion call failed; duplicate status is unknown, not \"new\":",
       error
     );
-    return empty;
+    return { duplicateIds: new Set(), matchesById: new Map(), checked: false };
   }
 }

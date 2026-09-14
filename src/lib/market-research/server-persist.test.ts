@@ -212,4 +212,37 @@ describe("saveMrPersistedState storage routing", () => {
     ]);
     expect(second.rowUpdates).toHaveLength(1);
   });
+
+  it("persists applied sheet filters, the active extract id, and per-collection paid ids through the real save path", async () => {
+    // Regression test for a gap where projectStateSlice computed these three
+    // fields correctly but stateForDb silently dropped them before the
+    // Postgres write, so a refresh reset applied filters and lost track of
+    // which collections had actually been paid for. This goes through
+    // saveMrPersistedState end-to-end (not just projectStateSlice) so it
+    // would have caught that regression.
+    const existingRow: StoredRow = {
+      id: projectId,
+      extract_rows: 0,
+      extract_charged_usd: 0,
+      keywords_path: null,
+      state: {},
+    };
+    const { admin, rowUpdates } = makeAdminStub([existingRow]);
+
+    const persisted = stateWithKeywords();
+    persisted.sheetFiltersByProject[projectId] = {
+      category: { minVolume: 50, maxKd: 40, questionsOnly: false, query: "" },
+      informational: { minVolume: 0, maxKd: 100, questionsOnly: false, query: "" },
+    };
+    persisted.extractIdByProject[projectId] = "44444444-4444-4444-8444-444444444444";
+    persisted.paidCollectionIdsByProject[projectId] = ["col-1", "col-2"];
+
+    await saveMrPersistedState(admin, workspaceId, userId, persisted);
+
+    expect(rowUpdates).toHaveLength(1);
+    const savedState = rowUpdates[0]!.state as MrProjectStateJson;
+    expect(savedState.sheetFilters).toEqual(persisted.sheetFiltersByProject[projectId]);
+    expect(savedState.extractId).toBe(persisted.extractIdByProject[projectId]);
+    expect(savedState.paidCollectionIds).toEqual(["col-1", "col-2"]);
+  });
 });

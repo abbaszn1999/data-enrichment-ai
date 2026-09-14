@@ -129,6 +129,13 @@ export type ProposedCollection = {
   existingName?: string;
   /** Live store PLPs the duplicate agent named as the same shopper intent. */
   duplicateMatches?: Array<{ id: string; name: string }>;
+  /**
+   * Whether the duplicate check actually ran for this collection. "unknown"
+   * means the live catalog fetch or the Gemini call failed — this must be
+   * re-checked before the collection can be published, since a silent "new"
+   * here could really be an unflagged duplicate.
+   */
+  dedupeCheckStatus?: "ok" | "unknown";
   matchedProductIds?: string[];
   productMatches?: CollectionProductMatch[];
   candidateMatches?: CollectionProductMatch[];

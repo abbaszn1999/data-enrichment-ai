@@ -25,7 +25,10 @@ export interface Stage4ClassificationResult {
     informationalCount: number;
     excludedCount: number;
   };
+  /** True only when every keyword in this call was actually verdicted by Gemini. */
   isAiGenerated: boolean;
+  /** Keywords in this call that fell back to the regex heuristic because Gemini's batch failed or omitted them. */
+  degradedCount: number;
 }
 
 interface GeminiKeywordClassificationItem {
@@ -138,6 +141,7 @@ export function runHeuristicStage4Classification(input: {
       excludedCount,
     },
     isAiGenerated: false,
+    degradedCount: classified.length,
   };
 }
 
@@ -237,7 +241,7 @@ Output strictly valid JSON with this exact schema:
    */
   async function classifyOneBatch(
     batch: KeywordToClassify[]
-  ): Promise<ClassifiedKeywordItem[]> {
+  ): Promise<{ items: ClassifiedKeywordItem[]; degraded: number }> {
     const data = await classifyBatchWithGemini(batch);
 
     const responseMap = indexGeminiClassifications(
@@ -245,6 +249,7 @@ Output strictly valid JSON with this exact schema:
     );
 
     const results: ClassifiedKeywordItem[] = [];
+    let degraded = 0;
     for (const kw of batch) {
       const item = lookupGeminiClassification(responseMap, kw);
       if (item) {
@@ -261,10 +266,11 @@ Output strictly valid JSON with this exact schema:
         const heuristic = runHeuristicStage4Classification({ keywords: [kw] });
         if (heuristic.classified[0]) {
           results.push(heuristic.classified[0]);
+          degraded += 1;
         }
       }
     }
-    return results;
+    return { items: results, degraded };
   }
 
   const batchRun = await runWithConcurrency(batches, classifyOneBatch, {
@@ -272,8 +278,10 @@ Output strictly valid JSON with this exact schema:
   });
 
   const allClassified: ClassifiedKeywordItem[] = [];
-  for (const rows of batchRun.successes) {
-    allClassified.push(...rows);
+  let degradedCount = 0;
+  for (const { items, degraded } of batchRun.successes) {
+    allClassified.push(...items);
+    degradedCount += degraded;
   }
   for (const { index } of batchRun.errors) {
     const failedBatch = batches[index];
@@ -283,6 +291,7 @@ Output strictly valid JSON with this exact schema:
     );
     const heuristic = runHeuristicStage4Classification({ keywords: failedBatch });
     allClassified.push(...heuristic.classified);
+    degradedCount += failedBatch.length;
   }
 
   const categoryCount = allClassified.filter((c) => c.sheet === "category").length;
@@ -297,6 +306,11 @@ Output strictly valid JSON with this exact schema:
       informationalCount,
       excludedCount,
     },
-    isAiGenerated: true,
+    // Only claim full AI verdicting when nothing in this call fell back to
+    // the regex heuristic — a partially-degraded page must not be reported
+    // as "the agent classified this" the same way the Extract-tab display
+    // bug used to lie about verdicts that were never actually produced.
+    isAiGenerated: degradedCount === 0,
+    degradedCount,
   };
 }

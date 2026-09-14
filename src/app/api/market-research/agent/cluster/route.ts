@@ -146,7 +146,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Merge, never overwrite: each cursor call adds/updates its own page's
-    // collections into whatever the slice already holds from earlier pages.
+    // collections into whatever the slice already holds from earlier pages
+    // of THIS SAME run. But a fresh run starting at offset 0 (re-clustering
+    // after changed filters, a new extract, etc.) must not let a previous
+    // run's stale collections linger forever — only carry over ones that
+    // were actually pushed live (they have a real storeHandle/storeCollectionId),
+    // since those still exist on the store regardless of the current term set.
     let merged: ProposedCollection[] = [];
     if (parsed.data.projectId) {
       const existing = await loadProjectSliceAdmin<ProposedCollection[]>(
@@ -155,10 +160,12 @@ export async function POST(request: NextRequest) {
         parsed.data.projectId,
         "collections"
       ).catch(() => null);
-      merged = mergeById(
-        Array.isArray(existing) ? existing : [],
-        result.collections
-      );
+      const existingList = Array.isArray(existing) ? existing : [];
+      const carryOver =
+        offset === 0
+          ? existingList.filter((c) => Boolean(c.storeHandle || c.storeCollectionId))
+          : existingList;
+      merged = mergeById(carryOver, result.collections);
       merged.sort((a, b) => b.volume - a.volume || a.name.localeCompare(b.name));
 
       await saveProjectSliceAdmin(

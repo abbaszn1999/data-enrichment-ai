@@ -116,6 +116,7 @@ export async function POST(request: NextRequest) {
         isAiGenerated: result.isAiGenerated,
         droppedByCap: result.droppedByCap,
         mergedByIntent: result.mergedByIntent,
+        degradedCount: result.degradedCount,
       },
       { headers: auth.headers }
     );

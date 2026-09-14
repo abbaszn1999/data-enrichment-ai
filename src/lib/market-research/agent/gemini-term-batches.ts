@@ -7,6 +7,10 @@ export type GeminiCandidateCard = {
   title: string;
   price: string;
   shortDescription: string;
+  /** Store-assigned product type (e.g. "Sunglasses") — a strong, cheap signal Gemini can use before reading tags/attributes. */
+  productType: string;
+  /** Store-assigned brand/vendor (e.g. "Gucci") — needed to reject a product that matches on words alone but is the wrong brand. */
+  vendor: string;
   tags: string[];
   attributes: Array<{ name: string; value: string }>;
   similarityScore: number;

@@ -8,6 +8,7 @@ import type {
 } from "@/components/market-research/mock-data";
 import type {
   CollectionContent,
+  CollectionLink,
   ExtractedKeyword,
   GeneratedArticle,
   MarketResearchProduct,
@@ -22,13 +23,18 @@ import {
 } from "./project-state";
 import {
   deleteProjectStorageFolder,
+  loadClassifiedManifestAdmin,
   loadMrJsonAdmin,
   loadProjectSliceAdmin,
   mrSlicePath,
   saveProjectSliceAdmin,
   type MrSliceName,
 } from "./storage-admin";
-import { loadLatestMrExtract, syncKeywordSampleFromArchive } from "./extract-advance";
+import {
+  loadLatestMrExtract,
+  overlayAndPersistKeywordClassifications,
+  syncKeywordSampleFromArchive,
+} from "./extract-advance";
 
 type PersistAdmin = SupabaseClient;
 
@@ -36,7 +42,7 @@ type PersistAdmin = SupabaseClient;
  * Cheap deterministic fingerprint used to detect whether a storage slice changed.
  * Combines length with two independent 32-bit rolling hashes.
  */
-function fingerprintOf(payload: unknown): string {
+export function fingerprintOf(payload: unknown): string {
   const json = JSON.stringify(payload) ?? "";
   let h1 = 0x811c9dc5;
   let h2 = 5381;
@@ -46,6 +52,49 @@ function fingerprintOf(payload: unknown): string {
     h2 = ((h2 << 5) + h2 + code) >>> 0;
   }
   return `${json.length.toString(36)}-${h1.toString(36)}-${h2.toString(36)}`;
+}
+
+/**
+ * Records a slice's fingerprint in `mr_projects.state.sliceHashes` right
+ * after a server route (not the client autosave path) writes that slice
+ * directly to object storage — e.g. the Stage 1 analyze route writing
+ * "niches", or the Stage 3 seeds route writing "seeds". Without this, the
+ * next client autosave compares its in-memory copy against a stale hash
+ * left over from before the server write, sees a mismatch, and re-uploads
+ * whatever it has — the same clobber shape the "keywords" slice used to
+ * have before it was made overlay-driven.
+ */
+export async function markSliceSavedAdmin(
+  admin: PersistAdmin,
+  projectId: string,
+  sliceName: MrSliceName,
+  payload: unknown
+): Promise<void> {
+  try {
+    const { data: row } = await admin
+      .from("mr_projects")
+      .select("state")
+      .eq("id", projectId)
+      .maybeSingle();
+    const state: MrProjectStateJson =
+      row?.state && typeof row.state === "object"
+        ? (row.state as MrProjectStateJson)
+        : {};
+    const sliceHashes = {
+      ...(state.sliceHashes ?? {}),
+      [sliceName]: fingerprintOf(payload),
+    };
+    const { error } = await admin
+      .from("mr_projects")
+      .update({ state: { ...state, sliceHashes } })
+      .eq("id", projectId);
+    if (error) throw error;
+  } catch (err) {
+    console.error(
+      `[markSliceSavedAdmin] Failed to record ${sliceName} fingerprint for project ${projectId}:`,
+      err
+    );
+  }
 }
 
 type NichesSlicePayload = {
@@ -205,14 +254,51 @@ export async function loadMrPersistedState(
             } else if (Array.isArray(state.keywords)) {
               persisted.keywordsByProject[projectId] = state.keywords;
             }
+
+            // Classified shards (Gemini's real verdicts) are always the
+            // source of truth. Re-apply them onto whatever sample we just
+            // loaded UNCONDITIONALLY, independent of the extract header's
+            // status — a missing, stuck, or errored extract row must never
+            // skip this, or the Extract tab keeps showing the placeholder
+            // "sheet: category" default forever, exactly the bug this fixes.
+            const currentSample = persisted.keywordsByProject[projectId];
+            if (Array.isArray(currentSample) && currentSample.length > 0) {
+              const overlaid = await overlayAndPersistKeywordClassifications(
+                admin,
+                workspaceId,
+                projectId,
+                currentSample
+              ).catch(() => currentSample);
+              persisted.keywordsByProject[projectId] = overlaid;
+            }
+
+            // A classified manifest with any rows means Stage 4 has actually
+            // run for this project, regardless of whether the `analyzed`
+            // autosave flag ever landed in Postgres (tab closed right after
+            // classification, failed write, etc). Derive it server-side so
+            // classified data always renders its sheets on the next load.
+            const manifest = await loadClassifiedManifestAdmin(
+              admin,
+              workspaceId,
+              projectId
+            ).catch(() => null);
+            if (
+              (manifest?.totalCount ?? 0) > 0 &&
+              !persisted.analyzedProjectIds.includes(projectId)
+            ) {
+              persisted.analyzedProjectIds.push(projectId);
+            }
+
+            // Best-effort extra: when a completed extract archive exists,
+            // also rebuild the sample from scratch if it looks stale/short
+            // compared to the full archive. Needs the extract header for its
+            // id and seed runs, so it stays best-effort rather than the
+            // primary fix above.
             const extract = await loadLatestMrExtract(admin, {
               workspaceId,
               projectId,
             }).catch(() => null);
-            if (
-              extract &&
-              extract.status !== "running"
-            ) {
+            if (extract && extract.status !== "running") {
               const { data: runRows } = await admin
                 .from("mr_runs")
                 .select("seed_id, seed_term")
@@ -316,6 +402,26 @@ export async function loadMrPersistedState(
             if (state.articles && typeof state.articles === "object") {
               persisted.articlesByProject[projectId] = state.articles;
             }
+          }
+        })(),
+
+        // 9. Internal-link graph slice — written by the background link-build
+        // job right after push (and by Stage 6/7 generation) but never read
+        // back before this, so the Links column in Tab 6 went blank on every
+        // refresh even though the graph was sitting in storage the whole time.
+        (async () => {
+          try {
+            const data = await loadProjectSliceAdmin<
+              Record<string, CollectionLink[]>
+            >(admin, workspaceId, projectId, "internal-links");
+            if (data && typeof data === "object") {
+              persisted.internalLinksByProject[projectId] = data;
+            }
+          } catch (err) {
+            console.error(
+              `[loadMrPersistedState] Failed to load internal-links slice for ${projectId}:`,
+              err
+            );
           }
         })(),
       ]);
@@ -438,6 +544,7 @@ export async function saveMrPersistedState(
       workspaceTab: slice.workspaceTab,
       openedWorkspace: slice.openedWorkspace,
       paidCollections: slice.paidCollections,
+      paidCollectionIds: slice.paidCollectionIds,
       contentReady: slice.contentReady,
       pushed: slice.pushed,
       analyzed: slice.analyzed,
@@ -446,6 +553,11 @@ export async function saveMrPersistedState(
       customInstruction: slice.customInstruction,
       extractCharge: slice.extractCharge,
       extractRows: slice.extractRows,
+      // Previously omitted here: a refresh silently reset applied Extract
+      // filters and lost track of the active extract id, even though both
+      // are computed correctly by projectStateSlice.
+      sheetFilters: slice.sheetFilters,
+      extractId: slice.extractId,
       sliceHashes: nextHashes,
     };
 

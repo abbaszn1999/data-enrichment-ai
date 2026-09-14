@@ -116,6 +116,8 @@ export async function POST(request: NextRequest) {
     }
 
     let pageContentById: Record<string, CollectionContent> = {};
+    let isAiGenerated = false;
+    let degradedCount = 0;
     if (pageCollections.length > 0) {
       const result = await runStage6OnPageGeneration({
         storeName,
@@ -128,6 +130,8 @@ export async function POST(request: NextRequest) {
         internalLinks: precomputedLinks,
       });
       pageContentById = result.contentById;
+      isAiGenerated = result.isAiGenerated;
+      degradedCount = result.degradedCount;
     }
 
     if (Object.keys(pageContentById).length > 0) {
@@ -162,7 +166,8 @@ export async function POST(request: NextRequest) {
         processed: pageIds.length,
         total,
         contentById: pageContentById,
-        isAiGenerated: Object.keys(pageContentById).length > 0,
+        isAiGenerated,
+        degradedCount,
       },
       { headers: auth.headers }
     );
