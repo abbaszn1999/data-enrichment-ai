@@ -5,15 +5,19 @@ import {
   AlertCircle,
   Check,
   ChevronRight,
+  Copy,
+  Download,
   Eye,
   ExternalLink,
   FileText,
   HelpCircle,
   Link2,
   Loader2,
+  MapPinned,
   Sparkles,
   UploadCloud,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -51,6 +55,8 @@ import {
   removeSelectedIds,
   unionSelectedIds,
 } from "@/lib/market-research/collection-sheet";
+import { buildCollectionsSitemapXml } from "@/lib/market-research/sitemap";
+import { buildWrStoreLinks } from "@/lib/website-restructure/provider-links";
 import {
   USD_PER_COLLECTION,
   type CollectionContent,
@@ -118,6 +124,8 @@ export function StageContentPanel({
   onSyncSeo,
   onNextStrategy,
   pushCostUsd,
+  storeUrl,
+  storeProvider,
 }: {
   collections: ProposedCollection[];
   contentById: Record<string, CollectionContent>;
@@ -144,6 +152,13 @@ export function StageContentPanel({
   onSyncSeo?: () => void;
   onNextStrategy: () => void;
   pushCostUsd?: number;
+  /** Storefront origin, used to build each collection's live URL and the
+   *  sitemap export. */
+  storeUrl?: string;
+  /** Connected store's provider id, used to pick the right URL pattern
+   *  (Shopify's "/collections/{handle}" vs WooCommerce's
+   *  "/product-category/{handle}"). Defaults to Shopify's convention. */
+  storeProvider?: string | null;
 }) {
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [openField, setOpenField] = useState<OnPageInstructionField | null>(null);
@@ -161,6 +176,8 @@ export function StageContentPanel({
     colId: string;
     field: FullTextField;
   } | null>(null);
+  const [sitemapDialogOpen, setSitemapDialogOpen] = useState(false);
+  const [sitemapUrlCopied, setSitemapUrlCopied] = useState(false);
 
   const preview = previewId ? contentById[previewId] : undefined;
   const previewCol = collections.find((c) => c.id === previewId);
@@ -235,6 +252,53 @@ export function StageContentPanel({
     contentById[id]?.links ?? internalLinksById?.[id] ?? [];
   const activeLinks = activeLinksColId ? linksFor(activeLinksColId) : [];
 
+  // Real, absolute storefront links — built once from the connected store's
+  // provider + origin, then filled in per row with that row's own handle.
+  // Same pattern helper the taxonomy export already trusts, so Shopify's
+  // "/collections/{handle}" and WooCommerce/WordPress's
+  // "/product-category/{handle}" are never guessed here.
+  const storeLinks = useMemo(
+    () => (storeUrl ? buildWrStoreLinks(storeProvider || "shopify", storeUrl) : null),
+    [storeUrl, storeProvider]
+  );
+  const liveUrlFor = (row: ProposedCollection): string | null => {
+    if (!storeLinks || !row.storeHandle) return null;
+    return storeLinks.collectionUrlPattern.replace("{handle}", row.storeHandle);
+  };
+  const liveCollectionUrls = collections
+    .map((c) => liveUrlFor(c))
+    .filter((url): url is string => Boolean(url));
+  const sitemapExampleOrigin = storeLinks?.baseUrl || "https://yourstore.com";
+  const sitemapExampleUrl = `${sitemapExampleOrigin}/collections-sitemap.xml`;
+
+  const handleDownloadSitemap = () => {
+    const xml = buildCollectionsSitemapXml(liveCollectionUrls);
+    const blob = new Blob([xml], { type: "application/xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "collections-sitemap.xml";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success(
+      `Sitemap downloaded — ${liveCollectionUrls.length} collection${
+        liveCollectionUrls.length === 1 ? "" : "s"
+      }`
+    );
+  };
+
+  const handleCopySitemapUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(sitemapExampleUrl);
+      setSitemapUrlCopied(true);
+      window.setTimeout(() => setSitemapUrlCopied(false), 1800);
+    } catch {
+      toast.error("Couldn't copy — select and copy the URL manually.");
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-3">
       <div className="shrink-0 space-y-2">
@@ -258,6 +322,21 @@ export function StageContentPanel({
           <div className="flex items-center gap-2">
             {ready ? (
               <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs"
+                  disabled={liveCollectionUrls.length === 0}
+                  title={
+                    liveCollectionUrls.length === 0
+                      ? "No published collection URLs yet"
+                      : undefined
+                  }
+                  onClick={() => setSitemapDialogOpen(true)}
+                >
+                  <MapPinned className="h-3.5 w-3.5" />
+                  Sitemap
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"
@@ -399,6 +478,7 @@ export function StageContentPanel({
               const rowLinks = linksFor(row.id);
               const rowGenerating = generating && selected.has(row.id) && !content;
               const on = selected.has(row.id);
+              const liveUrl = liveUrlFor(row);
               return (
                 <TableRow key={row.id} className={cn(on && "bg-primary/5")}>
                   <TableCell className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
@@ -419,13 +499,27 @@ export function StageContentPanel({
                     </button>
                   </TableCell>
                   <TableCell className="text-sm font-medium whitespace-nowrap">
-                    <button
-                      type="button"
-                      className="text-left hover:underline text-foreground flex items-center gap-1.5"
-                      onClick={() => content && setPreviewId(row.id)}
-                    >
-                      <span>{row.name}</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        className="text-left hover:underline text-foreground flex items-center gap-1.5"
+                        onClick={() => content && setPreviewId(row.id)}
+                      >
+                        <span>{row.name}</span>
+                      </button>
+                      {liveUrl ? (
+                        <a
+                          href={liveUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          title={`Open ${liveUrl} in a new tab`}
+                          className="text-muted-foreground/60 hover:text-primary transition-colors shrink-0"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      ) : null}
+                    </div>
                   </TableCell>
                   <ContentCell
                     ready={filled}
@@ -718,6 +812,120 @@ export function StageContentPanel({
               onClick={() => setActiveTextCell(null)}
             >
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Sitemap Export Modal */}
+      <Dialog
+        open={sitemapDialogOpen}
+        onOpenChange={(open) => {
+          setSitemapDialogOpen(open);
+          if (!open) setSitemapUrlCopied(false);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <MapPinned className="h-4 w-4 text-primary" />
+              <span>Download XML sitemap</span>
+            </DialogTitle>
+            <DialogDescription>
+              A standards-compliant sitemap (sitemaps.org format) listing the{" "}
+              {liveCollectionUrls.length} published collection page
+              {liveCollectionUrls.length === 1 ? "" : "s"} shown in this tab —
+              ready for Google Search Console.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <ol className="space-y-2.5 text-xs text-muted-foreground">
+              <li className="flex gap-2">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                  1
+                </span>
+                <span className="pt-0.5">
+                  Click <span className="font-medium text-foreground">Download sitemap</span> below to save{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">collections-sitemap.xml</code>.
+                </span>
+              </li>
+              <li className="flex gap-2">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                  2
+                </span>
+                <span className="pt-0.5">
+                  Upload that file to the root folder of your website (via your
+                  host&rsquo;s file manager, FTP, or your theme&rsquo;s file
+                  editor) — the same level your homepage lives at — so it
+                  becomes reachable at a URL like:
+                </span>
+              </li>
+            </ol>
+            <div className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-muted/40 px-2.5 py-2">
+              <code className="flex-1 truncate font-mono text-[11px] text-foreground">
+                {sitemapExampleUrl}
+              </code>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 shrink-0 px-1.5"
+                onClick={handleCopySitemapUrl}
+                title="Copy URL"
+              >
+                {sitemapUrlCopied ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-500" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+            <ol start={3} className="space-y-2.5 text-xs text-muted-foreground">
+              <li className="flex gap-2">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                  3
+                </span>
+                <span className="pt-0.5">
+                  In{" "}
+                  <a
+                    href="https://search.google.com/search-console/sitemaps"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-primary underline underline-offset-2"
+                  >
+                    Google Search Console
+                  </a>{" "}
+                  → your property → <span className="font-medium text-foreground">Sitemaps</span> → paste that
+                  same URL and click <span className="font-medium text-foreground">Submit</span>.
+                </span>
+              </li>
+            </ol>
+            <p className="text-[11px] text-muted-foreground/80">
+              Only <code className="font-mono">&lt;loc&gt;</code> and{" "}
+              <code className="font-mono">&lt;lastmod&gt;</code> are included —
+              Google&rsquo;s own documentation says it ignores{" "}
+              <code className="font-mono">changefreq</code> and{" "}
+              <code className="font-mono">priority</code>, so this stays lean
+              on purpose.
+            </p>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs"
+              onClick={() => setSitemapDialogOpen(false)}
+            >
+              Close
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              disabled={liveCollectionUrls.length === 0}
+              onClick={handleDownloadSitemap}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Download sitemap
             </Button>
           </DialogFooter>
         </DialogContent>

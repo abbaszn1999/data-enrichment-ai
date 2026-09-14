@@ -89,6 +89,7 @@ export function DeepWorkspace({
   generatedArticles,
   storeBlogs = [],
   storeUrl = "",
+  storeProvider = null,
   blogScopeWarning = null,
   strategyLoading,
   strategyReady,
@@ -172,6 +173,9 @@ export function DeepWorkspace({
   generatedArticles: Record<string, GeneratedArticle>;
   storeBlogs?: StoreBlog[];
   storeUrl?: string;
+  /** Connected store's provider id, used to build the correct live
+   *  collection URL pattern (Shopify vs WooCommerce/WordPress paths). */
+  storeProvider?: string | null;
   blogScopeWarning?: string | null;
   strategyLoading: boolean;
   strategyReady: boolean;
@@ -273,6 +277,8 @@ export function DeepWorkspace({
             )}
             contentById={contentById}
             internalLinksById={internalLinksById}
+            storeUrl={storeUrl}
+            storeProvider={storeProvider}
             linksBuildProgress={linksBuildProgress}
             instructions={instructions}
             onInstruction={onInstruction}

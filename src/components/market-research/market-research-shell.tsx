@@ -457,6 +457,9 @@ export function MarketResearchShell() {
   >({});
   const [storeBlogs, setStoreBlogs] = useState<StoreBlog[]>([]);
   const [storeUrl, setStoreUrl] = useState("");
+  /** Connected store's provider id ("shopify" | "woocommerce" | "wordpress"),
+   *  used to build the correct live collection URL pattern in Stage 6. */
+  const [storeProvider, setStoreProvider] = useState<string | null>(null);
   const [blogScopeWarning, setBlogScopeWarning] = useState<string | null>(null);
   const [articlesSyncing, setArticlesSyncing] = useState(false);
   const [articlesSyncProgress, setArticlesSyncProgress] = useState<{
@@ -998,17 +1001,20 @@ export function MarketResearchShell() {
     return articlesByProject[activeProject.id] ?? {};
   }, [activeProject, articlesByProject]);
 
-  // The store's blogs and storefront domain are only needed once the plan
-  // exists, and they rarely change, so they are fetched once on entering
-  // Stage 7.
+  // The storefront domain is also needed by Stage 6 (the live-collection link
+  // icon and the sitemap export), so this now fires as soon as Tab 6 unlocks
+  // rather than waiting for Stage 7's content plan. The blog list itself is
+  // still only used by Stage 7, but it's cheap to fetch alongside storeUrl.
   useEffect(() => {
-    if (!workspaceId || !strategyReady || storeUrl) return;
+    const needsStoreUrl = openedWorkspace === "content" || openedWorkspace === "strategy";
+    if (!workspaceId || !needsStoreUrl || storeUrl) return;
     let cancelled = false;
     fetchStoreBlogsApi(workspaceId)
       .then((res) => {
         if (cancelled) return;
         setStoreBlogs(res.blogs ?? []);
         setStoreUrl(res.storeUrl ?? "");
+        setStoreProvider(res.provider ?? null);
         setBlogScopeWarning(res.scopeWarning ?? null);
       })
       .catch(() => {
@@ -1017,7 +1023,7 @@ export function MarketResearchShell() {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, strategyReady, storeUrl]);
+  }, [workspaceId, openedWorkspace, storeUrl]);
 
   const contentById = useMemo(() => {
     if (!activeProject) return {};
@@ -4460,6 +4466,7 @@ export function MarketResearchShell() {
                     generatedArticles={generatedArticles}
                     storeBlogs={storeBlogs}
                     storeUrl={storeUrl}
+                    storeProvider={storeProvider}
                     blogScopeWarning={blogScopeWarning}
                     strategyLoading={strategyLoading}
                     strategyReady={strategyReady}
