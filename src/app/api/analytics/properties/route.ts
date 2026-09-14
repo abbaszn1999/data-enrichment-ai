@@ -6,6 +6,7 @@ import {
 } from "@/lib/analytics/connections";
 import { listAnalyticsProperties, listSearchConsoleSites } from "@/lib/analytics/google-api";
 import { isAnalyticsConnectionType } from "@/lib/analytics/types";
+import { invalidateServerAnalyticsCache } from "@/lib/analytics/cache";
 
 export async function GET(request: NextRequest) {
   try {
@@ -42,6 +43,7 @@ export async function POST(request: NextRequest) {
     }
     const { admin } = await requireAnalyticsAccess(workspaceId, { admin: true });
     await updateSelectedProperty(admin, workspaceId, type, selectedProperty, propertyDetails);
+    invalidateServerAnalyticsCache(workspaceId);
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to save property";

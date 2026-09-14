@@ -3,6 +3,7 @@ import { analyticsErrorResponse, requireAnalyticsAccess } from "@/lib/analytics/
 import { deleteAnalyticsConnection } from "@/lib/analytics/connections";
 import { isAnalyticsConnectionType } from "@/lib/analytics/types";
 import { writeSecurityAuditLog } from "@/lib/security/audit-log";
+import { invalidateServerAnalyticsCache } from "@/lib/analytics/cache";
 
 export async function DELETE(request: NextRequest) {
   try {
@@ -21,6 +22,7 @@ export async function DELETE(request: NextRequest) {
       after: { type },
       request,
     });
+    invalidateServerAnalyticsCache(workspaceId);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return analyticsErrorResponse(err);
