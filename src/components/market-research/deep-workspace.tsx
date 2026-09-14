@@ -262,8 +262,14 @@ export function DeepWorkspace({
         ) : null}
         {tab === "content" ? (
           <StageContentPanel
+            // Stage 6 must show every collection that's actually live on the
+            // store, not whatever is still checked in Stage 5's sheet —
+            // handlePushToStore clears successfully-pushed ids out of that
+            // selection (so the sheet doesn't show paid collections as
+            // "still selected to push"), which previously emptied this tab
+            // the instant a push succeeded.
             collections={collections.filter((c) =>
-              selectedCollectionIds.includes(c.id)
+              paidCollectionIds.includes(c.id)
             )}
             contentById={contentById}
             internalLinksById={internalLinksById}
