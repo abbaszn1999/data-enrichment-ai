@@ -193,7 +193,16 @@ export default function WorkspaceLayout({
     { href: `${basePath}/analytics/overview`, label: "Overview", icon: BarChart3 },
     { href: `${basePath}/analytics/plp`, label: "PLP Pages", icon: FolderTree },
     { href: `${basePath}/analytics/products`, label: "Products Pages", icon: Package },
-    { href: `${basePath}/analytics/low-hanging-fruits`, label: "Low Hanging Fruits", icon: Apple },
+    {
+      href: `${basePath}/analytics/low-hanging-fruits`,
+      label: "Low Hanging Fruits",
+      icon: Apple,
+      // Not built yet — keep it visible in the nav (so it's on the roadmap
+      // for users) but unclickable with a "Soon" badge instead of a real
+      // link. Flip `disabled` off once the page ships.
+      disabled: true,
+      badge: "Soon",
+    },
   ];
 
   const assessmentGrowthChildren = [
@@ -299,6 +308,7 @@ export default function WorkspaceLayout({
     label: string;
     icon: ComponentType<{ className?: string }>;
     disabled?: boolean;
+    badge?: string;
   }, opts?: { nested?: boolean }) => {
     if (link.disabled) {
       return (
@@ -307,10 +317,25 @@ export default function WorkspaceLayout({
           className={`relative flex items-center gap-2.5 rounded-lg text-xs font-medium cursor-not-allowed text-muted-foreground/35 select-none ${
             opts?.nested ? "px-2.5 py-1.5 pl-8" : "px-2.5 py-2"
           }`}
-          title={sidebarCollapsed ? link.label : undefined}
+          title={
+            sidebarCollapsed
+              ? link.badge
+                ? `${link.label} (${link.badge})`
+                : link.label
+              : undefined
+          }
         >
           <link.icon className="h-4 w-4 shrink-0" />
-          {!sidebarCollapsed && <span>{link.label}</span>}
+          {!sidebarCollapsed && (
+            <span className="flex flex-1 items-center gap-1.5">
+              <span>{link.label}</span>
+              {link.badge && (
+                <span className="rounded-full bg-muted-foreground/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/60">
+                  {link.badge}
+                </span>
+              )}
+            </span>
+          )}
         </div>
       );
     }
@@ -365,7 +390,7 @@ export default function WorkspaceLayout({
     isOpen: boolean;
     setOpen: (v: boolean) => void;
     isActive: boolean;
-    children: { href: string; label: string; icon: ComponentType<{ className?: string }>; disabled?: boolean }[];
+    children: { href: string; label: string; icon: ComponentType<{ className?: string }>; disabled?: boolean; badge?: string }[];
   }) => {
     const { label, icon: Icon, isOpen, setOpen, isActive, children } = opts;
     if (sidebarCollapsed) {
