@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { analyticsErrorResponse, requireAnalyticsAccess, AnalyticsHttpError } from "@/lib/analytics/access";
 import { getValidAnalyticsAccessToken } from "@/lib/analytics/connections";
+import { fetchWithServerCache } from "@/lib/analytics/cache";
 import {
   mapGscPages,
   mapGscTimeSeries,
@@ -25,6 +26,7 @@ export async function GET(
     const workspaceId = url.searchParams.get("workspaceId") || "";
     const startDate = url.searchParams.get("startDate") || "";
     const endDate = url.searchParams.get("endDate") || "";
+    const force = url.searchParams.get("force") === "1";
     if (!startDate || !endDate) {
       throw new AnalyticsHttpError(400, "Missing startDate or endDate");
     }
@@ -44,38 +46,67 @@ export async function GET(
       : null;
     const siteUrl = connection.selected_property;
 
+    const cacheKey = `gsc:${workspaceId}:${kind}:${siteUrl}:${startDate}:${endDate}:${pageType || "all"}`;
+
     if (kind === "totals") {
-      if (rules) {
-        return NextResponse.json({
-          totals: await queryFilteredGscTotals(token, siteUrl, startDate, endDate, rules),
-        });
-      }
-      try {
-        const rows = await querySearchConsole(token, siteUrl, startDate, endDate, []);
-        return NextResponse.json({ totals: mapGscTotals(rows) });
-      } catch {
-        const pages = await querySearchConsole(token, siteUrl, startDate, endDate, ["page"]);
-        return NextResponse.json({ totals: mapGscTotals(pages) });
-      }
+      const data = await fetchWithServerCache(
+        cacheKey,
+        async () => {
+          if (rules) {
+            return {
+              totals: await queryFilteredGscTotals(token, siteUrl, startDate, endDate, rules),
+            };
+          }
+          try {
+            const rows = await querySearchConsole(token, siteUrl, startDate, endDate, []);
+            return { totals: mapGscTotals(rows) };
+          } catch {
+            const pages = await querySearchConsole(token, siteUrl, startDate, endDate, ["page"]);
+            return { totals: mapGscTotals(pages) };
+          }
+        },
+        5 * 60 * 1000,
+        force
+      );
+      return NextResponse.json(data);
     }
+
     if (kind === "pages") {
-      if (rules) {
-        return NextResponse.json({
-          rows: await queryFilteredGscPages(token, siteUrl, startDate, endDate, rules),
-        });
-      }
-      const rows = await querySearchConsole(token, siteUrl, startDate, endDate, ["page"]);
-      return NextResponse.json({ rows: mapGscPages(rows) });
+      const data = await fetchWithServerCache(
+        cacheKey,
+        async () => {
+          if (rules) {
+            return {
+              rows: await queryFilteredGscPages(token, siteUrl, startDate, endDate, rules),
+            };
+          }
+          const rows = await querySearchConsole(token, siteUrl, startDate, endDate, ["page"]);
+          return { rows: mapGscPages(rows) };
+        },
+        5 * 60 * 1000,
+        force
+      );
+      return NextResponse.json(data);
     }
+
     if (kind === "timeseries") {
-      if (rules) {
-        return NextResponse.json({
-          rows: await queryFilteredGscTimeSeries(token, siteUrl, startDate, endDate, rules),
-        });
-      }
-      const rows = await querySearchConsole(token, siteUrl, startDate, endDate, ["date"]);
-      return NextResponse.json({ rows: mapGscTimeSeries(rows) });
+      const data = await fetchWithServerCache(
+        cacheKey,
+        async () => {
+          if (rules) {
+            return {
+              rows: await queryFilteredGscTimeSeries(token, siteUrl, startDate, endDate, rules),
+            };
+          }
+          const rows = await querySearchConsole(token, siteUrl, startDate, endDate, ["date"]);
+          return { rows: mapGscTimeSeries(rows) };
+        },
+        5 * 60 * 1000,
+        force
+      );
+      return NextResponse.json(data);
     }
+
     throw new AnalyticsHttpError(400, "Invalid GSC data type");
   } catch (err) {
     return analyticsErrorResponse(err);
