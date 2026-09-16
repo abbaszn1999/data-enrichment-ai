@@ -69,6 +69,12 @@ export type ExtractedKeyword = {
   productMatches: number;
   exclusionReason?: string;
   plpConcept?: string;
+  /**
+   * True when this row's `sheet` came from a real Gemini verdict; false
+   * means the regex heuristic fallback was used. Undefined means no
+   * classification has overlaid this row yet (still the extract default).
+   */
+  isAiGenerated?: boolean;
 };
 
 export type SeedExtractProgress = {

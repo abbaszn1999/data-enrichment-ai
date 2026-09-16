@@ -365,7 +365,20 @@ export function StageExtractPanel({
               ) : (
                 paged.map((row, index) => (
                   <TableRow key={`${row.id}-${safePageIndex}-${index}`}>
-                    <TableCell className="text-sm font-medium">{row.keyword}</TableCell>
+                    <TableCell className="text-sm font-medium">
+                      <div className="flex items-center gap-1.5">
+                        <span>{row.keyword}</span>
+                        {row.isAiGenerated === false ? (
+                          <Badge
+                            variant="outline"
+                            title="Gemini couldn't verify this keyword after retries — a rule-based guess was used instead of a real AI verdict."
+                            className="shrink-0 text-[9px] font-normal border-amber-500/30 text-amber-600 dark:text-amber-400 bg-amber-500/5 px-1.5 py-0"
+                          >
+                            Estimated
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {row.seed}
                     </TableCell>

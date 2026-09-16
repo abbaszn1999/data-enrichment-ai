@@ -8,6 +8,7 @@ import { runStage4IntentClassification } from "@/lib/free-assessment/agent/stage
 import {
   loadExtractRowsAdmin,
   appendClassifiedShardAdmin,
+  clearClassifiedShardsAdmin,
   loadClassifiedManifestAdmin,
   loadProjectSliceAdmin,
   type ClassifiedShardItem,
@@ -59,7 +60,22 @@ export async function POST(request: NextRequest) {
     const nextOffset = offset + batchRows.length;
     const done = nextOffset >= total;
 
+    // A fresh pass starting at offset 0 must not append onto whatever a
+    // previous classify run (or a re-analyze after a new Extract) already
+    // wrote — shards are append-only, so without this every re-run would
+    // double-count keywords and resurrect stale classifications forever.
+    if (offset === 0) {
+      await clearClassifiedShardsAdmin(
+        auth.admin,
+        parsed.data.workspaceId,
+        parsed.data.projectId
+      ).catch((err) =>
+        console.error("[fa-intent] Failed to clear classified shards for fresh pass:", err)
+      );
+    }
+
     let isAiGenerated = false;
+    let degradedCount = 0;
     let classifications: ClassifiedShardItem[] = [];
 
     if (batchRows.length > 0) {
@@ -71,6 +87,7 @@ export async function POST(request: NextRequest) {
         keywords: batchRows.map((r) => ({ id: r.phrase, keyword: r.phrase })),
       });
       isAiGenerated = result.isAiGenerated;
+      degradedCount = result.degradedCount;
 
       const items: ClassifiedShardItem[] = result.classified.map((c) => ({
         id: c.id,
@@ -79,6 +96,7 @@ export async function POST(request: NextRequest) {
         sheet: c.sheet,
         reason: c.reason,
         plpConcept: c.plpConcept,
+        isAiGenerated: c.isAiGenerated,
       }));
       classifications = items;
 
@@ -129,6 +147,7 @@ export async function POST(request: NextRequest) {
         informationalCount: manifest?.informationalCount ?? 0,
         excludedCount: manifest?.excludedCount ?? 0,
         isAiGenerated,
+        degradedCount,
         classifications,
       },
       { headers: auth.headers }

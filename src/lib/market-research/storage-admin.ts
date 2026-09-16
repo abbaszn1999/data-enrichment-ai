@@ -666,6 +666,14 @@ export type ClassifiedShardItem = {
   sheet: ClassifiedSheetType;
   reason: string;
   plpConcept?: string;
+  /**
+   * True when this row's sheet came from a real Gemini verdict; false
+   * means it used the regex heuristic fallback. Optional only for
+   * backward-compat with shards written before this field existed —
+   * treat `undefined` as AI-generated (the pre-existing behavior) rather
+   * than silently mislabeling old data as heuristic.
+   */
+  isAiGenerated?: boolean;
 };
 
 export async function loadClassifiedManifestAdmin(

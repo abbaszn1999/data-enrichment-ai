@@ -15,6 +15,12 @@ export type DisplayKeyword = {
   productMatches: number;
   exclusionReason?: string;
   plpConcept?: string;
+  /**
+   * True when this row's `sheet` came from a real Gemini verdict; false
+   * means the regex heuristic fallback was used. Undefined means no
+   * classification has overlaid this row yet (still the extract default).
+   */
+  isAiGenerated?: boolean;
 };
 
 
@@ -82,6 +88,8 @@ export type KeywordClassificationPatch = {
   reason?: string;
   plpConcept?: string;
   id?: string;
+  /** True = real Gemini verdict, false = heuristic fallback, undefined = unknown/legacy. */
+  isAiGenerated?: boolean;
 };
 
 /** One Stage 4 classified-archive row (or a Gemini log item). */
@@ -91,6 +99,7 @@ export type ClassifiedVerdict = {
   sheet: DisplayKeyword["sheet"];
   reason?: string;
   plpConcept?: string;
+  isAiGenerated?: boolean;
 };
 
 function classificationKey(value: string | undefined): string {
@@ -111,6 +120,7 @@ export function classifiedVerdictsToPatches(
       sheet: item.sheet,
       reason: item.reason,
       plpConcept: item.plpConcept,
+      isAiGenerated: item.isAiGenerated,
     });
   }
   return patches;
@@ -128,6 +138,7 @@ export function applyKeywordClassifications<
     exclusionReason?: string;
     plpConcept?: string;
     id?: string;
+    isAiGenerated?: boolean;
   },
 >(rows: T[], patches: KeywordClassificationPatch[]): T[] {
   if (rows.length === 0 || patches.length === 0) return rows;
@@ -149,6 +160,7 @@ export function applyKeywordClassifications<
       sheet: match.sheet,
       exclusionReason: match.reason,
       plpConcept: match.plpConcept,
+      isAiGenerated: match.isAiGenerated,
     };
   });
 }
@@ -160,6 +172,7 @@ export function overlayKeywordSampleWithClassified<T extends {
   exclusionReason?: string;
   plpConcept?: string;
   id?: string;
+  isAiGenerated?: boolean;
 }>(rows: T[], classified: ClassifiedVerdict[]): T[] {
   return applyKeywordClassifications(rows, classifiedVerdictsToPatches(classified));
 }
@@ -169,6 +182,7 @@ export function keywordClassificationOverlayChanged<
     sheet: DisplayKeyword["sheet"];
     exclusionReason?: string;
     plpConcept?: string;
+    isAiGenerated?: boolean;
   },
 >(before: T[], after: T[]): boolean {
   if (before.length !== after.length) return true;
@@ -178,6 +192,7 @@ export function keywordClassificationOverlayChanged<
     if (prev.sheet !== next.sheet) return true;
     if ((prev.exclusionReason ?? "") !== (next.exclusionReason ?? "")) return true;
     if ((prev.plpConcept ?? "") !== (next.plpConcept ?? "")) return true;
+    if (Boolean(prev.isAiGenerated) !== Boolean(next.isAiGenerated)) return true;
   }
   return false;
 }

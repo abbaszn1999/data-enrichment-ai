@@ -96,6 +96,7 @@ export async function POST(request: NextRequest) {
         sheet: c.sheet,
         reason: c.reason,
         plpConcept: c.plpConcept,
+        isAiGenerated: c.isAiGenerated,
       }));
       classifications = items;
 

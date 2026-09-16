@@ -15,6 +15,14 @@ export interface ClassifiedKeywordItem {
   confidence: number;
   reason: string;
   plpConcept?: string;
+  /**
+   * True only when THIS keyword's verdict came from a real Gemini response
+   * (initial batch or the targeted re-request below). False means it used
+   * the regex heuristic — it must be flagged everywhere downstream (shard
+   * storage, API response, Extract table) and never presented as if Gemini
+   * classified it.
+   */
+  isAiGenerated: boolean;
 }
 
 export interface Stage4ClassificationResult {
@@ -42,6 +50,39 @@ interface GeminiKeywordClassificationItem {
 interface GeminiIntentClassificationResponse {
   classifications: GeminiKeywordClassificationItem[];
 }
+
+/**
+ * Gemini structured-output schema for the classification response. This
+ * constrains the SHAPE Gemini is allowed to emit (types, required fields,
+ * the fixed sheet enum) on top of the plain `responseMimeType: "json"` the
+ * runner already sets — it catches malformed/missing-field output, but it
+ * cannot guarantee coverage of every requested id; that's handled by the
+ * missing-id detection and targeted re-request below.
+ */
+const STAGE4_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    classifications: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          id: { type: "STRING" },
+          sheet: {
+            type: "STRING",
+            format: "enum",
+            enum: ["category", "informational", "excluded"],
+          },
+          confidence: { type: "NUMBER" },
+          reason: { type: "STRING" },
+          plpConcept: { type: "STRING" },
+        },
+        required: ["id", "sheet", "reason"],
+      },
+    },
+  },
+  required: ["classifications"],
+};
 
 function indexGeminiClassifications(
   items: GeminiKeywordClassificationItem[]
@@ -77,6 +118,22 @@ function normalizeSheet(val: string): ClassifiedSheetType {
   return "excluded";
 }
 
+/** Builds a verdicted (real AI) classified item from a matched Gemini response row. */
+function toAiClassifiedItem(
+  kw: KeywordToClassify,
+  item: GeminiKeywordClassificationItem
+): ClassifiedKeywordItem {
+  return {
+    id: kw.id,
+    keyword: kw.keyword,
+    sheet: normalizeSheet(item.sheet || "category"),
+    confidence: Math.min(1, Math.max(0.1, item.confidence || 0.9)),
+    reason: item.reason || "Classified by Gemini 3.7 Flash",
+    plpConcept: item.plpConcept || undefined,
+    isAiGenerated: true,
+  };
+}
+
 /**
  * Heuristic fallback classifier in case AI API is unavailable.
  */
@@ -98,6 +155,7 @@ export function runHeuristicStage4Classification(input: {
         sheet: "informational",
         confidence: 0.9,
         reason: "Informational guide or query suitable for blog/FAQ content",
+        isAiGenerated: false,
       };
     }
 
@@ -114,6 +172,7 @@ export function runHeuristicStage4Classification(input: {
         sheet: "excluded",
         confidence: 0.85,
         reason: "Excluded: Single product SKU, model, or non-commercial navigational term",
+        isAiGenerated: false,
       };
     }
 
@@ -125,6 +184,7 @@ export function runHeuristicStage4Classification(input: {
       confidence: 0.85,
       reason: "Commercial group concept with multiple browsable products (PLP suitable)",
       plpConcept: "Category collection",
+      isAiGenerated: false,
     };
   });
 
@@ -155,6 +215,7 @@ export async function runStage4IntentClassification(input: {
 
   const BATCH_SIZE = 100;
   const BATCH_CONCURRENCY = 5;
+  const BATCH_MAX_ATTEMPTS = 3;
   const batches: KeywordToClassify[][] = chunk(input.keywords, BATCH_SIZE);
 
   const systemInstruction = `You are the Autommerce Intent Classification Agent powered by Gemini 3.7 Flash.
@@ -184,6 +245,9 @@ There is no fourth "needs review" bucket. For a genuinely ambiguous keyword, pic
 best-supported sheet, lower "confidence" (below ~0.6), and name the ambiguity directly in "reason"
 instead of guessing silently or forcing false confidence.
 
+Every keyword you were given an "id" for MUST get exactly one entry in "classifications" —
+never skip or merge entries, even for near-duplicate or ambiguous keywords.
+
 Output strictly valid JSON with this exact schema:
 {
   "classifications": [
@@ -198,10 +262,11 @@ Output strictly valid JSON with this exact schema:
 }`;
 
   /**
-   * Calls Gemini for a single batch, with one retry (short backoff) before
-   * giving up. A thrown error here means the WHOLE batch is undecided and
-   * must fall back to heuristics — a single retry protects against
-   * transient/rate-limit blips without silently downgrading quality.
+   * Calls Gemini for one batch, retrying up to `BATCH_MAX_ATTEMPTS` times
+   * total with a growing backoff before giving up. A thrown error here
+   * means every keyword in `batch` is undecided and must fall back to
+   * heuristics — the retry budget protects against transient/rate-limit
+   * blips without silently downgrading quality on the first hiccup.
    */
   async function classifyBatchWithGemini(
     batch: KeywordToClassify[]
@@ -213,23 +278,30 @@ Output strictly valid JSON with this exact schema:
       })),
     });
 
-    try {
-      const aiResponse = await runGeminiMarketResearch<GeminiIntentClassificationResponse>({
-        stage: 4,
-        systemInstruction,
-        userPrompt,
-      });
-      return aiResponse.data;
-    } catch (err) {
-      console.error("[runStage4IntentClassification] Batch call failed, retrying once:", err);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      const retryResponse = await runGeminiMarketResearch<GeminiIntentClassificationResponse>({
-        stage: 4,
-        systemInstruction,
-        userPrompt,
-      });
-      return retryResponse.data;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= BATCH_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const aiResponse = await runGeminiMarketResearch<GeminiIntentClassificationResponse>({
+          stage: 4,
+          systemInstruction,
+          userPrompt,
+          responseSchema: STAGE4_RESPONSE_SCHEMA,
+        });
+        return aiResponse.data;
+      } catch (err) {
+        lastError = err;
+        console.error(
+          `[runStage4IntentClassification] Batch call failed (attempt ${attempt}/${BATCH_MAX_ATTEMPTS}):`,
+          err
+        );
+        if (attempt < BATCH_MAX_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+        }
+      }
     }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Gemini batch call failed after retries");
   }
 
   /**
@@ -238,6 +310,12 @@ Output strictly valid JSON with this exact schema:
    * matches ONLY its own input keywords by `id` — this is what guarantees
    * no cross-batch data contamination, regardless of how many batches run
    * concurrently.
+   *
+   * If the batch call itself succeeds but Gemini's array is missing a
+   * handful of ids (a known LLM list-completion gap, not a capacity issue
+   * — 100 short JSON rows is nowhere near this model's output budget), we
+   * do one cheap targeted re-request containing only those missing
+   * keywords before ever falling back to the regex heuristic for them.
    */
   async function classifyOneBatch(
     batch: KeywordToClassify[]
@@ -249,27 +327,47 @@ Output strictly valid JSON with this exact schema:
     );
 
     const results: ClassifiedKeywordItem[] = [];
-    let degraded = 0;
+    const missing: KeywordToClassify[] = [];
     for (const kw of batch) {
       const item = lookupGeminiClassification(responseMap, kw);
       if (item) {
-        results.push({
-          id: kw.id,
-          keyword: kw.keyword,
-          sheet: normalizeSheet(item.sheet || "category"),
-          confidence: Math.min(1, Math.max(0.1, item.confidence || 0.9)),
-          reason: item.reason || "Classified by Gemini 3.7 Flash",
-          plpConcept: item.plpConcept || undefined,
-        });
+        results.push(toAiClassifiedItem(kw, item));
       } else {
-        // Fallback for individual items missing from an otherwise-valid response
-        const heuristic = runHeuristicStage4Classification({ keywords: [kw] });
-        if (heuristic.classified[0]) {
-          results.push(heuristic.classified[0]);
-          degraded += 1;
+        missing.push(kw);
+      }
+    }
+
+    let degraded = 0;
+    if (missing.length > 0) {
+      let recoveredMap = new Map<string, GeminiKeywordClassificationItem>();
+      try {
+        const recovered = await classifyBatchWithGemini(missing);
+        recoveredMap = indexGeminiClassifications(
+          Array.isArray(recovered?.classifications) ? recovered.classifications : []
+        );
+      } catch (err) {
+        console.error(
+          `[runStage4IntentClassification] Targeted re-request for ${missing.length} missing id(s) failed after retries:`,
+          err
+        );
+      }
+
+      for (const kw of missing) {
+        const item = lookupGeminiClassification(recoveredMap, kw);
+        if (item) {
+          results.push(toAiClassifiedItem(kw, item));
+        } else {
+          // Truly unrecoverable for this keyword — fall back for just this
+          // one item, clearly flagged as not a real Gemini verdict.
+          const heuristic = runHeuristicStage4Classification({ keywords: [kw] });
+          if (heuristic.classified[0]) {
+            results.push(heuristic.classified[0]);
+            degraded += 1;
+          }
         }
       }
     }
+
     return { items: results, degraded };
   }
 
@@ -287,7 +385,7 @@ Output strictly valid JSON with this exact schema:
     const failedBatch = batches[index];
     if (!failedBatch) continue;
     console.error(
-      `[runStage4IntentClassification] Batch ${index + 1}/${batches.length} failed after retry, falling back to heuristics for ${failedBatch.length} keywords`
+      `[runStage4IntentClassification] Batch ${index + 1}/${batches.length} failed after ${BATCH_MAX_ATTEMPTS} attempts, falling back to heuristics for ${failedBatch.length} keywords`
     );
     const heuristic = runHeuristicStage4Classification({ keywords: failedBatch });
     allClassified.push(...heuristic.classified);

@@ -360,11 +360,14 @@ export type ClassifyArchiveResponse = {
   informationalCount: number;
   excludedCount: number;
   isAiGenerated: boolean;
+  /** Keywords in this page that fell back to the regex heuristic because Gemini's batch failed or omitted them. */
+  degradedCount: number;
   classifications?: Array<{
     keyword: string;
     sheet: "category" | "informational" | "excluded";
     reason?: string;
     plpConcept?: string;
+    isAiGenerated?: boolean;
   }>;
 };
 

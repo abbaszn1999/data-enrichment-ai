@@ -169,6 +169,12 @@ describe("Market Research Agent - Stage 4 Intent Classifier", () => {
 
     const kw5 = result.classified.find((c) => c.id === "kw-5");
     expect(kw5?.sheet).toBe("category");
+
+    // Every heuristic-derived row must be flagged as such, per-keyword —
+    // never presented as if Gemini classified it.
+    for (const item of result.classified) {
+      expect(item.isAiGenerated).toBe(false);
+    }
   });
 });
 
@@ -248,11 +254,12 @@ describe("Market Research Agent - Stage 4 Batching and Concurrency", () => {
 
       const result = await runStage4IntentClassification({ keywords });
 
-      // One batch (100 keywords) persistently failed even after retry and
-      // fell back to the regex heuristic. isAiGenerated must reflect that
-      // truthfully — claiming "true" here is the exact class of bug this
-      // fix closes: heuristic guesses must never be presented as agent
-      // verdicts. degradedCount names exactly how many keywords fell back.
+      // One batch (100 keywords) persistently failed even after the full
+      // retry budget and fell back to the regex heuristic. isAiGenerated
+      // must reflect that truthfully — claiming "true" here is the exact
+      // class of bug this fix closes: heuristic guesses must never be
+      // presented as agent verdicts. degradedCount names exactly how many
+      // keywords fell back.
       expect(result.isAiGenerated).toBe(false);
       expect(result.degradedCount).toBe(100);
       expect(result.classified.length).toBe(TOTAL);
@@ -270,14 +277,102 @@ describe("Market Research Agent - Stage 4 Batching and Concurrency", () => {
       expect(maxInFlight).toBeGreaterThan(1);
       expect(maxInFlight).toBeLessThanOrEqual(5);
 
-      // The flaky batch recovered via the single retry and used the AI path.
+      // The flaky batch recovered via retry and used the real AI path —
+      // per-item isAiGenerated must say so.
       expect(byId.get("kw-200")?.reason).toContain("AI reason");
+      expect(byId.get("kw-200")?.isAiGenerated).toBe(true);
       expect(attemptsByBatchStart.get("kw-200")).toBe(2);
 
       // The persistently-broken batch fell back to the heuristic classifier
-      // (not the mocked AI reason) after exactly one retry, not endless retries.
+      // (not the mocked AI reason) after exhausting the full retry budget
+      // (3 attempts: 1 initial + 2 retries), not endless retries — and every
+      // one of its keywords must be flagged isAiGenerated: false.
       expect(byId.get("kw-500")?.reason).not.toContain("AI reason");
-      expect(attemptsByBatchStart.get("kw-500")).toBe(2);
+      expect(byId.get("kw-500")?.isAiGenerated).toBe(false);
+      expect(attemptsByBatchStart.get("kw-500")).toBe(3);
+    },
+    15000
+  );
+
+  it(
+    "recovers keywords missing from an otherwise-successful batch via a targeted re-request, only falling back to the heuristic for whatever is still missing afterwards",
+    async () => {
+      process.env.GEMINI_API_KEY = "test-key";
+      const { runStage4IntentClassification } = await import(
+        "./agent/stage4-intent-classifier"
+      );
+
+      // One batch of 100. Gemini's first response silently omits 3 ids —
+      // a known LLM list-completion gap, not a capacity issue (100 short
+      // JSON rows is nowhere near this model's output budget).
+      const TOTAL = 100;
+      const keywords = Array.from({ length: TOTAL }, (_, i) => ({
+        id: `kw-${i}`,
+        keyword: `term ${i}`,
+      }));
+      const omittedFromFirstCall = new Set(["kw-50", "kw-75", "kw-90"]);
+      // Of those, the targeted re-request only recovers two — the third
+      // stays missing even after the cheap follow-up call and must be the
+      // only one that falls back to the heuristic.
+      const stillMissingAfterRetry = new Set(["kw-90"]);
+
+      const callPayloads: string[][] = [];
+
+      vi.mocked(runGeminiMarketResearch).mockImplementation(async (
+        opts: GeminiRunOptions
+      ): Promise<GeminiRunResult<unknown>> => {
+        const parsed = JSON.parse(opts.userPrompt) as {
+          keywordsToClassify: Array<{ id: string }>;
+        };
+        const ids: string[] = parsed.keywordsToClassify.map((k) => k.id);
+        callPayloads.push(ids);
+
+        const isFullBatch = ids.length === TOTAL;
+        const omit = isFullBatch ? omittedFromFirstCall : stillMissingAfterRetry;
+
+        return {
+          data: {
+            classifications: ids
+              .filter((id) => !omit.has(id))
+              .map((id) => ({
+                id,
+                sheet: "category",
+                confidence: 0.95,
+                reason: `AI reason for ${id}`,
+              })),
+          },
+          rawText: "",
+          cost: {} as GeminiRunResult<unknown>["cost"],
+          credits: 0,
+          model: "gemini-3.7-flash",
+          thinkingLevel: "low",
+        };
+      });
+
+      const result = await runStage4IntentClassification({ keywords });
+      const byId = new Map(result.classified.map((c) => [c.id, c]));
+
+      // Exactly two calls: the full 100-keyword batch, then one targeted
+      // re-request containing ONLY the 3 ids missing from the first
+      // response — never the full batch again.
+      expect(callPayloads.length).toBe(2);
+      expect(callPayloads[0]?.length).toBe(TOTAL);
+      expect(new Set(callPayloads[1])).toEqual(omittedFromFirstCall);
+
+      // Recovered via the targeted re-request: real AI verdicts, not guesses.
+      expect(byId.get("kw-50")?.isAiGenerated).toBe(true);
+      expect(byId.get("kw-50")?.reason).toContain("AI reason");
+      expect(byId.get("kw-75")?.isAiGenerated).toBe(true);
+      expect(byId.get("kw-75")?.reason).toContain("AI reason");
+
+      // Still missing even after the targeted re-request -> heuristic for
+      // just that one keyword, clearly flagged as not a real verdict.
+      expect(byId.get("kw-90")?.isAiGenerated).toBe(false);
+      expect(byId.get("kw-90")?.reason).not.toContain("AI reason");
+
+      expect(result.degradedCount).toBe(1);
+      expect(result.isAiGenerated).toBe(false);
+      expect(result.classified.length).toBe(TOTAL);
     },
     15000
   );

@@ -10,6 +10,14 @@ export interface GeminiRunOptions {
   userPrompt: string;
   model?: string;
   overrideThinking?: MrThinkingLevel;
+  /**
+   * Optional JSON Schema constraining the shape Gemini is allowed to emit
+   * (constrained decoding), on top of the looser `responseMimeType: "json"`
+   * that only guarantees syntactically valid JSON. This catches malformed
+   * shapes/fields but can't guarantee coverage of every requested id —
+   * callers still need to check for missing items themselves.
+   */
+  responseSchema?: object;
 }
 
 export interface GeminiRunResult<T = unknown> {
@@ -66,6 +74,7 @@ export async function runGeminiMarketResearch<T = unknown>(
     config: {
       systemInstruction: finalSystemInstruction,
       responseMimeType: "application/json",
+      ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
       thinkingConfig: {
         thinkingLevel: levelMap[thinkingLevel] as any,
       },

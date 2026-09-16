@@ -666,6 +666,14 @@ export type ClassifiedShardItem = {
   sheet: ClassifiedSheetType;
   reason: string;
   plpConcept?: string;
+  /**
+   * True when this row's sheet came from a real Gemini verdict; false
+   * means it used the regex heuristic fallback. Optional only for
+   * backward-compat with shards written before this field existed —
+   * treat `undefined` as AI-generated (the pre-existing behavior) rather
+   * than silently mislabeling old data as heuristic.
+   */
+  isAiGenerated?: boolean;
 };
 
 export async function loadClassifiedManifestAdmin(
@@ -721,6 +729,44 @@ export async function appendClassifiedShardAdmin(
     manifest
   );
   return manifest;
+}
+
+/**
+ * Wipes the classified/ shard set for a fresh classify pass. Shards are
+ * append-only (see appendClassifiedShardAdmin), so restarting a classify
+ * loop at offset 0 without this first would append a second copy of every
+ * keyword on top of the previous pass's shards — doubling the manifest
+ * counts and returning duplicate rows from loadClassifiedItemsAdmin.
+ */
+export async function clearClassifiedShardsAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<void> {
+  const manifest = await loadClassifiedManifestAdmin(admin, workspaceId, projectId);
+  if (manifest && manifest.shards.length > 0) {
+    const paths = manifest.shards.map((shard) =>
+      mrClassifiedShardPath(workspaceId, projectId, shard)
+    );
+    for (let i = 0; i < paths.length; i += REMOVE_BATCH_SIZE) {
+      const batch = paths.slice(i, i + REMOVE_BATCH_SIZE);
+      const { error } = await admin.storage
+        .from(FREE_ASSESSMENT_STORAGE_BUCKET)
+        .remove(batch);
+      if (error) {
+        console.error("[clearClassifiedShardsAdmin] Failed to remove shard batch:", error);
+      }
+    }
+  }
+  await saveFaJsonAdmin(admin, mrClassifiedManifestPath(workspaceId, projectId), {
+    shards: [],
+    totalCount: 0,
+    categoryCount: 0,
+    informationalCount: 0,
+    excludedCount: 0,
+    done: false,
+    updatedAt: new Date().toISOString(),
+  } satisfies ClassifiedManifest);
 }
 
 export async function loadClassifiedItemsAdmin(

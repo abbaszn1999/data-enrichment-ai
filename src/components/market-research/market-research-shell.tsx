@@ -2588,6 +2588,7 @@ export function MarketResearchShell() {
     const gen = ++analyzeGen.current;
     setAnalyzeLoading(true);
     setAnalyzeProgress({ done: 0, total: currentKws.length });
+    let totalDegraded = 0;
 
     // Classification now runs server-side as a cursor job over the FULL
     // extract archive (not just a stale Extract-tab cache) — a
@@ -2601,6 +2602,7 @@ export function MarketResearchShell() {
         (state) => {
           if (analyzeGen.current !== gen) return;
           setAnalyzeProgress({ done: state.nextOffset, total: state.total });
+          totalDegraded += state.degradedCount ?? 0;
           if (state.classifications?.length) {
             setKeywordsByProject((prev) => ({
               ...prev,
@@ -2640,6 +2642,18 @@ export function MarketResearchShell() {
         next.add(projectId);
         return next;
       });
+
+      // Some keywords couldn't be verdicted by Gemini even after the
+      // hardened retries + targeted re-request, and used the regex
+      // heuristic instead. They're flagged per-row in the table below —
+      // this toast is what makes sure it's never silently invisible, the
+      // exact class of bug that used to let a heuristic guess pass as if
+      // Gemini had classified it.
+      if (totalDegraded > 0) {
+        toast.warning("Some keywords used a fallback guess", {
+          description: `${totalDegraded} keyword${totalDegraded === 1 ? "" : "s"} couldn't be verified by Gemini and used a rule-based guess instead. Look for the "Estimated" tag in the table below.`,
+        });
+      }
     } catch (err) {
       if (analyzeGen.current !== gen) return;
       console.error("[handleAnalyze] Error:", err);
