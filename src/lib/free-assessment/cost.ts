@@ -1,14 +1,18 @@
-/** Actual Apify cost, no markup. Agent stages are not billed. */
+/**
+ * Extraction pricing. $5 per 1,000 keyword rows ($0.005/row) — same rate as
+ * the main Growth Engine. Agent stages (classification, clustering, etc.)
+ * are not billed.
+ */
 
 export const APIFY_SEED_PROBE_USD_PER_SEED = 0.002;
-export const APIFY_KEYWORD_USD_PER_ROW = 0.01;
+export const APIFY_KEYWORD_USD_PER_ROW = 0.005;
 export const COLLECTION_PUSH_USD = 5;
 
 export const KEYWORDS_PER_PAGE = 100;
 export const MAX_EXTRACT_PAGES = 100;
 export const EXTRACT_CAP_PER_SEED = KEYWORDS_PER_PAGE * MAX_EXTRACT_PAGES;
 
-/** Wallet amounts use 4 decimal places so $0.002/seed and $0.01/row survive rounding. */
+/** Wallet amounts use 4 decimal places so $0.002/seed and $0.005/row survive rounding. */
 export function roundUsd(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.round(value * 10_000) / 10_000;

@@ -747,7 +747,7 @@ export function marketLabel(code: string): string {
 }
 
 /**
- * Wallet pricing — Stage 4 bills actual Apify keyword rows ($0.01 each / $10 per 1,000 keywords).
+ * Wallet pricing — Stage 4 bills keyword rows ($0.005 each / $5 per 1,000 keywords).
  * Stage 3 probe is $0.002 per seed. Agent stages are not billed.
  */
 export function usdForRawKeywords(rawKeywords: number): number {
