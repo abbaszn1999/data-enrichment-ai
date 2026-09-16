@@ -491,6 +491,21 @@
   background: var(--foreground);
 }
 
+@keyframes welcome-ticker {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.welcome-ticker-track {
+  animation: welcome-ticker 14s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-ticker-track {
+    animation: none;
+  }
+}
+
 @media (max-width: 767px) {
   .wr-shell-frame {
     grid-template-columns: minmax(0, 1fr);

@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { readBootstrap } from "@/lib/workspace-bootstrap-cache";
+import { useWorkspaceStore } from "@/store/workspace-store";
+import {
+  EMPTY_WELCOME_GIFT,
+  type WelcomeGiftState,
+} from "@/lib/billing/welcome-gift";
 
 interface SubscriptionState {
   subscription: any | null;
@@ -10,6 +15,7 @@ interface SubscriptionState {
   credits: { monthlyTotal: number; monthlyRemaining: number; bonus: number; total: number; used: number } | null;
   isActive: boolean;
   isLoading: boolean;
+  welcomeGift: WelcomeGiftState;
 }
 
 // Client-side promise deduplication & caching store
@@ -39,6 +45,7 @@ async function dedupedFetch(url: string, forceRefresh = false) {
 }
 
 export function useSubscription(workspaceId: string | null) {
+  const subscriptionVersion = useWorkspaceStore((s) => s.subscriptionVersion);
   const [state, setState] = useState<SubscriptionState>(() => {
     // Synchronously check if cached data is available to populate initial state instantly.
     // Prefer the shared bootstrap cache (seeded by the layout's single bootstrap
@@ -54,6 +61,7 @@ export function useSubscription(workspaceId: string | null) {
           credits: (s.credits as any) || null,
           isActive: s.isActive || false,
           isLoading: false,
+          welcomeGift: s.welcomeGift ?? EMPTY_WELCOME_GIFT,
         };
       }
       const cached = cacheStore.get(`/api/subscription?workspaceId=${workspaceId}`);
@@ -65,6 +73,7 @@ export function useSubscription(workspaceId: string | null) {
           credits: cached.data.credits || null,
           isActive: cached.data.isActive || false,
           isLoading: false,
+          welcomeGift: cached.data.welcomeGift ?? EMPTY_WELCOME_GIFT,
         };
       }
     }
@@ -75,6 +84,7 @@ export function useSubscription(workspaceId: string | null) {
       credits: null,
       isActive: false,
       isLoading: true,
+      welcomeGift: EMPTY_WELCOME_GIFT,
     };
   });
 
@@ -92,6 +102,7 @@ export function useSubscription(workspaceId: string | null) {
           credits: (s.credits as any) || null,
           isActive: s.isActive || false,
           isLoading: false,
+          welcomeGift: s.welcomeGift ?? EMPTY_WELCOME_GIFT,
         });
         return;
       }
@@ -106,11 +117,20 @@ export function useSubscription(workspaceId: string | null) {
         credits: data.credits || null,
         isActive: data.isActive || false,
         isLoading: false,
+        welcomeGift: data.welcomeGift ?? EMPTY_WELCOME_GIFT,
       });
     } catch {
       setState((prev) => ({ ...prev, isLoading: false }));
     }
   }, [workspaceId]);
+
+  const prevVersionRef = useRef(subscriptionVersion);
+  useEffect(() => {
+    if (prevVersionRef.current !== subscriptionVersion) {
+      prevVersionRef.current = subscriptionVersion;
+      void refresh(true);
+    }
+  }, [refresh, subscriptionVersion]);
 
   useEffect(() => {
     refresh(false);

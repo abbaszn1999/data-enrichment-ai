@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe, findPlanByStripePriceId, invalidateSubscriptionCache } from "@/lib/stripe";
 import { isSelfServePlanName } from "@/lib/billing/plans";
+import { stampFirstPaidAtIfNull } from "@/lib/billing/welcome-gift-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { creditWorkspaceWallet } from "@/lib/wallet/server";
 import { creditFaWallet } from "@/lib/free-assessment/wallet-server";
@@ -101,10 +102,11 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
       stripe_customer_id: customerId, stripe_subscription_id: subId,
       current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
       current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
-      cancel_at_period_end: false, credits_used: 0, bonus_credits: 0,
+      cancel_at_period_end: false, credits_used: 0,
       trial_end: null, has_used_trial: true,
       credits_reset_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     }, { onConflict: "user_id" });
+    await stampFirstPaidAtIfNull(admin, { userId });
 
   } else if (session.mode === "payment") {
     const credits = parseInt(session.metadata?.credits || "0", 10);
@@ -259,6 +261,10 @@ async function handleSubUpdated(sub: Stripe.Subscription, admin: any) {
     ...(normalizedStatus === "active" ? { trial_end: null, has_used_trial: true } : {}),
     updated_at: new Date().toISOString(),
   }).eq("stripe_subscription_id", sub.id);
+
+  if (normalizedStatus === "active") {
+    await stampFirstPaidAtIfNull(admin, { stripeSubscriptionId: sub.id });
+  }
 }
 
 async function handleSubDeleted(sub: Stripe.Subscription, admin: any) {

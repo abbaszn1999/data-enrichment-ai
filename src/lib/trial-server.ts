@@ -60,6 +60,8 @@ export async function ensureOwnerTrial(userId: string): Promise<{ granted: boole
     cancel_at_period_end: false,
     credits_reset_at: now.toISOString(),
     updated_at: now.toISOString(),
+    // first_paid_at stays null — the welcome-gift clock starts at Stripe
+    // paid activation, never this trial grant.
   };
 
   const { error: insertError } = await admin.from("user_subscriptions").insert(payload);

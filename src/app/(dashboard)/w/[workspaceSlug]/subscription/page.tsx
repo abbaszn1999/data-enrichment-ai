@@ -30,6 +30,7 @@ import { useWorkspaceContext } from "../workspace-context";
 import { useSubscription } from "@/hooks/use-subscription";
 import { formatCredits } from "@/lib/format-credits";
 import { isTrialPlanName, trialDaysRemaining } from "@/lib/trial";
+import { WelcomeGiftCard } from "@/components/billing/welcome-gift-card";
 import {
   ENTERPRISE_CONTACT_URL,
   isGrandfatheredPlanName,
@@ -53,7 +54,7 @@ export default function SubscriptionPage() {
   const { workspace } = useWorkspaceContext();
   const {
     subscription, plan: currentPlan, availablePlans,
-    credits, isActive, isLoading, refresh,
+    credits, isActive, isLoading, welcomeGift,
   } = useSubscription(workspace?.id ?? null);
 
   const [billing, setBilling] = useState<"monthly" | "yearly">("monthly");
@@ -332,6 +333,9 @@ export default function SubscriptionPage() {
       </div>
 
       {/* Extra Credits — buy any amount, priced at a flat $0.50/credit */}
+      {workspace?.id && (
+        <WelcomeGiftCard workspaceId={workspace.id} gift={welcomeGift} />
+      )}
       {isActive && !isTrialing && (
         <div className="relative overflow-hidden rounded-2xl border-2 border-[#F76D01]/20 bg-gradient-to-br from-[#F76D01]/[0.07] via-background to-[#400095]/[0.06] p-5 sm:p-7">
           <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-[#F76D01]/10 blur-3xl" />

@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase-server";
 import {
   getOwnerSubscription,
   getActiveSubscriptionPlans,
   isSubscriptionActive,
   calculateCreditBalance,
 } from "@/lib/stripe";
+import {
+  EMPTY_WELCOME_GIFT,
+  welcomeGiftFromSubscription,
+} from "@/lib/billing/welcome-gift";
 
 export async function GET(request: Request) {
   try {
@@ -15,13 +20,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "workspaceId is required" }, { status: 400 });
     }
 
-    const [ownerSub, plans] = await Promise.all([
+    const [ownerSub, plans, auth] = await Promise.all([
       getOwnerSubscription(workspaceId),
       getActiveSubscriptionPlans(),
+      createClient().then((supabase) => supabase.auth.getUser()),
     ]);
 
     const sub = ownerSub?.subscription ?? null;
     const bal = calculateCreditBalance(sub);
+    const userId = auth.data.user?.id ?? null;
+    const isOwner = Boolean(userId && ownerSub?.ownerId === userId);
 
     return NextResponse.json({
       subscription: sub ? {
@@ -38,6 +46,13 @@ export async function GET(request: Request) {
       availablePlans: plans || [],
       credits: bal,
       isActive: sub ? isSubscriptionActive(sub.status, sub.trial_end) : false,
+      welcomeGift: sub
+        ? welcomeGiftFromSubscription({
+            isOwner,
+            planName: ownerSub?.plan?.name,
+            subscription: sub,
+          })
+        : EMPTY_WELCOME_GIFT,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || "Internal server error" }, { status: 500 });

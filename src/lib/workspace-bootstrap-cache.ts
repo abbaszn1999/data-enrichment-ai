@@ -18,6 +18,8 @@
 // `fetch` when no seed is present (e.g. components used outside the layout, or
 // after the short TTL expires).
 
+import type { WelcomeGiftState } from "@/lib/billing/welcome-gift";
+
 export interface BootstrapCreditsShape {
   used: number;
   total: number;
@@ -31,6 +33,7 @@ export interface BootstrapSubscriptionShape {
   availablePlans: unknown[];
   credits: unknown | null;
   isActive: boolean;
+  welcomeGift?: WelcomeGiftState | null;
 }
 
 export interface BootstrapData {

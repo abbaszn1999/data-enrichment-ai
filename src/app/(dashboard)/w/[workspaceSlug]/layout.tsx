@@ -60,6 +60,7 @@ import { AutommerceLogo } from "@/components/brand/autommerce-logo";
 import { PageLoader } from "@/components/brand/page-loader";
 import { WorkspaceContext } from "./workspace-context";
 import { JobInbox } from "@/components/job-inbox";
+import { WelcomeGiftTicker } from "@/components/billing/welcome-gift-ticker";
 
 export default function WorkspaceLayout({
   children,
@@ -87,7 +88,7 @@ export default function WorkspaceLayout({
     isFreeAssessmentPage ? workspace?.id ?? null : null
   );
   const walletBalance = (isFreeAssessmentPage ? faWallet : wallet)?.balance ?? null;
-  const { subscription, isActive, isLoading: subLoading, plan: currentPlan } = useSubscription(workspace?.id ?? null);
+  const { subscription, isActive, isLoading: subLoading, plan: currentPlan, welcomeGift } = useSubscription(workspace?.id ?? null);
   const isTrialing = currentPlan?.name === "trial" && subscription?.status === "trialing" && isActive;
   const trialDaysLeft = isTrialing ? trialDaysRemaining(subscription?.trialEnd) : 0;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -511,9 +512,9 @@ export default function WorkspaceLayout({
         <header className={`border-b bg-background/95 backdrop-blur-sm sticky top-0 z-50 shrink-0 transition-all duration-300 ${
           isImmersive ? "h-0 border-transparent overflow-hidden" : "h-12 overflow-visible"
         }`}>
-          <div className="flex items-center justify-between h-12 px-4">
+          <div className="flex items-center h-12 px-4 gap-3">
             {/* Left: Logo + Workspace Name */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 shrink-0">
               <Link href={basePath} className="group flex items-center gap-2.5">
                 <AutommerceLogo size={28} priority className="transition-transform duration-300 group-hover:scale-105" />
                 <span className="leading-none">
@@ -537,8 +538,23 @@ export default function WorkspaceLayout({
               </Link>
             </div>
 
+            <div className="hidden min-w-0 flex-1 justify-center px-2 md:flex">
+              {!isImmersive && (
+                <WelcomeGiftTicker
+                  gift={welcomeGift}
+                  href={`${basePath}/subscription#welcome-gift`}
+                />
+              )}
+            </div>
+
             {/* Right: Wallet + Credits + Theme + User */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="min-w-0 max-w-[11rem] md:hidden">
+                <WelcomeGiftTicker
+                  gift={welcomeGift}
+                  href={`${basePath}/subscription#welcome-gift`}
+                />
+              </div>
               {walletBalance !== null && (
                 <Link
                   href={walletHref}

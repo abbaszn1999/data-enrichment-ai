@@ -486,6 +486,8 @@ export interface Database {
           credits_used: number;
           bonus_credits: number;
           credits_reset_at: string;
+          first_paid_at: string | null;
+          welcome_gift_claimed_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -512,6 +514,8 @@ export interface Database {
           credits_used?: number;
           bonus_credits?: number;
           credits_reset_at?: string;
+          first_paid_at?: string | null;
+          welcome_gift_claimed_at?: string | null;
           updated_at?: string;
         };
       };

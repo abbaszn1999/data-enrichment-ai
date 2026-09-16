@@ -4,6 +4,9 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { getWorkspaceContext, isContextSubscriptionActive, clearWorkspaceContextCache } from "@/lib/workspace-context";
 import { getActiveSubscriptionPlans, invalidateSubscriptionCache } from "@/lib/stripe";
 import { ensureOwnerTrial } from "@/lib/trial-server";
+import {
+  welcomeGiftFromSubscription,
+} from "@/lib/billing/welcome-gift";
 
 // Unified bootstrap endpoint for the dashboard layout. Returns workspace +
 // role + credits + subscription + integration in ONE request, collapsing the
@@ -85,6 +88,11 @@ export async function GET(request: NextRequest) {
         availablePlans: plans || [],
         credits: bal,
         isActive: isContextSubscriptionActive(ctx),
+        welcomeGift: welcomeGiftFromSubscription({
+          isOwner,
+          planName: ctx.plan?.name,
+          subscription: sub,
+        }),
       },
     });
   } catch (error: unknown) {
