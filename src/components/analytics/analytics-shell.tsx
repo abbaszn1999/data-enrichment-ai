@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { motion } from "motion/react";
 import { AlertCircle, BarChart3, RefreshCw, Settings } from "lucide-react";
@@ -22,9 +22,19 @@ import { AnalyticsPropertyPicker } from "@/components/analytics/property-picker"
 import { AnalyticsRulesDialog } from "@/components/analytics/rules-dialog";
 import { useWorkspaceContext } from "@/app/(dashboard)/w/[workspaceSlug]/workspace-context";
 import { useRole } from "@/hooks/use-role";
-import { disconnectAnalytics, saveAnalyticsRules, useAnalytics } from "@/hooks/use-analytics";
-import { parseAnalyticsDateRange } from "@/lib/analytics/dates";
-import type { AnalyticsConnectionType, AnalyticsDateRange, AnalyticsPageType } from "@/lib/analytics/types";
+import {
+  disconnectAnalytics,
+  invalidateClientAnalyticsCache,
+  saveAnalyticsRules,
+  useAnalytics,
+} from "@/hooks/use-analytics";
+import { parseAnalyticsDateRange, peekAnalyticsDateRange, readStoredAnalyticsDateRange, storeAnalyticsDateRange } from "@/lib/analytics/dates";
+import {
+  isAnalyticsConnectionType,
+  type AnalyticsConnectionType,
+  type AnalyticsDateRange,
+  type AnalyticsPageType,
+} from "@/lib/analytics/types";
 
 const ERROR_COPY: Record<string, string> = {
   not_configured: "Google OAuth is not configured on this server yet.",
@@ -55,6 +65,10 @@ const CONNECTION_LABEL: Record<AnalyticsConnectionType, string> = {
   "google-analytics": "Analytics 4",
 };
 
+function statusKeyForType(type: AnalyticsConnectionType): "gsc" | "ga4" {
+  return type === "search-console" ? "gsc" : "ga4";
+}
+
 export function AnalyticsShell({
   page,
   pageType,
@@ -78,23 +92,74 @@ export function AnalyticsShell({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const permissions = useRole(role);
-  const [range, setRange] = useState<AnalyticsDateRange>("28");
+  const [range, setRange] = useState<AnalyticsDateRange>(
+    () => peekAnalyticsDateRange(workspace?.id) ?? "28"
+  );
   const [busyType, setBusyType] = useState<AnalyticsConnectionType | null>(null);
   const [disconnectType, setDisconnectType] = useState<AnalyticsConnectionType | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [pickerType, setPickerType] = useState<AnalyticsConnectionType | null>(null);
   const analytics = useAnalytics(workspace?.id ?? null, range, pageType);
   const copy = PAGE_COPY[page];
   const showDataControls = !pageType || !!analytics.rules;
 
+  // Tracks which connection types we've already auto-opened the property
+  // popup for in this mount, so a status re-fetch after the user manually
+  // cancels the dialog doesn't keep forcing it back open.
+  const autoOpenedRef = useRef<Record<AnalyticsConnectionType, boolean>>({
+    "search-console": false,
+    "google-analytics": false,
+  });
+
   useEffect(() => {
     const connected = searchParams.get("connected");
+    const pick = searchParams.get("pick");
     const error = searchParams.get("error");
     if (connected) toast.success("Google account connected");
     if (error) toast.error(ERROR_COPY[error] || "Could not complete Google connection");
     if (connected || error) {
       router.replace(pathname);
     }
-  }, [pathname, router, searchParams]);
+    if (connected && workspace?.id) {
+      // The OAuth callback just wrote a new connection. The status route's
+      // 60s server cache was invalidated server-side, but this tab's own
+      // client cache (and any `refresh(false)` that ran before the redirect
+      // landed here) can still be holding the pre-connect snapshot — force
+      // a real round trip instead of waiting for that cache to expire.
+      invalidateClientAnalyticsCache(workspace.id);
+      void analytics.refresh(true);
+    }
+    if (connected && isAnalyticsConnectionType(connected) && pick === "1") {
+      // The callback found more than one property for this account — open
+      // the popup immediately instead of waiting for the forced status
+      // refresh above to resolve `needsProperty` a moment later.
+      autoOpenedRef.current[connected] = true;
+      setPickerType(connected);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, router, searchParams, workspace?.id]);
+
+  useEffect(() => {
+    if (!workspace?.id) return;
+    setRange(readStoredAnalyticsDateRange(workspace.id));
+  }, [workspace?.id]);
+
+  // Fallback trigger: covers a connection that needs a property for any
+  // other reason (page load with an already-connected-but-unset account,
+  // the `pick` param missing, zero properties returned so nothing was
+  // auto-selected, etc). Opens at most one popup per type per mount.
+  useEffect(() => {
+    if (pickerType || analytics.statusLoading) return;
+    if (analytics.status.gsc.needsProperty && !autoOpenedRef.current["search-console"]) {
+      autoOpenedRef.current["search-console"] = true;
+      setPickerType("search-console");
+      return;
+    }
+    if (analytics.status.ga4.needsProperty && !autoOpenedRef.current["google-analytics"]) {
+      autoOpenedRef.current["google-analytics"] = true;
+      setPickerType("google-analytics");
+    }
+  }, [analytics.status, analytics.statusLoading, pickerType]);
 
   if (!workspace) return <PageLoader />;
 
@@ -138,7 +203,11 @@ export function AnalyticsShell({
                       <button
                         key={id}
                         type="button"
-                        onClick={() => setRange(parseAnalyticsDateRange(id))}
+                        onClick={() => {
+                          const next = parseAnalyticsDateRange(id);
+                          setRange(next);
+                          if (workspace?.id) storeAnalyticsDateRange(workspace.id, next);
+                        }}
                         className={`h-8 rounded-lg px-3 text-xs font-semibold ${
                           range === id
                             ? "bg-[#400095]/10 text-[#400095] dark:bg-[#F76D01]/12 dark:text-[#F76D01]"
@@ -190,24 +259,24 @@ export function AnalyticsShell({
           slug={slug}
           busyType={busyType}
           onDisconnect={(type) => setDisconnectType(type)}
+          onChooseProperty={(type) => setPickerType(type)}
         />
 
-        {analytics.status.gsc.needsProperty && (
-          <AnalyticsPropertyPicker
-            workspaceId={workspace.id}
-            type="search-console"
-            title="Search Console"
-            onSaved={() => analytics.refresh()}
-          />
-        )}
-        {analytics.status.ga4.needsProperty && (
-          <AnalyticsPropertyPicker
-            workspaceId={workspace.id}
-            type="google-analytics"
-            title="Analytics 4"
-            onSaved={() => analytics.refresh()}
-          />
-        )}
+        <AnalyticsPropertyPicker
+          open={pickerType !== null}
+          onOpenChange={(open) => {
+            if (!open) setPickerType(null);
+          }}
+          workspaceId={workspace.id}
+          type={pickerType ?? "search-console"}
+          title={pickerType ? CONNECTION_LABEL[pickerType] : "property"}
+          hasExistingProperty={
+            pickerType ? !analytics.status[statusKeyForType(pickerType)].needsProperty : false
+          }
+          onSaved={() => {
+            if (pickerType) void analytics.refreshSource(pickerType);
+          }}
+        />
 
         {analytics.error && (
           <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-4">
@@ -251,9 +320,15 @@ export function AnalyticsShell({
                 setBusyType(disconnectType);
                 try {
                   await disconnectAnalytics(workspace.id, disconnectType);
+                  // The row is already gone server-side — flip local state
+                  // immediately instead of blocking on a full status +
+                  // up-to-7-endpoint reload that would also needlessly
+                  // re-pull the *other*, still-connected source.
+                  analytics.applyDisconnect(disconnectType);
+                  autoOpenedRef.current[disconnectType] = false;
+                  if (pickerType === disconnectType) setPickerType(null);
                   toast.success("Disconnected");
                   setDisconnectType(null);
-                  await analytics.refresh();
                 } catch (err) {
                   toast.error(err instanceof Error ? err.message : "Disconnect failed");
                 } finally {

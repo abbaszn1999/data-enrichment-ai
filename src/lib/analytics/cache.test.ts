@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fetchWithServerCache, invalidateServerAnalyticsCache } from "./cache";
+import { describe, it, expect, beforeEach } from "vitest";
+import { fetchWithServerCache, invalidateServerAnalyticsCache, analyticsPropertiesCacheKey } from "./cache";
 
 describe("analytics server cache", () => {
   beforeEach(() => {
@@ -53,5 +53,11 @@ describe("analytics server cache", () => {
 
     // ws-123 called twice, ws-999 called once
     expect(calls).toBe(3);
+  });
+
+  it("keys property listings by workspace and connection type", () => {
+    expect(analyticsPropertiesCacheKey("ws-1", "google-analytics")).toBe(
+      "properties:ws-1:google-analytics"
+    );
   });
 });

@@ -164,9 +164,6 @@ export async function updateSelectedProperty(
 ) {
   const existing = await getAnalyticsConnection(admin, workspaceId, type);
   if (!existing) throw new Error("Connection not found");
-  if (existing.selected_property && existing.selected_property !== selectedProperty) {
-    throw new Error("Property already selected. Disconnect and reconnect to change it.");
-  }
   const { error } = await admin
     .from("workspace_analytics_connections")
     .update({

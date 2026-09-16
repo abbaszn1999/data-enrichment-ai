@@ -14,6 +14,10 @@ const pendingFetches = new Map<string, Promise<unknown>>();
 const DEFAULT_SERVER_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_SERVER_CACHE_ENTRIES = 500;
 
+export function analyticsPropertiesCacheKey(workspaceId: string, type: string): string {
+  return `properties:${workspaceId}:${type}`;
+}
+
 export async function fetchWithServerCache<T>(
   key: string,
   fetcher: () => Promise<T>,

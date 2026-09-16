@@ -16,6 +16,8 @@ import {
   requireAnalyticsRuleConfig,
 } from "@/lib/analytics/filtered";
 
+export const maxDuration = 60;
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ kind: string }> }

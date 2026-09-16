@@ -1,6 +1,7 @@
 "use client";
 
-import { BarChart3, Globe, Loader2, PlugZap, Unplug } from "lucide-react";
+import { useState } from "react";
+import { BarChart3, Globe, Loader2, PlugZap, Settings2, Unplug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AnalyticsConnectionPublic, AnalyticsConnectionType, AnalyticsStatus } from "@/lib/analytics/types";
@@ -13,6 +14,7 @@ export function AnalyticsConnectionCards({
   slug,
   busyType,
   onDisconnect,
+  onChooseProperty,
 }: {
   status: AnalyticsStatus;
   loading: boolean;
@@ -21,8 +23,17 @@ export function AnalyticsConnectionCards({
   slug: string;
   busyType: AnalyticsConnectionType | null;
   onDisconnect: (type: AnalyticsConnectionType) => void;
+  onChooseProperty: (type: AnalyticsConnectionType) => void;
 }) {
+  const [connectingType, setConnectingType] = useState<AnalyticsConnectionType | null>(null);
+
   const start = (type: AnalyticsConnectionType) => {
+    // The click itself is instant, but /api/analytics/oauth/start still has
+    // to validate access and round-trip Supabase before the 302 to Google
+    // actually lands — show a busy state for that gap instead of leaving
+    // the button looking unresponsive. There is no need to ever clear this:
+    // the page navigates away right after.
+    setConnectingType(type);
     window.location.href = `/api/analytics/oauth/start?workspaceId=${encodeURIComponent(workspaceId)}&type=${type}&slug=${encodeURIComponent(slug)}`;
   };
 
@@ -44,8 +55,10 @@ export function AnalyticsConnectionCards({
         configured={status.configured}
         canManage={canManage}
         busy={busyType === "search-console"}
+        connecting={connectingType === "search-console"}
         onConnect={() => start("search-console")}
         onDisconnect={() => onDisconnect("search-console")}
+        onChooseProperty={() => onChooseProperty("search-console")}
       />
       <ConnectionCard
         title="Google Analytics 4"
@@ -54,8 +67,10 @@ export function AnalyticsConnectionCards({
         configured={status.configured}
         canManage={canManage}
         busy={busyType === "google-analytics"}
+        connecting={connectingType === "google-analytics"}
         onConnect={() => start("google-analytics")}
         onDisconnect={() => onDisconnect("google-analytics")}
+        onChooseProperty={() => onChooseProperty("google-analytics")}
       />
     </div>
   );
@@ -68,8 +83,10 @@ function ConnectionCard({
   configured,
   canManage,
   busy,
+  connecting,
   onConnect,
   onDisconnect,
+  onChooseProperty,
 }: {
   title: string;
   icon: typeof Globe;
@@ -77,8 +94,10 @@ function ConnectionCard({
   configured: boolean;
   canManage: boolean;
   busy: boolean;
+  connecting: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
+  onChooseProperty: () => void;
 }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card p-4 shadow-sm">
@@ -107,17 +126,40 @@ function ConnectionCard({
         </div>
       </div>
       {canManage && (
-        connection.connected ? (
-          <Button variant="outline" size="sm" className="h-8 shrink-0 text-xs" disabled={busy} onClick={onDisconnect}>
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}
-            Disconnect
-          </Button>
-        ) : (
-          <Button size="sm" className="h-8 shrink-0 text-xs" disabled={!configured || busy} onClick={onConnect}>
-            <PlugZap className="mr-1.5 h-3.5 w-3.5" />
-            Connect
-          </Button>
-        )
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {connection.connected ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                disabled={busy}
+                onClick={onChooseProperty}
+              >
+                <Settings2 className="mr-1.5 h-3.5 w-3.5" />
+                {connection.needsProperty ? "Choose property" : "Change property"}
+              </Button>
+              <Button variant="outline" size="sm" className="h-8 text-xs" disabled={busy} onClick={onDisconnect}>
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}
+                Disconnect
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              disabled={!configured || connecting}
+              onClick={onConnect}
+            >
+              {connecting ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <PlugZap className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {connecting ? "Connecting…" : "Connect"}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );

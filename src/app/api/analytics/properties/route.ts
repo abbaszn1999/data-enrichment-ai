@@ -5,23 +5,36 @@ import {
   updateSelectedProperty,
 } from "@/lib/analytics/connections";
 import { listAnalyticsProperties, listSearchConsoleSites } from "@/lib/analytics/google-api";
-import { isAnalyticsConnectionType } from "@/lib/analytics/types";
-import { invalidateServerAnalyticsCache } from "@/lib/analytics/cache";
+import { isAnalyticsConnectionType, type AnalyticsPropertyOption } from "@/lib/analytics/types";
+import {
+  analyticsPropertiesCacheKey,
+  fetchWithServerCache,
+  invalidateServerAnalyticsCache,
+} from "@/lib/analytics/cache";
+
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
     const url = new URL(request.url);
     const workspaceId = url.searchParams.get("workspaceId") || "";
     const type = url.searchParams.get("type") || "";
+    const force = url.searchParams.get("force") === "1";
     if (!isAnalyticsConnectionType(type)) {
       return NextResponse.json({ error: "Invalid connection type" }, { status: 400 });
     }
     const { admin } = await requireAnalyticsAccess(workspaceId, { admin: true });
-    const { token } = await getValidAnalyticsAccessToken(admin, workspaceId, type);
-    const properties =
-      type === "search-console"
-        ? await listSearchConsoleSites(token)
-        : await listAnalyticsProperties(token);
+    const properties = await fetchWithServerCache<AnalyticsPropertyOption[]>(
+      analyticsPropertiesCacheKey(workspaceId, type),
+      async () => {
+        const { token } = await getValidAnalyticsAccessToken(admin, workspaceId, type);
+        return type === "search-console"
+          ? listSearchConsoleSites(token)
+          : listAnalyticsProperties(token);
+      },
+      undefined,
+      force
+    );
     return NextResponse.json({ properties });
   } catch (err) {
     return analyticsErrorResponse(err);
@@ -46,10 +59,6 @@ export async function POST(request: NextRequest) {
     invalidateServerAnalyticsCache(workspaceId);
     return NextResponse.json({ ok: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to save property";
-    if (message.includes("already selected")) {
-      return NextResponse.json({ error: message }, { status: 409 });
-    }
     return analyticsErrorResponse(err);
   }
 }

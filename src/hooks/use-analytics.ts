@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { totalsFromGscPages } from "@/lib/analytics/aggregate";
 import { analyticsDateWindows, parseAnalyticsDateRange } from "@/lib/analytics/dates";
 import type {
+  AnalyticsConnectionType,
   AnalyticsDateRange,
   AnalyticsPageType,
   AnalyticsPropertyOption,
@@ -150,7 +151,8 @@ function readSnapshotFromCache(
     }).toString();
 
   const gscPagesUrl = `/api/analytics/gsc/pages?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`;
-  const prevGscPagesUrl = `/api/analytics/gsc/pages?${qs({ startDate: dates.prevStartDate, endDate: dates.prevEndDate })}`;
+  const gscTotalsUrl = `/api/analytics/gsc/totals?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`;
+  const prevGscTotalsUrl = `/api/analytics/gsc/totals?${qs({ startDate: dates.prevStartDate, endDate: dates.prevEndDate })}`;
   const gscTimeseriesUrl = `/api/analytics/gsc/timeseries?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`;
 
   const ga4OverviewUrl = `/api/analytics/ga4/overview?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`;
@@ -159,7 +161,8 @@ function readSnapshotFromCache(
   const ga4TimeseriesUrl = `/api/analytics/ga4/timeseries?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`;
 
   const gscPagesData = clientCacheStore.get(gscPagesUrl)?.data as { rows: GscPageRow[] } | undefined;
-  const prevGscPagesData = clientCacheStore.get(prevGscPagesUrl)?.data as { rows: GscPageRow[] } | undefined;
+  const gscTotalsData = clientCacheStore.get(gscTotalsUrl)?.data as { totals: GscTotals } | undefined;
+  const prevGscTotalsData = clientCacheStore.get(prevGscTotalsUrl)?.data as { totals: GscTotals } | undefined;
   const gscTimeseriesData = clientCacheStore.get(gscTimeseriesUrl)?.data as { rows: GscTimeSeriesRow[] } | undefined;
 
   const ga4OverviewData = clientCacheStore.get(ga4OverviewUrl)?.data as Ga4Overview | undefined;
@@ -168,8 +171,8 @@ function readSnapshotFromCache(
   const ga4TimeseriesData = clientCacheStore.get(ga4TimeseriesUrl)?.data as { rows: Ga4TimeSeriesRow[] } | undefined;
 
   const gscPages = gscPagesData?.rows || [];
-  const gscTotals = gscPages.length ? totalsFromGscPages(gscPages) : null;
-  const prevGscTotals = prevGscPagesData?.rows?.length ? totalsFromGscPages(prevGscPagesData.rows) : null;
+  const gscTotals = gscTotalsData?.totals ?? (gscPages.length ? totalsFromGscPages(gscPages) : null);
+  const prevGscTotals = prevGscTotalsData?.totals ?? null;
 
   return {
     status: statusCached || null,
@@ -232,7 +235,7 @@ export function useAnalytics(
   const loadStatus = useCallback(async (force = false) => {
     if (!workspaceId) return emptyStatus();
     const data = await dedupedFetch<AnalyticsStatus>(
-      `/api/analytics/status?workspaceId=${encodeURIComponent(workspaceId)}`,
+      `/api/analytics/status?workspaceId=${encodeURIComponent(workspaceId)}${force ? "&force=1" : ""}`,
       force
     );
     setStatus(data);
@@ -248,7 +251,7 @@ export function useAnalytics(
     setRulesLoading(true);
     try {
       const data = await dedupedFetch<{ rules: AnalyticsRulesRecord | null }>(
-        `/api/analytics/rules?workspaceId=${encodeURIComponent(workspaceId)}&pageType=${pageType}`,
+        `/api/analytics/rules?workspaceId=${encodeURIComponent(workspaceId)}&pageType=${pageType}${force ? "&force=1" : ""}`,
         force
       );
       setRules(data.rules);
@@ -257,6 +260,111 @@ export function useAnalytics(
       setRulesLoading(false);
     }
   }, [pageType, workspaceId]);
+
+  // Split out of the combined loadData below so a single source (GSC or
+  // GA4) can be reloaded on its own — e.g. after that source's property is
+  // saved — without re-pulling the other, untouched source from Google.
+  const loadGscData = useCallback(async (current: AnalyticsStatus, force = false) => {
+    if (!workspaceId) return;
+    const gscReady = current.gsc.connected && !current.gsc.needsProperty;
+    if (!gscReady) {
+      clearGsc(setGscTotals, setPrevGscTotals, setGscPages, setGscTimeSeries);
+      setGscLoading(false);
+      return;
+    }
+
+    const days = Number(parseAnalyticsDateRange(range));
+    const dates = analyticsDateWindows(days);
+    const qs = (extra: Record<string, string>) =>
+      new URLSearchParams({
+        workspaceId,
+        ...(pageType ? { pageType } : {}),
+        ...(force ? { force: "1" } : {}),
+        ...extra,
+      }).toString();
+
+    setGscLoading(true);
+    try {
+      const [pages, totals, prevTotals, series] = await Promise.all([
+        dedupedFetch<{ rows: GscPageRow[] }>(
+          `/api/analytics/gsc/pages?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
+          force
+        ),
+        dedupedFetch<{ totals: GscTotals }>(
+          `/api/analytics/gsc/totals?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
+          force
+        ),
+        dedupedFetch<{ totals: GscTotals }>(
+          `/api/analytics/gsc/totals?${qs({ startDate: dates.prevStartDate, endDate: dates.prevEndDate })}`,
+          force
+        ).catch(() => ({ totals: null as GscTotals | null })),
+        dedupedFetch<{ rows: GscTimeSeriesRow[] }>(
+          `/api/analytics/gsc/timeseries?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
+          force
+        ),
+      ]);
+      setGscPages(pages.rows);
+      setGscTotals(totals.totals);
+      setPrevGscTotals(prevTotals.totals);
+      setGscTimeSeries(series.rows);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load Search Console data");
+      clearGsc(setGscTotals, setPrevGscTotals, setGscPages, setGscTimeSeries);
+    } finally {
+      setGscLoading(false);
+    }
+  }, [pageType, range, workspaceId]);
+
+  const loadGa4Data = useCallback(async (current: AnalyticsStatus, force = false) => {
+    if (!workspaceId) return;
+    const ga4Ready = current.ga4.connected && !current.ga4.needsProperty;
+    if (!ga4Ready) {
+      clearGa4(setGa4Overview, setPrevGa4Overview, setGa4Pages, setGa4TimeSeries);
+      setGa4Loading(false);
+      return;
+    }
+
+    const days = Number(parseAnalyticsDateRange(range));
+    const dates = analyticsDateWindows(days);
+    const qs = (extra: Record<string, string>) =>
+      new URLSearchParams({
+        workspaceId,
+        ...(pageType ? { pageType } : {}),
+        ...(force ? { force: "1" } : {}),
+        ...extra,
+      }).toString();
+
+    setGa4Loading(true);
+    try {
+      const [overview, prevOverview, pages, series] = await Promise.all([
+        dedupedFetch<Ga4Overview>(
+          `/api/analytics/ga4/overview?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
+          force
+        ),
+        dedupedFetch<Ga4Overview>(
+          `/api/analytics/ga4/overview?${qs({ startDate: dates.prevStartDate, endDate: dates.prevEndDate })}`,
+          force
+        ).catch(() => null),
+        dedupedFetch<{ rows: Ga4PageRow[] }>(
+          `/api/analytics/ga4/pages?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
+          force
+        ),
+        dedupedFetch<{ rows: Ga4TimeSeriesRow[] }>(
+          `/api/analytics/ga4/timeseries?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
+          force
+        ),
+      ]);
+      setGa4Overview(overview);
+      setPrevGa4Overview(prevOverview);
+      setGa4Pages(pages.rows);
+      setGa4TimeSeries(series.rows);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load Analytics data");
+      clearGa4(setGa4Overview, setPrevGa4Overview, setGa4Pages, setGa4TimeSeries);
+    } finally {
+      setGa4Loading(false);
+    }
+  }, [pageType, range, workspaceId]);
 
   const loadData = useCallback(async (
     current: AnalyticsStatus,
@@ -272,111 +380,15 @@ export function useAnalytics(
       setError(null);
       return;
     }
-
-    const days = Number(parseAnalyticsDateRange(range));
-    const dates = analyticsDateWindows(days);
-    const qs = (extra: Record<string, string>) =>
-      new URLSearchParams({
-        workspaceId,
-        ...(pageType ? { pageType } : {}),
-        ...(force ? { force: "1" } : {}),
-        ...extra,
-      }).toString();
-
     setError(null);
-
-    const gscReady = current.gsc.connected && !current.gsc.needsProperty;
-    const ga4Ready = current.ga4.connected && !current.ga4.needsProperty;
-
-    const gscTasks = gscReady
-      ? Promise.all([
-          dedupedFetch<{ rows: GscPageRow[] }>(
-            `/api/analytics/gsc/pages?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
-            force
-          ),
-          dedupedFetch<{ rows: GscPageRow[] }>(
-            `/api/analytics/gsc/pages?${qs({ startDate: dates.prevStartDate, endDate: dates.prevEndDate })}`,
-            force
-          ).catch(() => ({ rows: [] as GscPageRow[] })),
-          dedupedFetch<{ rows: GscTimeSeriesRow[] }>(
-            `/api/analytics/gsc/timeseries?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
-            force
-          ),
-        ])
-      : null;
-
-    const ga4Tasks = ga4Ready
-      ? Promise.all([
-          dedupedFetch<Ga4Overview>(
-            `/api/analytics/ga4/overview?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
-            force
-          ),
-          dedupedFetch<Ga4Overview>(
-            `/api/analytics/ga4/overview?${qs({ startDate: dates.prevStartDate, endDate: dates.prevEndDate })}`,
-            force
-          ).catch(() => null),
-          dedupedFetch<{ rows: Ga4PageRow[] }>(
-            `/api/analytics/ga4/pages?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
-            force
-          ),
-          dedupedFetch<{ rows: Ga4TimeSeriesRow[] }>(
-            `/api/analytics/ga4/timeseries?${qs({ startDate: dates.startDate, endDate: dates.endDate })}`,
-            force
-          ),
-        ])
-      : null;
-
-    const gscPromise = gscTasks
-      ? (async () => {
-          setGscLoading(true);
-          try {
-            const [pages, prevPages, series] = await gscTasks;
-            setGscPages(pages.rows);
-            setGscTotals(totalsFromGscPages(pages.rows));
-            setPrevGscTotals(prevPages.rows.length ? totalsFromGscPages(prevPages.rows) : null);
-            setGscTimeSeries(series.rows);
-          } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to load Search Console data");
-            clearGsc(setGscTotals, setPrevGscTotals, setGscPages, setGscTimeSeries);
-          } finally {
-            setGscLoading(false);
-          }
-        })()
-      : (async () => {
-          clearGsc(setGscTotals, setPrevGscTotals, setGscPages, setGscTimeSeries);
-          setGscLoading(false);
-        })();
-
-    const ga4Promise = ga4Tasks
-      ? (async () => {
-          setGa4Loading(true);
-          try {
-            const [overview, prevOverview, pages, series] = await ga4Tasks;
-            setGa4Overview(overview);
-            setPrevGa4Overview(prevOverview);
-            setGa4Pages(pages.rows);
-            setGa4TimeSeries(series.rows);
-          } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to load Analytics data");
-            clearGa4(setGa4Overview, setPrevGa4Overview, setGa4Pages, setGa4TimeSeries);
-          } finally {
-            setGa4Loading(false);
-          }
-        })()
-      : (async () => {
-          clearGa4(setGa4Overview, setPrevGa4Overview, setGa4Pages, setGa4TimeSeries);
-          setGa4Loading(false);
-        })();
-
-    await Promise.all([gscPromise, ga4Promise]);
-  }, [pageType, range, workspaceId]);
+    await Promise.all([loadGscData(current, force), loadGa4Data(current, force)]);
+  }, [loadGa4Data, loadGscData, pageType, workspaceId]);
 
   const refresh = useCallback(async (force = false) => {
     if (!workspaceId) return;
     setStatusLoading(true);
     try {
-      const next = await loadStatus(force);
-      const nextRules = await loadRules(force);
+      const [next, nextRules] = await Promise.all([loadStatus(force), loadRules(force)]);
       await loadData(next, nextRules, force);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load analytics");
@@ -388,6 +400,54 @@ export function useAnalytics(
   useEffect(() => {
     void refresh(false);
   }, [refresh]);
+
+  // Optimistic disconnect: the DELETE call has already completed by the
+  // time this runs — this just flips local state to match instantly
+  // instead of waiting on (and paying for) a full status + up-to-7-endpoint
+  // data reload, which is what used to make Disconnect feel slow even
+  // though the DELETE route itself is a single-row delete.
+  const applyDisconnect = useCallback((type: AnalyticsConnectionType) => {
+    const key = type === "search-console" ? "gsc" : "ga4";
+    setStatus((prev) => ({
+      ...prev,
+      [key]: {
+        connected: false,
+        email: null,
+        property: null,
+        propertyLabel: null,
+        needsProperty: false,
+      },
+    }));
+    if (type === "search-console") {
+      clearGsc(setGscTotals, setPrevGscTotals, setGscPages, setGscTimeSeries);
+      setGscLoading(false);
+    } else {
+      clearGa4(setGa4Overview, setPrevGa4Overview, setGa4Pages, setGa4TimeSeries);
+      setGa4Loading(false);
+    }
+  }, []);
+
+  // After saving a property selection, only the source that changed needs
+  // a fresh status + data pull. Reloading both (the old `refresh()` call)
+  // meant every property save re-pulled the *other*, already-working
+  // source from Google for no reason.
+  const refreshSource = useCallback(async (type: AnalyticsConnectionType, force = true) => {
+    if (!workspaceId) return;
+    setStatusLoading(true);
+    try {
+      const nextStatus = await loadStatus(force);
+      if (pageType && !rules) return;
+      if (type === "search-console") {
+        await loadGscData(nextStatus, force);
+      } else {
+        await loadGa4Data(nextStatus, force);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load analytics");
+    } finally {
+      setStatusLoading(false);
+    }
+  }, [loadGa4Data, loadGscData, loadStatus, pageType, rules, workspaceId]);
 
   return {
     status,
@@ -406,16 +466,19 @@ export function useAnalytics(
     ga4Loading,
     error,
     refresh: (force = true) => refresh(force),
+    applyDisconnect,
+    refreshSource,
   };
 }
 
 export async function fetchAnalyticsProperties(
   workspaceId: string,
-  type: "search-console" | "google-analytics"
+  type: "search-console" | "google-analytics",
+  force = false
 ): Promise<AnalyticsPropertyOption[]> {
   const data = await readJson<{ properties: AnalyticsPropertyOption[] }>(
     await fetch(
-      `/api/analytics/properties?workspaceId=${encodeURIComponent(workspaceId)}&type=${type}`
+      `/api/analytics/properties?workspaceId=${encodeURIComponent(workspaceId)}&type=${type}${force ? "&force=1" : ""}`
     )
   );
   return data.properties;

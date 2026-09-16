@@ -143,7 +143,63 @@ type Ga4RunReport = {
   }>;
 };
 
-export async function listAnalyticsProperties(accessToken: string): Promise<AnalyticsPropertyOption[]> {
+export type Ga4AccountSummary = {
+  account?: string;
+  displayName?: string;
+  propertySummaries?: Array<{ property?: string; displayName?: string }>;
+};
+
+export type Ga4AccountSummariesResponse = {
+  accountSummaries?: Ga4AccountSummary[];
+  nextPageToken?: string;
+};
+
+export function mapGa4AccountSummaries(
+  summaries: Ga4AccountSummary[] | undefined | null
+): AnalyticsPropertyOption[] {
+  const options: AnalyticsPropertyOption[] = [];
+  for (const account of summaries ?? []) {
+    for (const prop of account.propertySummaries ?? []) {
+      const id = prop.property?.split("/")[1] || "";
+      if (!id) continue;
+      options.push({
+        id,
+        label: prop.displayName || id,
+        detail: account.displayName || undefined,
+      });
+    }
+  }
+  return options;
+}
+
+/**
+ * Fast path: `accountSummaries` returns every account with its properties
+ * nested inline, so the whole property list comes back in one call (or a
+ * couple, if the account paginates past 200 accounts — rare in practice).
+ * This replaces the old accounts+properties N+1 below, which issued one
+ * additional Google call per account and was the main reason opening the
+ * property picker felt slow for anyone with more than one GA4 account.
+ */
+async function listAnalyticsPropertiesViaAccountSummaries(
+  accessToken: string
+): Promise<AnalyticsPropertyOption[]> {
+  const options: AnalyticsPropertyOption[] = [];
+  let pageToken: string | undefined;
+  do {
+    const url = new URL("https://analyticsadmin.googleapis.com/v1beta/accountSummaries");
+    url.searchParams.set("pageSize", "200");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const data = await googleJson<Ga4AccountSummariesResponse>(url.toString(), accessToken);
+    options.push(...mapGa4AccountSummaries(data.accountSummaries));
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return options;
+}
+
+/** Fallback only: one accounts call, then one properties call per account. */
+async function listAnalyticsPropertiesViaAccountsLoop(
+  accessToken: string
+): Promise<AnalyticsPropertyOption[]> {
   const accounts = await googleJson<{ accounts?: Array<{ name?: string; displayName?: string }> }>(
     "https://analyticsadmin.googleapis.com/v1beta/accounts",
     accessToken
@@ -168,6 +224,18 @@ export async function listAnalyticsProperties(accessToken: string): Promise<Anal
     }
   }
   return options;
+}
+
+export async function listAnalyticsProperties(accessToken: string): Promise<AnalyticsPropertyOption[]> {
+  try {
+    return await listAnalyticsPropertiesViaAccountSummaries(accessToken);
+  } catch (err) {
+    console.error(
+      "[listAnalyticsProperties] accountSummaries failed, falling back to per-account listing:",
+      err
+    );
+    return listAnalyticsPropertiesViaAccountsLoop(accessToken);
+  }
 }
 
 export async function runGa4Report(
