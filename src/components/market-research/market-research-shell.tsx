@@ -483,6 +483,11 @@ export function MarketResearchShell() {
   const extractRunIds = useRef<string[]>([]);
   const extractIdRef = useRef("");
   const resumedExtract = useRef(new Set<string>());
+  const resumedArticles = useRef(new Set<string>());
+  const articleInFlight = useRef(new Set<string>());
+  const generateArticlesRef = useRef<(ids: string[]) => Promise<void>>(
+    async () => undefined
+  );
   const analyzeGen = useRef(0);
   const clusterGen = useRef(0);
   const contentGen = useRef(0);
@@ -577,6 +582,7 @@ export function MarketResearchShell() {
     persistReady.current = false;
     persistRemote.current = false;
     skipPersistSave.current = true;
+    resumedArticles.current = new Set();
     setHydrated(false);
 
     const finish = (saved: MarketResearchPersisted | null) => {
@@ -3376,6 +3382,8 @@ export function MarketResearchShell() {
         while (cursor < rows.length) {
           const row = rows[cursor];
           cursor += 1;
+          if (articleInFlight.current.has(row.id)) continue;
+          articleInFlight.current.add(row.id);
 
           try {
             const res = await writeArticleApi(
@@ -3413,6 +3421,8 @@ export function MarketResearchShell() {
               status: "failed",
               error: err instanceof Error ? err.message : "Writing failed",
             });
+          } finally {
+            articleInFlight.current.delete(row.id);
           }
         }
       }
@@ -3420,6 +3430,30 @@ export function MarketResearchShell() {
 
     await Promise.all(workers);
   };
+
+  generateArticlesRef.current = handleGenerateArticles;
+
+  useEffect(() => {
+    if (!hydrated || !canEdit || !workspaceId || !activeProject) return;
+    const projectId = activeProject.id;
+    if (resumedArticles.current.has(projectId)) return;
+    const rows = strategyByProject[projectId] ?? [];
+    if (rows.length === 0) return;
+    const generated = articlesByProject[projectId] ?? {};
+    const pendingIds = rows
+      .filter((row) => row.status === "generating" && !generated[row.id])
+      .map((row) => row.id);
+    resumedArticles.current.add(projectId);
+    if (pendingIds.length === 0) return;
+    void generateArticlesRef.current(pendingIds);
+  }, [
+    hydrated,
+    canEdit,
+    workspaceId,
+    activeProject,
+    strategyByProject,
+    articlesByProject,
+  ]);
 
   const handleSyncArticles = async (ids: string[]) => {
     if (!canEdit || !activeProject || !workspaceId || ids.length === 0) return;

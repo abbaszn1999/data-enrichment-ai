@@ -17,6 +17,7 @@ export type MrSliceName =
   | "content"
   | "strategy"
   | "articles"
+  | "article-jobs"
   | "internal-links";
 
 /**

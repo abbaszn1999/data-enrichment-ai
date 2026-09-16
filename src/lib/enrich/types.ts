@@ -86,6 +86,7 @@ export type OpenAiResponseItem = {
 };
 
 export type OpenAiResponse = {
+  id?: string;
   status?: string;
   output?: OpenAiResponseItem[];
   usage?: unknown;

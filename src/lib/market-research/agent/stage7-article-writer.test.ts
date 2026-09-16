@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  articleFromOpenAiResponse,
+  buildArticleResponsesPayload,
   ensureTermInAltText,
   ensureTermInSeoDescription,
   ensureTermInSeoTitle,
+  startArticleWrite,
   stripUnauthorizedLinks,
 } from "./stage7-article-writer";
 
@@ -115,5 +118,87 @@ describe("stripUnauthorizedLinks", () => {
     expect(result).toBe(
       '<a href="/collections/mugs">Mugs</a> and bad and <a href="/products/blue-mug">Blue Mug</a>'
     );
+  });
+});
+
+const sampleInput = {
+  articleId: "art-1",
+  title: "How to choose ceramic coffee mugs",
+  keyword: "ceramic coffee mugs",
+  type: "guide" as const,
+  linksOut: [],
+};
+
+describe("buildArticleResponsesPayload", () => {
+  it("backgrounds the write and stores the response for later retrieve", () => {
+    const payload = buildArticleResponsesPayload(sampleInput, { background: true });
+    expect(payload.background).toBe(true);
+    expect(payload.store).toBe(true);
+    expect(payload.metadata).toEqual({
+      articleId: "art-1",
+      source: "growth-engine-stage7",
+    });
+  });
+
+  it("omits background when the caller wants a blocking write", () => {
+    const payload = buildArticleResponsesPayload(sampleInput);
+    expect(payload.background).toBeUndefined();
+  });
+});
+
+describe("startArticleWrite", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("returns the OpenAI response id without waiting for completion", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-test");
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: "resp_123", status: "queued" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const started = await startArticleWrite(sampleInput);
+    expect(started.responseId).toBe("resp_123");
+    expect(started.response.status).toBe("queued");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      background?: boolean;
+    };
+    expect(body.background).toBe(true);
+  });
+});
+
+describe("articleFromOpenAiResponse", () => {
+  it("parses a completed Responses payload into an article", () => {
+    const result = articleFromOpenAiResponse(sampleInput, {
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                seoTitle: "Ceramic coffee mugs for daily use",
+                seoDescription:
+                  "A practical look at ceramic coffee mugs, from size and glaze to what actually lasts in a real kitchen.",
+                blogTitle: "none",
+                bodyHtml:
+                  "<p>Ceramic coffee mugs hold heat without tasting like the mug. Pick a weight you can lift one-handed.</p>",
+                images: [],
+                featuredImage: { url: "", alt: "" },
+              }),
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.bodyHtml).toContain("Ceramic coffee mugs");
+    expect(result.seoTitle.toLowerCase()).toContain("ceramic coffee mugs");
+    expect(result.blogTitle).toBe("none");
   });
 });

@@ -34,6 +34,19 @@ export const ARTICLE_WRITER_MODEL = "gpt-5.6-sol" as const;
 /** Hard ceiling the user set: the model chooses how many, never more than this. */
 export const MAX_ARTICLE_IMAGES = 5;
 
+/** Background create should return in seconds; retrieve is a short GET. */
+export const ARTICLE_OPENAI_REQUEST_MS = 45_000;
+/** How long the client/server will keep asking OpenAI whether a write finished. */
+export const ARTICLE_POLL_INTERVAL_MS = 3_000;
+export const ARTICLE_POLL_MAX_MS = 8 * 60 * 1000;
+
+const OPEN_AI_FAILURE_STATUSES = new Set([
+  "failed",
+  "cancelled",
+  "canceled",
+  "incomplete",
+]);
+
 const TYPE_BRIEF: Record<StrategyArticleType, string> = {
   guide:
     "A practical guide: explain how to choose or use the subject, in the order a buyer actually decides.",
@@ -81,10 +94,25 @@ type RawArticle = {
   featuredImage?: unknown;
 };
 
-async function postResponses(body: Record<string, unknown>): Promise<OpenAiResponse> {
-  if (!process.env.OPENAI_API_KEY?.trim()) {
-    throw new Error("OPENAI_API_KEY is not configured");
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function isOpenAiWriteFailure(status: string | undefined): boolean {
+  return Boolean(status && OPEN_AI_FAILURE_STATUSES.has(status));
+}
+
+function parseOpenAiJson(rawText: string, httpStatus: number): OpenAiResponse {
+  try {
+    return JSON.parse(rawText) as OpenAiResponse;
+  } catch {
+    throw new Error(`Article writer returned invalid JSON (${httpStatus})`);
   }
+}
+
+async function postResponses(
+  body: Record<string, unknown>
+): Promise<OpenAiResponse> {
   const apiKey = requireOpenAiApiKey();
 
   const response = await fetch(OPENAI_RESPONSES_URL, {
@@ -94,23 +122,150 @@ async function postResponses(body: Record<string, unknown>): Promise<OpenAiRespo
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(280_000),
+    signal: AbortSignal.timeout(ARTICLE_OPENAI_REQUEST_MS),
   });
 
-  const rawText = await response.text();
-  let parsed: OpenAiResponse;
-  try {
-    parsed = JSON.parse(rawText) as OpenAiResponse;
-  } catch {
-    throw new Error(`Article writer returned invalid JSON (${response.status})`);
-  }
+  const parsed = parseOpenAiJson(await response.text(), response.status);
   if (!response.ok) {
     throw new Error(
       parsed.error?.message || `Article writer failed (${response.status})`
     );
   }
-  if (parsed.status && parsed.status !== "completed") {
-    throw new Error(`Article writer ended with status ${parsed.status}`);
+  if (!parsed.id) {
+    throw new Error("Article writer did not return a response id");
+  }
+  return parsed;
+}
+
+export function buildArticleResponsesPayload(
+  input: ArticleWriteInput,
+  options?: { background?: boolean }
+): Record<string, unknown> {
+  return {
+    model: ARTICLE_WRITER_MODEL,
+    reasoning: { effort: "high" },
+    ...(options?.background ? { background: true } : {}),
+    tools: [
+      {
+        type: "web_search",
+        search_context_size: "high",
+        external_web_access: true,
+        search_content_types: ["image", "text"],
+        image_settings: {
+          max_results: MAX_ARTICLE_IMAGES * 3,
+          caption: true,
+        },
+      },
+    ],
+    include: ["web_search_call.results"],
+    input: [
+      {
+        role: "user",
+        content: [{ type: "input_text", text: buildPrompt(input) }],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "store_article",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "seoTitle",
+            "seoDescription",
+            "blogTitle",
+            "bodyHtml",
+            "images",
+            "featuredImage",
+          ],
+          properties: {
+            seoTitle: { type: "string", description: "Meta title, under 60 characters" },
+            seoDescription: {
+              type: "string",
+              description: "Meta description, 140-155 characters",
+            },
+            blogTitle: {
+              type: "string",
+              description: 'Exact store blog title, or "none"',
+            },
+            bodyHtml: {
+              type: "string",
+              description:
+                "Article body as HTML with [[IMAGE_n]] placeholders, no <h1>, no <img>",
+            },
+            images: {
+              type: "array",
+              maxItems: MAX_ARTICLE_IMAGES,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["url", "alt"],
+                properties: {
+                  url: {
+                    type: "string",
+                    description: "Exact image_result.image_url from web_search",
+                  },
+                  alt: { type: "string", description: "Descriptive alt text" },
+                },
+              },
+              description:
+                "Images in placeholder order: entry 1 is [[IMAGE_1]]",
+            },
+            featuredImage: {
+              type: "object",
+              additionalProperties: false,
+              required: ["url", "alt"],
+              properties: {
+                url: {
+                  type: "string",
+                  description:
+                    "Exact image_result.image_url for the cover, or an empty string",
+                },
+                alt: { type: "string", description: "Descriptive alt text" },
+              },
+              description: "Cover image shown on the blog listing",
+            },
+          },
+        },
+      },
+    },
+    store: true,
+    metadata: {
+      articleId: input.articleId,
+      source: "growth-engine-stage7",
+    },
+  };
+}
+
+export async function startArticleWrite(
+  input: ArticleWriteInput
+): Promise<{ responseId: string; response: OpenAiResponse }> {
+  const response = await postResponses(
+    buildArticleResponsesPayload(input, { background: true })
+  );
+  return { responseId: response.id as string, response };
+}
+
+export async function retrieveArticleResponse(
+  responseId: string
+): Promise<OpenAiResponse> {
+  const apiKey = requireOpenAiApiKey();
+  const url = new URL(`${OPENAI_RESPONSES_URL}/${encodeURIComponent(responseId)}`);
+  url.searchParams.append("include[]", "web_search_call.results");
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(ARTICLE_OPENAI_REQUEST_MS),
+  });
+
+  const parsed = parseOpenAiJson(await response.text(), response.status);
+  if (!response.ok) {
+    throw new Error(
+      parsed.error?.message || `Article retrieve failed (${response.status})`
+    );
   }
   return parsed;
 }
@@ -358,101 +513,10 @@ function clampText(raw: unknown, max: number, fallback: string): string {
   return value.slice(0, max);
 }
 
-export async function writeArticle(
-  input: ArticleWriteInput
-): Promise<ArticleWriteResult> {
-  const body = await postResponses({
-    model: ARTICLE_WRITER_MODEL,
-    reasoning: { effort: "high" },
-    tools: [
-      {
-        type: "web_search",
-        search_context_size: "high",
-        external_web_access: true,
-        search_content_types: ["image", "text"],
-        image_settings: {
-          max_results: MAX_ARTICLE_IMAGES * 3,
-          caption: true,
-        },
-      },
-    ],
-    include: ["web_search_call.results"],
-    input: [
-      {
-        role: "user",
-        content: [{ type: "input_text", text: buildPrompt(input) }],
-      },
-    ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "store_article",
-        strict: true,
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          required: [
-            "seoTitle",
-            "seoDescription",
-            "blogTitle",
-            "bodyHtml",
-            "images",
-            "featuredImage",
-          ],
-          properties: {
-            seoTitle: { type: "string", description: "Meta title, under 60 characters" },
-            seoDescription: {
-              type: "string",
-              description: "Meta description, 140-155 characters",
-            },
-            blogTitle: {
-              type: "string",
-              description: 'Exact store blog title, or "none"',
-            },
-            bodyHtml: {
-              type: "string",
-              description:
-                "Article body as HTML with [[IMAGE_n]] placeholders, no <h1>, no <img>",
-            },
-            images: {
-              type: "array",
-              maxItems: MAX_ARTICLE_IMAGES,
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["url", "alt"],
-                properties: {
-                  url: {
-                    type: "string",
-                    description: "Exact image_result.image_url from web_search",
-                  },
-                  alt: { type: "string", description: "Descriptive alt text" },
-                },
-              },
-              description:
-                "Images in placeholder order: entry 1 is [[IMAGE_1]]",
-            },
-            featuredImage: {
-              type: "object",
-              additionalProperties: false,
-              required: ["url", "alt"],
-              properties: {
-                url: {
-                  type: "string",
-                  description:
-                    "Exact image_result.image_url for the cover, or an empty string",
-                },
-                alt: { type: "string", description: "Descriptive alt text" },
-              },
-              description: "Cover image shown on the blog listing",
-            },
-          },
-        },
-      },
-    },
-    store: true,
-  });
-
+export function articleFromOpenAiResponse(
+  input: ArticleWriteInput,
+  body: OpenAiResponse
+): ArticleWriteResult {
   const parsed = parseJsonObject(responseOutputText(body)) as RawArticle | null;
   if (!parsed || typeof parsed.bodyHtml !== "string" || !parsed.bodyHtml.trim()) {
     throw new Error("The writer returned no article body");
@@ -561,4 +625,27 @@ export async function writeArticle(
     featuredImage,
     cost,
   };
+}
+
+export async function writeArticle(
+  input: ArticleWriteInput
+): Promise<ArticleWriteResult> {
+  const started = await startArticleWrite(input);
+  let body = started.response;
+  const deadline = Date.now() + ARTICLE_POLL_MAX_MS;
+
+  while (body.status && body.status !== "completed") {
+    if (isOpenAiWriteFailure(body.status)) {
+      throw new Error(
+        body.error?.message || `Article writer ended with status ${body.status}`
+      );
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Article writer timed out waiting for OpenAI");
+    }
+    await sleep(ARTICLE_POLL_INTERVAL_MS);
+    body = await retrieveArticleResponse(started.responseId);
+  }
+
+  return articleFromOpenAiResponse(input, body);
 }

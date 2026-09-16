@@ -985,12 +985,63 @@ export async function writeArticleApi(
   blogs?: StoreBlog[],
   storeUrl?: string
 ): Promise<{ article: GeneratedArticle; cost: number }> {
-  const response = await fetch("/api/market-research/agent/article", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, projectId, article, blogs, storeUrl }),
-  });
-  return readJson<{ article: GeneratedArticle; cost: number }>(response);
+  if (!projectId) {
+    throw new Error("A project is required to write articles");
+  }
+
+  const payload = { workspaceId, projectId, article, blogs, storeUrl };
+
+  const post = async (mode: "start" | "poll") => {
+    const response = await fetch("/api/market-research/agent/article", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, mode }),
+    });
+    return readJson<{
+      article?: GeneratedArticle;
+      cost?: number;
+      pending?: boolean;
+      status?: string;
+    }>(response);
+  };
+
+  let startError: Error | null = null;
+  try {
+    const started = await post("start");
+    if (started.article) {
+      return { article: started.article, cost: started.cost ?? 0 };
+    }
+  } catch (err) {
+    startError = err instanceof Error ? err : new Error("Writing failed");
+  }
+
+  const deadline = Date.now() + 8 * 60 * 1000;
+  let missingStreak = 0;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    try {
+      const polled = await post("poll");
+      if (polled.article) {
+        return { article: polled.article, cost: polled.cost ?? 0 };
+      }
+      if (polled.status === "missing") {
+        missingStreak += 1;
+        if (startError && missingStreak >= 3) throw startError;
+        continue;
+      }
+      missingStreak = 0;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      const retryable = /failed to fetch|network|timeout|502|503|504|missing/i.test(
+        message
+      );
+      if (startError && missingStreak >= 3) throw startError;
+      if (!retryable) throw err;
+    }
+  }
+
+  throw startError ?? new Error("Timed out waiting for the article");
 }
 
 export type ArticleSyncResponse = {

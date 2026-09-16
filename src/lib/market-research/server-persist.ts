@@ -30,6 +30,7 @@ import {
   saveProjectSliceAdmin,
   type MrSliceName,
 } from "./storage-admin";
+import { reconcileStrategyArticles } from "./agent/article-reconcile";
 import {
   loadLatestMrExtract,
   overlayAndPersistKeywordClassifications,
@@ -137,6 +138,7 @@ export async function loadMrPersistedState(
     projectRows.map(async (row) => {
       const projectId = row.id;
       const state = (row.state && typeof row.state === "object" ? row.state : {}) as MrProjectStateJson;
+      let articleJobs: Record<string, { status: string; error?: string }> = {};
 
       await Promise.all([
         // 1. Niches slice
@@ -424,7 +426,31 @@ export async function loadMrPersistedState(
             );
           }
         })(),
+
+        // 10. Stage 7 OpenAI write jobs — used only to rebuild `generating`
+        // after a refresh; the client never round-trips this slice.
+        (async () => {
+          try {
+            const data = await loadProjectSliceAdmin<
+              Record<string, { status: string; error?: string }>
+            >(admin, workspaceId, projectId, "article-jobs");
+            if (data && typeof data === "object") {
+              articleJobs = data;
+            }
+          } catch {
+            // No jobs file yet.
+          }
+        })(),
       ]);
+
+      const strategy = persisted.strategyByProject[projectId] ?? [];
+      if (strategy.length > 0) {
+        persisted.strategyByProject[projectId] = reconcileStrategyArticles(
+          strategy,
+          persisted.articlesByProject[projectId] ?? {},
+          articleJobs
+        );
+      }
     })
   );
 

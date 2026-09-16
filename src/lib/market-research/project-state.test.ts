@@ -131,6 +131,9 @@ describe("market-research project state", () => {
     expect(mrSlicePath(workspaceId, projectId, "content")).toBe(
       "ws-123/market-research/proj-456/content.json"
     );
+    expect(mrSlicePath(workspaceId, projectId, "article-jobs")).toBe(
+      "ws-123/market-research/proj-456/article-jobs.json"
+    );
     expect(
       mrExtractChunkPath(workspaceId, projectId, "ext-1", "run-1", "100")
     ).toBe("ws-123/market-research/proj-456/extracts/ext-1/run-1/100.json");

@@ -317,26 +317,52 @@ const articleSkuLinkSchema = z.object({
   productName: z.string(),
 });
 
-export const agentArticleBodySchema = z.object({
-  workspaceId: workspaceIdSchema,
-  projectId: projectIdSchema.optional(),
-  article: z.object({
-    id: z.string(),
-    title: z.string().min(1),
-    keyword: z.string().min(1),
-    type: z.enum(["guide", "comparison", "faq", "roundup"]),
-    volume: z.number().optional(),
-    difficulty: z.number().optional(),
-    linksOut: z.array(articleLinkSchema).max(12).optional(),
-    skuLinks: z.array(articleSkuLinkSchema).max(5).optional(),
-  }),
-  /** The storefront's real domain, so the writer knows what "our website" is. */
-  storeUrl: z.string().optional(),
-  blogs: z
-    .array(z.object({ id: z.string(), handle: z.string(), title: z.string() }))
-    .max(100)
-    .optional(),
-});
+export const agentArticleBodySchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    projectId: projectIdSchema,
+    mode: z.enum(["start", "poll"]).optional(),
+    article: z.object({
+      id: z.string().min(1),
+      title: z.string().optional(),
+      keyword: z.string().optional(),
+      type: z.enum(["guide", "comparison", "faq", "roundup"]).optional(),
+      volume: z.number().optional(),
+      difficulty: z.number().optional(),
+      linksOut: z.array(articleLinkSchema).max(12).optional(),
+      skuLinks: z.array(articleSkuLinkSchema).max(5).optional(),
+    }),
+    /** The storefront's real domain, so the writer knows what "our website" is. */
+    storeUrl: z.string().optional(),
+    blogs: z
+      .array(z.object({ id: z.string(), handle: z.string(), title: z.string() }))
+      .max(100)
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    if ((value.mode ?? "start") === "poll") return;
+    if (!value.article.title?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "title is required",
+        path: ["article", "title"],
+      });
+    }
+    if (!value.article.keyword?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "keyword is required",
+        path: ["article", "keyword"],
+      });
+    }
+    if (!value.article.type) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "type is required",
+        path: ["article", "type"],
+      });
+    }
+  });
 
 export const articleSyncBodySchema = z.object({
   workspaceId: workspaceIdSchema,

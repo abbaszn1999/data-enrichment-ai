@@ -4,14 +4,15 @@ import {
   jsonError,
   requireMrWrite,
 } from "@/lib/market-research/api-schema";
-import { writeArticle } from "@/lib/market-research/agent/stage7-article-writer";
+import type { ArticleWriteInput } from "@/lib/market-research/agent/stage7-article-writer";
 import {
-  loadProjectSliceAdmin,
-  saveProjectSliceAdmin,
-} from "@/lib/market-research/storage-admin";
-import type { GeneratedArticle } from "@/components/market-research/workspace-data";
+  finalizeArticleJob,
+  loadArticleJobs,
+  loadGeneratedArticles,
+  startOrResumeArticleJob,
+} from "@/lib/market-research/agent/article-jobs";
 
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 function normalizeStoreUrl(value: string | null | undefined): string {
   const clean = (value ?? "").trim().replace(/\/+$/, "");
@@ -20,9 +21,10 @@ function normalizeStoreUrl(value: string | null | undefined): string {
 }
 
 /**
- * Writes exactly one article per request. The client fires three of these in
- * parallel, which keeps a slow article from stalling the other two and keeps
- * every call inside the platform's function timeout.
+ * Starts one OpenAI article write in the background and returns as soon as
+ * the response id is stored. The client polls the same route until the body
+ * is saved — so an OpenAI completion still finalizes after the original
+ * request or a page refresh dies.
  */
 export async function POST(request: NextRequest) {
   let json: unknown;
@@ -39,8 +41,22 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   const { article, blogs, projectId, workspaceId, storeUrl } = parsed.data;
+  const mode = parsed.data.mode ?? "start";
 
   try {
+    const existing = await loadGeneratedArticles(
+      auth.admin,
+      workspaceId,
+      projectId
+    );
+    const saved = existing[article.id];
+    if (saved?.bodyHtml) {
+      return NextResponse.json(
+        { article: saved, cost: 0, pending: false },
+        { headers: auth.headers }
+      );
+    }
+
     let storeName = "Ecommerce Store";
     const { data: integrationRow } = await auth.admin
       .from("workspace_integrations")
@@ -50,58 +66,80 @@ export async function POST(request: NextRequest) {
     if (integrationRow?.integration_name) {
       storeName = integrationRow.integration_name;
     }
-    // The client already fetched the storefront's real domain once on
-    // entering Stage 7 (via /api/market-research/blogs); this is only a
-    // fallback for a request that somehow arrives without it.
     const resolvedStoreUrl =
-      normalizeStoreUrl(storeUrl) || normalizeStoreUrl(integrationRow?.base_url);
+      normalizeStoreUrl(storeUrl) ||
+      normalizeStoreUrl(integrationRow?.base_url);
 
-    const written = await writeArticle({
+    const input: ArticleWriteInput = {
       articleId: article.id,
-      title: article.title,
-      keyword: article.keyword,
-      type: article.type,
+      title: article.title?.trim() || saved?.seoTitle || article.id,
+      keyword: article.keyword?.trim() || "",
+      type: article.type ?? "guide",
       linksOut: article.linksOut ?? [],
       skuLinks: article.skuLinks ?? [],
       storeName,
       storeUrl: resolvedStoreUrl,
       blogs: blogs ?? [],
-    });
-
-    const generated: GeneratedArticle = {
-      articleId: written.articleId,
-      seoTitle: written.seoTitle,
-      seoDescription: written.seoDescription,
-      blogTitle: written.blogTitle,
-      bodyHtml: written.bodyHtml,
-      images: written.images,
-      featuredImage: written.featuredImage,
     };
 
-    // Merge into the slice so a page refresh mid-batch never loses an article.
-    if (projectId) {
-      try {
-        const existing = (await loadProjectSliceAdmin<
-          Record<string, GeneratedArticle>
-        >(auth.admin, workspaceId, projectId, "articles").catch(
-          () => ({}) as Record<string, GeneratedArticle>
-        )) ?? {};
-        await saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "articles", {
-          ...existing,
-          [generated.articleId]: generated,
-        });
-      } catch (err) {
-        console.error("[article] Error saving articles slice:", err);
-      }
+    const jobs = await loadArticleJobs(auth.admin, workspaceId, projectId);
+    let job = jobs[article.id];
+    if (mode !== "poll") {
+      const started = await startOrResumeArticleJob(
+        auth.admin,
+        workspaceId,
+        projectId,
+        input
+      );
+      job = started.job;
     }
 
+    if (!job) {
+      return NextResponse.json(
+        { pending: true, status: "missing", articleId: article.id },
+        { headers: auth.headers }
+      );
+    }
+
+    if (job.status === "failed") {
+      return jsonError(job.error || "Writing failed", 500);
+    }
+
+    let result: Awaited<ReturnType<typeof finalizeArticleJob>>;
+    try {
+      result = await finalizeArticleJob(
+        auth.admin,
+        workspaceId,
+        projectId,
+        job
+      );
+    } catch (err) {
+      // The response id is already stored. A flaky retrieve must not look like
+      // a failed write — the client will poll and try again.
+      console.error("[api/market-research/agent/article] retrieve:", err);
+      return NextResponse.json(
+        { pending: true, status: job.status, articleId: article.id },
+        { headers: auth.headers }
+      );
+    }
+
+    if (result.status === "ready") {
+      return NextResponse.json(
+        { article: result.article, cost: result.cost, pending: false },
+        { headers: auth.headers }
+      );
+    }
+    if (result.status === "failed") {
+      return jsonError(result.error, 500);
+    }
     return NextResponse.json(
-      { article: generated, cost: written.cost?.totalCost ?? 0 },
+      { pending: true, status: result.openaiStatus, articleId: article.id },
       { headers: auth.headers }
     );
   } catch (err) {
     console.error("[api/market-research/agent/article] Error:", err);
-    const msg = err instanceof Error ? err.message : "Failed to write the article";
+    const msg =
+      err instanceof Error ? err.message : "Failed to write the article";
     return jsonError(msg, 500);
   }
 }
