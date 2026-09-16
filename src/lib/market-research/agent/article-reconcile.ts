@@ -1,4 +1,5 @@
 import type {
+  ArticleStatus,
   GeneratedArticle,
   StrategyArticle,
 } from "@/components/market-research/workspace-data";
@@ -8,7 +9,7 @@ type JobLike = {
   error?: string;
 };
 
-const KEEP_STATUSES = new Set(["synced", "syncing", "scheduled"]);
+const KEEP_STATUSES = new Set<ArticleStatus>(["syncing", "scheduled"]);
 
 /**
  * Stage 7 stores the article plan (`strategy`) and the written bodies

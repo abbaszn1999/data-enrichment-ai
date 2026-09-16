@@ -154,11 +154,12 @@ describe("startArticleWrite", () => {
 
   it("returns the OpenAI response id without waiting for completion", async () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-test");
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ id: "resp_123", status: "queued" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })
+    const fetchMock = vi.fn(
+      async (_url: string | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ id: "resp_123", status: "queued" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
     );
     vi.stubGlobal("fetch", fetchMock);
 

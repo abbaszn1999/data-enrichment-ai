@@ -41,12 +41,12 @@ describe("reconcileStrategyArticles", () => {
     expect(next[0]?.error).toBeUndefined();
   });
 
-  it("does not un-sync an article that already reached the store", () => {
+  it("does not un-schedule an article that already reached the store", () => {
     const next = reconcileStrategyArticles(
-      [row({ status: "synced", category: "Guides" })],
+      [row({ status: "scheduled", category: "Guides" })],
       { "art-1": article }
     );
-    expect(next[0]?.status).toBe("synced");
+    expect(next[0]?.status).toBe("scheduled");
   });
 
   it("keeps generating when a job is in flight and no body exists yet", () => {

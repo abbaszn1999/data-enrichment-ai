@@ -130,7 +130,7 @@ async function markStrategyArticleReady(
   if (!Array.isArray(strategy) || strategy.length === 0) return;
   const next = strategy.map((row) => {
     if (row.id !== articleId) return row;
-    if (row.status === "synced" || row.status === "syncing" || row.status === "scheduled") {
+    if (row.status === "syncing" || row.status === "scheduled") {
       return row;
     }
     return {
