@@ -105,7 +105,7 @@ export default function AdminOverviewPage() {
               {
                 label: "Credits spent",
                 value: creditsSpent?.value ?? "—",
-                hint: `${formatUsd(creditUsdTotal)} at $0.30 / credit`,
+                hint: `${formatUsd(creditUsdTotal)} at $0.50 / credit`,
                 delta: creditDelta,
               },
               {

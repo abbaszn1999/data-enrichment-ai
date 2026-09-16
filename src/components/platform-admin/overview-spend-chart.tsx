@@ -48,7 +48,7 @@ function ChartTooltip({
     <div className="rounded-lg border bg-card px-3 py-2 text-xs shadow-sm">
       <p className="mb-1.5 font-medium text-muted-foreground">{label ? formatTickDate(label) : ""}</p>
       <p className="tabular-nums" style={{ color: CREDIT }}>
-        AI credits ($0.30) {formatUsd(credit)}
+        AI credits ($0.50) {formatUsd(credit)}
       </p>
       <p className="tabular-nums" style={{ color: walletColor }}>
         Wallet {formatUsd(wallet)}
@@ -80,7 +80,7 @@ export function OverviewSpendChart({ series }: { series: OverviewDayPoint[] }) {
     <OverviewCard className="h-full">
       <OverviewPanelHeader
         title="Spend over time"
-        hint="Wallet USD and AI credits at $0.30 each"
+        hint="Wallet USD and AI credits at $0.50 each"
         action={
           <div className="flex gap-3">
             <LegendDot color={CREDIT} label="AI credits" />

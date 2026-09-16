@@ -808,7 +808,7 @@ export async function loadLiveOverview(range: AdminOverviewRange): Promise<LiveO
       tone: pastDue ? "warn" : "ok",
     },
     { label: "MRR (plans)", value: formatKpiUsd(mrr), hint: "Subscriptions only" },
-    { label: "Credit top-up", value: formatKpiUsd(creditTopupUsd), hint: "$0.30 / credit" },
+    { label: "Credit top-up", value: formatKpiUsd(creditTopupUsd), hint: "$0.50 / credit" },
     { label: "Wallet top-up", value: formatKpiUsd(walletTopupUsd), hint: "USD wallet in" },
     { label: "Credits spent", value: creditsSpent.toLocaleString("en-US"), hint: "AI credits out" },
     { label: "Wallet spent", value: formatKpiUsd(walletSpent), hint: "USD wallet out" },

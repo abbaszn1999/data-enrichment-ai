@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildOverviewSeries, halfPeriodDeltaPercent } from "./overview-series";
 
 describe("overview series", () => {
-  it("fills every UTC day and converts credit spend at $0.30", () => {
+  it("fills every UTC day and converts credit spend at $0.50", () => {
     const now = new Date("2026-08-28T15:00:00.000Z");
     const series = buildOverviewSeries(
       "7d",
@@ -14,7 +14,7 @@ describe("overview series", () => {
     expect(series[0]?.date).toBe("2026-08-22");
     expect(series[6]?.date).toBe("2026-08-28");
     expect(series[6]?.credits).toBe(10);
-    expect(series[6]?.creditUsd).toBe(3);
+    expect(series[6]?.creditUsd).toBe(5);
     expect(series[5]?.walletUsd).toBe(4.5);
   });
 

@@ -36,7 +36,7 @@ import {
   type PublicCheckoutPlan,
 } from "@/lib/billing/plans";
 
-const CREDIT_TOPUP_USD_PER_CREDIT = 0.3;
+const CREDIT_TOPUP_USD_PER_CREDIT = 0.5;
 const CREDIT_TOPUP_MIN_CREDITS = 100;
 const CREDIT_TOPUP_PRESETS = [500, 1000, 2500, 5000, 10000];
 
@@ -331,7 +331,7 @@ export default function SubscriptionPage() {
         })}
       </div>
 
-      {/* Extra Credits — buy any amount, priced at a flat $0.30/credit */}
+      {/* Extra Credits — buy any amount, priced at a flat $0.50/credit */}
       {isActive && !isTrialing && (
         <div className="relative overflow-hidden rounded-2xl border-2 border-[#F76D01]/20 bg-gradient-to-br from-[#F76D01]/[0.07] via-background to-[#400095]/[0.06] p-5 sm:p-7">
           <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-[#F76D01]/10 blur-3xl" />
@@ -358,7 +358,7 @@ export default function SubscriptionPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2 mt-1">
                 {[
                   { icon: InfinityIcon, text: "Never expires while your subscription is active" },
-                  { icon: Wallet, text: "Flat $0.30 per credit — no hidden fees" },
+                  { icon: Wallet, text: "Flat $0.50 per credit — no hidden fees" },
                   { icon: ShieldCheck, text: "Secure checkout, processed by Stripe" },
                   { icon: Sparkles, text: "Buy exactly what you need, any amount" },
                 ].map((item, i) => (
@@ -430,7 +430,7 @@ export default function SubscriptionPage() {
                   <div className="text-3xl font-extrabold tracking-tight text-[#F76D01]">
                     ${topupUsd.toFixed(2)}
                   </div>
-                  <div className="text-[10px] text-muted-foreground">$0.30 / credit · one-time</div>
+                  <div className="text-[10px] text-muted-foreground">$0.50 / credit · one-time</div>
                 </div>
               </div>
 

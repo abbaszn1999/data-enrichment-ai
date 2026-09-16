@@ -4,10 +4,9 @@ import { buildPublicCheckoutPlans } from "@/lib/billing/plans";
 import { roundCredits } from "@/lib/format-credits";
 import { assertStripeKeyAllowed, getStripeKeyMode } from "@/lib/stripe-mode";
 
-/** Flat rate for the free-form credit top-up — derived from (and replacing)
- *  the old fixed packs, which all priced out to exactly $0.30/credit
- *  (Basic 1,000/$300, Standard 2,000/$600, Premium 3,000/$900). */
-export const CREDIT_TOPUP_USD_PER_CREDIT = 0.3;
+/** Flat rate for extra AI credits. Set above Growth (~$0.47) and Pro (~$0.36)
+ *  included-credit rates so overage is not cheaper than the subscription. */
+export const CREDIT_TOPUP_USD_PER_CREDIT = 0.5;
 export const CREDIT_TOPUP_MIN_CREDITS = 100;
 
 export function creditsToUsd(credits: number): number {
