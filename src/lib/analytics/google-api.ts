@@ -5,6 +5,7 @@ import type {
   Ga4Overview,
   Ga4PageRow,
   Ga4TimeSeriesRow,
+  GscDimensionFilterGroup,
   GscPageRow,
   GscTimeSeriesRow,
   GscTotals,
@@ -71,7 +72,8 @@ export async function querySearchConsole(
   siteUrl: string,
   startDate: string,
   endDate: string,
-  dimensions: string[] = []
+  dimensions: string[] = [],
+  dimensionFilterGroups?: GscDimensionFilterGroup[]
 ): Promise<GscApiRow[]> {
   const encoded = encodeURIComponent(siteUrl);
   const data = await googleJson<{ rows?: GscApiRow[] }>(
@@ -83,6 +85,7 @@ export async function querySearchConsole(
         startDate,
         endDate,
         ...(dimensions.length ? { dimensions } : {}),
+        ...(dimensionFilterGroups?.length ? { dimensionFilterGroups } : {}),
         rowLimit: 25000,
         searchType: "web",
         aggregationType: dimensions.includes("page") ? "byPage" : "auto",

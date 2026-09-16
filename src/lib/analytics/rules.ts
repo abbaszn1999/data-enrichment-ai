@@ -3,6 +3,8 @@ import type {
   AnalyticsRuleConfig,
   AnalyticsRulePattern,
   Ga4FilterExpression,
+  GscDimensionFilter,
+  GscDimensionFilterGroup,
 } from "./types";
 
 export const DEFAULT_ANALYTICS_RULE_CONFIG: AnalyticsRuleConfig = {
@@ -140,6 +142,58 @@ export function parseAnalyticsRuleConfig(input: unknown): {
   };
   const errors = validateAnalyticsRulePatterns(config);
   return { config: errors.length ? null : config, errors };
+}
+
+/**
+ * GSC filters against the full page URL (`https://host/path`). Path-anchored
+ * regexes like `^/product/[^/]+$` match our client-side pathname candidates,
+ * so rewrite the `^/` anchor to also allow the scheme+host prefix Google uses.
+ */
+export function adaptGscPageRegex(pattern: string): string {
+  if (pattern.startsWith("^/")) {
+    return `^https?://[^/]+${pattern.slice(1)}`;
+  }
+  return pattern;
+}
+
+/**
+ * Server-side Search Console filters. `undefined` means "no filter / all
+ * pages". `null` means "match nothing" (include mode with no patterns).
+ *
+ * Groups are OR'd; filters inside a group are AND'd — the same shape as
+ * Google's Performance report page filter.
+ */
+export function buildGscDimensionFilterGroups(
+  config: AnalyticsRuleConfig
+): GscDimensionFilterGroup[] | null | undefined {
+  if (!config.isActive) return undefined;
+  const patterns = enabledPatterns(config);
+  if (!patterns.length) {
+    return config.filterMode === "include" ? null : undefined;
+  }
+
+  const include = config.filterMode === "include";
+  const regex = config.patternType === "regex";
+  const operator: GscDimensionFilter["operator"] = include
+    ? regex
+      ? "includingRegex"
+      : "contains"
+    : regex
+      ? "excludingRegex"
+      : "notContains";
+
+  const filters: GscDimensionFilter[] = patterns.map((rule) => ({
+    dimension: "page",
+    operator,
+    expression: regex ? adaptGscPageRegex(rule.value) : rule.value,
+  }));
+
+  // De Morgan: exclude+OR → AND of negatives; exclude+AND → OR of negatives.
+  const asOrGroups = include ? config.patterns.logic === "OR" : config.patterns.logic === "AND";
+  if (asOrGroups) {
+    return filters.map((filter) => ({ groupType: "and", filters: [filter] }));
+  }
+  return [{ groupType: "and", filters }];
 }
 
 export function buildGa4FilterExpression(config: AnalyticsRuleConfig): Ga4FilterExpression | undefined {

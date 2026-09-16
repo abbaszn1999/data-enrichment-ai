@@ -1,19 +1,27 @@
 import { AnalyticsHttpError } from "./access";
-import { aggregateGscTimeSeriesByDate, totalsFromGscPages } from "./aggregate";
 import {
   mapGa4Overview,
   mapGa4Pages,
   mapGa4TimeSeries,
   mapGscPages,
+  mapGscTimeSeries,
+  mapGscTotals,
   querySearchConsole,
   runGa4Report,
   GA4_OVERVIEW_METRICS,
   GA4_PAGE_METRICS,
 } from "./google-api";
-import { buildGa4FilterExpression, filterPagesByRules } from "./rules";
+import { buildGa4FilterExpression, buildGscDimensionFilterGroups, filterPagesByRules } from "./rules";
 import { getAnalyticsRules } from "./rules-store";
-import { isAnalyticsPageType, type AnalyticsPageType, type AnalyticsRuleConfig } from "./types";
+import { isAnalyticsPageType, type AnalyticsPageType, type AnalyticsRuleConfig, type GscTotals } from "./types";
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+const EMPTY_GSC_TOTALS: GscTotals = {
+  clicks: 0,
+  impressions: 0,
+  ctr: 0,
+  position: 0,
+};
 
 export function parseAnalyticsPageTypeParam(value: string | null): AnalyticsPageType | null {
   if (!value) return null;
@@ -45,7 +53,11 @@ export async function queryFilteredGscPages(
   endDate: string,
   rules: AnalyticsRuleConfig
 ) {
-  const rows = await querySearchConsole(token, siteUrl, startDate, endDate, ["page"]);
+  const groups = buildGscDimensionFilterGroups(rules);
+  if (groups === null) return [];
+  const rows = await querySearchConsole(token, siteUrl, startDate, endDate, ["page"], groups);
+  // Google already applied the page filter; keep a local pass so regex
+  // pathname anchors stay consistent with the rule preview in the UI.
   return filterPagesByRules(mapGscPages(rows), rules);
 }
 
@@ -56,8 +68,10 @@ export async function queryFilteredGscTotals(
   endDate: string,
   rules: AnalyticsRuleConfig
 ) {
-  const pages = await queryFilteredGscPages(token, siteUrl, startDate, endDate, rules);
-  return totalsFromGscPages(pages);
+  const groups = buildGscDimensionFilterGroups(rules);
+  if (groups === null) return EMPTY_GSC_TOTALS;
+  const rows = await querySearchConsole(token, siteUrl, startDate, endDate, [], groups);
+  return mapGscTotals(rows);
 }
 
 export async function queryFilteredGscTimeSeries(
@@ -67,14 +81,13 @@ export async function queryFilteredGscTimeSeries(
   endDate: string,
   rules: AnalyticsRuleConfig
 ) {
-  const rows = await querySearchConsole(token, siteUrl, startDate, endDate, ["date", "page"]);
-  const mapped = rows.map((row) => ({
-    date: row.keys?.[0] || "",
-    page: row.keys?.[1] || "",
-    clicks: row.clicks || 0,
-    impressions: row.impressions || 0,
-  }));
-  return aggregateGscTimeSeriesByDate(filterPagesByRules(mapped, rules));
+  const groups = buildGscDimensionFilterGroups(rules);
+  if (groups === null) return [];
+  // Date-only + a server-side page filter is what GSC's Performance chart
+  // does. Fetching date×page and slicing locally hits the 25k row cap and
+  // under-counts large catalogs.
+  const rows = await querySearchConsole(token, siteUrl, startDate, endDate, ["date"], groups);
+  return mapGscTimeSeries(rows);
 }
 
 export async function queryFilteredGa4Overview(

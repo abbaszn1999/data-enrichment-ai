@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { aggregateGscTimeSeriesByDate, totalsFromGscPages } from "./aggregate";
 import {
   analyticsPageCandidates,
+  adaptGscPageRegex,
   buildGa4FilterExpression,
+  buildGscDimensionFilterGroups,
   describeAnalyticsRules,
   filterPagesByRules,
   pageMatchesRules,
@@ -99,6 +101,114 @@ describe("filterPagesByRules", () => {
       config()
     );
     expect(rows).toEqual([{ page: "/collections/a", clicks: 2 }]);
+  });
+});
+
+describe("buildGscDimensionFilterGroups", () => {
+  it("sends a single contains filter for include + one simple pattern", () => {
+    expect(
+      buildGscDimensionFilterGroups(
+        config({
+          patterns: { logic: "OR", rules: [{ value: "/product/", enabled: true }] },
+        })
+      )
+    ).toEqual([
+      {
+        groupType: "and",
+        filters: [{ dimension: "page", operator: "contains", expression: "/product/" }],
+      },
+    ]);
+  });
+
+  it("ORs include patterns as separate groups", () => {
+    const groups = buildGscDimensionFilterGroups(
+      config({
+        patterns: {
+          logic: "OR",
+          rules: [
+            { value: "/product/", enabled: true },
+            { value: "/p/", enabled: true },
+          ],
+        },
+      })
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups?.[0].filters[0].expression).toBe("/product/");
+    expect(groups?.[1].filters[0].expression).toBe("/p/");
+  });
+
+  it("ANDs include patterns inside one group", () => {
+    expect(
+      buildGscDimensionFilterGroups(
+        config({
+          patterns: {
+            logic: "AND",
+            rules: [
+              { value: "/product/", enabled: true },
+              { value: "summer", enabled: true },
+            ],
+          },
+        })
+      )
+    ).toEqual([
+      {
+        groupType: "and",
+        filters: [
+          { dimension: "page", operator: "contains", expression: "/product/" },
+          { dimension: "page", operator: "contains", expression: "summer" },
+        ],
+      },
+    ]);
+  });
+
+  it("turns exclude + OR into AND of notContains", () => {
+    expect(
+      buildGscDimensionFilterGroups(
+        config({
+          filterMode: "exclude",
+          patterns: {
+            logic: "OR",
+            rules: [
+              { value: "/product/", enabled: true },
+              { value: "/p/", enabled: true },
+            ],
+          },
+        })
+      )
+    ).toEqual([
+      {
+        groupType: "and",
+        filters: [
+          { dimension: "page", operator: "notContains", expression: "/product/" },
+          { dimension: "page", operator: "notContains", expression: "/p/" },
+        ],
+      },
+    ]);
+  });
+
+  it("rewrites path-anchored regex so it can match a full GSC page URL", () => {
+    expect(adaptGscPageRegex("^/collections/[^/]+$")).toBe("^https?://[^/]+/collections/[^/]+$");
+    expect(
+      buildGscDimensionFilterGroups(
+        config({
+          patternType: "regex",
+          patterns: { logic: "OR", rules: [{ value: "^/collections/[^/]+$", enabled: true }] },
+        })
+      )?.[0].filters[0]
+    ).toEqual({
+      dimension: "page",
+      operator: "includingRegex",
+      expression: "^https?://[^/]+/collections/[^/]+$",
+    });
+  });
+
+  it("returns null when include mode has no patterns, undefined when inactive", () => {
+    expect(
+      buildGscDimensionFilterGroups(
+        config({ patterns: { logic: "OR", rules: [{ value: "/x/", enabled: false }] } })
+      )
+    ).toBeNull();
+    expect(buildGscDimensionFilterGroups(config({ isActive: false }))).toBeUndefined();
   });
 });
 

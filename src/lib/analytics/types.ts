@@ -93,6 +93,17 @@ export type AnalyticsRulesRecord = AnalyticsRuleConfig & {
   pageType: AnalyticsPageType;
 };
 
+export type GscDimensionFilter = {
+  dimension: "page";
+  operator: "contains" | "equals" | "notContains" | "notEquals" | "includingRegex" | "excludingRegex";
+  expression: string;
+};
+
+export type GscDimensionFilterGroup = {
+  groupType: "and";
+  filters: GscDimensionFilter[];
+};
+
 export type Ga4FilterExpression = {
   filter?: {
     fieldName: string;
