@@ -556,6 +556,7 @@ export function FreeAssessmentShell() {
       highlightedCollectionIds: [],
     };
     setProjects((prev) => [...prev, project]);
+    setReviewFlow(null);
     setActiveProjectId(project.id);
     setOpenedMaxByProject((prev) => ({ ...prev, [project.id]: 1 }));
     setStage(1);
@@ -1466,9 +1467,16 @@ export function FreeAssessmentShell() {
     return <PageLoader />;
   }
 
-  const lockedViewStage: MarketResearchStage = reviewFlow
-    ? (briefStageFromFlow(reviewFlow) ?? (Math.min(stage, 3) as MarketResearchStage))
-    : (Math.min(stage, 3) as MarketResearchStage);
+  /**
+   * Never point at a stage the project has not opened yet — every stage panel
+   * is guarded by `openedMax`, so an out-of-range view stage renders an empty
+   * results pane instead of the current stage.
+   */
+  const currentViewStage = Math.min(stage, 3, openedMax) as MarketResearchStage;
+  const briefViewStage = reviewFlow ? briefStageFromFlow(reviewFlow) : null;
+  const lockedViewStage: MarketResearchStage = briefViewStage
+    ? (Math.min(briefViewStage, openedMax) as MarketResearchStage)
+    : currentViewStage;
   const messages = activeProject
     ? (chatByProject[activeProject.id] ?? [])
     : [];

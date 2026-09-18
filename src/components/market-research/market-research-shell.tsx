@@ -840,8 +840,15 @@ export function MarketResearchShell() {
     stage,
     openedMax
   ) as MarketResearchStage;
-  const lockedViewStage: MarketResearchStage = reviewFlow
-    ? (briefStageFromFlow(reviewFlow) ?? currentStage)
+  /**
+   * A brief flow can only point at a stage the project has actually opened.
+   * Without this clamp a stale `reviewFlow` (e.g. "catalog" → stage 2) on a
+   * project still at `openedMax` 1 leaves every stage panel's guard false and
+   * renders an empty results pane.
+   */
+  const briefViewStage = reviewFlow ? briefStageFromFlow(reviewFlow) : null;
+  const lockedViewStage: MarketResearchStage = briefViewStage
+    ? (Math.min(briefViewStage, openedMax) as MarketResearchStage)
     : currentStage;
 
   useLayoutEffect(() => {
@@ -4006,6 +4013,7 @@ export function MarketResearchShell() {
       };
       pendingAutoAnalyzeId.current = project.id;
       setProjects((prev) => [...prev, project]);
+      setReviewFlow(null);
       setActiveProjectId(project.id);
       setOpenedMaxByProject((prev) => ({ ...prev, [project.id]: 1 }));
       setStageByProject((prev) => ({ ...prev, [project.id]: 1 }));
