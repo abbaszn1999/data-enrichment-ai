@@ -31,12 +31,25 @@ import {
   formatProductCount,
   sumProductsForCollections,
   type MarketResearchProject,
+  type MockCollection,
+  type MockExcludedItem,
   type MockNiche,
+  type MockSubcategory,
 } from "./mock-data";
 import { cn } from "@/lib/utils";
 
-/** Minimum SKUs recommended to dominate a niche or PLP in catalog scope. */
-const MIN_SCOPE_SKUS = 500;
+/** Default minimum SKUs recommended to dominate a niche or PLP in catalog
+ *  scope — overridable per project via the `skuFloor`/`onChangeSkuFloor`
+ *  persistent setting below. */
+const MIN_SCOPE_SKUS = 100;
+
+const EXCLUSION_LABEL: Record<MockExcludedItem["reason"], string> = {
+  promotional: "Promotional",
+  "attribute-only": "Attribute-only",
+  duplicate: "Duplicate",
+  empty: "Empty",
+  unresolved: "Unresolved",
+};
 
 function belowSkuFloor(count: number, floor: number) {
   return count < floor;
@@ -65,6 +78,9 @@ function SkuFloorTooltip({
 type StageSelectPanelProps = {
   project: MarketResearchProject;
   niches?: MockNiche[];
+  /** Non-taxonomic PLPs the Stage 1 agent excluded — shown as a read-only,
+   *  collapsed footer; never selectable, never counted. */
+  excludedItems?: MockExcludedItem[];
   preparing?: boolean;
   onChangeSelection: (collectionIds: string[]) => void;
   /** Stage 1 result carried into this stage (receipt line). */
@@ -74,12 +90,20 @@ type StageSelectPanelProps = {
   nextDisabled?: boolean;
   onNext?: () => void;
   readOnly?: boolean;
+  /**
+   * Minimum SKUs a category/subcategory/PLP needs to be selectable —
+   * a persistent per-project setting (default 100). Falls back to local
+   * state when no `onChangeSkuFloor` is given (e.g. mock/demo usage).
+   */
+  skuFloor?: number;
+  onChangeSkuFloor?: (value: number) => void;
 };
 
 /** Stage 2 — interactive catalog scope from Stage 1 niches. */
 export function StageSelectPanel({
   project,
   niches,
+  excludedItems,
   preparing = false,
   onChangeSelection,
   lockedNicheCount,
@@ -88,13 +112,17 @@ export function StageSelectPanel({
   nextDisabled = false,
   onNext,
   readOnly = false,
+  skuFloor: skuFloorProp,
+  onChangeSkuFloor,
 }: StageSelectPanelProps) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [hintOpen, setHintOpen] = useState(false);
-  // TEMP_TEST_SKU_FLOOR — testing-only override for the 500 SKU floor below.
-  // Remove this state + the "TEST" control in the header once QA is done.
-  const [skuFloor, setSkuFloor] = useState(MIN_SCOPE_SKUS);
+  const [excludedOpen, setExcludedOpen] = useState(false);
+  // Uncontrolled fallback for callers that don't pass a persisted skuFloor.
+  const [localSkuFloor, setLocalSkuFloor] = useState(MIN_SCOPE_SKUS);
+  const skuFloor = skuFloorProp ?? localSkuFloor;
+  const setSkuFloor = onChangeSkuFloor ?? setLocalSkuFloor;
   const activeNiches = useMemo(
     () => (Array.isArray(niches) ? niches : []),
     [niches]
@@ -209,6 +237,183 @@ export function StageSelectPanel({
     onChangeSelection(Array.from(next));
   };
 
+  /** Selecting a thin subcategory (< skuFloor across its own PLPs) is
+   *  blocked entirely — same rule as a niche/category, one level deeper. */
+  const toggleSubcategory = (ids: string[], totalProductCount: number) => {
+    if (readOnly || belowSkuFloor(totalProductCount, skuFloor)) return;
+    const next = new Set(selected);
+    const allOn = ids.every((id) => next.has(id));
+    if (allOn) ids.forEach((id) => next.delete(id));
+    else ids.forEach((id) => next.add(id));
+    onChangeSelection(Array.from(next));
+  };
+
+  /** One selectable PLP row — shared by the flat and nested (subcategory) layouts. */
+  function renderCollectionRow(collection: MockCollection) {
+    const isOn = selected.has(collection.id);
+    const plpThin = belowSkuFloor(collection.productCount, skuFloor);
+    return (
+      <li key={collection.id}>
+        <button
+          type="button"
+          onClick={() => toggleCollection(collection.id, collection.productCount)}
+          disabled={readOnly || plpThin}
+          aria-pressed={isOn}
+          aria-label={
+            plpThin ? `${collection.name} does not have enough SKUs to select` : undefined
+          }
+          className={cn(
+            "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
+            readOnly || plpThin ? "cursor-not-allowed" : "hover:bg-muted/40",
+            plpThin && "bg-amber-500/[0.06] opacity-80",
+            isOn && !plpThin && "bg-primary/5",
+            isOn && plpThin && "bg-amber-500/10"
+          )}
+        >
+          <SkuFloorTooltip count={collection.productCount} floor={skuFloor}>
+            <span
+              tabIndex={0}
+              className={cn(
+                "flex h-4 w-4 shrink-0 items-center justify-center rounded border outline-none",
+                plpThin &&
+                  "ring-2 ring-amber-500/50 ring-offset-1 ring-offset-background",
+                isOn
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : plpThin
+                    ? "border-amber-500 bg-amber-500/15"
+                    : "border-muted-foreground/40 bg-background"
+              )}
+              aria-hidden
+            >
+              {isOn ? <Check className="h-3 w-3" /> : null}
+            </span>
+          </SkuFloorTooltip>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
+              <span className="text-sm truncate">{collection.name}</span>
+              {collection.coversNiche ? (
+                <span className="shrink-0 rounded-full border border-border/70 px-1.5 text-[9px] text-muted-foreground">
+                  Covers niche
+                </span>
+              ) : null}
+              {collection.kind === "brand" ? (
+                <span className="shrink-0 rounded-full border border-border/70 px-1.5 text-[9px] text-muted-foreground">
+                  Brand
+                </span>
+              ) : null}
+            </span>
+            {collection.description ? (
+              <span className="block text-[11px] text-muted-foreground truncate">
+                {collection.description}
+              </span>
+            ) : null}
+            <span className="block text-[10px] text-muted-foreground/80 truncate">
+              {collection.plpPath}
+              {collection.lastSyncedLabel ? ` · ${collection.lastSyncedLabel}` : ""}
+            </span>
+          </span>
+          <span
+            className={cn(
+              "text-xs tabular-nums shrink-0",
+              plpThin ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground"
+            )}
+          >
+            {formatProductCount(collection.productCount)}
+          </span>
+        </button>
+      </li>
+    );
+  }
+
+  /** One subcategory row — a checkbox rollup over its own PLPs, using the
+   *  deduplicated `productCount` the taxonomy engine already computed. */
+  function renderSubcategoryRow(niche: MockNiche, sub: MockSubcategory) {
+    const subIds = sub.collections.map((c) => c.id);
+    const on = subIds.filter((id) => selected.has(id)).length;
+    const subState = on === 0 ? "none" : on === subIds.length ? "all" : "some";
+    const subThin = belowSkuFloor(sub.productCount, skuFloor);
+    const collapseKey = `${niche.id}::${sub.id}`;
+    const subCollapsed = Boolean(collapsed[collapseKey]) && !query;
+
+    return (
+      <div key={sub.id} className="border-t border-border/40 first:border-t-0">
+        <div
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 pl-6",
+            subThin ? "bg-amber-500/[0.05]" : "bg-muted/10"
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => toggleSubcategory(subIds, sub.productCount)}
+            disabled={readOnly || subThin}
+            className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-not-allowed disabled:opacity-70"
+            aria-label={
+              readOnly
+                ? `${sub.name} collections`
+                : subThin
+                  ? `${sub.name} does not have enough SKUs to select`
+                  : `Select all collections in ${sub.name}`
+            }
+            aria-pressed={subState === "all"}
+          >
+            <SkuFloorTooltip count={sub.productCount} floor={skuFloor}>
+              <span
+                tabIndex={0}
+                className={cn(
+                  "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border outline-none",
+                  subThin &&
+                    "ring-2 ring-amber-500/50 ring-offset-1 ring-offset-background",
+                  subState === "all"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : subState === "some"
+                      ? "border-primary bg-primary/15 text-primary"
+                      : subThin
+                        ? "border-amber-500 bg-amber-500/15"
+                        : "border-muted-foreground/40 bg-background"
+                )}
+                aria-hidden
+              >
+                {subState === "all" ? (
+                  <Check className="h-2.5 w-2.5" />
+                ) : subState === "some" ? (
+                  <Minus className="h-2.5 w-2.5" />
+                ) : null}
+              </span>
+            </SkuFloorTooltip>
+            <span className="text-xs font-medium truncate">{sub.name}</span>
+          </button>
+          <span
+            className={cn(
+              "text-[11px] tabular-nums shrink-0",
+              subThin ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground"
+            )}
+          >
+            {formatProductCount(sub.productCount)} products
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setCollapsed((prev) => ({ ...prev, [collapseKey]: !prev[collapseKey] }))
+            }
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground"
+            aria-label={subCollapsed ? `Expand ${sub.name}` : `Collapse ${sub.name}`}
+            aria-expanded={!subCollapsed}
+          >
+            <ChevronDown
+              className={cn("h-3.5 w-3.5 transition-transform", subCollapsed && "-rotate-90")}
+            />
+          </button>
+        </div>
+        {subCollapsed ? null : (
+          <ul className="divide-y divide-border/40 pl-4">
+            {sub.collections.map((collection) => renderCollectionRow(collection))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-1 min-h-0 space-y-4 overflow-y-auto pb-4">
@@ -238,33 +443,29 @@ export function StageSelectPanel({
               Check this before you select
             </button>
 
-            {/* TEMP_TEST_SKU_FLOOR — testing-only control. Delete this whole
-                block (and the `skuFloor` state + belowSkuFloor(..., skuFloor)
-                calls above) once QA on the SKU floor is finished. */}
+            {/* Persistent per-project merchant setting — minimum SKUs a
+                category/subcategory/PLP needs to be selectable below. */}
             {readOnly ? null : (
-              <div className="ml-auto flex items-center gap-1.5 rounded-full border border-dashed border-amber-500/60 bg-amber-500/10 px-2 py-1">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-                  Test
-                </span>
-                <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                  SKU floor
+              <div className="ml-auto flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-2.5 py-1">
+                <label className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+                  Min SKUs to select
                   <input
                     type="number"
                     min={0}
-                    step={50}
+                    step={10}
                     value={skuFloor}
                     onChange={(e) =>
                       setSkuFloor(Math.max(0, Number(e.target.value) || 0))
                     }
                     className="h-5 w-16 rounded border border-border/60 bg-background px-1.5 text-[10px] tabular-nums outline-none focus:border-primary"
-                    aria-label="Temporary testing SKU floor override"
+                    aria-label="Minimum SKUs required to select a category, subcategory, or collection"
                   />
                 </label>
                 {skuFloor !== MIN_SCOPE_SKUS ? (
                   <button
                     type="button"
                     onClick={() => setSkuFloor(MIN_SCOPE_SKUS)}
-                    className="text-[10px] font-medium text-amber-700 underline dark:text-amber-400"
+                    className="text-[10px] font-medium text-primary underline"
                   >
                     reset
                   </button>
@@ -391,90 +592,13 @@ export function StageSelectPanel({
                       />
                     </button>
                   </div>
-                  {isCollapsed ? null : (
+                  {isCollapsed ? null : niche.subcategories && niche.subcategories.length > 0 ? (
+                    <div className="divide-y divide-border/50">
+                      {niche.subcategories.map((sub) => renderSubcategoryRow(niche, sub))}
+                    </div>
+                  ) : (
                     <ul className="divide-y divide-border/50">
-                      {niche.collections.map((collection) => {
-                        const isOn = selected.has(collection.id);
-                        const plpThin = belowSkuFloor(collection.productCount, skuFloor);
-                        return (
-                          <li key={collection.id}>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                toggleCollection(collection.id, collection.productCount)
-                              }
-                              disabled={readOnly || plpThin}
-                              aria-pressed={isOn}
-                              aria-label={
-                                plpThin
-                                  ? `${collection.name} does not have enough SKUs to select`
-                                  : undefined
-                              }
-                              className={cn(
-                                "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
-                                readOnly || plpThin
-                                  ? "cursor-not-allowed"
-                                  : "hover:bg-muted/40",
-                                plpThin && "bg-amber-500/[0.06] opacity-80",
-                                isOn && !plpThin && "bg-primary/5",
-                                isOn && plpThin && "bg-amber-500/10"
-                              )}
-                            >
-                              <SkuFloorTooltip count={collection.productCount} floor={skuFloor}>
-                                <span
-                                  tabIndex={0}
-                                  className={cn(
-                                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border outline-none",
-                                    plpThin &&
-                                      "ring-2 ring-amber-500/50 ring-offset-1 ring-offset-background",
-                                    isOn
-                                      ? "border-primary bg-primary text-primary-foreground"
-                                      : plpThin
-                                        ? "border-amber-500 bg-amber-500/15"
-                                        : "border-muted-foreground/40 bg-background"
-                                  )}
-                                  aria-hidden
-                                >
-                                  {isOn ? <Check className="h-3 w-3" /> : null}
-                                </span>
-                              </SkuFloorTooltip>
-                              <span className="min-w-0 flex-1">
-                                <span className="flex items-center gap-2">
-                                  <span className="text-sm truncate">
-                                    {collection.name}
-                                  </span>
-                                  {collection.coversNiche ? (
-                                    <span className="shrink-0 rounded-full border border-border/70 px-1.5 text-[9px] text-muted-foreground">
-                                      Covers niche
-                                    </span>
-                                  ) : null}
-                                </span>
-                                {collection.description ? (
-                                  <span className="block text-[11px] text-muted-foreground truncate">
-                                    {collection.description}
-                                  </span>
-                                ) : null}
-                                <span className="block text-[10px] text-muted-foreground/80 truncate">
-                                  {collection.plpPath}
-                                  {collection.lastSyncedLabel
-                                    ? ` · ${collection.lastSyncedLabel}`
-                                    : ""}
-                                </span>
-                              </span>
-                              <span
-                                className={cn(
-                                  "text-xs tabular-nums shrink-0",
-                                  plpThin
-                                    ? "font-medium text-amber-700 dark:text-amber-400"
-                                    : "text-muted-foreground"
-                                )}
-                              >
-                                {formatProductCount(collection.productCount)}
-                              </span>
-                            </button>
-                          </li>
-                        );
-                      })}
+                      {niche.collections.map((collection) => renderCollectionRow(collection))}
                     </ul>
                   )}
                 </div>
@@ -482,6 +606,43 @@ export function StageSelectPanel({
             })
           )}
         </div>
+
+        {excludedItems && excludedItems.length > 0 ? (
+          <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-4 py-3">
+            <button
+              type="button"
+              onClick={() => setExcludedOpen((v) => !v)}
+              className="flex w-full items-center justify-between gap-2 text-left"
+              aria-expanded={excludedOpen}
+            >
+              <span className="text-xs font-medium text-muted-foreground">
+                {excludedItems.length} PLP{excludedItems.length === 1 ? "" : "s"} excluded — not
+                real product categories
+              </span>
+              <ChevronDown
+                className={cn(
+                  "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                  !excludedOpen && "-rotate-90"
+                )}
+              />
+            </button>
+            {excludedOpen ? (
+              <ul className="mt-2 space-y-1">
+                {excludedItems.map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground"
+                  >
+                    <span className="truncate">{item.name}</span>
+                    <span className="shrink-0 rounded-full border border-border/60 px-1.5 py-0.5 text-[10px]">
+                      {EXCLUSION_LABEL[item.reason]}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="shrink-0 border-t border-border/70 bg-background/95 pt-3 mt-1 space-y-3">
@@ -588,10 +749,11 @@ export function StageSelectPanel({
                 Our recommendation
               </p>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Don&apos;t select multiple broad niches at once. The narrower
-                and deeper you go, the faster you can dominate — a small,
-                specific niche is easier to rank for and easier to fully own
-                than a wide, generic one.
+                Don&apos;t select a whole category at once. A category can mix
+                several different search intents together — pick a single
+                subcategory instead. It&apos;s narrower, so it&apos;s faster
+                to rank for and easier to fully own than the broad category it
+                lives in.
               </p>
             </div>
 
@@ -604,19 +766,12 @@ export function StageSelectPanel({
                   <span className="rounded-full border border-border/70 px-2 py-0.5">
                     Eyewear
                   </span>
-                  <span className="text-[10px]">broad — many competitors</span>
+                  <span className="text-[10px]">category — several intents mixed</span>
                 </div>
-                <div className="flex items-center gap-1.5 pl-4 text-xs text-muted-foreground">
-                  <ChevronRight className="h-3 w-3 shrink-0" />
-                  <span className="rounded-full border border-border/70 px-2 py-0.5">
-                    Women&apos;s Eyewear
-                  </span>
-                  <span className="text-[10px]">narrower — still crowded</span>
-                </div>
-                <div className="flex items-center gap-1.5 pl-8 text-xs">
+                <div className="flex items-center gap-1.5 pl-4 text-xs">
                   <ChevronRight className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
                   <span className="rounded-full border border-amber-500/50 bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400">
-                    Women&apos;s Gucci Sunglasses
+                    Women&apos;s Sunglasses
                   </span>
                   <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-semibold text-white">
                     Best pick
@@ -624,12 +779,12 @@ export function StageSelectPanel({
                 </div>
               </div>
               <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                If &ldquo;Women&apos;s Gucci Sunglasses&rdquo; has enough SKUs on
-                its own, it&apos;s the strongest choice — it&apos;s the most
-                specific. Select it, take every broad term generated for it in
-                the next stage, and build your collections around it, instead
-                of spreading the same effort across the wider Eyewear or
-                Women&apos;s Eyewear levels.
+                If &ldquo;Women&apos;s Sunglasses&rdquo; has enough SKUs on its
+                own, it&apos;s the strongest choice — it&apos;s a single,
+                clear search intent. Select the subcategory, take every broad
+                term generated for it in the next stage, and build your
+                collections around it, instead of spreading the same effort
+                across the whole Eyewear category.
               </p>
             </div>
           </div>

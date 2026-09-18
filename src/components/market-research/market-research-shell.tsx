@@ -55,7 +55,10 @@ import {
   collectionPushCostUsd,
   estimateProbeCostUsd,
 } from "@/lib/market-research/cost";
-import { assignUuidProjectIds } from "@/lib/market-research/project-state";
+import {
+  assignUuidProjectIds,
+  DEFAULT_SKU_FLOOR,
+} from "@/lib/market-research/project-state";
 import { clearSelectedContent } from "@/lib/market-research/collection-sheet";
 import {
   appendKeywordRows,
@@ -126,6 +129,7 @@ import {
   stage3AgentReady,
   type MarketResearchProject,
   type MarketResearchStage,
+  type MockExcludedItem,
   type MockNiche,
   type MockSeedRow,
   type NicheReading,
@@ -161,6 +165,7 @@ import {
 
 const DEFAULT_STORE = "Demo Shopify store";
 const EMPTY_IDS: string[] = [];
+const EMPTY_EXCLUDED_ITEMS: MockExcludedItem[] = [];
 
 function msgId() {
   return `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -316,6 +321,17 @@ export function MarketResearchShell() {
   >({});
   const [structuredNichesByProject, setStructuredNichesByProject] = useState<
     Record<string, MockNiche[]>
+  >({});
+  /** Non-taxonomic PLPs the Stage 1 taxonomy agent excluded — visible in
+   *  Tab 2, never selectable, zero SKUs. */
+  const [taxonomyExcludedByProject, setTaxonomyExcludedByProject] = useState<
+    Record<string, MockExcludedItem[]>
+  >({});
+  /** Minimum SKUs a category/subcategory/PLP needs to be selectable in Tab
+   *  2 — persistent per-project setting (default 100), promoted from a
+   *  client-only QA test control. */
+  const [skuFloorByProject, setSkuFloorByProject] = useState<
+    Record<string, number>
   >({});
   const [productsByProject, setProductsByProject] = useState<
     Record<string, MarketResearchProduct[]>
@@ -520,6 +536,8 @@ export function MarketResearchShell() {
     setSeedSelectionByProject(saved.seedSelectionByProject ?? {});
     setNichesByProject(saved.nichesByProject ?? {});
     setStructuredNichesByProject(saved.structuredNichesByProject ?? {});
+    setTaxonomyExcludedByProject(saved.taxonomyExcludedByProject ?? {});
+    setSkuFloorByProject(saved.skuFloorByProject ?? {});
     setSeedRowsByProject(saved.seedRowsByProject ?? {});
     setMarketByProject(saved.marketByProject ?? {});
     setProbesByProject(saved.probesByProject ?? {});
@@ -645,6 +663,8 @@ export function MarketResearchShell() {
       seedSelectionByProject,
       nichesByProject,
       structuredNichesByProject,
+      taxonomyExcludedByProject,
+      skuFloorByProject,
       // Never round-tripped through autosave: a project's real product
       // records can run into the tens of thousands, far past what a JSON
       // blob (or localStorage) should carry, and a stale client copy could
@@ -695,6 +715,8 @@ export function MarketResearchShell() {
       seedSelectionByProject,
       nichesByProject,
       structuredNichesByProject,
+      taxonomyExcludedByProject,
+      skuFloorByProject,
       seedRowsByProject,
       marketByProject,
       probesByProject,
@@ -784,6 +806,12 @@ export function MarketResearchShell() {
   const activeMarket = activeProject
     ? (marketByProject[activeProject.id] ?? DEFAULT_MARKET)
     : DEFAULT_MARKET;
+  const activeSkuFloor = activeProject
+    ? (skuFloorByProject[activeProject.id] ?? DEFAULT_SKU_FLOOR)
+    : DEFAULT_SKU_FLOOR;
+  const activeExcludedItems = activeProject
+    ? (taxonomyExcludedByProject[activeProject.id] ?? EMPTY_EXCLUDED_ITEMS)
+    : EMPTY_EXCLUDED_ITEMS;
   const activeProbes = useMemo(
     () => (activeProject ? (probesByProject[activeProject.id] ?? {}) : {}),
     [activeProject, probesByProject]
@@ -1487,6 +1515,12 @@ export function MarketResearchShell() {
         delete next[projectId];
         return next;
       });
+      setTaxonomyExcludedByProject((prev) => {
+        if (!(projectId in prev)) return prev;
+        const next = { ...prev };
+        delete next[projectId];
+        return next;
+      });
       setSeedRowsByProject((prev) => {
         if (!(projectId in prev)) return prev;
         const next = { ...prev };
@@ -1547,6 +1581,10 @@ export function MarketResearchShell() {
           setStructuredNichesByProject((prev) => ({
             ...prev,
             [projectId]: res.structuredNiches,
+          }));
+          setTaxonomyExcludedByProject((prev) => ({
+            ...prev,
+            [projectId]: res.excludedItems ?? [],
           }));
           if (res.storeName && res.storeName !== "Connected Store" && res.storeName !== "Demo Store") {
             setProjects((prev) =>
@@ -3748,6 +3786,20 @@ export function MarketResearchShell() {
           (sum, c) => sum + (c.productCount || 0),
           0
         );
+        // Preserve the nested subcategory tree only when BOTH sides came from
+        // the taxonomy agent — subcategory ids are unique across the whole
+        // tree, so this is a plain union. If either side is a legacy flat
+        // niche, subcategory grouping can't be reconstructed for the merge,
+        // so the result falls back to the flat collections view above.
+        const combinedSubcategories =
+          Array.isArray(target.subcategories) && Array.isArray(source.subcategories)
+            ? [
+                ...target.subcategories,
+                ...source.subcategories.filter(
+                  (sub) => !target.subcategories!.some((t) => t.id === sub.id)
+                ),
+              ]
+            : undefined;
         return {
           ...prev,
           [projectId]: current
@@ -3758,6 +3810,7 @@ export function MarketResearchShell() {
                     ...sn,
                     productCount: combinedProductCount,
                     collections: combinedCollections,
+                    subcategories: combinedSubcategories,
                   }
                 : sn
             ),
@@ -4307,6 +4360,14 @@ export function MarketResearchShell() {
                       <StageSelectPanel
                         project={activeProject}
                         niches={activeStructuredNiches}
+                        excludedItems={activeExcludedItems}
+                        skuFloor={activeSkuFloor}
+                        onChangeSkuFloor={(value) => {
+                          setSkuFloorByProject((prev) => ({
+                            ...prev,
+                            [activeProject.id]: value,
+                          }));
+                        }}
                         preparing={
                           preparingStage2 || !stage2ReadyForActive
                         }

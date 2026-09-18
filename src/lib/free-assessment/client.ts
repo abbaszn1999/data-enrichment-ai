@@ -238,6 +238,23 @@ export type AgentAnalyzeResponse = {
       productCount: number;
       description?: string;
     }>;
+    subcategories?: Array<{
+      id: string;
+      name: string;
+      productCount: number;
+      collections: Array<{
+        id: string;
+        name: string;
+        productCount: number;
+        description?: string;
+      }>;
+    }>;
+    overlapping?: boolean;
+  }>;
+  excludedItems?: Array<{
+    id: string;
+    name: string;
+    reason: "promotional" | "attribute-only" | "duplicate" | "empty" | "unresolved";
   }>;
   agentConclusion: string;
   beats: Array<{ at: number; text: string }>;

@@ -54,9 +54,18 @@ export type FaProjectStateJson = {
   strategy?: StrategyArticle[];
   articles?: Record<string, GeneratedArticle>;
   extractId?: string;
+  /**
+   * Minimum SKUs a category/subcategory/PLP needs to be selectable in Tab
+   * 2 — a persistent per-project setting, promoted from a client-only QA
+   * test control. Free Assessment defaults to 0 (no floor).
+   */
+  skuFloor?: number;
   /** Fingerprints of the heavy slices stored in object storage, so autosave can skip unchanged uploads. */
   sliceHashes?: Record<string, string>;
 };
+
+/** Default minimum SKUs to select a category/subcategory/PLP in Tab 2. */
+export const DEFAULT_SKU_FLOOR = 0;
 
 export type FaProjectRow = {
   id: string;
@@ -141,6 +150,10 @@ export function rowsToPersisted(
       next.seedRowsByProject[id] = state.seedRows;
     }
     next.marketByProject[id] = row.market || "us-en";
+    next.skuFloorByProject[id] =
+      typeof state.skuFloor === "number" && state.skuFloor >= 0
+        ? state.skuFloor
+        : DEFAULT_SKU_FLOOR;
     if (state.probes) next.probesByProject[id] = state.probes;
     if (Array.isArray(state.manualSeeds)) {
       next.manualSeedsByProject[id] = state.manualSeeds;
@@ -245,6 +258,7 @@ export function projectStateSlice(
     extractId: persisted.extractIdByProject[projectId],
     strategy: persisted.strategyByProject?.[projectId] ?? [],
     articles: persisted.articlesByProject?.[projectId] ?? {},
+    skuFloor: persisted.skuFloorByProject[projectId] ?? DEFAULT_SKU_FLOOR,
   };
 }
 
@@ -276,6 +290,9 @@ export function remapPersistedIds(
     stage3ScopeByProject: remapRecord(persisted.stage3ScopeByProject),
     seedSelectionByProject: remapRecord(persisted.seedSelectionByProject),
     nichesByProject: remapRecord(persisted.nichesByProject),
+    structuredNichesByProject: remapRecord(persisted.structuredNichesByProject),
+    taxonomyExcludedByProject: remapRecord(persisted.taxonomyExcludedByProject),
+    skuFloorByProject: remapRecord(persisted.skuFloorByProject),
     marketByProject: remapRecord(persisted.marketByProject),
     probesByProject: remapRecord(persisted.probesByProject),
     manualSeedsByProject: remapRecord(persisted.manualSeedsByProject),

@@ -59,7 +59,7 @@ export function parseSkillMarkdown(content: string, filename = ""): MarketResear
   const rawThinking = String(parsed.thinking || "medium").toLowerCase();
   if (rawThinking === "minimal") {
     throw new Error(
-      `Gemini 3.7 Flash rejects 'minimal' thinking_level. Invalid config in ${filename}`
+      `Gemini rejects 'minimal' thinking_level. Invalid config in ${filename}`
     );
   }
 

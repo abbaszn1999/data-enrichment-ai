@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
         saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "niches", {
           niches: discovery.niches,
           structuredNiches: discovery.structuredNiches,
+          excludedItems: discovery.excludedItems ?? [],
         }).catch((err) => console.error("[analyze] Error saving niches slice:", err)),
       ]);
 
@@ -59,6 +60,7 @@ export async function POST(request: NextRequest) {
       await markSliceSavedAdmin(auth.admin, projectId, "niches", {
         niches: discovery.niches,
         structuredNiches: discovery.structuredNiches,
+        excludedItems: discovery.excludedItems ?? [],
       });
     }
 
@@ -70,6 +72,7 @@ export async function POST(request: NextRequest) {
         isMock: catalog.isMock,
         niches: discovery.niches,
         structuredNiches: discovery.structuredNiches,
+        excludedItems: discovery.excludedItems ?? [],
         agentConclusion: discovery.agentConclusion,
         beats: discovery.beats,
         isAiGenerated: discovery.isAiGenerated,

@@ -1,292 +1,387 @@
 ---
 id: 01-niches
-version: 3.0.0
+version: 4.0.0
 stage: 1
 thinking: high
-tools: [read_store_collections, read_store_brands, fetch_site_pages, propose_niches]
-input_schema: NichesInput
-output_schema: NichesOutput
+tools: [read_store_collections, read_store_brands, fetch_site_pages, propose_taxonomy]
+input_schema: TaxonomyCandidateList
+output_schema: TaxonomyPassAOutput | TaxonomyPassBOutput
 triggers:
   - "Stage 1 of the Collection Builder"
-  - "discover parent niches"
-  - "map store collections to niches"
+  - "build the searchable category/subcategory tree"
+  - "classify store collections and brands into categories"
 not_for:
-  - "recommending which niche to dominate (that is a later stage)"
+  - "recommending which category to dominate (that is a later stage)"
   - "generating keyword seeds or variations (Stage 3)"
   - "classifying keyword search intent (Stage 4)"
+  - "computing product counts or SKU totals (always done in code, never by you)"
 ---
 
-# Stage 1 — Store Catalog Extractor & Niche Discovery
+# Stage 1 — Searchable Category Taxonomy
 
 ## Goal
 
-Read the merchant's entire existing catalog structure — every collection, category, and
-brand/vendor PLP the storefront already has, exactly as it exists today — and organize all of it
-into the small set of broad parent commercial niches the store actually sells in. Nothing is
-invented, nothing is recommended yet. "Done" means every single input item is assigned to exactly
-one broad parent niche, product counts roll up correctly, and a merchant reading the summary
-immediately recognizes their own store.
+You are not mapping the merchant's own website structure back to itself. Two different stores can
+sell the exact same inventory and organize it completely differently — one lists "Dresses", another
+splits "Long Dresses" and "Short Dresses" as separate collections with no shared parent. If Stage 1
+just mirrored each store's own labels, the same underlying business would get a different research
+outcome depending on how its CMS happens to be organized. That is the bug this stage exists to fix.
 
-This is the foundation of the whole Collection Builder pipeline. An inaccurate niche map here
-corrupts every later stage — Stage 2 scope selection, Stage 3 seed generation, and everything
-downstream inherits whatever grouping mistake happens here. Precision is worth more than speed.
+Your job is to reclassify every collection, category, and brand/vendor PLP the storefront has into
+your OWN category → subcategory tree — organized the way real shoppers actually search for this
+merchandise on Google, in the language those shoppers use, not the way the merchant's CMS happens to
+group it. Two stores selling the same inventory under different CMS structures should converge on
+the same (or near-identical) tree. Nothing is invented — every category and subcategory must be
+backed by real inventory in the input — and nothing is left unaccounted for.
+
+This is the single most consequential stage in the whole Collection Builder pipeline. Every later
+stage — scope selection, seed generation, keyword extraction, collection clustering, content
+planning — inherits whatever tree you build here. A generic or CMS-mirrored label here produces a
+dead seed three stages later; a wrong category/subcategory split here either hides real research
+opportunities behind an artificial 500-SKU wall or double-counts the same inventory under two
+different totals. Precision here is worth far more than speed.
+
+You run in two separate calls against the same input catalog:
+
+- **Pass A — build the tree.** You see every candidate's name, its breadcrumb path, its kind, and
+  its product count. You output ONLY the category/subcategory label tree — no item ids at all.
+- **Pass B — place items onto the tree.** You receive the fixed tree Pass A already produced (you
+  never rename, merge, or invent a node here) plus one batch of candidate ids, and you place each id
+  onto the tree or exclude it with a reason.
+
+Every rule below applies to whichever pass you are currently running — the per-call instructions
+tell you which one that is and give you the exact JSON schema to fill in.
 
 ---
 
-## Input Context
+## Output language — CRITICAL
 
-You receive one flat list of items. Every item is real, selectable, and product-backed — there is
-no separate "signal-only" input anymore. Items come in two kinds, distinguished only by `kind`:
+Every category name, subcategory name, and conclusion sentence you write must be in the SAME
+language/script the store's own PLP names are written in — this is passed to you explicitly as the
+required output language for this run. If the catalog is Arabic, the whole tree is Arabic, judged by
+how Arabic-speaking shoppers actually search — not translated from an English mental model. A
+French catalog gets French category names using French search phrasing, not French words forced into
+English category-then-subcategory word order. Never mix languages within one tree, and never emit a
+category or subcategory name in a different language than the run's required output language.
+
+---
+
+## Input you receive
+
+Every candidate (a collection, a WooCommerce category, or a brand/vendor PLP) has already been
+prepared for you — deep WooCommerce descendants (three or more levels down) have already been folded
+into their nearest depth-0/1 ancestor by code, so you never see them and never need to reconstruct
+hierarchy yourself. What you see per candidate:
 
 | Field | Meaning |
 |---|---|
-| `id` | Unique item id |
-| `name` | Display name, e.g. `"Educational Toys"` or `"Ray-Ban"` |
-| `productCount` | Products currently inside it — a real count for both collections and brands |
-| `description` | Optional description, when the store has one (brands rarely do) |
-| `parentId` | **WooCommerce collections only.** The id of the direct parent category. Omitted for top-level categories, brand items, and always for Shopify. |
-| `depth` | **WooCommerce collections only.** `0` = top-level category, `1` = subcategory, `2` = sub-subcategory. Always `0`/omitted for Shopify and for brand items. |
-| `kind` | `"brand"` when this item is a brand/vendor PLP (a Shopify `vendor` filter page, or a WooCommerce brand taxonomy/attribute archive). **Omitted** for every normal collection/category. |
+| `id` | Unique item id (Pass B only — Pass A never sees ids) |
+| `name` | The store's own display name, e.g. `"Educational Toys"`, `"Ray-Ban"`, `"قبعات أطفال"` |
+| `taxonomyPath` | Breadcrumb from the top-level WooCommerce ancestor down to this item (e.g. `["Women", "Clothing", "Dresses"]`); a single-entry path (just its own name) for Shopify collections and every brand PLP, which have no real hierarchy |
+| `kind` | `"brand"` for a brand/vendor PLP, `"collection"` for everything else |
+| `productCount` | Real product count — context for how significant this item is, never something you output a count for yourself |
 
-**Platform shapes differ on purpose:**
-- **Shopify** — collections are flat. There is no `parentId` or `depth`; every collection is
-  independent and manually or automatically curated.
-- **WooCommerce** — categories are a real tree. `depth` and `parentId` tell you exactly where
-  each category sits, and you must use that hierarchy, not re-derive it from the name.
-
-**Brand/vendor PLPs (`kind: "brand"`) are a normal item, not a separate signal.** A brand page is
-a real, selectable PLP on the store with its own real product count — it gets classified into a
-niche and placed in `collectionIds` exactly like a collection. The only thing that's different
-about it is *how* you figure out where it belongs (see below) and that its name can never become
-the niche's own name.
+You never compute or output a product count anywhere. All SKU math — including deduplicating
+overlapping inventory — happens in code after your placement decisions.
 
 ---
 
-## Step-by-Step Process
+## PART A — Building the category/subcategory tree
 
-1. **Read every item** — collections, categories, and brand PLPs alike. Do not sample, cap, or
-   skip any; every item must be assigned to a niche in the final output.
-2. **Resolve the WooCommerce hierarchy first, if present.** For every collection with `depth > 0`,
-   locate its ancestor chain via `parentId` up to the top-level (`depth === 0`) category. Decide
-   the niche for the top-level ancestor, then carry that same niche down to every descendant.
-   Brand items never have a `parentId` — skip this step for them.
-3. **Classify each collection/category** into a broad commercial niche using its name and
-   description first. When the name is generic or ambiguous, use nearby collections and any
-   brand PLPs already resolved in that niche as a confirming signal (e.g. a generic "Accessories"
-   collection sitting beside `Ray-Ban`/`Oakley`/`Maui Jim` confirms Eyewear).
-4. **Classify each brand PLP (`kind: "brand"`) using your own knowledge of what that brand sells.**
-   A brand's name carries no commercial-category signal by itself — `"Ray-Ban"` doesn't lexically
-   say "eyewear." Use your general knowledge (you know Ray-Ban/Oakley/Maui Jim sell
-   sunglasses/eyewear, LEGO/Hasbro/Mattel sell toys, Garmin/Casio sell watches/electronics, etc.)
-   to place it. If you don't recognize a brand and nothing else on the store resolves it, place it
-   under the store's largest/most dominant niche rather than inventing a niche for one brand.
-5. **Merge into the smallest accurate set of broad parent niches.** A store selling only sunglasses
-   and eyeglasses should produce one niche (`Eyewear`), not two.
-6. **Aggregate product counts** per niche by summing every item (collections and brands alike)
-   assigned to it — never estimate or round.
-7. **Write the `agentConclusion`** as a short, natural, professional sentence a merchant would
-   actually want to read — state the number of niches found and the total item count covered.
+### The category test
 
----
+A category name must be something a shopper actually types into Google to shop for this kind of
+product — a product type, not an audience, a department, or the merchant's own internal grouping.
+`"Laptops"` passes — people search it directly. `"Women"` fails — nobody searches just "women"; it is
+an audience, not a product. `"Apple Products"` fails — it is the merchant's internal department, not
+how anyone searches; the real category is what people search for, e.g. `"Laptops"`, with Apple
+handled as a brand (see brand placement below). When a `taxonomyPath` shows a department-like ancestor
+(`"Electronics" > "Apple Products" > "MacBooks"`), look past the department layer to the actual
+product type shoppers search for.
 
-## Decision Rules
+### Audience qualification — language-neutral
 
-- **Single-niche stores.** If every item resolves to the same broad niche, output exactly one
-  niche containing all of them. Do not invent a second niche to look more thorough.
-- **Subcategories (WooCommerce, `depth > 0`).** Always inherit the niche of the top-level
-  ancestor. Only break this rule when a subcategory is unmistakably a different commercial
-  vertical from its parent with nothing in common (e.g. a `"Gift Cards"` subcategory under
-  `"Toys"` — treat this as the rare exception, never the default assumption).
-- **Ambiguous or generic collection names** (`"Accessories"`, `"Featured"`, `"New Arrivals"`,
-  `"Sale"`). In this order: (a) check the description, (b) check which niche's items it sits
-  beside in the same parent category, (c) check whether a nearby brand PLP confirms a niche,
-  (d) if still unresolved, group it under the store's largest/most dominant niche rather than
-  creating a vague catch-all niche.
-- **Brand PLPs are classified by what they sell, not by wording.** Rely on your own knowledge of
-  the brand's typical commercial category. Exactly like a collection, a brand PLP is a single item
-  that lands in exactly one niche's `collectionIds` — never duplicate the same brand id into more
-  than one niche, even for a brand that commercially spans multiple categories; pick its single
-  most dominant/primary vertical on this store.
-- **Multiple unrelated niches.** Real multi-vertical stores exist (e.g. Toys + Sunglasses +
-  Watches on one storefront). Report every distinct niche you find; do not force unrelated
-  verticals into one niche for tidiness.
-- **Every item must land somewhere.** If a collection or brand genuinely fits nowhere, place it
-  under the closest/largest existing niche rather than dropping it — never emit an
-  "Uncategorized" niche unless truly nothing else fits and every other option has been exhausted.
+An audience alone is never a category or subcategory (`"Women"`, `"Kids"` on their own both fail).
+An audience combined with a product noun is a real, searchable subcategory — but the RULE is
+"qualify the product with the audience," not "put the audience word first," because word order is
+not consistent across languages. In English that produces `"Kids Hats"`; the equivalent Arabic
+phrasing is `"قبعات أطفال"` (product noun first, audience second) — both are correct applications of
+the same rule in their own language's natural search phrasing. Judge every audience+product pairing
+by whether a real shopper in that language would type it that way, not by copying English word order
+into another script.
 
----
+### Subcategory distinctness
 
-## Strict Constraints — NEVER
+Two subcategories under the same category must never share search intent — if one keyword would
+satisfy a shopper looking for either one, they are the same subcategory and must be merged. This is
+the core fix for the classic CMS-mirroring failure: one store's `"Long Dresses"` + `"Short Dresses"`
+and another store's single `"Dresses"` are the SAME shopper intent (nobody meaningfully searches
+"long dresses" vs. "short dresses" as different shopping missions in most catalogs) and should
+produce the same subcategory, `"Dresses"`, in both stores. Only split into separate subcategories
+when the split reflects a genuinely different, independently-searched intent — e.g. `"Wedding
+Dresses"` vs. `"Evening Dresses"` are different occasions with different real search volume and
+different shopper intent, so they stay separate even though both are dresses.
 
-- **NEVER** invent a collection, a brand, a product count, or a niche that isn't backed by the
-  actual input data.
-- **NEVER** use a brand/vendor name as a niche NAME — the niche name is always a generic
-  commercial term (e.g. `"Eyewear"`), even when that niche is dominated by one or two brand PLPs.
-  A brand's own item `name` inside `collectionIds` is unaffected by this — the brand item itself
-  keeps its real name; only the *niche* name must stay generic.
-- **NEVER** rename a brand PLP's `name`, alter its casing/spelling, or merge two different brands
-  into one item.
-- **NEVER** create a niche named after a WooCommerce subcategory when its parent category already
-  defines the correct broad niche.
-- **NEVER** recommend which niche the merchant should pursue or dominate — that decision belongs
-  to a later stage. Stage 1 only organizes what already exists.
-- **NEVER** leave an item unassigned in the final `structuredNiches` output — every input id
-  (collection or brand) must appear in exactly one niche's `collectionIds`.
-- **NEVER** split one obvious commercial niche into multiple near-duplicate niches (e.g.
-  `"Sunglasses"` and `"Sun Glasses"` as two separate niches) — merge them.
+Do not let a store's own SKU distribution decide this. Whether a store has 200 or 6,000 dresses
+never changes whether "Long Dresses" and "Short Dresses" are one subcategory or two — that is a pure
+search-intent judgment, decided the same way regardless of catalog size. (The 500-SKU selection
+floor in Stage 2 is applied on top of whatever tree you build here — it never feeds back into how
+you build it.)
+
+### Non-taxonomic content — route to `excluded`, never invent a home for it
+
+Not everything on a storefront is real taxonomic content. The following must never become a
+category or subcategory, and must never be folded into an unrelated one just because they need to go
+somewhere (Pass B routes these to `excluded` with a reason):
+
+- **Promotional/merchandising PLPs** (`"Sale"`, `"New Arrivals"`, `"Best Sellers"`, `"Shop All"`,
+  `"Black Friday"`). These are curated cross-sections of inventory that already lives elsewhere in
+  the catalog — including them anywhere would double-count real product totals. Reason:
+  `"promotional"`.
+- **Bare attribute PLPs** (`"Red"`, `"Cotton"`, `"Size 12"`, `"Under 500 SAR"`). An attribute alone
+  describes a filter, not a product type. Reason: `"attribute-only"`. The same attribute COMBINED
+  with a product noun can be a real subcategory when the combination has genuinely distinct search
+  intent — `"Christmas Dresses"` is a real, searched-for subcategory (a specific occasion changes
+  what shoppers are looking for); bare `"Ramadan"` with no product noun attached is not (reason:
+  `"attribute-only"`). Judge each one on whether the combination itself is something people actually
+  search, not on whether the words sound festive.
+- **Cryptic or internal-only names** (`"SS24 Drop 2"`, `"Collection A"`). Resolve in this order: (1)
+  the `taxonomyPath` breadcrumb, (2) the item's own description if present, (3) which resolved
+  sibling items it sits beside. Only if all three genuinely fail to resolve it, route it to
+  `excluded` with reason `"unresolved"` — never guess it into your largest category just to make it
+  disappear from the leftover list. An unresolved item that stays visibly excluded is honest; one
+  silently absorbed into the wrong category corrupts that category's real total.
+- **Empty or duplicate housekeeping PLPs** (a legacy collection with 0 products, an exact duplicate
+  of another PLP under a different slug). Reasons: `"empty"`, `"duplicate"`.
 
 ---
 
-## Output Contract
+## PART B — Placing items onto the tree
 
-Strict JSON matching `NichesOutput`:
+### Brand placement
 
+Brands get their own category, never folded into a product category. On a single-vertical store,
+use one category (e.g. `"Brands"`); on a genuine multi-vertical store, use one brand category per
+vertical (e.g. `"Women Brands"`, `"Electronics Brands"`) rather than one giant mixed bucket. Mark
+every brand category `"overlapping": true` in Pass A — its inventory already counts once inside a
+product category, so code excludes brand categories from the store-wide unique total while still
+using their real counts for their own selection floor. Each individual brand becomes its own
+subcategory under that category (`"Ray-Ban"`, `"Maje"`) — never grouped together into one generic
+"brands" subcategory, since a merchant may want to research one brand specifically.
+
+A brand/vendor PLP (`kind: "brand"`) gets exactly one placement: primary under its own brand
+subcategory. Do not also try to place a pure brand PLP under a product category — it has no separate
+product-category identity of its own to place there.
+
+A **brand+product PLP** is different: a real collection (not a brand/vendor page) whose own name
+names both a brand and a product type, e.g. a collection literally called `"Nike Shoes"`. That one
+item gets two assignments: `primary: true` under the product subcategory (`"Shoes"`), `primary:
+false` under the brand subcategory (`"Nike"`). It is reachable from both places, but only counted
+once — the same principle used for `"Apple laptops"` below.
+
+### Sibling and cross-category overlap
+
+Two items with no hierarchy link between them can still represent the same physical inventory —
+this is the case code cannot resolve on its own, because it has no way to know two independently
+named collections share products, only you do, from your knowledge of the brand and the product.
+`"Laptops"` and `"Apple laptops"` are a canonical example: `"Apple laptops"` is a brand-filtered cut
+of the same MacBooks already inside `"Laptops"`. Give the narrower/duplicate one `primary: false`
+and the broader one `primary: true`, mirroring the brand+product pattern above even when neither
+item is itself a brand PLP. If you cannot tell whether two items overlap, do not guess — placing
+each as its own `primary: true` assignment (treating them as genuinely separate) is the safer
+default than inventing a false duplicate relationship.
+
+### Coverage
+
+Every item id in your current batch must appear at least once, in `assignments` or `excluded` — an
+item that is neither placed nor excluded is a gap, and code will treat it as a discovery failure
+and retry it. Never leave an id out of your response just because you were unsure — place it under
+your best-supported subcategory, or exclude it with the most accurate reason, but always output
+something for every id you were given.
+
+---
+
+## Strict constraints — NEVER
+
+- **NEVER** invent a category, subcategory, or item that isn't backed by real input data.
+- **NEVER** use a department, an audience alone, or the merchant's own internal grouping name as a
+  category — apply the category test above every time.
+- **NEVER** rename, merge, or invent a tree node during Pass B — the tree handed to you is already
+  final for this run; Pass B only places items onto it or excludes them.
+- **NEVER** create two subcategories under the same category that share search intent — merge them.
+- **NEVER** silently fold a promotional, attribute-only, cryptic, empty, or duplicate PLP into a real
+  category just to avoid using `excluded` — that inflates that category's real total with inventory
+  that isn't actually distinct from what it already contains.
+- **NEVER** output a product count, a total, or any SKU math yourself — that is always computed in
+  code from your placement decisions.
+- **NEVER** write a category/subcategory name, or the `agentConclusion`, in a different
+  language/script than this run's required output language.
+- **NEVER** leave an item id out of both `assignments` and `excluded` in a Pass B batch.
+- **NEVER** mark more than one of an item's assignments `primary: true` — across the WHOLE tree, one
+  item has exactly one primary home, even when it is legitimately reachable from two places.
+
+---
+
+## Worked examples
+
+### Example A — Flat Shopify, CMS-mirroring failure fixed
+
+**Input (English store, flat collections):**
 ```json
-{
-  "niches": [
-    {
-      "id": "slug-id",
-      "name": "Broad Parent Niche Name",
-      "summary": "One sentence explaining what this broad parent space covers on the store.",
-      "collectionIds": ["id1", "id2"]
-    }
-  ],
-  "agentConclusion": "Conversational conclusion summary written in professional plain English."
-}
+[
+  { "id": "col-1", "name": "Dresses", "taxonomyPath": ["Dresses"], "productCount": 4200 },
+  { "id": "col-2", "name": "Long Dresses", "taxonomyPath": ["Long Dresses"], "productCount": 1800 },
+  { "id": "col-3", "name": "Short Dresses", "taxonomyPath": ["Short Dresses"], "productCount": 1600 },
+  { "id": "col-4", "name": "Wedding Dresses", "taxonomyPath": ["Wedding Dresses"], "productCount": 300 }
+]
 ```
 
-| Field | Rule |
-|---|---|
-| `niches[].id` | URL-safe slug derived from the niche name |
-| `niches[].name` | The broad commercial niche (e.g. `"Eyewear"`, `"Toys"`) — never a brand, never a subcategory name |
-| `niches[].summary` | One factual sentence, no promotional language |
-| `niches[].collectionIds` | Every item id (collection **or** brand) assigned to this niche — union across all niches must equal the full input item set exactly once each |
-| `agentConclusion` | Plain English, states niche count and total item count, no niche recommendation |
+**Pass A reasoning:** `"Dresses"` passes the category test and anchors the category. `"Long
+Dresses"` and `"Short Dresses"` share the exact same shopper intent as plain `"Dresses"` — nobody
+meaningfully searches those as separate missions — so they merge into one subcategory, `"Dresses"`.
+`"Wedding Dresses"` is a genuinely distinct, independently-searched occasion, so it stays its own
+subcategory.
 
-The caller reconstructs each niche's full item list (including brand PLPs, each carrying its own
-real `productCount`) from `collectionIds` — you never need a separate brands field.
-
----
-
-## Quality Gates
-
-Before returning, verify:
-
-- [ ] Every input item id (collection or brand) appears in exactly one niche's `collectionIds` — no duplicates, no omissions.
-- [ ] No niche NAME, `summary`, or `agentConclusion` sentence uses a brand/vendor name as the niche's own identity.
-- [ ] Every brand PLP was placed using knowledge of what it commercially sells, not by matching its name against category keywords.
-- [ ] No brand PLP id appears in more than one niche's `collectionIds` — exactly one niche each, same rule as collections.
-- [ ] No WooCommerce subcategory (`depth > 0`) was placed in a different niche than its top-level ancestor, unless it is a genuine unrelated vertical.
-- [ ] Product counts per niche equal the sum of every assigned item's `productCount` (collections and brands together) — no rounding, no invented numbers.
-- [ ] `agentConclusion` names the niche count and total item count and makes no dominate/pursue recommendation.
-- [ ] The niche set is the smallest accurate grouping — no near-duplicate niches for the same commercial concept.
-
----
-
-## Error Handling & Fallbacks
-
-- **No brand PLPs in the input.** Perfectly normal — most stores have no discoverable brand
-  taxonomy. Classify by name, description, and hierarchy alone; do not treat their absence as a
-  failure.
-- **An unrecognized brand name.** If you have no knowledge of what a brand sells and nothing on
-  the store disambiguates it, place it under the store's largest/most dominant niche rather than
-  guessing a specific one or inventing a new niche for it.
-- **No description on a collection.** Fall back to the name alone, then hierarchy position, then
-  nearby items as a signal, in that order.
-- **Malformed or missing hierarchy fields.** If `parentId` points to an id not present in the
-  input, treat that collection as top-level (`depth = 0`) rather than failing.
-- **Zero items.** Should not occur — the caller only invokes this skill with a non-empty catalog.
-  If it ever happens, return an empty `niches` array with an `agentConclusion` stating nothing was
-  found, rather than fabricating placeholder niches.
-
----
-
-## Worked Examples
-
-### Example A — Shopify (flat collections + brand PLPs classified by knowledge)
-
-**Input:**
+**Pass A output:**
 ```json
 {
-  "storeName": "OpticWorld",
-  "collections": [
-    { "id": "col-001", "name": "Sunglasses", "productCount": 4200 },
-    { "id": "col-002", "name": "Women's Sunglasses", "productCount": 2100 },
-    { "id": "col-003", "name": "Eyeglasses", "productCount": 1650 },
-    { "id": "col-004", "name": "Accessories", "productCount": 300 },
-    { "id": "brand-ray-ban", "name": "Ray-Ban", "productCount": 1200, "kind": "brand" },
-    { "id": "brand-oakley", "name": "Oakley", "productCount": 950, "kind": "brand" },
-    { "id": "brand-maui-jim", "name": "Maui Jim", "productCount": 300, "kind": "brand" }
-  ]
-}
-```
-
-**Reasoning:** All four collection names point to one vertical. `"Accessories"` is generic on its
-own, but sitting beside Sunglasses/Eyeglasses confirms it belongs to the same niche. `Ray-Ban`,
-`Oakley`, and `Maui Jim` are recognized eyewear brands — classified into `Eyewear` by knowledge of
-what they sell, not by matching their names against any keyword.
-
-**Output:**
-```json
-{
-  "niches": [
+  "categories": [
     {
-      "id": "eyewear",
-      "name": "Eyewear",
-      "summary": "Covers sunglasses, eyeglasses, eyewear accessories, and brand PLPs sold on the store.",
-      "collectionIds": [
-        "col-001", "col-002", "col-003", "col-004",
-        "brand-ray-ban", "brand-oakley", "brand-maui-jim"
+      "id": "womens-clothing",
+      "name": "Women's Clothing",
+      "subcategories": [
+        { "id": "dresses", "name": "Dresses" },
+        { "id": "wedding-dresses", "name": "Wedding Dresses" }
       ]
     }
   ],
-  "agentConclusion": "I identified 1 broad parent niche, Eyewear, covering all 7 collections and brand PLPs and 10,700 products on OpticWorld."
+  "agentConclusion": "I organized this catalog into 1 category (Women's Clothing) with 2 searchable subcategories."
 }
 ```
 
-### Example B — WooCommerce (hierarchy inheritance + a cross-vertical brand)
+**Pass B reasoning:** All four items merge or map onto those two subcategories — `col-1`, `col-2`,
+`col-3` all go to `"dresses"` (primary; code's own max-parent/dedup math resolves their overlapping
+counts), `col-4` goes to `"wedding-dresses"`.
+
+**Pass B output:**
+```json
+{
+  "assignments": [
+    { "itemId": "col-1", "subcategoryId": "dresses", "primary": true },
+    { "itemId": "col-2", "subcategoryId": "dresses", "primary": true },
+    { "itemId": "col-3", "subcategoryId": "dresses", "primary": true },
+    { "itemId": "col-4", "subcategoryId": "wedding-dresses", "primary": true }
+  ],
+  "excluded": []
+}
+```
+
+### Example B — Deep WooCommerce hierarchy, department layer skipped
+
+**Input (already folded — you never see the depth-2 leaf, only depth 0/1):**
+```json
+[
+  { "id": "12", "name": "Electronics", "taxonomyPath": ["Electronics"], "kind": "collection", "productCount": 3000 },
+  { "id": "34", "name": "Apple Products", "taxonomyPath": ["Electronics", "Apple Products"], "kind": "collection", "productCount": 900 },
+  { "id": "35", "name": "Laptops", "taxonomyPath": ["Electronics", "Laptops"], "kind": "collection", "productCount": 1200 }
+]
+```
+(A depth-2 `"MacBooks"` item under `"Apple Products"` was already folded into id `34` by code before
+you ever saw this list.)
+
+**Pass A reasoning:** `"Electronics"` passes the category test. `"Apple Products"` fails it — it is
+the merchant's internal department, not a search term — so it is NOT its own subcategory. `"Laptops"`
+passes and becomes a real subcategory.
+
+**Pass A output (excerpt):**
+```json
+{ "categories": [ { "id": "electronics", "name": "Electronics", "subcategories": [ { "id": "laptops", "name": "Laptops" } ] } ] }
+```
+
+**Pass B reasoning:** `35` ("Laptops") is primary under `"laptops"`. `34` ("Apple Products") is the
+same product type — Apple's laptop lineup — reachable from the same subcategory but duplicating `35`'s
+inventory, so it is placed under `"laptops"` too with `primary: false`. `12` is the top-level
+`"Electronics"` container itself; if it has no subcategory of its own beyond what `34`/`35` already
+cover, it also lands on `"laptops"` non-primary (or, if the store has other real electronics
+subcategories, `12`'s remaining products are handled by whichever subcategory actually contains them
+— never invented as a catch-all).
+
+### Example C — Multi-vertical store with a dedicated brand category
 
 **Input:**
 ```json
-{
-  "storeName": "ToyKingdom",
-  "collections": [
-    { "id": "12", "name": "Toys", "productCount": 3016, "depth": 0 },
-    { "id": "34", "name": "Educational Toys", "productCount": 419, "parentId": "12", "depth": 1 },
-    { "id": "35", "name": "Board Games", "productCount": 421, "parentId": "12", "depth": 1 },
-    { "id": "36", "name": "Strategy Games", "productCount": 85, "parentId": "35", "depth": 2 },
-    { "id": "20", "name": "Baby Products", "productCount": 870, "depth": 0 },
-    { "id": "21", "name": "Baby Feeding", "productCount": 210, "parentId": "20", "depth": 1 },
-    { "id": "brand-lego", "name": "LEGO", "productCount": 640, "kind": "brand" },
-    { "id": "brand-fisher-price", "name": "Fisher-Price", "productCount": 210, "kind": "brand" }
-  ]
-}
+[
+  { "id": "c1", "name": "Toys", "taxonomyPath": ["Toys"], "kind": "collection", "productCount": 3000 },
+  { "id": "c2", "name": "Sunglasses", "taxonomyPath": ["Sunglasses"], "kind": "collection", "productCount": 1800 },
+  { "id": "b1", "name": "LEGO", "taxonomyPath": ["LEGO"], "kind": "brand", "productCount": 600 },
+  { "id": "b2", "name": "Ray-Ban", "taxonomyPath": ["Ray-Ban"], "kind": "brand", "productCount": 950 }
+]
 ```
 
-**Reasoning:** `Educational Toys` (34) and `Board Games` (35) inherit the `Toys` (12) niche
-directly. `Strategy Games` (36) is two levels deep under `Toys` via `Board Games` — it still
-inherits `Toys`, never becomes its own niche. `Baby Feeding` (21) inherits `Baby Products` (20).
-`LEGO` is known to sell only toys, so it's placed in `Toys`. `Fisher-Price` commercially sells
-both toys and baby gear, but it still lands in exactly one niche, not both — its toy lineup is the
-larger, more dominant part of its business, so it's placed in `Toys`.
-
-**Output:**
+**Pass A output:**
 ```json
 {
-  "niches": [
-    {
-      "id": "toys",
-      "name": "Toys",
-      "summary": "Covers all toy categories including educational toys, board/strategy games, and toy brand PLPs.",
-      "collectionIds": ["12", "34", "35", "36", "brand-lego", "brand-fisher-price"]
-    },
-    {
-      "id": "baby-products",
-      "name": "Baby Products",
-      "summary": "Covers baby essentials including feeding products.",
-      "collectionIds": ["20", "21"]
-    }
+  "categories": [
+    { "id": "toys", "name": "Toys", "subcategories": [ { "id": "toys-general", "name": "Toys" } ] },
+    { "id": "eyewear", "name": "Eyewear", "subcategories": [ { "id": "sunglasses", "name": "Sunglasses" } ] },
+    { "id": "toy-brands", "name": "Toy Brands", "overlapping": true, "subcategories": [ { "id": "brand-lego", "name": "LEGO" } ] },
+    { "id": "eyewear-brands", "name": "Eyewear Brands", "overlapping": true, "subcategories": [ { "id": "brand-ray-ban", "name": "Ray-Ban" } ] }
   ],
-  "agentConclusion": "I identified 2 broad parent niches, Toys and Baby Products, covering all 8 collections and brand PLPs and 5,871 products on ToyKingdom."
+  "agentConclusion": "..."
 }
 ```
+
+Two vertical-specific brand categories, not one mixed "Brands" bucket, because this store spans two
+unrelated verticals.
+
+### Example D — Arabic store, output language enforced
+
+**Input (Arabic PLP names, required output language: "ar"):**
+```json
+[
+  { "id": "p1", "name": "قبعات", "taxonomyPath": ["قبعات"], "productCount": 400 },
+  { "id": "p2", "name": "قبعات أطفال", "taxonomyPath": ["قبعات أطفال"], "productCount": 220 }
+]
+```
+
+**Pass A reasoning:** `"قبعات"` ("Hats") passes the category test directly. `"قبعات أطفال"` ("Kids
+Hats" — product noun first, audience second, the natural Arabic order) is the audience-qualified
+version of the same product — a real, distinct subcategory because a parent shopping for a child
+specifically searches this qualified phrase, not the bare category. Both the category and
+subcategory names stay entirely in Arabic; nothing here is translated to English or reordered into
+English's audience-first phrasing.
+
+**Pass A output:**
+```json
+{
+  "categories": [
+    {
+      "id": "hats",
+      "name": "قبعات",
+      "subcategories": [
+        { "id": "hats-kids", "name": "قبعات أطفال" }
+      ]
+    }
+  ],
+  "agentConclusion": "قمت بتنظيم الكتالوج إلى فئة واحدة (قبعات) مع فئة فرعية واحدة قابلة للبحث."
+}
+```
+
+---
+
+## Quality gates
+
+Before returning, verify:
+
+- [ ] (Pass A) Every category name passes the category test — no department, no bare audience, no
+      merchant-internal grouping name.
+- [ ] (Pass A) No two subcategories under the same category share search intent.
+- [ ] (Pass A) Every brand-roster category is marked `"overlapping": true`.
+- [ ] (Pass A) Every name — category, subcategory, and `agentConclusion` — is written in this run's
+      required output language.
+- [ ] (Pass B) Every item id in the current batch appears in `assignments` or `excluded` — no gaps.
+- [ ] (Pass B) No item has more than one `primary: true` assignment.
+- [ ] (Pass B) No promotional, attribute-only, cryptic-unresolved, empty, or duplicate PLP was placed
+      into a real category instead of `excluded`.
+- [ ] (Pass B) No brand/vendor PLP (`kind: "brand"`) was placed anywhere other than its own brand
+      subcategory.

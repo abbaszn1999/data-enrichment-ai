@@ -170,6 +170,14 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     searchPerQuery: 0.035,
     freeSearchQuota: 1500,
   },
+  // Gemini 3.8 Flash pricing per 1M tokens.
+  "gemini-3.8-flash": {
+    inputPerMillion: 0.75,
+    outputPerMillion: 3.75,
+    cachedInputPerMillion: 0.075,
+    searchPerQuery: 0.035,
+    freeSearchQuota: 1500,
+  },
 };
 
 const DEFAULT_PRICING: ModelPricing = {

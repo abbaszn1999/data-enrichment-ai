@@ -41,7 +41,7 @@ output: NichesOutput
 # Bad`;
 
     expect(() => parseSkillMarkdown(badSkill, "01-bad.md")).toThrow(
-      /Gemini 3.7 Flash rejects 'minimal' thinking_level/
+      /Gemini rejects 'minimal' thinking_level/
     );
   });
 });

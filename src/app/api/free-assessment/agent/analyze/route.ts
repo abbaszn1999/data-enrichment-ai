@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
         saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "niches", {
           niches: discovery.niches,
           structuredNiches: discovery.structuredNiches,
+          excludedItems: discovery.excludedItems ?? [],
         }).catch((err) => console.error("[fa-analyze] Error saving niches slice:", err)),
       ]);
     }
@@ -53,6 +54,7 @@ export async function POST(request: NextRequest) {
         rowCount: parsed.data.plpRows.length,
         niches: discovery.niches,
         structuredNiches: discovery.structuredNiches,
+        excludedItems: discovery.excludedItems ?? [],
         agentConclusion: discovery.agentConclusion,
         beats: discovery.beats,
         isAiGenerated: discovery.isAiGenerated,

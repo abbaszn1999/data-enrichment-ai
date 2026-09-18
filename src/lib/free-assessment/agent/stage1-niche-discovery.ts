@@ -1,38 +1,72 @@
 import type {
   MockCollection,
+  MockExcludedItem,
   MockNiche,
+  MockSubcategory,
   NicheReading,
 } from "@/components/free-assessment/mock-data";
 import type { StoreCollectionItem } from "./store-catalog";
-import { compressCollectionsForStage1 } from "./stage1-catalog";
+import { prepareStage1Catalog } from "./stage1-catalog";
 import { runGeminiMarketResearch } from "./gemini-runner";
+import {
+  batchCandidates,
+  detectOutputLanguage,
+  verifyAssignmentCoverage,
+  routeMissingToUnresolved,
+  normalizeAssignments,
+  enforceWooParentPrimacy,
+  computeSkuTotals,
+  indexCandidatesById,
+} from "./taxonomy-build";
+import type {
+  ExcludedItem,
+  TaxonomyAssignment,
+  TaxonomyCandidate,
+  TaxonomyPassAOutput,
+  TaxonomyPassBOutput,
+  TaxonomyTree,
+} from "./taxonomy-types";
 
 export type Stage1DiscoveryResult = {
+  /** Legacy flattened view — kept so Tab 1/2 and every downstream stage
+   *  keep working unchanged until they read `taxonomy` directly. Built from
+   *  `taxonomy` when a fresh discovery ran; only includes each subcategory's
+   *  PRIMARY member(s), so it never double-counts an overlap the taxonomy
+   *  engine already resolved. Non-primary duplicates and excluded PLPs are
+   *  omitted here (they are not lost — see `taxonomy.assignments`/`excluded`)
+   *  until Tab 1/2 render the tree directly. */
   niches: NicheReading[];
   structuredNiches: MockNiche[];
+  /** The new searchable category/subcategory tree. Present on every fresh
+   *  Gemini-backed discovery; absent on the heuristic fallback and on
+   *  projects persisted before this rewrite. */
+  taxonomy?: TaxonomyTree;
+  /** Non-taxonomic PLPs the agent excluded (promotional, attribute-only,
+   *  duplicate, empty, unresolved) — visible in Tab 2, never selectable,
+   *  zero SKUs. Present alongside `taxonomy` on a fresh Gemini-backed run. */
+  excludedItems?: MockExcludedItem[];
   agentConclusion: string;
   beats: Array<{ at: number; text: string }>;
   isAiGenerated: boolean;
 };
 
 function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "") || "niche";
+  return (
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "") || "niche"
+  );
 }
 
-interface GeminiNichesResponse {
-  niches: Array<{
-    id?: string;
-    name: string;
-    summary?: string;
-    collectionIds: string[];
-  }>;
-  agentConclusion: string;
-}
-
-function toMockCollection(item: StoreCollectionItem): MockCollection {
+function toMockCollection(item: {
+  id: string;
+  name: string;
+  productCount: number;
+  description?: string;
+  plpPath?: string;
+  kind?: "collection" | "brand";
+}): MockCollection {
   return {
     id: item.id,
     name: item.name,
@@ -43,6 +77,330 @@ function toMockCollection(item: StoreCollectionItem): MockCollection {
   };
 }
 
+// ─── Pass A — propose the category/subcategory label tree ────────────────
+
+const PASS_A_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    categories: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          name: { type: "string" },
+          overlapping: { type: "boolean" },
+          subcategories: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                name: { type: "string" },
+              },
+              required: ["id", "name"],
+            },
+          },
+        },
+        required: ["id", "name", "subcategories"],
+      },
+    },
+    agentConclusion: { type: "string" },
+  },
+  required: ["categories", "agentConclusion"],
+};
+
+async function runTaxonomyPassA(params: {
+  storeName: string;
+  candidates: TaxonomyCandidate[];
+  outputLanguage: string;
+}): Promise<TaxonomyPassAOutput> {
+  const { storeName, candidates, outputLanguage } = params;
+
+  const candidateSummary = candidates.map((c) => ({
+    name: c.name,
+    taxonomyPath: c.taxonomyPath,
+    kind: c.kind,
+    productCount: c.productCount,
+  }));
+
+  const systemInstruction = `## Pass A of Stage 1 — propose the label tree only
+
+You are naming the tree in this call — you are NOT placing any item id yet
+(a separate Pass B call handles that afterwards, batched). Do not output any
+item id here.
+
+Required output language for every "name" and the "agentConclusion":
+"${outputLanguage}" — the same language/script the store's own PLP names use.
+
+Output strictly valid JSON matching this exact schema:
+{
+  "categories": [
+    {
+      "id": "url-safe-slug",
+      "name": "Category Name",
+      "overlapping": false,
+      "subcategories": [ { "id": "url-safe-slug", "name": "Subcategory Name" } ]
+    }
+  ],
+  "agentConclusion": "Plain-language summary of the tree you proposed, in ${outputLanguage}."
+}`;
+
+  const userPrompt = `Store: ${storeName}
+Total candidate PLPs/brands: ${candidates.length}
+
+${JSON.stringify(candidateSummary)}
+
+Propose the full category/subcategory label tree now.`;
+
+  const result = await runGeminiMarketResearch<TaxonomyPassAOutput>({
+    stage: 1,
+    systemInstruction,
+    userPrompt,
+    responseSchema: PASS_A_RESPONSE_SCHEMA,
+  });
+
+  return result.data;
+}
+
+// ─── Pass B — place a batch of ids onto the fixed tree ────────────────────
+
+const PASS_B_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    assignments: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          itemId: { type: "string" },
+          subcategoryId: { type: "string" },
+          primary: { type: "boolean" },
+        },
+        required: ["itemId", "subcategoryId", "primary"],
+      },
+    },
+    excluded: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          itemId: { type: "string" },
+          name: { type: "string" },
+          reason: {
+            type: "string",
+            enum: ["promotional", "attribute-only", "duplicate", "empty", "unresolved"],
+          },
+        },
+        required: ["itemId", "name", "reason"],
+      },
+    },
+  },
+  required: ["assignments", "excluded"],
+};
+
+async function runTaxonomyPassBBatch(params: {
+  storeName: string;
+  outputLanguage: string;
+  tree: TaxonomyPassAOutput;
+  batch: TaxonomyCandidate[];
+}): Promise<TaxonomyPassBOutput> {
+  const { storeName, outputLanguage, tree, batch } = params;
+
+  const flatSubcategories = tree.categories.flatMap((cat) =>
+    cat.subcategories.map((sub) => ({
+      subcategoryId: sub.id,
+      subcategoryName: sub.name,
+      categoryId: cat.id,
+      categoryName: cat.name,
+      overlapping: Boolean(cat.overlapping),
+    }))
+  );
+
+  const systemInstruction = `## Pass B of Stage 1 — place these items onto the fixed tree
+
+The category/subcategory tree below is already final for this store in this
+run — never rename, merge, or invent a category/subcategory here; that
+already happened in Pass A. Your only job is to place each candidate id
+below onto exactly one (or, only for a genuine brand+product PLP or a
+confirmed sibling duplicate, exactly two) of these existing subcategory ids,
+or exclude it with a reason.
+
+Fixed tree (subcategoryId -> category):
+${JSON.stringify(flatSubcategories)}
+
+For every item id in "Candidates to place" below, output exactly one of:
+- One assignment {"itemId","subcategoryId","primary": true} — the normal case.
+- Two assignments for the same itemId when it is a genuine brand+product PLP
+  (e.g. a collection literally named "Nike Shoes"): primary: true under the
+  product subcategory, primary: false under the brand subcategory.
+- Two assignments for the same itemId when you know this item's inventory
+  duplicates a sibling item's (e.g. "Apple laptops" duplicating "Laptops"):
+  the narrower/duplicate one gets primary: false.
+- An "excluded" entry with a reason ("promotional", "attribute-only",
+  "duplicate", "empty") when the item is not real taxonomic content at all.
+
+Every item id below must appear at least once, in "assignments" or
+"excluded" — never omitted from both. Output language: "${outputLanguage}".
+
+Output strictly valid JSON:
+{ "assignments": [...], "excluded": [...] }`;
+
+  const userPrompt = `Store: ${storeName}
+Candidates to place (${batch.length} items):
+${JSON.stringify(
+    batch.map((c) => ({
+      id: c.id,
+      name: c.name,
+      taxonomyPath: c.taxonomyPath,
+      kind: c.kind,
+      productCount: c.productCount,
+    }))
+  )}`;
+
+  const result = await runGeminiMarketResearch<TaxonomyPassBOutput>({
+    stage: 1,
+    systemInstruction,
+    userPrompt,
+    responseSchema: PASS_B_RESPONSE_SCHEMA,
+  });
+
+  return result.data;
+}
+
+/** How many times one Pass B batch is retried (with just its still-missing
+ *  ids, not the whole batch) before the remainder is routed to `unresolved`. */
+const MAX_BATCH_ATTEMPTS = 2;
+
+/**
+ * Runs every Pass B batch and guarantees 100% id coverage: a batch that
+ * comes back with missing ids is retried with only those ids; a batch that
+ * throws (network/parse failure) is retried in full. Either way, whatever
+ * is still missing after `MAX_BATCH_ATTEMPTS` is routed to `unresolved`
+ * rather than silently dropped or absorbed into an unrelated category —
+ * one failing/slow batch on a large catalog can never take down the whole
+ * discovery.
+ */
+async function runTaxonomyPassBWithCoverage(params: {
+  storeName: string;
+  outputLanguage: string;
+  tree: TaxonomyPassAOutput;
+  candidates: TaxonomyCandidate[];
+}): Promise<{ assignments: TaxonomyAssignment[]; excluded: ExcludedItem[] }> {
+  const { storeName, outputLanguage, tree, candidates } = params;
+  const candidatesById = indexCandidatesById(candidates);
+  const batches = batchCandidates(candidates);
+
+  const allAssignments: TaxonomyAssignment[] = [];
+  const allExcluded: ExcludedItem[] = [];
+
+  for (const batch of batches) {
+    let remaining = batch;
+    let batchAssignments: TaxonomyAssignment[] = [];
+    let batchExcluded: ExcludedItem[] = [];
+
+    for (let attempt = 1; attempt <= MAX_BATCH_ATTEMPTS && remaining.length > 0; attempt++) {
+      try {
+        const output = await runTaxonomyPassBBatch({
+          storeName,
+          outputLanguage,
+          tree,
+          batch: remaining,
+        });
+        batchAssignments = [...batchAssignments, ...(output.assignments || [])];
+        batchExcluded = [...batchExcluded, ...(output.excluded || [])];
+
+        const { missingIds } = verifyAssignmentCoverage(
+          remaining.map((c) => c.id),
+          output.assignments || [],
+          output.excluded || []
+        );
+        remaining = remaining.filter((c) => missingIds.includes(c.id));
+      } catch (error) {
+        console.error(
+          `[runTaxonomyPassB] batch attempt ${attempt} failed (${remaining.length} items):`,
+          error
+        );
+      }
+    }
+
+    allAssignments.push(...batchAssignments);
+    allExcluded.push(...batchExcluded);
+
+    const { missingIds } = verifyAssignmentCoverage(
+      batch.map((c) => c.id),
+      batchAssignments,
+      batchExcluded
+    );
+    if (missingIds.length > 0) {
+      allExcluded.push(...routeMissingToUnresolved(missingIds, candidatesById));
+    }
+  }
+
+  return { assignments: allAssignments, excluded: allExcluded };
+}
+
+// ─── Legacy flattened view ────────────────────────────────────────────────
+
+function taxonomyToLegacyNiches(
+  taxonomy: TaxonomyTree,
+  candidatesById: Map<string, TaxonomyCandidate>
+): {
+  structuredNiches: MockNiche[];
+  nichesReadings: NicheReading[];
+  excludedItems: MockExcludedItem[];
+} {
+  const structuredNiches: MockNiche[] = taxonomy.categories.map((cat) => {
+    const subcategories: MockSubcategory[] = cat.subcategories.map((sub) => {
+      const memberIds = taxonomy.assignments
+        .filter((a) => a.primary && a.subcategoryId === sub.id)
+        .map((a) => a.itemId);
+      const collections: MockCollection[] = memberIds
+        .map((id) => candidatesById.get(id))
+        .filter((c): c is TaxonomyCandidate => Boolean(c))
+        .map((c) => toMockCollection(c));
+      return {
+        id: sub.id,
+        name: sub.name,
+        productCount: sub.productCount,
+        collections,
+      };
+    });
+
+    // Always the full flattened list, even though `subcategories` above
+    // carries the same PLPs nested — legacy consumers (seed generation, CSV
+    // export, product counting) only ever look at `collections`.
+    const collections: MockCollection[] = subcategories.flatMap(
+      (s) => s.collections
+    );
+
+    return {
+      id: cat.id,
+      name: cat.name,
+      productCount: cat.productCount,
+      collections,
+      subcategories,
+      ...(cat.overlapping ? { overlapping: true } : {}),
+    };
+  });
+
+  const nichesReadings: NicheReading[] = structuredNiches.map((sn) => ({
+    id: sn.id,
+    name: sn.name,
+    summary: `Covers ${sn.collections.length} PLPs with ${sn.productCount.toLocaleString()} unique products.`,
+  }));
+
+  const excludedItems: MockExcludedItem[] = taxonomy.excluded.map((e) => ({
+    id: e.itemId,
+    name: e.name,
+    reason: e.reason,
+  }));
+
+  return { structuredNiches, nichesReadings, excludedItems };
+}
+
+// ─── Orchestration ─────────────────────────────────────────────────────────
+
 export async function runStage1NicheDiscovery(input: {
   storeName: string;
   collections: StoreCollectionItem[];
@@ -50,11 +408,14 @@ export async function runStage1NicheDiscovery(input: {
    * Every brand/vendor PLP on the store (Shopify `vendor` pages or the
    * WooCommerce brand taxonomy/attribute archives), each already shaped as a
    * full `StoreCollectionItem` with `kind: "brand"` and a real product
-   * count. Merged straight into the working collection list below — a brand
-   * is classified into a niche exactly like any other collection, never
-   * treated as a separate "signal-only" input.
+   * count. Merged straight into the working candidate list — a brand is
+   * classified exactly like any other item, never treated as a separate
+   * "signal-only" input.
    */
   storeBrands?: StoreCollectionItem[];
+  /** Optional hint for language detection when the catalog's own PLP names
+   *  don't carry a strong non-Latin script signal (see `detectOutputLanguage`). */
+  market?: string;
 }): Promise<Stage1DiscoveryResult> {
   const allItems: StoreCollectionItem[] = [
     ...input.collections,
@@ -66,168 +427,84 @@ export async function runStage1NicheDiscovery(input: {
     return runHeuristicStage1Discovery(input);
   }
 
-  // Brand PLPs are compressed together with regular collections so a store
-  // with hundreds of vendor pages still gets a bounded payload, and so the
-  // "largest by product count" ranking below considers both fairly.
-  const compressed = compressCollectionsForStage1(allItems);
-  const catalogSummary = compressed.kept;
-
-  const systemInstruction = `You are the Market Research Store Discovery Agent powered by Gemini 3.7 Flash.
-Your job is Stage 1 of the Collection Builder:
-1. Analyze the existing website navigation, categories, collections, and brand/vendor PLPs of the client's store (${input.storeName}).
-2. Identify the broad parent niches represented on the website (e.g. Eyewear, Toys, Baby Products, Sports Equipment, Watches, Electronics, Apparel, Home Decor, etc.).
-3. Group each provided item under exactly one of these identified broad parent niches.
-4. Calculate or aggregate the total product count under each parent niche.
-5. Write a concise, natural spoken conclusion in plain English.
-   Important: At Stage 1, DO NOT recommend which niche to dominate yet. Only identify and organize the broad catalog areas that currently exist on the website.
-
-## Catalog hierarchy (WooCommerce only)
-Each collection carries "depth" (0 = top-level category, 1 = subcategory, 2 = sub-subcategory) and
-"parentId" (the id of its direct parent, omitted for top-level items and always omitted for Shopify).
-- Never create a niche named after a subcategory. A subcategory (depth > 0) belongs under the same
-  broad parent niche as its top-level ancestor unless it is unmistakably a distinct commercial vertical
-  that has nothing to do with its parent (rare — treat this as the exception, not the default).
-- Shopify stores have no hierarchy: every collection is flat and depth is always 0.
-
-## Brand/vendor PLPs — just another item to classify
-Some items carry "kind": "brand". These are real store pages (a Shopify vendor filter page, or a
-WooCommerce brand taxonomy/attribute archive) — not a commercial category — but you classify them
-into "collectionIds" exactly like any other item, with one difference in HOW you decide where they go:
-- A category/collection's OWN name and description tell you its niche.
-- A brand's name does not describe a niche by itself — you must use your own general knowledge of what
-  that brand/vendor commercially sells (e.g. you know "Ray-Ban" and "Oakley" sell sunglasses/eyewear,
-  "LEGO" sells toys, "Garmin" sells watches/electronics) to decide which niche it belongs to.
-- If you do not recognize a brand and no other signal on the store resolves it, place it under the
-  store's largest/most dominant niche rather than inventing a new niche for one unrecognized brand.
-- A brand's presence next to other collections can still help confirm an otherwise generic collection
-  name (e.g. an "Accessories" collection sitting beside Ray-Ban/Oakley/Maui Jim confirms Eyewear).
-- NEVER use a brand name as the niche NAME. The niche name is always a generic commercial term (e.g.
-  "Eyewear"), even when that niche is dominated by one or two brand PLPs.
-
-Output strictly valid JSON with this exact schema:
-{
-  "niches": [
-    {
-      "id": "slug-id",
-      "name": "Broad Parent Niche Name",
-      "summary": "One sentence explaining what this broad parent space covers on the store.",
-      "collectionIds": ["id1", "id2"]
-    }
-  ],
-  "agentConclusion": "Conversational conclusion summary written in professional plain English."
-}`;
-
-  const overflowLine =
-    compressed.overflowCount > 0
-      ? `\nPlus ${compressed.overflowCount} smaller collections (${compressed.overflowProducts} products) omitted from this list — map only the collections given; leftover live collections are assigned in code by name.`
-      : "";
-
-  const userPrompt = `Store Name: ${input.storeName}
-Existing Collections, Categories and Brand/Vendor PLPs (${allItems.length} total, showing the ${catalogSummary.length} largest by product count — items with "kind": "brand" are brand/vendor pages):
-${JSON.stringify(catalogSummary, null, 2)}
-${overflowLine}
-
-Identify the broad parent niches and group every item (including brand/vendor PLPs) under them.`;
+  const { candidates, foldedInto, foldedItems } = prepareStage1Catalog(allItems);
+  const outputLanguage = detectOutputLanguage(candidates, input.market);
 
   try {
-    const result = await runGeminiMarketResearch<GeminiNichesResponse>({
-      stage: 1,
-      systemInstruction,
-      userPrompt,
+    const passA = await runTaxonomyPassA({
+      storeName: input.storeName,
+      candidates,
+      outputLanguage,
     });
 
-    const parsed = result.data;
-    if (parsed && Array.isArray(parsed.niches) && parsed.niches.length > 0) {
-      const itemsMap = new Map<string, StoreCollectionItem>(
-        allItems.map((c) => [c.id, c])
-      );
-
-      const assignedIds = new Set<string>();
-
-      const structuredNiches: MockNiche[] = parsed.niches.map((n, idx) => {
-        const nicheId = n.id ? slugify(n.id) : slugify(n.name || `niche-${idx + 1}`);
-        const nicheCollections: MockCollection[] = (n.collectionIds || [])
-          .map((cid) => {
-            const found = itemsMap.get(cid);
-            if (!found) return null;
-            assignedIds.add(cid);
-            return toMockCollection(found);
-          })
-          .filter(Boolean) as MockCollection[];
-
-        const productCount = nicheCollections.reduce(
-          (sum, c) => sum + c.productCount,
-          0
-        );
-
-        return {
-          id: nicheId,
-          name: n.name,
-          productCount,
-          collections: nicheCollections,
-        };
-      });
-
-      // Catch any items (collections or brand PLPs) that weren't assigned.
-      const unassigned = allItems.filter((c) => !assignedIds.has(c.id));
-
-      if (unassigned.length > 0) {
-        if (structuredNiches.length > 0) {
-          const first = structuredNiches[0];
-          for (const u of unassigned) {
-            first.collections.push(toMockCollection(u));
-            first.productCount += u.productCount;
-          }
-        } else {
-          structuredNiches.push({
-            id: "all-catalog",
-            name: "Catalog Collections",
-            productCount: unassigned.reduce((s, c) => s + c.productCount, 0),
-            collections: unassigned.map(toMockCollection),
-          });
-        }
-      }
-
-      // Build simplified NicheReading for UI progress
-      const nichesReadings: NicheReading[] = structuredNiches.map((sn, idx) => {
-        const matchingParsed = parsed.niches[idx];
-        const summary =
-          matchingParsed?.summary ||
-          `Covers ${sn.collections.length} collections with ${sn.productCount.toLocaleString()} items.`;
-
-        return {
-          id: sn.id,
-          name: sn.name,
-          summary,
-        };
-      });
-
-      const totalItemsCount = allItems.length;
-      const totalNichesCount = structuredNiches.length;
-
-      const beats = [
-        { at: 1200, text: `Connecting to ${input.storeName} storefront...` },
-        { at: 2800, text: `Extracted ${totalItemsCount} active collections, categories and brand PLPs.` },
-        { at: 4500, text: `Identified ${totalNichesCount} parent niches with Gemini 3.7 Flash.` },
-        { at: 6000, text: `Catalog grouped. Ready for scope selection.` },
-      ];
-
-      return {
-        niches: nichesReadings,
-        structuredNiches,
-        agentConclusion:
-          parsed.agentConclusion ||
-          `I analyzed ${input.storeName}'s catalog across ${totalItemsCount} collections and grouped them into ${totalNichesCount} distinct broad parent niches. In the next step, select which collections you want to research.`,
-        beats,
-        isAiGenerated: true,
-      };
+    if (!passA || !Array.isArray(passA.categories) || passA.categories.length === 0) {
+      throw new Error("Pass A returned no categories");
     }
+
+    const { assignments: rawAssignments, excluded } = await runTaxonomyPassBWithCoverage({
+      storeName: input.storeName,
+      outputLanguage,
+      tree: passA,
+      candidates,
+    });
+
+    const candidatesById = indexCandidatesById(candidates);
+    const normalized = normalizeAssignments(rawAssignments);
+    const finalAssignments = enforceWooParentPrimacy(normalized, candidatesById);
+
+    const { categories, totalUniqueProducts } = computeSkuTotals({
+      categories: passA.categories,
+      assignments: finalAssignments,
+      candidates,
+      foldedItems,
+      foldedInto,
+    });
+
+    const taxonomy: TaxonomyTree = {
+      categories,
+      assignments: finalAssignments,
+      excluded,
+      outputLanguage,
+      totalUniqueProducts,
+    };
+
+    const { structuredNiches, nichesReadings, excludedItems } =
+      taxonomyToLegacyNiches(taxonomy, candidatesById);
+
+    const totalItemsCount = allItems.length;
+    const beats = [
+      { at: 1200, text: `Connecting to ${input.storeName} storefront...` },
+      {
+        at: 2800,
+        text: `Extracted ${totalItemsCount} active collections, categories and brand PLPs.`,
+      },
+      { at: 4500, text: `Classified into ${categories.length} searchable categories.` },
+      { at: 6000, text: `Catalog grouped. Ready for scope selection.` },
+    ];
+
+    return {
+      niches: nichesReadings,
+      structuredNiches,
+      taxonomy,
+      excludedItems,
+      agentConclusion:
+        passA.agentConclusion ||
+        `I organized ${input.storeName}'s catalog into ${categories.length} searchable categories covering ${totalUniqueProducts.toLocaleString()} unique products.`,
+      beats,
+      isAiGenerated: true,
+    };
   } catch (error) {
-    console.error("[runStage1NicheDiscovery] Gemini 3.7 Flash call failed:", error);
+    console.error("[runStage1NicheDiscovery] Taxonomy discovery failed:", error);
   }
 
   return runHeuristicStage1Discovery(input);
 }
+
+// ─── Heuristic fallback (no API key / Gemini failure) ─────────────────────
+//
+// A coarse, name-matching safety net — not held to the same search-language
+// bar as the Gemini-backed path above. It only needs to keep the pipeline
+// usable when the model is unavailable.
 
 function classifyCollectionNameHeuristically(name: string): string {
   const lower = name.toLowerCase();
@@ -345,9 +622,7 @@ export function runHeuristicStage1Discovery(input: {
 
   // Resolve top-level items first so subcategories always inherit an already
   // -settled ancestor group rather than racing the recursion.
-  const sortedByDepth = [...collectionList].sort(
-    (a, b) => (a.depth ?? 0) - (b.depth ?? 0)
-  );
+  const sortedByDepth = [...collectionList].sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0));
   for (const item of sortedByDepth) {
     resolveGroupKey(item, 0);
   }
@@ -411,7 +686,10 @@ export function runHeuristicStage1Discovery(input: {
 
   const beats = [
     { at: 1000, text: `Connecting to ${input.storeName} catalog...` },
-    { at: 2500, text: `Indexed ${totalItemsCount} collections and brand PLPs across navigation structure.` },
+    {
+      at: 2500,
+      text: `Indexed ${totalItemsCount} collections and brand PLPs across navigation structure.`,
+    },
     { at: 4200, text: `Organized into ${structuredNiches.length} parent niches.` },
     { at: 5500, text: `Ready for Stage 2 catalog scope selection.` },
   ];

@@ -43,13 +43,48 @@ export type MockCollection = {
   kind?: "collection" | "brand";
 };
 
+/**
+ * One searchable subcategory produced by the Stage 1 taxonomy agent —
+ * present only on categories that went through the two-pass Gemini
+ * classifier (see `TaxonomySubcategory` in `taxonomy-types.ts`). `productCount`
+ * is the deduplicated total computed in code, never a naive sum of its PLPs.
+ */
+export type MockSubcategory = {
+  id: string;
+  name: string;
+  productCount: number;
+  collections: MockCollection[];
+};
+
+/** A PLP/brand the taxonomy agent decided is not real, selectable product
+ *  content (promotional, attribute-only, duplicate, empty, or a genuinely
+ *  unresolved item). Visible for transparency, never selectable, contributes
+ *  zero SKUs. Mirrors `ExclusionReason` in `taxonomy-types.ts`. */
+export type MockExcludedItem = {
+  id: string;
+  name: string;
+  reason: "promotional" | "attribute-only" | "duplicate" | "empty" | "unresolved";
+};
+
 export type MockNiche = {
   id: string;
   name: string;
   productCount: number;
   /** Every PLP under this niche — categories, subcategories, collections,
-   * and brand/vendor pages (kind: "brand") mixed in as normal entries. */
+   * and brand/vendor pages (kind: "brand") mixed in as normal entries.
+   * Always the full flattened list, even when `subcategories` below is
+   * present, so legacy code (seed generation, CSV export, product counting)
+   * that only knows one level keeps working unchanged. */
   collections: MockCollection[];
+  /** Present when this niche was produced by the searchable-taxonomy Stage 1
+   * agent (Gemini two-pass run) — subcategories organized by search intent
+   * rather than mirrored 1:1 from the store's own PLP structure. When
+   * present, Tab 2 renders this nested tree instead of the flat list above. */
+  subcategories?: MockSubcategory[];
+  /** True for brand-roster categories (e.g. "Women brands") — kept selectable
+   * per SKU floor like any other category, but excluded from store-wide
+   * unique totals since its inventory already counts once elsewhere. */
+  overlapping?: boolean;
 };
 
 export type MockSeedRow = {

@@ -43,11 +43,13 @@ import {
   createManualSeedRow,
   type MarketResearchProject,
   type MarketResearchStage,
+  type MockExcludedItem,
   type MockNiche,
   type MockSeedRow,
   type NicheReading,
   type SeedProbe,
 } from "./mock-data";
+import { DEFAULT_SKU_FLOOR } from "@/lib/free-assessment/project-state";
 import {
   briefStageFromFlow,
   clampWorkspaceTab,
@@ -125,6 +127,17 @@ export function FreeAssessmentShell() {
   >({});
   const [structuredNichesByProject, setStructuredNichesByProject] = useState<
     Record<string, MockNiche[]>
+  >({});
+  /** Non-taxonomic PLPs the Stage 1 taxonomy agent excluded — visible in
+   *  Tab 2, never selectable, zero SKUs. */
+  const [taxonomyExcludedByProject, setTaxonomyExcludedByProject] = useState<
+    Record<string, MockExcludedItem[]>
+  >({});
+  /** Minimum SKUs a category/subcategory/PLP needs to be selectable in Tab
+   *  2 — persistent per-project setting, promoted from a client-only QA
+   *  test control. */
+  const [skuFloorByProject, setSkuFloorByProject] = useState<
+    Record<string, number>
   >({});
   const [seedRowsByProject, setSeedRowsByProject] = useState<
     Record<string, MockSeedRow[]>
@@ -281,6 +294,8 @@ export function FreeAssessmentShell() {
     setChatByProject(saved.chatByProject ?? {});
     setNichesByProject(saved.nichesByProject ?? {});
     setStructuredNichesByProject(saved.structuredNichesByProject ?? {});
+    setTaxonomyExcludedByProject(saved.taxonomyExcludedByProject ?? {});
+    setSkuFloorByProject(saved.skuFloorByProject ?? {});
     setSeedRowsByProject(saved.seedRowsByProject ?? {});
     setSeedSelectionByProject(saved.seedSelectionByProject ?? {});
     setStage3ScopeByProject(saved.stage3ScopeByProject ?? {});
@@ -368,6 +383,8 @@ export function FreeAssessmentShell() {
       chatByProject,
       nichesByProject,
       structuredNichesByProject,
+      taxonomyExcludedByProject,
+      skuFloorByProject,
       seedRowsByProject,
       seedSelectionByProject,
       stage3ScopeByProject,
@@ -393,6 +410,8 @@ export function FreeAssessmentShell() {
     chatByProject,
     nichesByProject,
     structuredNichesByProject,
+    taxonomyExcludedByProject,
+    skuFloorByProject,
     seedRowsByProject,
     seedSelectionByProject,
     stage3ScopeByProject,
@@ -439,6 +458,12 @@ export function FreeAssessmentShell() {
   const activeStructuredNiches = activeProject
     ? (structuredNichesByProject[activeProject.id] ?? [])
     : [];
+  const activeExcludedItems = activeProject
+    ? (taxonomyExcludedByProject[activeProject.id] ?? [])
+    : [];
+  const activeSkuFloor = activeProject
+    ? (skuFloorByProject[activeProject.id] ?? DEFAULT_SKU_FLOOR)
+    : DEFAULT_SKU_FLOOR;
   const stage3Scope = activeProject
     ? (stage3ScopeByProject[activeProject.id] ??
       activeProject.highlightedCollectionIds)
@@ -582,6 +607,10 @@ export function FreeAssessmentShell() {
       setStructuredNichesByProject((prev) => ({
         ...prev,
         [projectId]: result.structuredNiches as unknown as MockNiche[],
+      }));
+      setTaxonomyExcludedByProject((prev) => ({
+        ...prev,
+        [projectId]: (result.excludedItems ?? []) as unknown as MockExcludedItem[],
       }));
       setStage1DoneIds((prev) => {
         const next = new Set(prev);
@@ -1601,6 +1630,14 @@ export function FreeAssessmentShell() {
                       <StageSelectPanel
                         project={activeProject}
                         niches={activeStructuredNiches}
+                        excludedItems={activeExcludedItems}
+                        skuFloor={activeSkuFloor}
+                        onChangeSkuFloor={(value) => {
+                          setSkuFloorByProject((prev) => ({
+                            ...prev,
+                            [activeProject.id]: value,
+                          }));
+                        }}
                         preparing={preparingStage2 || !stage2ReadyForActive}
                         showNext={
                           stage2ReadyForActive && !preparingStage2 && !reviewingBrief

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { MarketResearchPersisted } from "@/components/free-assessment/persistence";
 import type {
+  MockExcludedItem,
   MockNiche,
   MockSeedRow,
   NicheReading,
@@ -51,6 +52,9 @@ function fingerprintOf(payload: unknown): string {
 type NichesSlicePayload = {
   niches: NicheReading[];
   structuredNiches: MockNiche[];
+  /** Non-taxonomic PLPs the Stage 1 taxonomy agent excluded. Absent on
+   *  projects persisted before this field existed. */
+  excludedItems?: MockExcludedItem[];
 };
 
 type SeedsSlicePayload = {
@@ -105,6 +109,9 @@ export async function loadFaPersistedState(
               }
               if (Array.isArray(data.structuredNiches) && data.structuredNiches.length > 0) {
                 persisted.structuredNichesByProject[projectId] = data.structuredNiches;
+              }
+              if (Array.isArray(data.excludedItems) && data.excludedItems.length > 0) {
+                persisted.taxonomyExcludedByProject[projectId] = data.excludedItems;
               }
             } else {
               // Legacy fallback from DB state
@@ -358,10 +365,12 @@ export async function saveFaPersistedState(
         payload: {
           niches: persisted.nichesByProject[projectId] ?? [],
           structuredNiches: persisted.structuredNichesByProject[projectId] ?? [],
+          excludedItems: persisted.taxonomyExcludedByProject[projectId] ?? [],
         } satisfies NichesSlicePayload,
         empty:
           (persisted.nichesByProject[projectId] ?? []).length === 0 &&
-          (persisted.structuredNichesByProject[projectId] ?? []).length === 0,
+          (persisted.structuredNichesByProject[projectId] ?? []).length === 0 &&
+          (persisted.taxonomyExcludedByProject[projectId] ?? []).length === 0,
       },
       // No "products" entry: real product records are written directly to
       // the sharded `products-shards/` store by `/api/free-assessment/products/fetch`
