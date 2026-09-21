@@ -151,8 +151,7 @@ export function StageSeedsPanel({
   const [manualFamily, setManualFamily] = useState("");
   const [budget, setBudget] = useState<number | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [minVolumeInput, setMinVolumeInput] = useState("");
-  const [maxDifficultyInput, setMaxDifficultyInput] = useState("");
+  const [minVolumeInput, setMinVolumeInput] = useState("1");
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const probing = useMemo(() => new Set(probingIds), [probingIds]);
@@ -1037,48 +1036,30 @@ export function StageSeedsPanel({
           <DialogHeader>
             <DialogTitle>Confirm keyword extract</DialogTitle>
             <DialogDescription>
-              Semrush applies your volume and difficulty filters before
-              billing, so narrower filters cost less. Unused hold is
+              Semrush applies your minimum search volume filter before
+              billing, so a higher floor costs less. Unused hold is
               refunded instantly — you pay the actual row count returned
-              after the run.
+              after the run. Difficulty and word count can be filtered for
+              free after the pull, in the Extract tab.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label
-                htmlFor="mr-extract-min-volume"
-                className="text-xs font-medium text-muted-foreground"
-              >
-                Min. search volume
-              </label>
-              <Input
-                id="mr-extract-min-volume"
-                type="number"
-                min={0}
-                inputMode="numeric"
-                placeholder="No minimum"
-                value={minVolumeInput}
-                onChange={(e) => setMinVolumeInput(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <label
-                htmlFor="mr-extract-max-kd"
-                className="text-xs font-medium text-muted-foreground"
-              >
-                Max. keyword difficulty
-              </label>
-              <Input
-                id="mr-extract-max-kd"
-                type="number"
-                min={0}
-                max={100}
-                inputMode="numeric"
-                placeholder="No maximum"
-                value={maxDifficultyInput}
-                onChange={(e) => setMaxDifficultyInput(e.target.value)}
-              />
-            </div>
+          <div className="space-y-1">
+            <label
+              htmlFor="mr-extract-min-volume"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Min. search volume
+            </label>
+            <Input
+              id="mr-extract-min-volume"
+              type="number"
+              min={0}
+              inputMode="numeric"
+              placeholder="No minimum"
+              value={minVolumeInput}
+              onChange={(e) => setMinVolumeInput(e.target.value)}
+              className="max-w-[160px]"
+            />
           </div>
           <div className="max-h-56 overflow-auto rounded-xl border border-border/70">
             <table className="w-full text-[11px]">
@@ -1150,15 +1131,10 @@ export function StageSeedsPanel({
               onClick={() => {
                 setConfirmOpen(false);
                 const minVolume = Number(minVolumeInput);
-                const maxDifficulty = Number(maxDifficultyInput);
                 onConfirmSpend({
                   minVolume:
                     minVolumeInput.trim() && Number.isFinite(minVolume)
                       ? Math.max(0, Math.floor(minVolume))
-                      : undefined,
-                  maxDifficulty:
-                    maxDifficultyInput.trim() && Number.isFinite(maxDifficulty)
-                      ? Math.min(100, Math.max(0, Math.floor(maxDifficulty)))
                       : undefined,
                 });
               }}

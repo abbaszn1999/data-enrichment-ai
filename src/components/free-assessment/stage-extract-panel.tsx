@@ -243,15 +243,36 @@ export function StageExtractPanel({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card px-3 py-2 shrink-0">
-        <Input
-          value={filters.query}
-          onChange={(e) =>
-            setFilters((prev) => ({ ...prev, query: e.target.value }))
-          }
-          placeholder="Include / exclude…"
-          className="h-8 w-[180px] text-xs"
-          aria-label="Filter keywords"
-        />
+        <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          Word count
+          <Input
+            type="number"
+            min={1}
+            value={filters.minWordCount}
+            onChange={(e) =>
+              setFilters((prev) => ({
+                ...prev,
+                minWordCount: Number(e.target.value) || 1,
+              }))
+            }
+            className="h-8 w-[56px] text-xs"
+            aria-label="Minimum word count"
+          />
+          <span>to</span>
+          <Input
+            type="number"
+            min={1}
+            value={filters.maxWordCount}
+            onChange={(e) =>
+              setFilters((prev) => ({
+                ...prev,
+                maxWordCount: Number(e.target.value) || 1,
+              }))
+            }
+            className="h-8 w-[56px] text-xs"
+            aria-label="Maximum word count"
+          />
+        </label>
         <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           Min volume
           <Input

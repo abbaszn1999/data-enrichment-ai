@@ -293,14 +293,24 @@ export type KeywordFilters = {
   minVolume: number;
   maxKd: number;
   questionsOnly: boolean;
-  query: string;
+  /** Inclusive lower bound on the number of words in the phrase. */
+  minWordCount: number;
+  /** Inclusive upper bound on the number of words in the phrase. */
+  maxWordCount: number;
 };
 
+/**
+ * Auto-applied on the Extract tab: search volume ≥ 1, KD ≤ 50, word count
+ * ≥ 2 (drops bare single-word seeds, keeps everything else). We own this
+ * data post-extraction (already paid for), so these are free browse/apply
+ * filters — not billing inputs.
+ */
 export const DEFAULT_FILTERS: KeywordFilters = {
-  minVolume: 0,
-  maxKd: 100,
+  minVolume: 1,
+  maxKd: 50,
   questionsOnly: false,
-  query: "",
+  minWordCount: 2,
+  maxWordCount: 12,
 };
 
 export type SheetKeywordFilters = {
@@ -317,14 +327,26 @@ export function normalizeKeywordFilters(raw: unknown): KeywordFilters {
   const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const minVolume = Number(value.minVolume);
   const maxKd = Number(value.maxKd);
+  const minWordCount = Number(value.minWordCount);
+  const maxWordCount = Number(value.maxWordCount);
+  const safeMinWordCount =
+    Number.isFinite(minWordCount) && minWordCount > 0
+      ? Math.floor(minWordCount)
+      : DEFAULT_FILTERS.minWordCount;
   return {
     minVolume:
-      Number.isFinite(minVolume) && minVolume > 0 ? Math.floor(minVolume) : 0,
+      Number.isFinite(minVolume) && minVolume > 0
+        ? Math.floor(minVolume)
+        : DEFAULT_FILTERS.minVolume,
     maxKd: Number.isFinite(maxKd)
       ? Math.min(100, Math.max(0, Math.floor(maxKd)))
-      : 100,
+      : DEFAULT_FILTERS.maxKd,
     questionsOnly: value.questionsOnly === true,
-    query: typeof value.query === "string" ? value.query : "",
+    minWordCount: safeMinWordCount,
+    maxWordCount:
+      Number.isFinite(maxWordCount) && maxWordCount >= safeMinWordCount
+        ? Math.floor(maxWordCount)
+        : Math.max(safeMinWordCount, DEFAULT_FILTERS.maxWordCount),
   };
 }
 
@@ -341,26 +363,28 @@ export function filtersEqual(a: KeywordFilters, b: KeywordFilters): boolean {
     a.minVolume === b.minVolume &&
     a.maxKd === b.maxKd &&
     a.questionsOnly === b.questionsOnly &&
-    a.query === b.query
+    a.minWordCount === b.minWordCount &&
+    a.maxWordCount === b.maxWordCount
   );
 }
 
 export function keywordPassesFilters(
   row: Pick<
     ExtractedKeyword,
-    "keyword" | "seed" | "volume" | "difficulty" | "isQuestion"
+    "keyword" | "seed" | "volume" | "difficulty" | "isQuestion" | "wordCount"
   >,
   filters: KeywordFilters
 ): boolean {
   if (row.volume < filters.minVolume) return false;
+  // Semrush reports KD as "N/A" for terms it hasn't scored. Our provider
+  // parser already coerces that to 0 (never undefined/NaN), so unscored
+  // terms are treated as easy and pass a max-KD ceiling instead of being
+  // dropped just because they're unscored.
   if (row.difficulty > filters.maxKd) return false;
+  if (row.wordCount < filters.minWordCount) return false;
+  if (row.wordCount > filters.maxWordCount) return false;
   if (filters.questionsOnly && !row.isQuestion) return false;
-  const q = filters.query.trim().toLowerCase();
-  if (!q) return true;
-  return (
-    row.keyword.toLowerCase().includes(q) ||
-    row.seed.toLowerCase().includes(q)
-  );
+  return true;
 }
 
 function hash(value: string): number {

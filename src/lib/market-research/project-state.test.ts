@@ -44,13 +44,15 @@ describe("market-research project state", () => {
         minVolume: 10,
         maxKd: 100,
         questionsOnly: false,
-        query: "",
+        minWordCount: 2,
+        maxWordCount: 12,
       },
       informational: {
         minVolume: 0,
         maxKd: 40,
         questionsOnly: true,
-        query: "how",
+        minWordCount: 3,
+        maxWordCount: 12,
       },
     };
 

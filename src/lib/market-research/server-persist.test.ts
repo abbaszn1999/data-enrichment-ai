@@ -231,8 +231,8 @@ describe("saveMrPersistedState storage routing", () => {
 
     const persisted = stateWithKeywords();
     persisted.sheetFiltersByProject[projectId] = {
-      category: { minVolume: 50, maxKd: 40, questionsOnly: false, query: "" },
-      informational: { minVolume: 0, maxKd: 100, questionsOnly: false, query: "" },
+      category: { minVolume: 50, maxKd: 40, questionsOnly: false, minWordCount: 2, maxWordCount: 12 },
+      informational: { minVolume: 0, maxKd: 100, questionsOnly: false, minWordCount: 2, maxWordCount: 12 },
     };
     persisted.extractIdByProject[projectId] = "44444444-4444-4444-8444-444444444444";
     persisted.paidCollectionIdsByProject[projectId] = ["col-1", "col-2"];

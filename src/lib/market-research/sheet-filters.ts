@@ -4,6 +4,7 @@ import {
   normalizeKeywordFilters,
   type KeywordFilters,
 } from "@/components/market-research/workspace-data";
+import { wordCount } from "@/lib/market-research/filters";
 import { isQuestionKeyword } from "@/lib/market-research/providers/semrush-codes";
 import type { ArchiveKeywordRow } from "@/lib/market-research/storage-admin";
 import type { ClassifiedShardItem } from "@/lib/market-research/storage-admin";
@@ -50,6 +51,7 @@ export function filterClassifiedTerms<T extends ClassifiedShardItem>(
         seed: archive?.seed ?? term.seedId,
         volume: archive?.volume ?? 0,
         difficulty: archive?.difficulty ?? 0,
+        wordCount: wordCount(archive?.phrase ?? term.keyword),
         isQuestion: archive
           ? isQuestionKeyword(archive.phrase, archive.intents)
           : false,
