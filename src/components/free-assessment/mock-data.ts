@@ -792,7 +792,7 @@ export function marketLabel(code: string): string {
 }
 
 /**
- * Wallet pricing — Stage 4 bills keyword rows ($0.005 each / $5 per 1,000 keywords).
+ * Wallet pricing — Stage 4 bills keyword rows ($0.006 each / $6 per 1,000 keywords).
  * Stage 3 probe is $0.002 per seed. Agent stages are not billed.
  */
 export function usdForRawKeywords(rawKeywords: number): number {
@@ -804,7 +804,7 @@ export function usdForRawKeywords(rawKeywords: number): number {
  * broad-match idea count — Semrush Keyword Magic Tool's combined "all
  * ideas" total for the seed, not a phrase-match-restricted count. Past the
  * per-seed extract cap it's purely informational (extract never pulls more
- * than the cap), so we show "20,000+" instead of a false-precision exact
+ * than the cap), so we show "10,000+" instead of a false-precision exact
  * number.
  */
 export function formatRawKeywords(rawKeywords: number): string {

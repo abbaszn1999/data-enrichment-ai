@@ -1,27 +1,30 @@
 /**
- * Extraction pricing. $5 per 1,000 keyword rows ($0.005/row) — discounted
- * off our underlying data-provider rate, not a 1:1 pass-through. Agent
- * stages (classification, clustering, on-page copy, etc.) are not billed.
+ * Extraction pricing. $6 per 1,000 keyword rows ($0.006/row). Agent stages
+ * (classification, clustering, on-page copy, etc.) are not billed.
  *
  * Provider: amassuo/semrush-keyword-expander, `sources: ["broad"]` only
- * (~$4/1,000 provider cost). Server-side `minVolume`/`maxDifficulty`
- * filters are applied by Semrush before billing, so narrowing the filters
- * genuinely lowers what gets charged — see `extract/start` route.
+ * (~$4/1,000 provider cost — priced at $6/1k here, not $5, since the
+ * server-side filtering below shrinks the billed row count enough that a
+ * flat pass-through rate would erode margin too far). Server-side
+ * `minVolume`/`maxDifficulty` filters are applied by Semrush before
+ * billing, so narrowing the filters genuinely lowers what gets charged —
+ * see `extract/start` route.
  */
 
 export const APIFY_SEED_PROBE_USD_PER_SEED = 0.002;
-export const APIFY_KEYWORD_USD_PER_ROW = 0.005;
+export const APIFY_KEYWORD_USD_PER_ROW = 0.006;
 export const COLLECTION_PUSH_USD = 5;
 
 /**
  * Hard per-seed ceiling on extracted/billed rows, enforced both in the
- * display (Tab 3 shows "20,000+" past this) and via the actor's own
- * `limitPerSeed` input — Semrush never returns, and we never pay for,
- * more than this many rows for a single seed.
+ * display (Tab 3 shows "10,000+" past this) and via the actor's own
+ * `limitPerSeed` input — this matches `amassuo/semrush-keyword-expander`'s
+ * own schema ceiling (`maximum: 10000`), so Semrush never returns, and we
+ * never pay for, more than this many rows for a single seed.
  */
-export const EXTRACT_CAP_PER_SEED = 20_000;
+export const EXTRACT_CAP_PER_SEED = 10_000;
 
-/** Wallet amounts use 4 decimal places so $0.002/seed and $0.01/row survive rounding. */
+/** Wallet amounts use 4 decimal places so $0.002/seed and $0.006/row survive rounding. */
 export function roundUsd(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.round(value * 10_000) / 10_000;

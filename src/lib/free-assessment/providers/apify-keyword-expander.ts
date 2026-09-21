@@ -1,3 +1,4 @@
+import { EXTRACT_CAP_PER_SEED } from "../cost";
 import {
   actorKeywordExpanderId,
   abortActorRun,
@@ -81,7 +82,12 @@ export async function startApifyKeywordExpander(
   filters: KeywordExtractFilters
 ): Promise<KeywordIdeasHandle> {
   const term = normalizeSeedTerm(seed);
-  const safeLimit = Math.min(20_000, Math.max(1, Math.floor(filters.limitPerSeed) || 1));
+  // The actor's own input schema hard-caps `limitPerSeed` at 10,000 — this
+  // must never exceed that value, or Apify rejects the run before it starts.
+  const safeLimit = Math.min(
+    EXTRACT_CAP_PER_SEED,
+    Math.max(1, Math.floor(filters.limitPerSeed) || 1)
+  );
   const input: Record<string, unknown> = {
     seedKeywords: [term],
     sources: KEYWORD_EXPANDER_SOURCES,

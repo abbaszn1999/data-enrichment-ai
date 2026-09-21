@@ -15,19 +15,19 @@ import { parseSeedMetricsItem } from "./providers/parse-seed-metrics";
 import type { KeywordRow } from "./providers/keyword-provider";
 
 describe("market-research cost", () => {
-  it("prices probe at $0.002/seed and extract at $5 per 1,000 keyword rows", () => {
+  it("prices probe at $0.002/seed and extract at $6 per 1,000 keyword rows", () => {
     expect(estimateProbeCostUsd(1)).toBe(0.002);
     expect(estimateProbeCostUsd(20)).toBe(0.04);
     expect(actualProbeCostUsd(3)).toBe(0.006);
-    expect(estimateExtractCostUsd(2400)).toBe(12);
-    expect(actualExtractCostUsd(1)).toBe(0.005);
-    expect(actualExtractCostUsd(1850)).toBe(9.25);
+    expect(estimateExtractCostUsd(2400)).toBe(14.4);
+    expect(actualExtractCostUsd(1)).toBe(0.006);
+    expect(actualExtractCostUsd(1850)).toBe(11.1);
     expect(collectionPushCostUsd(3)).toBe(15);
   });
 
-  it("caps extract rows at 20,000 keywords per seed", () => {
-    expect(cappedKeywordEstimate(48_000)).toBe(20_000);
-    expect(cappedKeywordEstimate(18_000)).toBe(18_000);
+  it("caps extract rows at 10,000 keywords per seed", () => {
+    expect(cappedKeywordEstimate(48_000)).toBe(10_000);
+    expect(cappedKeywordEstimate(8_000)).toBe(8_000);
     expect(cappedKeywordEstimate(0)).toBe(0);
   });
 });
