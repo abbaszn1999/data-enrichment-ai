@@ -47,7 +47,7 @@ export function splitKeywordSheets(rows: KeywordRow[]): {
     const key = row.phrase.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    if (sheetForIntents(row.intents) === "category") commercial.push(row);
+    if (sheetForIntents(row.intents ?? []) === "category") commercial.push(row);
     else informational.push(row);
   }
   return { commercial, informational };

@@ -11,7 +11,9 @@ describe("mock keyword provider", () => {
 
   it("pages keyword ideas through a cursor until succeeded", async () => {
     const provider = createMockKeywordProvider();
-    const handle = await provider.startKeywordIdeas("Sunglasses", "us", 2);
+    const handle = await provider.startKeywordIdeas("Sunglasses", "us", {
+      limitPerSeed: 200,
+    });
     expect(handle.runId.startsWith("mock:")).toBe(true);
 
     let cursor: string | undefined;

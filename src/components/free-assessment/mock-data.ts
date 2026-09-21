@@ -6,6 +6,7 @@
 import {
   actualExtractCostUsd,
   cappedKeywordEstimate,
+  EXTRACT_CAP_PER_SEED,
   formatUsd as formatUsdShared,
 } from "@/lib/free-assessment/cost";
 
@@ -41,6 +42,15 @@ export type MockCollection = {
    * allowed to be used for downstream (never a niche name).
    */
   kind?: "collection" | "brand";
+  /**
+   * Breadcrumb from the top-level WooCommerce ancestor down to this item
+   * (e.g. ["Kids", "Hats"]), or a single-entry path (its own name) for
+   * Shopify collections and brand PLPs with no real hierarchy. Mirrors
+   * `TaxonomyCandidate.taxonomyPath` in `taxonomy-types.ts` — carried
+   * through so Stage 3 can use the client's own nesting as supporting
+   * context, never a substitute for `MockSubcategory.name`.
+   */
+  taxonomyPath?: string[];
 };
 
 /**
@@ -787,6 +797,21 @@ export function marketLabel(code: string): string {
  */
 export function usdForRawKeywords(rawKeywords: number): number {
   return actualExtractCostUsd(cappedKeywordEstimate(rawKeywords));
+}
+
+/**
+ * `keywordIdeasTotal` (the demand-check's "raw keywords" figure) is a
+ * broad-match idea count — Semrush Keyword Magic Tool's combined "all
+ * ideas" total for the seed, not a phrase-match-restricted count. Past the
+ * per-seed extract cap it's purely informational (extract never pulls more
+ * than the cap), so we show "20,000+" instead of a false-precision exact
+ * number.
+ */
+export function formatRawKeywords(rawKeywords: number): string {
+  if (rawKeywords > EXTRACT_CAP_PER_SEED) {
+    return `${EXTRACT_CAP_PER_SEED.toLocaleString("en-US")}+`;
+  }
+  return Math.max(0, Math.floor(rawKeywords)).toLocaleString("en-US");
 }
 
 export const formatUsd = formatUsdShared;

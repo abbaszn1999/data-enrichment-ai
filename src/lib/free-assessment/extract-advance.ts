@@ -641,7 +641,9 @@ export async function advanceMrExtract(
             datasetId: run.dataset_id ?? undefined,
             seed: run.seed_term,
             database: "",
-            pages: run.pages,
+            // `mr_runs.pages` (DB column, unchanged) now stores the
+            // per-seed `limitPerSeed` cap sent to the extraction actor.
+            limitPerSeed: run.pages,
           },
           cursor
         );

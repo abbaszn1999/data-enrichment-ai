@@ -30,6 +30,9 @@ export const extractStartBodySchema = z.object({
     )
     .min(1)
     .max(100),
+  /** Applied by Semrush server-side, before billing — narrower filters cost less. */
+  minVolume: z.number().int().min(0).max(1_000_000).optional(),
+  maxDifficulty: z.number().int().min(0).max(100).optional(),
 });
 
 export const extractPollBodySchema = z.object({
@@ -146,6 +149,17 @@ export const agentSeedsBodySchema = z.object({
          * decide whether a niche-level canonical seed is appropriate.
          */
         nicheFullySelected: z.boolean().optional(),
+        /** The searchable subcategory this PLP was placed under by the
+         *  Stage 1 taxonomy agent (e.g. "Kids Hats") — the actual
+         *  search-intent label, more reliable than the PLP's own raw name. */
+        subcategoryName: z.string().optional(),
+        /** Same as `nicheFullySelected` but at subcategory granularity —
+         *  the level that represents one real search intent. */
+        subcategoryFullySelected: z.boolean().optional(),
+        /** Breadcrumb from the client's own store hierarchy down to this
+         *  PLP (e.g. ["Kids", "Hats"]) — supporting context only, never a
+         *  substitute for `subcategoryName`. */
+        taxonomyPath: z.array(z.string()).optional(),
       })
     )
     .min(1)

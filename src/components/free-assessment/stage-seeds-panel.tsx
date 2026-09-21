@@ -48,6 +48,7 @@ import {
   STAGE3_EXCLUDED_EXAMPLES,
   estimateSelection,
   formatProductCount,
+  formatRawKeywords,
   formatUsd,
   groupSeedRowsByCanonical,
   isProbeStale,
@@ -63,6 +64,7 @@ import {
   APIFY_KEYWORD_USD_PER_ROW,
   APIFY_SEED_PROBE_USD_PER_SEED,
   estimateProbeCostUsd,
+  EXTRACT_CAP_PER_SEED,
 } from "@/lib/free-assessment/cost";
 import { cn } from "@/lib/utils";
 
@@ -100,7 +102,10 @@ type StageSeedsPanelProps = {
    * — never the canonical NAME alone, since two different PLPs can share
    * the same canonical seed name. */
   onAddManualSeed: (term: string, collectionId: string) => void;
-  onConfirmSpend: () => void;
+  onConfirmSpend: (filters?: {
+    minVolume?: number;
+    maxDifficulty?: number;
+  }) => void;
   committed?: boolean;
   walletHref?: string;
   walletBalance?: number | null;
@@ -146,6 +151,8 @@ export function StageSeedsPanel({
   const [manualFamily, setManualFamily] = useState("");
   const [budget, setBudget] = useState<number | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [minVolumeInput, setMinVolumeInput] = useState("");
+  const [maxDifficultyInput, setMaxDifficultyInput] = useState("");
 
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const probing = useMemo(() => new Set(probingIds), [probingIds]);
@@ -647,6 +654,7 @@ export function StageSeedsPanel({
                             probing={isProbing}
                             market={market}
                             value={probe?.rawKeywords}
+                            format={formatRawKeywords}
                           />
                         </TableCell>
                         <TableCell className="min-w-[80px] text-xs tabular-nums text-right whitespace-nowrap">
@@ -791,7 +799,7 @@ export function StageSeedsPanel({
                             </span>
                             {probe && !probe.failed ? (
                               <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-                                {probe.rawKeywords.toLocaleString("en-US")} kw ·{" "}
+                                {formatRawKeywords(probe.rawKeywords)} kw ·{" "}
                                 {formatUsd(
                                   usdForRawKeywords(probe.rawKeywords)
                                 )}
@@ -985,8 +993,8 @@ export function StageSeedsPanel({
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Phrase extraction filters out noise and only pulls exact matching search terms. Unused hold is refunded instantly. Extract pulls up to 10,000 keywords per selected seed at{" "}
-              {formatUsd(APIFY_KEYWORD_USD_PER_ROW)} per row. The figure above is an estimate from
+              Extract pulls up to {EXTRACT_CAP_PER_SEED.toLocaleString("en-US")} keywords per selected seed at{" "}
+              {formatUsd(APIFY_KEYWORD_USD_PER_ROW)} per row. Unused hold is refunded instantly. The figure above is an estimate from
               the demand check; your wallet is charged for rows actually
               returned. Agent work after this is free. Publishing collections
               is {formatUsd(5)} each.
@@ -1029,9 +1037,49 @@ export function StageSeedsPanel({
           <DialogHeader>
             <DialogTitle>Confirm keyword extract</DialogTitle>
             <DialogDescription>
-              Phrase extraction filters out noise and only pulls exact matching search terms. Unused hold is refunded instantly. You pay the actual row count returned after the run.
+              Semrush applies your volume and difficulty filters before
+              billing, so narrower filters cost less. Unused hold is
+              refunded instantly — you pay the actual row count returned
+              after the run.
             </DialogDescription>
           </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label
+                htmlFor="fa-extract-min-volume"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Min. search volume
+              </label>
+              <Input
+                id="fa-extract-min-volume"
+                type="number"
+                min={0}
+                inputMode="numeric"
+                placeholder="No minimum"
+                value={minVolumeInput}
+                onChange={(e) => setMinVolumeInput(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label
+                htmlFor="fa-extract-max-kd"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Max. keyword difficulty
+              </label>
+              <Input
+                id="fa-extract-max-kd"
+                type="number"
+                min={0}
+                max={100}
+                inputMode="numeric"
+                placeholder="No maximum"
+                value={maxDifficultyInput}
+                onChange={(e) => setMaxDifficultyInput(e.target.value)}
+              />
+            </div>
+          </div>
           <div className="max-h-56 overflow-auto rounded-xl border border-border/70">
             <table className="w-full text-[11px]">
               <thead className="sticky top-0 bg-muted/80 text-muted-foreground">
@@ -1050,10 +1098,7 @@ export function StageSeedsPanel({
                     <tr key={row.id} className="border-t border-border/50">
                       <td className="px-3 py-1.5">{row.broadSeedVariation}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">
-                        {Math.min(
-                          10_000,
-                          probes[row.id].rawKeywords
-                        ).toLocaleString("en-US")}
+                        {formatRawKeywords(probes[row.id].rawKeywords)}
                       </td>
                       <td className="px-3 py-1.5 text-right tabular-nums">
                         {formatUsd(usdForRawKeywords(probes[row.id].rawKeywords))}
@@ -1104,7 +1149,18 @@ export function StageSeedsPanel({
               disabled={!canAffordExtract}
               onClick={() => {
                 setConfirmOpen(false);
-                onConfirmSpend();
+                const minVolume = Number(minVolumeInput);
+                const maxDifficulty = Number(maxDifficultyInput);
+                onConfirmSpend({
+                  minVolume:
+                    minVolumeInput.trim() && Number.isFinite(minVolume)
+                      ? Math.max(0, Math.floor(minVolume))
+                      : undefined,
+                  maxDifficulty:
+                    maxDifficultyInput.trim() && Number.isFinite(maxDifficulty)
+                      ? Math.min(100, Math.max(0, Math.floor(maxDifficulty)))
+                      : undefined,
+                });
               }}
               className="bg-[#400095] hover:bg-[#6B358D] text-white dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
             >
@@ -1159,11 +1215,14 @@ function ProbeCell({
   probing,
   market,
   value,
+  format,
 }: {
   probe?: SeedProbe;
   probing: boolean;
   market: string;
   value?: number;
+  /** Defaults to a plain locale-formatted number; pass `formatRawKeywords` to cap the display at the extract ceiling. */
+  format?: (value: number) => string;
 }) {
   if (probing) {
     return (
@@ -1184,7 +1243,7 @@ function ProbeCell({
         isProbeStale(probe, market) && "text-amber-700 dark:text-amber-400"
       )}
     >
-      {(value ?? 0).toLocaleString("en-US")}
+      {format ? format(value ?? 0) : (value ?? 0).toLocaleString("en-US")}
     </span>
   );
 }

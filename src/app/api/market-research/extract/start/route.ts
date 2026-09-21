@@ -5,8 +5,9 @@ import {
   requireMrWrite,
 } from "@/lib/market-research/api-schema";
 import {
+  cappedKeywordEstimate,
   estimateExtractCostUsd,
-  pagesForEstimate,
+  EXTRACT_CAP_PER_SEED,
   roundUsd,
 } from "@/lib/market-research/cost";
 import { getKeywordProvider } from "@/lib/market-research/providers";
@@ -43,8 +44,7 @@ export async function POST(request: NextRequest) {
   const provider = getKeywordProvider();
   const extractId = crypto.randomUUID();
   const estimatedRows = parsed.data.seeds.reduce(
-    (sum, seed) =>
-      sum + Math.min(pagesForEstimate(seed.rawKeywordEstimate) * 100, seed.rawKeywordEstimate),
+    (sum, seed) => sum + cappedKeywordEstimate(seed.rawKeywordEstimate),
     0
   );
   const heldUsd = roundUsd(
@@ -95,26 +95,25 @@ export async function POST(request: NextRequest) {
     term: string;
     runId: string;
     datasetId?: string;
-    pages: number;
+    limitPerSeed: number;
     estimatedRows: number;
     estimatedCostUsd: number;
   }> = [];
 
   try {
     for (const seed of parsed.data.seeds) {
-      const pages = pagesForEstimate(seed.rawKeywordEstimate);
-      const handle = await provider.startKeywordIdeas(
-        seed.term,
-        database,
-        pages
-      );
+      const handle = await provider.startKeywordIdeas(seed.term, database, {
+        limitPerSeed: EXTRACT_CAP_PER_SEED,
+        minVolume: parsed.data.minVolume,
+        maxDifficulty: parsed.data.maxDifficulty,
+      });
       started.push({
         seedId: seed.id,
         term: seed.term,
         runId: handle.runId,
         datasetId: handle.datasetId,
-        pages: handle.pages,
-        estimatedRows: Math.min(pages * 100, seed.rawKeywordEstimate),
+        limitPerSeed: handle.limitPerSeed,
+        estimatedRows: cappedKeywordEstimate(seed.rawKeywordEstimate),
         estimatedCostUsd: estimateExtractCostUsd(seed.rawKeywordEstimate),
       });
       const { error: runError } = await auth.admin.from("mr_runs").insert({
@@ -126,7 +125,8 @@ export async function POST(request: NextRequest) {
         seed_term: seed.term,
         apify_run_id: handle.runId,
         dataset_id: handle.datasetId ?? null,
-        pages: handle.pages,
+        // `pages` column (unchanged) now stores `limitPerSeed`.
+        pages: handle.limitPerSeed,
         status: "running",
         estimated_usd: estimateExtractCostUsd(seed.rawKeywordEstimate),
       });

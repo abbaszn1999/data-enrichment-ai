@@ -66,6 +66,7 @@ function toMockCollection(item: {
   description?: string;
   plpPath?: string;
   kind?: "collection" | "brand";
+  taxonomyPath?: string[];
 }): MockCollection {
   return {
     id: item.id,
@@ -74,6 +75,9 @@ function toMockCollection(item: {
     description: item.description || undefined,
     plpPath: item.plpPath || undefined,
     ...(item.kind === "brand" ? { kind: "brand" as const } : {}),
+    ...(item.taxonomyPath && item.taxonomyPath.length > 0
+      ? { taxonomyPath: item.taxonomyPath }
+      : {}),
   };
 }
 

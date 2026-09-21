@@ -103,7 +103,7 @@ function mockAdmin(options: {
       runId: "apify-1",
       seed: "sunglasses",
       database: "us",
-      pages: 2,
+      limitPerSeed: 2,
     }),
     pollKeywordIdeas: async (_handle, cursor) => {
       providerCalls.push(cursor);

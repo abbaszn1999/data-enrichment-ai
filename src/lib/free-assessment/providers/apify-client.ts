@@ -116,6 +116,13 @@ export function actorKeywordIdeasId(): string {
   return process.env.APIFY_ACTOR_KEYWORD_IDEAS?.trim() || "7LH0CgHLrGbpFh49M";
 }
 
+/** amassuo/semrush-keyword-expander — replaces the keyword-ideas actor above for extraction. */
+export function actorKeywordExpanderId(): string {
+  return (
+    process.env.APIFY_ACTOR_KEYWORD_EXPANDER?.trim() || "inYcRmkB2hj4bKC0K"
+  );
+}
+
 const resolvedActorIds = new Map<string, Promise<string>>();
 
 /**

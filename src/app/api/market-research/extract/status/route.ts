@@ -118,7 +118,7 @@ export async function GET(request: NextRequest) {
           term: String(run.seed_term ?? ""),
           status: String(run.status ?? "running"),
           rowsReturned: Number(run.rows_returned) || 0,
-          pages: Number(run.pages) || 0,
+          limitPerSeed: Number(run.pages) || 0,
         })),
         sample,
       },

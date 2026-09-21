@@ -1,8 +1,6 @@
-import { EXTRACT_CAP_PER_SEED, KEYWORDS_PER_PAGE } from "../cost";
+import { EXTRACT_CAP_PER_SEED } from "../cost";
 import type {
   KeywordDataProvider,
-  KeywordIdeasHandle,
-  KeywordIdeasPoll,
   KeywordRow,
   RelatedKeyword,
   SeedMetrics,
@@ -41,9 +39,29 @@ const MOCK_DURATION_MS = 1_200;
 type MockPayload = {
   seed: string;
   database: string;
-  pages: number;
+  limitPerSeed: number;
+  minVolume?: number;
+  maxDifficulty?: number;
   startedAt: number;
 };
+
+function passesFilters(
+  row: KeywordRow,
+  minVolume?: number,
+  maxDifficulty?: number
+): boolean {
+  if (typeof minVolume === "number" && minVolume > 0 && row.volume < minVolume) {
+    return false;
+  }
+  if (
+    typeof maxDifficulty === "number" &&
+    maxDifficulty < 100 &&
+    row.difficulty > maxDifficulty
+  ) {
+    return false;
+  }
+  return true;
+}
 
 function hash(value: string): number {
   let h = 0;
@@ -186,22 +204,24 @@ export function createMockKeywordProvider(): KeywordDataProvider {
       return unique.map((seed) => metricsFor(seed, database));
     },
 
-    async startKeywordIdeas(seed, database, pages) {
+    async startKeywordIdeas(seed, database, filters) {
       const term = normalizeSeedTerm(seed);
-      const safePages = Math.min(
-        100,
-        Math.max(1, Math.floor(pages) || 1)
+      const safeLimit = Math.min(
+        EXTRACT_CAP_PER_SEED,
+        Math.max(1, Math.floor(filters.limitPerSeed) || 1)
       );
       return {
         runId: encodeHandle({
           seed: term,
           database,
-          pages: safePages,
+          limitPerSeed: safeLimit,
+          minVolume: filters.minVolume,
+          maxDifficulty: filters.maxDifficulty,
           startedAt: Date.now(),
         }),
         seed: term,
         database,
-        pages: safePages,
+        limitPerSeed: safeLimit,
       };
     },
 
@@ -210,27 +230,32 @@ export function createMockKeywordProvider(): KeywordDataProvider {
       if (!payload) {
         return { status: "failed", rows: [], error: "Unknown mock run" };
       }
-      const cap = Math.min(
-        payload.pages * KEYWORDS_PER_PAGE,
-        EXTRACT_CAP_PER_SEED,
-        rawFor(payload.seed)
-      );
-      const offset = Math.max(0, Number.parseInt(cursor ?? "0", 10) || 0);
+      const rawTotal = rawFor(payload.seed);
       const elapsed = Date.now() - payload.startedAt;
-      const ready = Math.min(
-        cap,
-        Math.max(0, Math.round((elapsed / MOCK_DURATION_MS) * cap))
+      const arrivedRaw = Math.min(
+        rawTotal,
+        Math.max(0, Math.round((elapsed / MOCK_DURATION_MS) * rawTotal))
       );
-      const end = Math.min(ready, offset + CHUNK);
-      const rows: KeywordRow[] = [];
-      for (let i = offset; i < end; i += 1) {
-        rows.push(rowAt(payload.seed, payload.database, i));
+      const filteredCap = Math.min(payload.limitPerSeed, EXTRACT_CAP_PER_SEED);
+      // Server-side minVolume/maxDifficulty filters, applied the same way
+      // amassuo/semrush-keyword-expander applies them before billing.
+      const filtered: KeywordRow[] = [];
+      for (let i = 0; i < arrivedRaw && filtered.length < filteredCap; i += 1) {
+        const row = rowAt(payload.seed, payload.database, i);
+        if (passesFilters(row, payload.minVolume, payload.maxDifficulty)) {
+          filtered.push(row);
+        }
       }
-      const done = ready >= cap;
+      const offset = Math.max(0, Number.parseInt(cursor ?? "0", 10) || 0);
+      const end = Math.min(filtered.length, offset + CHUNK);
+      const rows = filtered.slice(offset, end);
+      const rawExhausted = arrivedRaw >= rawTotal;
+      const capReached = filtered.length >= filteredCap;
+      const done = rawExhausted || capReached;
       return {
-        status: done && end >= cap ? "succeeded" : "running",
+        status: done && end >= filtered.length ? "succeeded" : "running",
         rows,
-        nextCursor: end < cap ? String(end) : undefined,
+        nextCursor: end < filtered.length ? String(end) : undefined,
       };
     },
 

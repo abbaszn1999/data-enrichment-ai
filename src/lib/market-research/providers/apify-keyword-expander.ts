@@ -1,5 +1,5 @@
 import {
-  actorKeywordIdeasId,
+  actorKeywordExpanderId,
   abortActorRun,
   assertRunBelongsToActor,
   getActorRun,
@@ -8,18 +8,27 @@ import {
   startActorRun,
 } from "./apify-client";
 import type {
+  KeywordExtractFilters,
   KeywordIdeasHandle,
   KeywordIdeasPoll,
   KeywordRow,
 } from "./keyword-provider";
 import { normalizeSeedTerm } from "./keyword-provider";
-import { decodeIntents, decodeSerpFeatures } from "./semrush-codes";
 
 const PAGE_SIZE = 250;
 
 /**
- * `clean=true` can return fewer than `limit` items while more rows still exist.
- * A short page is not EOF — only an empty page is.
+ * `amassuo/semrush-keyword-expander` — replaces the old phrase-match
+ * `pnda/semrush-keyword` actor. We request `sources: ["broad"]` only (the
+ * cheapest report, and the same match type the demand-check probe's raw
+ * count already represents), plus `minVolume`/`maxDifficulty`, which
+ * Semrush applies server-side *before* billing.
+ */
+export const KEYWORD_EXPANDER_SOURCES = ["broad"] as const;
+
+/**
+ * `clean=true`-style actors can return fewer than `limit` items while more
+ * rows still exist. A short page is not EOF — only an empty page is.
  */
 export function datasetPageExhausted(returnedCount: number): boolean {
   return returnedCount <= 0;
@@ -39,61 +48,68 @@ function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function parseKeywordIdeaItem(
+export function parseKeywordExpanderItem(
   item: unknown,
   seed: string,
   database: string
 ): KeywordRow | null {
   if (!item || typeof item !== "object") return null;
   const row = item as Record<string, unknown>;
-  const phrase = str(row.phrase ?? row.keyword ?? row.q);
+  const phrase = str(row.keyword ?? row.phrase ?? row.q);
   if (!phrase) return null;
-  const trends = Array.isArray(row.trends)
-    ? row.trends.map((value) => num(value)).slice(0, 12)
-    : [];
   return {
     phrase,
     database: str(row.database) || database,
     volume: Math.max(0, Math.floor(num(row.volume))),
     cpc: num(row.cpc),
-    competitionLevel: num(row.competition_level ?? row.competition),
+    competitionLevel: num(row.competition ?? row.competition_level),
     difficulty: Math.max(0, Math.floor(num(row.difficulty ?? row.kd))),
     results: Math.max(0, Math.floor(num(row.results))),
-    intents: decodeIntents(row.intents),
-    serpFeatures: decodeSerpFeatures(row.serp_features),
-    trends,
+    // amassuo doesn't return intents/serpFeatures/trends — production
+    // classification runs through the separate Gemini "Analyze with AI"
+    // step, not through these fields.
+    intents: [],
+    serpFeatures: [],
+    trends: [],
     seed,
   };
 }
 
-export async function startApifyKeywordIdeas(
+export async function startApifyKeywordExpander(
   seed: string,
   database: string,
-  pages: number
+  filters: KeywordExtractFilters
 ): Promise<KeywordIdeasHandle> {
   const term = normalizeSeedTerm(seed);
-  const safePages = Math.min(100, Math.max(1, Math.floor(pages) || 1));
-  const run = await startActorRun(actorKeywordIdeasId(), {
-    q: term,
-    db: database,
-    type: "phrase",
-    pages: safePages,
-  });
+  const safeLimit = Math.min(20_000, Math.max(1, Math.floor(filters.limitPerSeed) || 1));
+  const input: Record<string, unknown> = {
+    seedKeywords: [term],
+    sources: KEYWORD_EXPANDER_SOURCES,
+    database,
+    limitPerSeed: safeLimit,
+  };
+  if (typeof filters.minVolume === "number" && filters.minVolume > 0) {
+    input.minVolume = Math.floor(filters.minVolume);
+  }
+  if (typeof filters.maxDifficulty === "number" && filters.maxDifficulty < 100) {
+    input.maxDifficulty = Math.max(0, Math.floor(filters.maxDifficulty));
+  }
+  const run = await startActorRun(actorKeywordExpanderId(), input);
   return {
     runId: run.id,
     datasetId: run.defaultDatasetId,
     seed: term,
     database,
-    pages: safePages,
+    limitPerSeed: safeLimit,
   };
 }
 
-export async function pollApifyKeywordIdeas(
+export async function pollApifyKeywordExpander(
   handle: KeywordIdeasHandle,
   cursor?: string
 ): Promise<KeywordIdeasPoll> {
   const run = await getActorRun(handle.runId);
-  await assertRunBelongsToActor(run, actorKeywordIdeasId());
+  await assertRunBelongsToActor(run, actorKeywordExpanderId());
   const status = mapRunStatus(run.status);
   const datasetId = run.defaultDatasetId || handle.datasetId;
   const offset = Math.max(0, Number.parseInt(cursor ?? "0", 10) || 0);
@@ -103,11 +119,11 @@ export async function pollApifyKeywordIdeas(
       status,
       rows: [],
       datasetId,
-      error: run.statusMessage || "Keyword ideas actor failed",
+      error: run.statusMessage || "Keyword expander actor failed",
     };
   }
   if (status === "aborted") {
-    return { status, rows: [], datasetId, error: "Keyword ideas actor aborted" };
+    return { status, rows: [], datasetId, error: "Keyword expander actor aborted" };
   }
   if (!datasetId) {
     return {
@@ -119,7 +135,7 @@ export async function pollApifyKeywordIdeas(
 
   const items = await listDatasetItems<unknown>(datasetId, offset, PAGE_SIZE);
   const rows = items
-    .map((item) => parseKeywordIdeaItem(item, handle.seed, handle.database))
+    .map((item) => parseKeywordExpanderItem(item, handle.seed, handle.database))
     .filter((row): row is KeywordRow => Boolean(row));
   const nextOffset = offset + items.length;
   const exhausted = datasetPageExhausted(items.length);
@@ -141,9 +157,9 @@ export async function pollApifyKeywordIdeas(
   };
 }
 
-export async function abortApifyKeywordIdeas(runId: string): Promise<void> {
+export async function abortApifyKeywordExpander(runId: string): Promise<void> {
   if (!runId || runId.startsWith("mock:")) return;
   const run = await getActorRun(runId);
-  await assertRunBelongsToActor(run, actorKeywordIdeasId());
+  await assertRunBelongsToActor(run, actorKeywordExpanderId());
   await abortActorRun(runId);
 }

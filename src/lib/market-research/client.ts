@@ -41,7 +41,7 @@ export type ExtractSeedStart = {
   term: string;
   runId: string;
   datasetId?: string;
-  pages: number;
+  limitPerSeed: number;
   estimatedRows: number;
   estimatedCostUsd: number;
 };
@@ -145,12 +145,21 @@ export async function startExtractApi(
   workspaceId: string,
   projectId: string,
   market: string,
-  seeds: Array<ProbeSeedInput & { rawKeywordEstimate: number }>
+  seeds: Array<ProbeSeedInput & { rawKeywordEstimate: number }>,
+  /** Applied by Semrush server-side, before billing — narrower filters cost less. */
+  filters?: { minVolume?: number; maxDifficulty?: number }
 ): Promise<ExtractStartResponse> {
   const response = await fetch("/api/market-research/extract/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, projectId, market, seeds }),
+    body: JSON.stringify({
+      workspaceId,
+      projectId,
+      market,
+      seeds,
+      minVolume: filters?.minVolume,
+      maxDifficulty: filters?.maxDifficulty,
+    }),
   });
   return readJson<ExtractStartResponse>(response);
 }
@@ -195,7 +204,7 @@ export type ExtractStatusResponse = {
     term: string;
     status: string;
     rowsReturned: number;
-    pages: number;
+    limitPerSeed: number;
   }>;
   sample?: import("./map-keywords").DisplayKeyword[];
 };
@@ -827,6 +836,9 @@ export async function generateSeedsApi(
     productCount: number;
     parentNicheName: string;
     nicheFullySelected?: boolean;
+    subcategoryName?: string;
+    subcategoryFullySelected?: boolean;
+    taxonomyPath?: string[];
   }>
 ): Promise<AgentSeedsResponse> {
   const response = await fetch("/api/market-research/agent/seeds", {

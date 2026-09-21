@@ -17,6 +17,25 @@ export type SelectedScopeCollectionInput = {
    * only specific PLPs within a bigger niche were chosen.
    */
   nicheFullySelected?: boolean;
+  /**
+   * The searchable subcategory this PLP was placed under by the Stage 1
+   * taxonomy agent (e.g. "Kids Hats") — the verified search-intent label,
+   * more reliable than this PLP's own raw `name`. Absent only on
+   * legacy/mock niches that predate the subcategory tree.
+   */
+  subcategoryName?: string;
+  /**
+   * Same as `nicheFullySelected` but at subcategory granularity — the level
+   * that actually represents one real search intent, not the (possibly
+   * multi-intent) category above it.
+   */
+  subcategoryFullySelected?: boolean;
+  /**
+   * Breadcrumb from the client's own store hierarchy down to this PLP
+   * (e.g. ["Kids", "Hats"]) — supporting context only, never a substitute
+   * for `subcategoryName`.
+   */
+  taxonomyPath?: string[];
 };
 
 export type Stage3SeedGeneratorResult = {
@@ -87,44 +106,71 @@ function capTotalSeedRows(rows: MockSeedRow[]): MockSeedRow[] {
 }
 
 /**
- * Renders the selection in the human-readable, niche-grouped shape the
- * agent should reason over: every PLP under a niche that was selected in
- * full is grouped with a "fully selected" label so the model knows the
- * customer wants full-niche coverage; PLPs picked out of a bigger niche are
- * grouped with a "partial selection" label so the model stays tightly
- * scoped to just those PLPs rather than assuming the whole niche is wanted.
+ * Renders the selection in the human-readable, intent-grouped shape the
+ * agent should reason over. Groups at SUBCATEGORY granularity when present
+ * — that's the level that represents one real search intent — falling back
+ * to the flat category alone for legacy/mock niches with no subcategory
+ * tree. Every PLP under a group that was selected in full is labeled
+ * "fully selected" so the model knows full coverage of that exact intent is
+ * wanted; PLPs picked out of a bigger group are labeled "partial selection"
+ * so the model stays tightly scoped to just those PLPs.
  */
-function formatSelectionForPrompt(
+export function formatSelectionForPrompt(
   selectedCollections: SelectedScopeCollectionInput[]
 ): string {
   const order: string[] = [];
   const groups = new Map<
     string,
-    { fullySelected: boolean; items: SelectedScopeCollectionInput[] }
+    {
+      fullySelected: boolean;
+      categoryName: string;
+      subcategoryName?: string;
+      items: SelectedScopeCollectionInput[];
+    }
   >();
 
   for (const item of selectedCollections) {
-    const key = item.parentNicheName;
+    const key = item.subcategoryName
+      ? `${item.parentNicheName}::${item.subcategoryName}`
+      : item.parentNicheName;
     if (!groups.has(key)) {
-      groups.set(key, { fullySelected: Boolean(item.nicheFullySelected), items: [] });
+      groups.set(key, {
+        fullySelected: Boolean(
+          item.subcategoryName ? item.subcategoryFullySelected : item.nicheFullySelected
+        ),
+        categoryName: item.parentNicheName,
+        subcategoryName: item.subcategoryName,
+        items: [],
+      });
       order.push(key);
     }
     groups.get(key)!.items.push(item);
   }
 
   return order
-    .map((nicheName) => {
-      const group = groups.get(nicheName)!;
-      const label = group.fullySelected
-        ? "fully selected — every PLP under this niche was chosen, full-niche coverage is wanted"
-        : "partial selection — only these specific PLPs were chosen out of a bigger niche, stay scoped to them";
+    .map((key) => {
+      const group = groups.get(key)!;
+      const label = group.subcategoryName
+        ? group.fullySelected
+          ? "fully selected — every PLP under this subcategory was chosen, this exact search intent is fully in scope"
+          : "partial selection — only some PLPs under this subcategory were chosen, stay scoped to them"
+        : group.fullySelected
+          ? "fully selected — every PLP under this category was chosen, full-category coverage is wanted"
+          : "partial selection — only these specific PLPs were chosen out of a bigger category, stay scoped to them";
+      const scopeLines = group.subcategoryName
+        ? `Category: ${group.categoryName}\nSubcategory: ${group.subcategoryName} (${label})`
+        : `Category: ${group.categoryName} (${label})`;
       const plpLines = group.items
         .map((item) => {
           const desc = item.description ? ` — description: "${item.description}"` : "";
-          return `  - id="${item.id}" name="${item.name}" (${item.productCount.toLocaleString()} products)${desc}`;
+          const path =
+            item.taxonomyPath && item.taxonomyPath.length > 1
+              ? ` — store path: ${item.taxonomyPath.join(" > ")}`
+              : "";
+          return `  - id="${item.id}" name="${item.name}" (${item.productCount.toLocaleString()} products)${desc}${path}`;
         })
         .join("\n");
-      return `Niche: ${nicheName} (${label})\nPLPs:\n${plpLines}`;
+      return `${scopeLines}\nPLPs:\n${plpLines}`;
     })
     .join("\n\n");
 }
@@ -150,15 +196,24 @@ export async function runStage3SeedGeneration(input: {
     return runHeuristicStage3SeedGeneration(input);
   }
 
-  const systemInstruction = `You are the Market Research Stage 3 Broad Niche Seed Variation Agent powered by Gemini 3.7 Flash.
+  const systemInstruction = `You are the Market Research Stage 3 Broad Niche Seed Variation Agent powered by Gemini 3.8 Flash.
 Your job is to analyze the commercial catalog PLPs (collections/categories/brand pages) selected by the user and generate a structured family of broad niche seed variations for each one.
 
 ## Input shape
-The selection is grouped by niche. Each niche group is labeled either:
-- "fully selected" — every PLP under that niche was chosen, so full-niche coverage is wanted. You
-  may lean more liberally into that niche's own generic broad market term across its PLPs.
-- "partial selection" — only specific PLPs were hand-picked out of a bigger niche. Stay tightly
-  scoped to just those PLPs; do not assume the customer wants the whole niche's generic terms.
+The selection is grouped by CATEGORY and, when available, SUBCATEGORY — the subcategory is the
+searchable-intent label a Stage 1 taxonomy agent already assigned this PLP to (e.g. "Kids Hats"),
+and it is more reliable than the PLP's own raw name for judging what this page is really about.
+Each group is labeled either:
+- "fully selected" — every PLP under that subcategory (or category, if no subcategory is given)
+  was chosen, so full coverage of that exact search intent is wanted. You may lean more liberally
+  into that intent's own generic broad market term across its PLPs.
+- "partial selection" — only specific PLPs were hand-picked out of a bigger group. Stay tightly
+  scoped to just those PLPs; do not assume the customer wants the whole group's generic terms.
+
+When a PLP's own name is generic or ambiguous on its own (e.g. "Hats"), trust its subcategory label
+first (e.g. "Kids Hats") to resolve the anchor — never fall back to the bare category name while a
+subcategory label is available. A "store path" line, when present, is the client's own breadcrumb
+for that PLP — supporting evidence only, never a substitute for the subcategory label.
 
 ## THE GOLDEN RULE — reverse-engineer the entry point, don't paraphrase the title
 A broad seed variation is NOT a synonym of the PLP's name. It is a head/anchor term that recurs
@@ -208,9 +263,11 @@ family; a PLP named in English gets an all-English family; a mixed-language sele
 mixed-language output, matched per PLP, not one language for the whole response.
 
 ## For each selected PLP
-1. Classify its anchor shape first (pure category / brand-anchored / function-anchored), then
-   define the "canonicalNicheSeed" — the true anchor for this PLP's search space, in the SAME
-   language as the PLP's own name (e.g. "Sunglasses", "Gucci Sunglasses", "Eye Care",
+1. Read its subcategory label first, when given — that is the verified search intent, more
+   reliable than the PLP's own raw name. Classify the anchor shape (pure category / brand-anchored
+   / function-anchored) from the subcategory label if present, otherwise from the PLP's own name,
+   then define the "canonicalNicheSeed" — the true anchor for this PLP's search space, in the SAME
+   language as the PLP's own name (e.g. "Sunglasses", "Gucci Sunglasses", "Eye Care", "Kids Hats",
    "نظارات شمسية").
 2. Generate broad seed variations — the anchors and their close variants, per the Golden Rule
    above, never a mechanical dictionary-synonym list.
@@ -270,7 +327,7 @@ Output strictly valid JSON with this exact schema:
 }`;
 
   const userPrompt = `Store Name: ${input.storeName}
-Selected PLPs (${input.selectedCollections.length} total), grouped by niche:
+Selected PLPs (${input.selectedCollections.length} total), grouped by category/subcategory:
 
 ${formatSelectionForPrompt(input.selectedCollections)}
 
@@ -329,7 +386,7 @@ constraints.`;
       }
     }
   } catch (error) {
-    console.error("[runStage3SeedGeneration] Gemini 3.7 Flash seed call failed:", error);
+    console.error("[runStage3SeedGeneration] Gemini 3.8 Flash seed call failed:", error);
   }
 
   return runHeuristicStage3SeedGeneration(input);

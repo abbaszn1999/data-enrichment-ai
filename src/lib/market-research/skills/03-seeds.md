@@ -83,27 +83,37 @@ for a *different* PLP.
 
 ## Input Context
 
-You receive the customer's Stage 2 selection, already grouped by the Stage 1 niche each PLP
-belongs to, in this exact shape:
+You receive the customer's Stage 2 selection, already grouped at SUBCATEGORY granularity — the
+level a Stage 1 taxonomy agent already classified as one real, distinct search intent (e.g. "Kids
+Hats") — falling back to the flat CATEGORY alone only for legacy projects that predate the
+subcategory tree. Exact shape:
 
 ```
-Niche: <niche name> (<fully selected | partial selection> label)
+Category: <category name>
+Subcategory: <subcategory name> (<fully selected | partial selection> label)
 PLPs:
-  - id="<id>" name="<name>" (<productCount> products) — description: "<description>"
+  - id="<id>" name="<name>" (<productCount> products) — description: "<description>" — store path: <breadcrumb>
   ...
 ```
 
+(When no subcategory tree exists for this project, the `Subcategory:` line is omitted and the
+label appears directly on the `Category:` line instead — treat that category as the intent group.)
+
 | Field | Meaning |
 |---|---|
-| Niche label | `fully selected` when every PLP under that niche was chosen — full-niche coverage is wanted. `partial selection` when the customer hand-picked only some PLPs out of a bigger niche — stay scoped to just those PLPs. |
+| `Category` | The broad commercial category this PLP lives in (e.g. "Clothing"). Context only — never the source of the canonical seed while a subcategory is available. |
+| `Subcategory` | **The verified search-intent label** — a Stage 1 taxonomy agent already read this PLP's real name and its place in the client's own store hierarchy and decided this is the correct, Google-searchable intent for it (e.g. a client PLP literally named "Hats", nested under "Kids" in their own menu, was classified as "Kids Hats"). This is more reliable than the PLP's own raw `name` — **read it before the PLP name, not after.** |
+| Fully selected / partial selection label | Applies to whichever group you're reading (subcategory, or category when no subcategory is given). `fully selected` — every PLP under that exact intent was chosen, full coverage of it is wanted. `partial selection` — the customer hand-picked only some PLPs out of a bigger group — stay scoped to just those PLPs. |
 | `id` | The PLP's unique id — every output row must reference the same id it came from. |
-| `name` | The PLP's display name, in whatever language the merchant wrote it. This tells you the PLP's language AND whether it is a pure category, a brand-anchored page, or a function/benefit page — read it carefully before doing anything else. |
+| `name` | The PLP's own raw display name, in whatever language the merchant wrote it — this is the client's own label, not necessarily the searchable intent (a page named "Hats" doesn't tell you it's for kids; its subcategory does). Still useful for detecting the PLP's language/script, and as the fallback anchor source only when no subcategory is given. |
 | `productCount` | Real product count behind that PLP today — carried through to every output row unchanged. |
-| `description` | Optional. When present, read it before deciding the anchor set — it often confirms whether a generic-sounding name is actually brand- or function-anchored. |
+| `description` | Optional. When present, read it before falling back to it as an anchor source — it often confirms whether a generic-sounding name is actually brand- or function-anchored. |
+| `store path` | Optional. The client's own breadcrumb through their store hierarchy down to this PLP (e.g. "Kids > Hats"). Supporting evidence only — useful when the subcategory label alone still leaves ambiguity — never a substitute for the subcategory label itself. |
 
 A PLP can be a normal category/collection or a brand/vendor page — you treat both with the exact
 same reverse-engineering process. The only thing that changes is which *shape* of anchor (pure
-category, brand-anchored, or function-anchored) the PLP's own name tells you to produce.
+category, brand-anchored, or function-anchored) the subcategory label (or, absent one, the PLP's
+own name) tells you to produce.
 
 ---
 
@@ -111,17 +121,25 @@ category, brand-anchored, or function-anchored) the PLP's own name tells you to 
 
 1. **Read the whole selection first**, before writing anything. Note the total PLP count — you
    will need it to budget your reasoning depth and the 100-row output ceiling (see Decision Rules).
-2. **For each niche group**, note whether it is `fully selected` or `partial selection` — this
-   changes how liberally you lean into that niche's own generic broad term (see Decision Rules).
-3. **For each PLP, classify its anchor shape first:**
-   - Does the name contain a specific brand/vendor? → brand-anchored — the brand token is fixed.
+2. **For each subcategory group** (or category group, when no subcategory is given), note whether
+   it is `fully selected` or `partial selection` — this changes how liberally you lean into that
+   exact intent's own generic broad term (see Decision Rules).
+3. **For each PLP, read its subcategory label first, then classify its anchor shape:**
+   - Does the subcategory label (or, absent one, the PLP's own name) contain a specific
+     brand/vendor? → brand-anchored — the brand token is fixed.
    - Is it a generic commercial category? → pure category — no fixed token beyond the category itself.
    - Is it framed around a function, benefit, or use case (care, repair, cleaning, relief)? →
      function-anchored — the product-type + function combination is fixed.
+   - Never classify from the raw PLP `name` alone while a subcategory label is available — a name
+     like "Hats" is genuinely ambiguous on its own; its subcategory ("Kids Hats") already resolved
+     that ambiguity using the client's own store hierarchy, so trust it.
 4. **Detect the PLP's language/script** from its `name` (and `description`, if present). This is
-   the language every one of its output anchors must be written in — no exceptions.
-5. **Simulate that PLP's real query space** (silently, per the Golden Rule) and extract the
-   recurring anchor(s) — this is the `canonicalNicheSeed`, in the PLP's own language.
+   the language every one of its output anchors must be written in — no exceptions. The subcategory
+   label decides *what* the anchor means; the PLP's own name/description still decides *what
+   language and script* to write it in.
+5. **Simulate that PLP's real query space** (silently, per the Golden Rule), anchored on the
+   subcategory's intent, and extract the recurring anchor(s) — this is the `canonicalNicheSeed`, in
+   the PLP's own language.
 6. **Generate the broad seed variations** for that anchor: think as a real shopper searching
    Google, not as a thesaurus. Tag each with the correct `variationType` and `scopeMatch`.
 7. **Budget as you go.** Running total across every PLP processed so far must stay on track to
@@ -168,12 +186,18 @@ category, brand-anchored, or function-anchored) the PLP's own name tells you to 
   the surrounding language (e.g. "Gucci" stays "Gucci" even inside an Arabic-language variation
   set) unless the store itself localizes the brand name — follow the PLP's own name as written.
 
-### Fully selected niche vs. partial selection
-- **Fully selected** — every PLP under that niche was chosen. You may lean more liberally into
-  that niche's own broad, generic market term as a `"Broader market term"` variation across
-  several of its PLPs, since full-niche coverage is clearly what the customer wants.
-- **Partial selection** — only specific PLPs were hand-picked out of a bigger niche. Stay tightly
-  scoped to just those PLPs' own commercial meaning. Do not casually insert the whole niche's
+### Fully selected vs. partial selection — judged at SUBCATEGORY granularity
+This decision is made per subcategory group (the level that represents one real search intent),
+not per category — a category can hold several unrelated subcategories, and a fully-selected
+subcategory must never be treated as "partial" just because a sibling subcategory under the same
+category wasn't also picked. Only fall back to category-level judgment when a project has no
+subcategory tree at all.
+- **Fully selected** — every PLP under that subcategory (or category, if no subcategory is given)
+  was chosen. You may lean more liberally into that exact intent's own broad, generic market term
+  as a `"Broader market term"` variation across several of its PLPs, since full coverage of it is
+  clearly what the customer wants.
+- **Partial selection** — only specific PLPs were hand-picked out of a bigger group. Stay tightly
+  scoped to just those PLPs' own commercial meaning. Do not casually insert the whole group's
   generic term into every PLP's variation family — only include a broader term when it is a
   genuine, commonly-searched broadening of that specific PLP, and always label it `"Broader"`
   scope match so it is clearly distinguished from the PLP's exact meaning.
@@ -195,9 +219,12 @@ category, brand-anchored, or function-anchored) the PLP's own name tells you to 
 - The canonical seed is always the true anchor for that PLP's search space, in the PLP's own
   language, following its anchor shape (pure category / brand-anchored / function-anchored) — never
   the store's own name, and never narrower than the PLP itself.
-- When a PLP's name is generic (`"Accessories"`, `"New Arrivals"`, `"Featured"`), use its
-  description first, then its parent niche name, to infer the real anchor. If truly unresolvable,
-  use the parent niche name itself as the canonical seed.
+- **Fallback order when the PLP's own name is generic or ambiguous** (`"Hats"`, `"Accessories"`,
+  `"New Arrivals"`, `"Featured"`): 1) its **subcategory label** first — that is exactly what it was
+  invented to resolve (e.g. "Hats" → "Kids Hats"); 2) its `description`, when a subcategory isn't
+  available or is itself still generic; 3) its parent category name as a last resort. Never skip
+  straight from the PLP name to the category name while a subcategory label is sitting right there
+  unused.
 
 ---
 
@@ -280,19 +307,24 @@ Before returning, verify:
 - [ ] Small selections (few PLPs) received genuinely deep brainstorming, not a shallow minimum.
 - [ ] No variation is a style, material, feature, function-modifier, audience-narrowing
       combination, or SKU-level attribute — only anchors, never the long-tail built on top of them.
-- [ ] `fully selected` niches were treated more liberally toward the niche's own broad term than
-      `partial selection` niches, without over-generalizing either.
+- [ ] Every PLP's anchor shape and canonical seed were read from its subcategory label first —
+      never derived from a generic/ambiguous raw PLP name while a subcategory label was available.
+- [ ] `fully selected` subcategories (or categories, when no subcategory tree exists) were treated
+      more liberally toward that intent's own broad term than `partial selection` groups, without
+      over-generalizing either — and this was judged at subcategory granularity, not leaked up from
+      or down to a sibling subcategory under the same category.
 - [ ] No niche or PLP was recommended, ranked, or endorsed — this stage only prepares terms.
 
 ---
 
 ## Error Handling & Fallbacks
 
-- **A PLP has no description.** Fall back to its name alone, then its parent niche name, to infer
-  the anchor — this is normal, not a failure.
-- **A generic/ambiguous PLP name with no description and an unhelpful parent niche name.** Use the
-  parent niche name itself as the canonical seed rather than inventing a specific-sounding term
-  that isn't backed by the input.
+- **A PLP has no description.** Fall back to its subcategory label first (if given), then its name
+  alone, then its parent category name, to infer the anchor — this is normal, not a failure.
+- **A generic/ambiguous PLP name with no subcategory label, no description, and an unhelpful
+  parent category name.** Use the parent category name itself as the canonical seed rather than
+  inventing a specific-sounding term that isn't backed by the input. This should be rare — it only
+  happens when a project predates the subcategory tree entirely.
 - **Unsure whether a name token is a real brand or just a descriptive word.** If you recognize it
   as a real commercial brand/vendor, treat it as a fixed anchor per the brand-handling rule. If you
   do not recognize it as a brand, treat the PLP as a pure category or function-anchored PLP instead
@@ -314,7 +346,8 @@ Before returning, verify:
 
 **Input:**
 ```
-Niche: Eyewear (fully selected — every PLP under this niche was chosen, full-niche coverage is wanted)
+Category: Eyewear
+Subcategory: Eyewear (fully selected — every PLP under this subcategory was chosen, this exact search intent is fully in scope)
 PLPs:
   - id="col-eye" name="Eyewear" (6,800 products)
 ```
@@ -351,7 +384,8 @@ the plain category terms. Only one PLP selected, so go deep (8+ variations) per 
 
 **Input:**
 ```
-Niche: Eyewear (partial selection — only these specific PLPs were chosen out of a bigger niche, stay scoped to them)
+Category: Eyewear Brands
+Subcategory: Gucci (partial selection — only some PLPs under this subcategory were chosen, stay scoped to them)
 PLPs:
   - id="brand-gucci" name="Gucci Sunglasses" (640 products)
 ```
@@ -386,7 +420,8 @@ Sunglasses PLP, not this one.
 
 **Input:**
 ```
-Niche: Skincare (partial selection — only these specific PLPs were chosen out of a bigger niche, stay scoped to them)
+Category: Skincare
+Subcategory: Eye Care (partial selection — only some PLPs under this subcategory were chosen, stay scoped to them)
 PLPs:
   - id="col-eyecare" name="Eye Care" (980 products) — description: "Creams, serums and treatments for the eye area"
 ```
@@ -418,19 +453,20 @@ function combinations — never the narrow modifiers ("dark circles", "caffeine"
 
 ---
 
-### Example D — English, partial selection out of a bigger niche (Board Games)
+### Example D — English, partial selection out of a bigger category (Board Games)
 
 **Input:**
 ```
-Niche: Toys (partial selection — only these specific PLPs were chosen out of a bigger niche, stay scoped to them)
+Category: Toys
+Subcategory: Board Games (partial selection — only some PLPs under this subcategory were chosen, stay scoped to them)
 PLPs:
   - id="35" name="Board Games" (421 products)
 ```
 
-**Reasoning:** Only "Board Games" was picked from the larger Toys niche — the customer did not
-select "All Toys" or "Educational Toys". Stay scoped to board games specifically; do not casually
-add the whole "Toys" niche as a broader term the way full-niche selections do — only include a
-genuinely common broadening if it exists, clearly labeled `"Broader"`.
+**Reasoning:** Only the "Board Games" subcategory was picked from the larger Toys category — the
+customer did not select "All Toys" or "Educational Toys". Stay scoped to board games specifically;
+do not casually add the whole "Toys" category as a broader term the way full-selection groups do —
+only include a genuinely common broadening if it exists, clearly labeled `"Broader"`.
 
 **Output:**
 ```json
@@ -456,7 +492,8 @@ genuinely common broadening if it exists, clearly labeled `"Broader"`.
 
 **Input:**
 ```
-Niche: نظارات (fully selected — every PLP under this niche was chosen, full-niche coverage is wanted)
+Category: نظارات
+Subcategory: نظارات شمسية (fully selected — every PLP under this subcategory was chosen, this exact search intent is fully in scope)
 PLPs:
   - id="col-9" name="نظارات شمسية" (3,500 products)
 ```
@@ -478,6 +515,46 @@ sunglasses.
         { "term": "نظاره شمسيه", "variationType": "Spelling variation", "scopeMatch": "Exact" },
         { "term": "نظارات شمس", "variationType": "Alternative wording", "scopeMatch": "Close" },
         { "term": "نظارات", "variationType": "Broader market term", "scopeMatch": "Broader" }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### Example F — Subcategory resolves an ambiguous raw PLP name (Kids Hats)
+
+**Input:**
+```
+Category: Clothing
+Subcategory: Kids Hats (fully selected — every PLP under this subcategory was chosen, this exact search intent is fully in scope)
+PLPs:
+  - id="hats-123" name="Hats" (150 products) — store path: Kids > Hats
+```
+
+**Reasoning:** The PLP's own raw name is just "Hats" — genuinely ambiguous on its own; it could mean
+hats for anyone. Its subcategory label, "Kids Hats", already resolved that: a Stage 1 taxonomy
+agent read this PLP's real position in the client's own store menu (the "store path" confirms it
+sits under "Kids") and correctly classified it as a kids-specific search intent. Per the
+fallback-order rule, the subcategory label is read BEFORE the raw PLP name — the canonical seed is
+"Kids Hats", never bare "Hats". Simulated query space: "kids hats", "toddler hats", "children's
+hats", "boys hats", "girls hats". No brand present — pure category, but the anchor itself must
+carry "kids", not just the bare product type.
+
+**Output:**
+```json
+{
+  "collections": [
+    {
+      "collectionId": "hats-123",
+      "canonicalNicheSeed": "Kids Hats",
+      "variations": [
+        { "term": "Kids hats", "variationType": "Primary term", "scopeMatch": "Exact" },
+        { "term": "Children's hats", "variationType": "Common synonym", "scopeMatch": "Exact" },
+        { "term": "Toddler hats", "variationType": "Audience variation", "scopeMatch": "Close" },
+        { "term": "Kids caps", "variationType": "Alternative wording", "scopeMatch": "Close" },
+        { "term": "Hats", "variationType": "Broader market term", "scopeMatch": "Broader" }
       ]
     }
   ]

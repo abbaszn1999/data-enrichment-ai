@@ -5,7 +5,7 @@ import {
   keywordSampleNeedsRebuild,
   overlayKeywordSampleWithClassified,
 } from "./map-keywords";
-import { datasetPageExhausted } from "./providers/apify-keyword-ideas";
+import { datasetPageExhausted } from "./providers/apify-keyword-expander";
 
 describe("keywordSampleNeedsRebuild", () => {
   it("rebuilds when the archive has more rows than the Extract cache", () => {

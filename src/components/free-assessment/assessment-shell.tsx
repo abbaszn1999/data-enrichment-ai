@@ -680,21 +680,55 @@ export function FreeAssessmentShell() {
       productCount: number;
       parentNicheName: string;
       nicheFullySelected: boolean;
+      subcategoryName?: string;
+      subcategoryFullySelected?: boolean;
+      taxonomyPath?: string[];
     }> = [];
     for (const niche of currentStructured) {
+      // Whole category was picked as a unit vs. the customer hand-picked
+      // only some of its PLPs.
       const nicheFullySelected =
         niche.collections.length > 0 &&
         niche.collections.every((c) => selectedIdSet.has(c.id));
-      for (const col of niche.collections) {
-        if (!selectedIdSet.has(col.id)) continue;
-        selectedScopeCollections.push({
-          id: col.id,
-          name: col.name,
-          description: col.description,
-          productCount: col.productCount,
-          parentNicheName: niche.name,
-          nicheFullySelected,
-        });
+
+      if (niche.subcategories && niche.subcategories.length > 0) {
+        // Group/flag at subcategory granularity — that's the level that
+        // actually represents one search intent under the new taxonomy,
+        // not the (possibly multi-intent) category above it.
+        for (const sub of niche.subcategories) {
+          const subcategoryFullySelected =
+            sub.collections.length > 0 &&
+            sub.collections.every((c) => selectedIdSet.has(c.id));
+          for (const col of sub.collections) {
+            if (!selectedIdSet.has(col.id)) continue;
+            selectedScopeCollections.push({
+              id: col.id,
+              name: col.name,
+              description: col.description,
+              productCount: col.productCount,
+              parentNicheName: niche.name,
+              nicheFullySelected,
+              subcategoryName: sub.name,
+              subcategoryFullySelected,
+              taxonomyPath: col.taxonomyPath,
+            });
+          }
+        }
+      } else {
+        // Legacy/mock niches with no subcategory tree — fall back to the
+        // flat category-only grouping exactly as before.
+        for (const col of niche.collections) {
+          if (!selectedIdSet.has(col.id)) continue;
+          selectedScopeCollections.push({
+            id: col.id,
+            name: col.name,
+            description: col.description,
+            productCount: col.productCount,
+            parentNicheName: niche.name,
+            nicheFullySelected,
+            taxonomyPath: col.taxonomyPath,
+          });
+        }
       }
     }
 
@@ -821,7 +855,10 @@ export function FreeAssessmentShell() {
             seedId: row.seedId,
             market,
             rawKeywords: row.keywordIdeasTotal,
-            searchVolume: row.volume,
+            // Total volume across all broad-match ideas for this seed, not
+            // the seed's own standalone volume (`row.volume`) — matches
+            // what "Raw keywords" (keywordIdeasTotal) is counting.
+            searchVolume: row.keywordIdeasTotalVolume,
             sampleKeywords: row.sampleKeywords.slice(0, 5),
             checkedAt: Date.now(),
           };
@@ -1021,7 +1058,9 @@ export function FreeAssessmentShell() {
     await tick();
   };
 
-  const handleExtract = async () => {
+  const handleExtract = async (
+    filters?: { minVolume?: number; maxDifficulty?: number }
+  ) => {
     if (!canEdit || !activeProject) return;
     if (!workspaceId) {
       toast.error("Workspace is still loading");
@@ -1093,7 +1132,8 @@ export function FreeAssessmentShell() {
           id: seed.id,
           term: seed.broadSeedVariation,
           rawKeywordEstimate: activeProbes[seed.id]?.rawKeywords ?? 0,
-        }))
+        })),
+        filters
       );
       if (extractGen.current !== gen) {
         setExtracting(false);
@@ -1113,7 +1153,7 @@ export function FreeAssessmentShell() {
           return {
             id: seed.seedId,
             term: seed.term,
-            cap: match?.cap ?? seed.pages * 100,
+            cap: match?.cap ?? seed.limitPerSeed,
           };
         }),
       });
@@ -1203,7 +1243,7 @@ export function FreeAssessmentShell() {
             term: seed.term,
             cap: match
               ? pulledCountForSeed(match, activeProbes)
-              : Math.max(seed.pages * 100, seed.rowsReturned, 1),
+              : Math.max(seed.limitPerSeed, seed.rowsReturned, 1),
           };
         });
         setSeedProgress(

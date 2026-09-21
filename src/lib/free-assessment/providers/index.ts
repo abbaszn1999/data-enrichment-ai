@@ -1,10 +1,10 @@
 import { createMockKeywordProvider } from "./mock-provider";
 import { fetchApifySeedMetrics } from "./apify-seed-metrics";
 import {
-  abortApifyKeywordIdeas,
-  pollApifyKeywordIdeas,
-  startApifyKeywordIdeas,
-} from "./apify-keyword-ideas";
+  abortApifyKeywordExpander,
+  pollApifyKeywordExpander,
+  startApifyKeywordExpander,
+} from "./apify-keyword-expander";
 import type { KeywordDataProvider } from "./keyword-provider";
 
 export function keywordProviderMode(): "apify" | "mock" {
@@ -20,9 +20,9 @@ export function getKeywordProvider(): KeywordDataProvider {
   }
   return {
     fetchSeedMetrics: fetchApifySeedMetrics,
-    startKeywordIdeas: startApifyKeywordIdeas,
-    pollKeywordIdeas: pollApifyKeywordIdeas,
-    abortKeywordIdeas: abortApifyKeywordIdeas,
+    startKeywordIdeas: startApifyKeywordExpander,
+    pollKeywordIdeas: pollApifyKeywordExpander,
+    abortKeywordIdeas: abortApifyKeywordExpander,
   };
 }
 

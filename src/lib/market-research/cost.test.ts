@@ -6,12 +6,11 @@ import {
   collectionPushCostUsd,
   estimateExtractCostUsd,
   estimateProbeCostUsd,
-  pagesForEstimate,
 } from "./cost";
 import { applyKeywordFilters, splitKeywordSheets } from "./filters";
 import { decodeIntents, sheetForIntents } from "./providers/semrush-codes";
 import { marketToSemrushDb } from "./providers/keyword-provider";
-import { parseKeywordIdeaItem } from "./providers/apify-keyword-ideas";
+import { parseKeywordExpanderItem } from "./providers/apify-keyword-expander";
 import { parseSeedMetricsItem } from "./providers/parse-seed-metrics";
 import type { KeywordRow } from "./providers/keyword-provider";
 
@@ -26,11 +25,10 @@ describe("market-research cost", () => {
     expect(collectionPushCostUsd(3)).toBe(15);
   });
 
-  it("caps extract pages at 10,000 keywords", () => {
-    expect(cappedKeywordEstimate(48_000)).toBe(10_000);
-    expect(pagesForEstimate(48_000)).toBe(100);
-    expect(pagesForEstimate(2400)).toBe(24);
-    expect(pagesForEstimate(0)).toBe(1);
+  it("caps extract rows at 20,000 keywords per seed", () => {
+    expect(cappedKeywordEstimate(48_000)).toBe(20_000);
+    expect(cappedKeywordEstimate(18_000)).toBe(18_000);
+    expect(cappedKeywordEstimate(0)).toBe(0);
   });
 });
 
@@ -128,20 +126,26 @@ describe("provider parsers", () => {
     expect(parsed?.relatedKeywords[0]?.keyword).toBe("best sunglasses");
   });
 
-  it("parses Actor 4 keyword idea rows", () => {
-    const parsed = parseKeywordIdeaItem(
+  it("parses amassuo/semrush-keyword-expander keyword rows", () => {
+    const parsed = parseKeywordExpanderItem(
       {
-        phrase: "polarized sunglasses",
+        keyword: "polarized sunglasses",
         volume: 18100,
-        cpc: 2.1,
         difficulty: 44,
-        intents: [3, 4],
-        serp_features: [7],
+        cpc: 2.1,
+        competition: 0.4,
+        results: 92000,
+        seed: "Sunglasses",
+        sources: "broad",
+        database: "us",
       },
       "Sunglasses",
       "us"
     );
-    expect(parsed?.intents).toEqual(["commercial", "transactional"]);
-    expect(parsed?.serpFeatures).toContain("people_also_ask");
+    expect(parsed?.phrase).toBe("polarized sunglasses");
+    expect(parsed?.volume).toBe(18100);
+    expect(parsed?.difficulty).toBe(44);
+    expect(parsed?.intents).toEqual([]);
+    expect(parsed?.serpFeatures).toEqual([]);
   });
 });

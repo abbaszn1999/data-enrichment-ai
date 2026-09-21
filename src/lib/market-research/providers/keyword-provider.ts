@@ -31,10 +31,18 @@ export type KeywordRow = {
   competitionLevel: number;
   difficulty: number;
   results: number;
-  intents: SearchIntent[];
-  serpFeatures: string[];
-  trends: number[];
+  /** Not returned by amassuo/semrush-keyword-expander; kept optional for older providers/tests. */
+  intents?: SearchIntent[];
+  serpFeatures?: string[];
+  trends?: number[];
   seed: string;
+};
+
+/** Filters amassuo/semrush-keyword-expander applies server-side, before billing. */
+export type KeywordExtractFilters = {
+  limitPerSeed: number;
+  minVolume?: number;
+  maxDifficulty?: number;
 };
 
 export type KeywordIdeasHandle = {
@@ -42,7 +50,7 @@ export type KeywordIdeasHandle = {
   datasetId?: string;
   seed: string;
   database: string;
-  pages: number;
+  limitPerSeed: number;
 };
 
 export type KeywordIdeasStatus = "running" | "succeeded" | "failed" | "aborted";
@@ -60,7 +68,7 @@ export interface KeywordDataProvider {
   startKeywordIdeas(
     seed: string,
     database: string,
-    pages: number
+    filters: KeywordExtractFilters
   ): Promise<KeywordIdeasHandle>;
   pollKeywordIdeas(
     handle: KeywordIdeasHandle,
