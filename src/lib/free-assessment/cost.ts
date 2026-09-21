@@ -25,6 +25,14 @@ export const COLLECTION_PUSH_USD = 5;
  */
 export const EXTRACT_CAP_PER_SEED = 10_000;
 
+/**
+ * Hard ceiling on how many raw keywords a Tab 3 selection may commit to
+ * extracting. Each seed counts as `min(raw keywords, EXTRACT_CAP_PER_SEED)`
+ * — a term shown as "10,000+" counts as 10,000 — so ten maxed-out seeds
+ * fill the ceiling exactly.
+ */
+export const RAW_KEYWORD_SELECTION_CAP = 100_000;
+
 /** Wallet amounts use 4 decimal places so $0.002/seed and $0.006/row survive rounding. */
 export function roundUsd(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;

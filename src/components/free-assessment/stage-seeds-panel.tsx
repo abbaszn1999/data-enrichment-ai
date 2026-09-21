@@ -9,11 +9,9 @@ import {
   ChevronRight,
   Copy,
   Info,
-  Layers,
   Loader2,
   Plus,
   RefreshCw,
-  Rows3,
   Search,
   Wallet,
 } from "lucide-react";
@@ -63,12 +61,12 @@ import {
 import {
   APIFY_KEYWORD_USD_PER_ROW,
   APIFY_SEED_PROBE_USD_PER_SEED,
+  cappedKeywordEstimate,
   estimateProbeCostUsd,
   EXTRACT_CAP_PER_SEED,
+  RAW_KEYWORD_SELECTION_CAP,
 } from "@/lib/free-assessment/cost";
 import { cn } from "@/lib/utils";
-
-const SCOPE_FILTERS: ScopeMatch[] = ["Exact", "Close", "Broader", "Ambiguous"];
 
 function scopeMatchClass(match: ScopeMatch): string {
   switch (match) {
@@ -83,6 +81,47 @@ function scopeMatchClass(match: ScopeMatch): string {
     default:
       return "";
   }
+}
+
+/** Capped raw keywords a probed seed would actually extract. Unprobed is unknown. */
+function billedRawKeywords(
+  rowId: string,
+  probes: Record<string, SeedProbe>
+): number | null {
+  const probe = probes[rowId];
+  if (!probe || probe.failed) return null;
+  return cappedKeywordEstimate(probe.rawKeywords);
+}
+
+function billedTotal(
+  ids: Iterable<string>,
+  probes: Record<string, SeedProbe>
+): number {
+  let total = 0;
+  for (const id of ids) {
+    const billed = billedRawKeywords(id, probes);
+    if (billed != null) total += billed;
+  }
+  return total;
+}
+
+/** Unselected ids that still fit under the raw-keyword ceiling, in given order. */
+function idsThatFit(
+  candidates: { id: string }[],
+  already: Set<string>,
+  probes: Record<string, SeedProbe>
+): string[] {
+  let running = billedTotal(already, probes);
+  const added: string[] = [];
+  if (running >= RAW_KEYWORD_SELECTION_CAP) return added;
+  for (const row of candidates) {
+    if (already.has(row.id)) continue;
+    const billed = billedRawKeywords(row.id, probes) ?? 0;
+    if (running + billed > RAW_KEYWORD_SELECTION_CAP) continue;
+    added.push(row.id);
+    running += billed;
+  }
+  return added;
 }
 
 type StageSeedsPanelProps = {
@@ -143,9 +182,6 @@ export function StageSeedsPanel({
   productCountByCollectionId = {},
   productFetchProgress = null,
 }: StageSeedsPanelProps) {
-  const [view, setView] = useState<"rows" | "grouped">("rows");
-  const [query, setQuery] = useState("");
-  const [scopes, setScopes] = useState<ScopeMatch[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [manualTerm, setManualTerm] = useState("");
   const [manualFamily, setManualFamily] = useState("");
@@ -156,24 +192,13 @@ export function StageSeedsPanel({
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const probing = useMemo(() => new Set(probingIds), [probingIds]);
 
-  const visibleRows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (scopes.length > 0 && !scopes.includes(row.scopeMatch)) return false;
-      if (!q) return true;
-      return (
-        row.broadSeedVariation.toLowerCase().includes(q) ||
-        row.canonicalNicheSeed.toLowerCase().includes(q) ||
-        row.selectedCollection.toLowerCase().includes(q)
-      );
-    });
-  }, [rows, query, scopes]);
-
-  const groups = useMemo(
-    () => groupSeedRowsByCanonical(visibleRows),
-    [visibleRows]
+  const groups = useMemo(() => groupSeedRowsByCanonical(rows), [rows]);
+  const selectedBilled = useMemo(
+    () => billedTotal(selected, probes),
+    [selected, probes]
   );
-  const allGroups = useMemo(() => groupSeedRowsByCanonical(rows), [rows]);
+  const overSelectionCap = selectedBilled > RAW_KEYWORD_SELECTION_CAP;
+  const atSelectionCap = selectedBilled >= RAW_KEYWORD_SELECTION_CAP;
 
   const selectedRows = useMemo(
     () => rows.filter((row) => selected.has(row.id)),
@@ -186,8 +211,8 @@ export function StageSeedsPanel({
   const maxBudget = Math.max(0.01, estimate.usd);
   const effectiveBudget = budget ?? maxBudget;
 
-  const allVisibleSelected =
-    visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.id));
+  const allRowsSelected =
+    rows.length > 0 && rows.every((r) => selected.has(r.id));
 
   const [insufficientFundsOpen, setInsufficientFundsOpen] = useState(false);
   const [insufficientFundsAction, setInsufficientFundsAction] = useState("");
@@ -257,25 +282,39 @@ export function StageSeedsPanel({
   const toggleRow = (id: string) => {
     if (readOnly) return;
     const next = new Set(selected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    if (next.has(id)) {
+      next.delete(id);
+      onChangeSelected(Array.from(next));
+      return;
+    }
+    if (idsThatFit([{ id }], next, probes).length === 0) return;
+    next.add(id);
     onChangeSelected(Array.from(next));
   };
 
   const toggleAllVisible = () => {
     if (readOnly) return;
-    const next = new Set(selected);
-    if (allVisibleSelected) visibleRows.forEach((r) => next.delete(r.id));
-    else visibleRows.forEach((r) => next.add(r.id));
-    onChangeSelected(Array.from(next));
+    if (allRowsSelected) {
+      onChangeSelected([]);
+      return;
+    }
+    const fit = idsThatFit(rows, selected, probes);
+    if (fit.length === 0) return;
+    onChangeSelected([...selectedIds, ...fit]);
   };
 
   const toggleGroup = (groupRows: MockSeedRow[]) => {
     if (readOnly) return;
     const next = new Set(selected);
     const allOn = groupRows.every((r) => next.has(r.id));
-    if (allOn) groupRows.forEach((r) => next.delete(r.id));
-    else groupRows.forEach((r) => next.add(r.id));
+    if (allOn) {
+      groupRows.forEach((r) => next.delete(r.id));
+      onChangeSelected(Array.from(next));
+      return;
+    }
+    const fit = idsThatFit(groupRows, next, probes);
+    if (fit.length === 0) return;
+    for (const id of fit) next.add(id);
     onChangeSelected(Array.from(next));
   };
 
@@ -293,19 +332,13 @@ export function StageSeedsPanel({
     }
   };
 
-  const toggleScope = (scope: ScopeMatch) => {
-    setScopes((prev) =>
-      prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope]
-    );
-  };
-
   const submitManualSeed = () => {
     const term = manualTerm.trim();
     // Keyed by collectionId, not the canonical NAME — two different PLPs
     // can legitimately share the same canonical seed name (e.g. two
     // collections that both distill to "Smartphones"), so the name alone
     // can't reliably identify which family to attach the term to.
-    const collectionId = manualFamily || allGroups[0]?.collectionId;
+    const collectionId = manualFamily || groups[0]?.collectionId;
     if (!term || !collectionId) return;
     onAddManualSeed(term, collectionId);
     setManualTerm("");
@@ -418,67 +451,27 @@ export function StageSeedsPanel({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-lg border border-border/70 p-0.5">
-            {(
-              [
-                { id: "rows", label: "Rows", icon: Rows3 },
-                { id: "grouped", label: "By canonical seed", icon: Layers },
-              ] as const
-            ).map((option) => {
-              const Icon = option.icon;
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => setView(option.id)}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
-                    view === option.id
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter seeds…"
-            className="h-8 w-[160px] text-xs"
-            aria-label="Filter seed variations"
-            disabled={readOnly}
-          />
-
-          <div className="flex flex-wrap items-center gap-1">
-            {SCOPE_FILTERS.map((scope) => {
-              const on = scopes.includes(scope);
-              return (
-                <button
-                  key={scope}
-                  type="button"
-                  onClick={() => toggleScope(scope)}
-                  disabled={readOnly}
-                  aria-pressed={on}
-                  className={cn(
-                    "rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors disabled:cursor-default",
-                    on
-                      ? scopeMatchClass(scope)
-                      : "border-border/70 text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {scope}
-                </button>
-              );
-            })}
-          </div>
+          <span
+            className={cn(
+              "rounded-lg border px-2.5 py-1 text-[11px] font-medium tabular-nums",
+              overSelectionCap
+                ? "border-destructive/40 bg-destructive/10 text-destructive"
+                : atSelectionCap
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                  : "border-border/70 text-muted-foreground"
+            )}
+          >
+            {selectedBilled.toLocaleString("en-US")} /{" "}
+            {RAW_KEYWORD_SELECTION_CAP.toLocaleString("en-US")} raw keywords
+            {overSelectionCap
+              ? " — over the maximum. Deselect seeds before extracting."
+              : atSelectionCap
+                ? " — maximum reached, more seeds can’t be checked."
+                : ""}
+          </span>
 
           <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">
-            {rows.length} rows · {allGroups.length} canonical
+            {rows.length} broad terms · {groups.length} canonical
           </span>
 
           <TooltipProvider>
@@ -520,21 +513,33 @@ export function StageSeedsPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto custom-scrollbar overscroll-contain rounded-xl border border-border/70 bg-card">
-        {view === "rows" ? (
           <table className="w-full min-w-[880px] caption-bottom text-sm">
             <TableHeader className="sticky top-0 z-10 bg-card shadow-xs">
               <TableRow className="hover:bg-transparent">
                 <TableHead className="w-10 shrink-0">
                   <SelectBox
                     state={
-                      allVisibleSelected
+                      allRowsSelected
                         ? "all"
-                        : visibleRows.some((r) => selected.has(r.id))
+                        : rows.some((r) => selected.has(r.id))
                           ? "some"
                           : "none"
                     }
-                    onClick={readOnly ? undefined : toggleAllVisible}
-                    label="Select all visible seeds"
+                    onClick={
+                      readOnly ||
+                      (!allRowsSelected &&
+                        idsThatFit(rows, selected, probes).length === 0)
+                        ? undefined
+                        : toggleAllVisible
+                    }
+                    disabledReason={
+                      !readOnly &&
+                      !allRowsSelected &&
+                      idsThatFit(rows, selected, probes).length === 0
+                        ? "Maximum is 100,000 raw keywords"
+                        : undefined
+                    }
+                    label="Select seeds up to 100,000 raw keywords"
                   />
                 </TableHead>
                 <TableHead className="min-w-[160px] text-xs font-semibold whitespace-nowrap">
@@ -567,19 +572,90 @@ export function StageSeedsPanel({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visibleRows.length === 0 ? (
+              {groups.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={10}
                     className="text-center text-xs text-muted-foreground py-8"
                   >
-                    {rows.length === 0
-                      ? "No seed rows for the current selection."
-                      : "No seeds match these filters."}
+                    No seed rows for the current selection.
                   </TableCell>
                 </TableRow>
               ) : (
-                visibleRows.map((row) => {
+                groups.map((group) => {
+                  const groupOn = group.rows.every((r) => selected.has(r.id));
+                  const groupSome = group.rows.some((r) => selected.has(r.id));
+                  const groupFit = idsThatFit(group.rows, selected, probes);
+                  const groupBlocked = !readOnly && !groupOn && groupFit.length === 0;
+                  const groupProbes = group.rows
+                    .map((r) => probes[r.id])
+                    .filter((p): p is SeedProbe => Boolean(p) && !p.failed);
+                  const groupBilled = groupProbes.reduce(
+                    (sum, probe) => sum + cappedKeywordEstimate(probe.rawKeywords),
+                    0
+                  );
+                  const groupVolume = groupProbes.reduce(
+                    (sum, probe) => sum + probe.searchVolume,
+                    0
+                  );
+                  const groupPrice = group.rows.reduce((sum, row) => {
+                    const probe = probes[row.id];
+                    if (!probe || probe.failed) return sum;
+                    return sum + usdForRawKeywords(probe.rawKeywords);
+                  }, 0);
+                  return (
+                    <Fragment
+                      key={`${group.collectionId}-${group.canonicalNicheSeed}`}
+                    >
+                      <TableRow className="bg-primary/10 hover:bg-primary/10">
+                        <TableCell className="w-10 shrink-0">
+                          <SelectBox
+                            state={groupOn ? "all" : groupSome ? "some" : "none"}
+                            onClick={
+                              readOnly || groupBlocked
+                                ? undefined
+                                : () => toggleGroup(group.rows)
+                            }
+                            disabledReason={
+                              groupBlocked
+                                ? "Maximum is 100,000 raw keywords"
+                                : undefined
+                            }
+                            label={`Select ${group.canonicalNicheSeed}`}
+                          />
+                        </TableCell>
+                        <TableCell colSpan={3} className="py-2.5">
+                          <p className="text-sm font-semibold tracking-tight">
+                            {group.canonicalNicheSeed}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {group.selectedCollection} · {group.broadParentNiche} ·{" "}
+                            {formatProductCount(
+                              productCountByCollectionId[group.collectionId] ??
+                                group.productCount
+                            )}{" "}
+                            products · {group.rows.length} broad term
+                            {group.rows.length === 1 ? "" : "s"}
+                          </p>
+                        </TableCell>
+                        <TableCell />
+                        <TableCell />
+                        <TableCell className="text-xs tabular-nums text-right font-medium whitespace-nowrap">
+                          {groupProbes.length > 0
+                            ? groupBilled.toLocaleString("en-US")
+                            : "—"}
+                        </TableCell>
+                        <TableCell className="text-xs tabular-nums text-right whitespace-nowrap">
+                          {groupProbes.length > 0
+                            ? groupVolume.toLocaleString("en-US")
+                            : "—"}
+                        </TableCell>
+                        <TableCell className="text-xs tabular-nums text-right whitespace-nowrap">
+                          {groupProbes.length > 0 ? formatUsd(groupPrice) : "—"}
+                        </TableCell>
+                        <TableCell />
+                      </TableRow>
+                  {group.rows.map((row) => {
                   const on = selected.has(row.id);
                   const probe = probes[row.id];
                   const isProbing = probing.has(row.id);
@@ -606,7 +682,20 @@ export function StageSeedsPanel({
                           <SelectBox
                             state={on ? "all" : "none"}
                             onClick={
-                              readOnly ? undefined : () => toggleRow(row.id)
+                              readOnly ||
+                              (!on &&
+                                idsThatFit([{ id: row.id }], selected, probes)
+                                  .length === 0)
+                                ? undefined
+                                : () => toggleRow(row.id)
+                            }
+                            disabledReason={
+                              !readOnly &&
+                              !on &&
+                              idsThatFit([{ id: row.id }], selected, probes)
+                                .length === 0
+                                ? "Maximum is 100,000 raw keywords"
+                                : undefined
                             }
                             label={`Select ${row.broadSeedVariation}`}
                           />
@@ -697,130 +786,15 @@ export function StageSeedsPanel({
                       ) : null}
                     </Fragment>
                   );
+                })}
+                    </Fragment>
+                  );
                 })
               )}
             </TableBody>
           </table>
-        ) : (
-          <div className="divide-y divide-border/60">
-            {groups.length === 0 ? (
-              <p className="py-8 text-center text-xs text-muted-foreground">
-                {rows.length === 0
-                  ? "No seed rows for the current selection."
-                  : "No seeds match these filters."}
-              </p>
-            ) : (
-              groups.map((group) => {
-                const groupOn = group.rows.every((r) => selected.has(r.id));
-                const groupSome = group.rows.some((r) => selected.has(r.id));
-                const groupProbes = group.rows
-                  .map((r) => probes[r.id])
-                  .filter((p): p is SeedProbe => Boolean(p) && !p?.failed);
-                const groupRaw = groupProbes.reduce(
-                  (sum, p) => sum + p.rawKeywords,
-                  0
-                );
-                const groupVolume = groupProbes.reduce(
-                  (sum, p) => sum + p.searchVolume,
-                  0
-                );
-                return (
-                  <section
-                    key={`${group.selectedCollection}-${group.canonicalNicheSeed}`}
-                  >
-                    <div className="flex items-center gap-3 bg-muted/30 px-4 py-2.5">
-                      <SelectBox
-                        state={groupOn ? "all" : groupSome ? "some" : "none"}
-                        onClick={
-                          readOnly
-                            ? undefined
-                            : () => toggleGroup(group.rows)
-                        }
-                        label={`Select ${group.canonicalNicheSeed} family`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold tracking-tight truncate">
-                          {group.canonicalNicheSeed}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          {group.selectedCollection} · {group.broadParentNiche} ·{" "}
-                          {formatProductCount(group.productCount)} products ·{" "}
-                          {group.rows.length} variation
-                          {group.rows.length === 1 ? "" : "s"}
-                        </p>
-                      </div>
-                      {groupProbes.length > 0 ? (
-                        <div className="shrink-0 text-right text-[10px] text-muted-foreground tabular-nums">
-                          <div>
-                            {groupRaw.toLocaleString("en-US")} raw ·{" "}
-                            {groupVolume.toLocaleString("en-US")} vol
-                          </div>
-                          <div>
-                            {formatUsd(usdForRawKeywords(groupRaw))} before
-                            overlap
-                          </div>
-                        </div>
-                      ) : readOnly ? null : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 shrink-0 gap-1.5 text-[11px]"
-                          disabled={probing.size > 0}
-                          onClick={() => onProbe(group.rows.map((r) => r.id))}
-                        >
-                          <Search className="h-3 w-3" />
-                          Check family
-                        </Button>
-                      )}
-                    </div>
-                    <ul className="divide-y divide-border/40">
-                      {group.rows.map((row) => {
-                        const on = selected.has(row.id);
-                        const probe = probes[row.id];
-                        return (
-                          <li
-                            key={row.id}
-                            className={cn(
-                              "flex items-center gap-3 px-4 py-2",
-                              on && "bg-primary/5"
-                            )}
-                          >
-                            <SelectBox
-                              state={on ? "all" : "none"}
-                              onClick={
-                                readOnly ? undefined : () => toggleRow(row.id)
-                              }
-                              label={`Select ${row.broadSeedVariation}`}
-                            />
-                            <span className="min-w-0 flex-1 text-sm truncate">
-                              {row.broadSeedVariation}
-                            </span>
-                            {probe && !probe.failed ? (
-                              <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-                                {formatRawKeywords(probe.rawKeywords)} kw ·{" "}
-                                {formatUsd(
-                                  usdForRawKeywords(probe.rawKeywords)
-                                )}
-                              </span>
-                            ) : null}
-                            <Badge
-                              variant="outline"
-                              className={`shrink-0 text-[10px] font-medium ${scopeMatchClass(row.scopeMatch)}`}
-                            >
-                              {row.scopeMatch}
-                            </Badge>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </section>
-                );
-              })
-            )}
-          </div>
-        )}
       </div>
+
 
       {/* Manual seed — the client knows regional wording we may miss. */}
       {readOnly ? null : (
@@ -840,12 +814,12 @@ export function StageSeedsPanel({
           aria-label="Add a broad seed variation"
         />
         <select
-          value={manualFamily || allGroups[0]?.collectionId || ""}
+          value={manualFamily || groups[0]?.collectionId || ""}
           onChange={(e) => setManualFamily(e.target.value)}
           className="h-8 max-w-[240px] rounded-lg border border-border/70 bg-background px-2 text-xs outline-none"
           aria-label="Canonical seed family"
         >
-          {allGroups.map((group) => (
+          {groups.map((group) => (
             <option key={group.collectionId} value={group.collectionId}>
               {group.canonicalNicheSeed} — {group.selectedCollection}
             </option>
@@ -856,7 +830,7 @@ export function StageSeedsPanel({
           size="sm"
           variant="outline"
           className="h-8 text-xs"
-          disabled={!manualTerm.trim() || allGroups.length === 0}
+          disabled={!manualTerm.trim() || groups.length === 0}
           onClick={submitManualSeed}
         >
           Add seed
@@ -983,7 +957,8 @@ export function StageSeedsPanel({
                 disabled={
                   estimate.rows === 0 ||
                   committed ||
-                  unprobedSelected.length > 0
+                  unprobedSelected.length > 0 ||
+                  overSelectionCap
                 }
               >
                 {committed
@@ -998,6 +973,16 @@ export function StageSeedsPanel({
               returned. Agent work after this is free. Publishing collections
               is {formatUsd(5)} each.
             </p>
+            {overSelectionCap ? (
+              <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-destructive">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                Selected seeds total {selectedBilled.toLocaleString("en-US")} raw
+                keywords, over the{" "}
+                {RAW_KEYWORD_SELECTION_CAP.toLocaleString("en-US")} maximum.
+                Deselect seeds before extracting. A term shown as 10,000+ counts
+                as 10,000.
+              </p>
+            ) : null}
             {!committed && unprobedSelected.length > 0 ? (
               <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -1322,15 +1307,18 @@ function SelectBox({
   state,
   onClick,
   label,
+  disabledReason,
 }: {
   state: "all" | "some" | "none";
   onClick?: () => void;
   label: string;
+  disabledReason?: string;
 }) {
   const box = (
     <span
       className={cn(
         "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+        disabledReason && "cursor-not-allowed opacity-40",
         state === "all"
           ? "border-primary bg-primary text-primary-foreground"
           : state === "some"
@@ -1348,7 +1336,7 @@ function SelectBox({
 
   if (!onClick) {
     return (
-      <span role="img" aria-label={label}>
+      <span role="img" aria-label={disabledReason ?? label} title={disabledReason}>
         {box}
       </span>
     );
