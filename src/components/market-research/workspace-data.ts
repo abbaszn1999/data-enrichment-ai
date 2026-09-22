@@ -333,24 +333,26 @@ export function normalizeKeywordFilters(raw: unknown): KeywordFilters {
   const maxKd = Number(value.maxKd);
   const minWordCount = Number(value.minWordCount);
   const maxWordCount = Number(value.maxWordCount);
-  const safeMinWordCount =
-    Number.isFinite(minWordCount) && minWordCount > 0
-      ? Math.floor(minWordCount)
-      : DEFAULT_FILTERS.minWordCount;
+  const safeMinWordCount = Number.isFinite(minWordCount)
+    ? Math.max(DEFAULT_FILTERS.minWordCount, Math.floor(minWordCount))
+    : DEFAULT_FILTERS.minWordCount;
+  const safeMaxWordCount = Number.isFinite(maxWordCount)
+    ? Math.min(
+        DEFAULT_FILTERS.maxWordCount,
+        Math.max(safeMinWordCount, Math.floor(maxWordCount))
+      )
+    : DEFAULT_FILTERS.maxWordCount;
   return {
     minVolume:
       Number.isFinite(minVolume) && minVolume > 0
-        ? Math.floor(minVolume)
+        ? Math.max(DEFAULT_FILTERS.minVolume, Math.floor(minVolume))
         : DEFAULT_FILTERS.minVolume,
     maxKd: Number.isFinite(maxKd)
       ? Math.min(DEFAULT_FILTERS.maxKd, Math.max(0, Math.floor(maxKd)))
       : DEFAULT_FILTERS.maxKd,
     questionsOnly: value.questionsOnly === true,
     minWordCount: safeMinWordCount,
-    maxWordCount:
-      Number.isFinite(maxWordCount) && maxWordCount >= safeMinWordCount
-        ? Math.floor(maxWordCount)
-        : Math.max(safeMinWordCount, DEFAULT_FILTERS.maxWordCount),
+    maxWordCount: safeMaxWordCount,
   };
 }
 

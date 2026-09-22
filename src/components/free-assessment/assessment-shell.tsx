@@ -1328,16 +1328,39 @@ export function FreeAssessmentShell() {
         if (!status.pending) break;
       }
 
-      try {
+      let refreshed: ExtractedKeyword[] | null = null;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (analyzeGen.current !== gen) return;
         const state = await loadFaStateApi(workspaceId);
         if (analyzeGen.current !== gen) return;
-        const refreshed = state.keywordsByProject?.[projectId];
-        if (Array.isArray(refreshed) && refreshed.length > 0) {
-          setKeywordsByProject((prev) => ({ ...prev, [projectId]: refreshed }));
+        const sample = state.keywordsByProject?.[projectId];
+        if (Array.isArray(sample) && sample.length > 0) {
+          refreshed = sample;
+          const classified = sample.some(
+            (row) =>
+              typeof row.isAiGenerated === "boolean" ||
+              row.sheet === "informational" ||
+              row.sheet === "excluded" ||
+              Boolean(row.plpConcept) ||
+              Boolean(row.exclusionReason) ||
+              Boolean(row.sameIntentOf)
+          );
+          if (classified) break;
         }
-      } catch (refreshErr) {
-        console.error("[handleAnalyze] Failed to refresh sample:", refreshErr);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
       }
+      if (!refreshed || !refreshed.some(
+        (row) =>
+          typeof row.isAiGenerated === "boolean" ||
+          row.sheet === "informational" ||
+          row.sheet === "excluded" ||
+          Boolean(row.plpConcept) ||
+          Boolean(row.exclusionReason) ||
+          Boolean(row.sameIntentOf)
+      )) {
+        throw new Error("Classification finished but the sheet did not update");
+      }
+      setKeywordsByProject((prev) => ({ ...prev, [projectId]: refreshed! }));
 
       setAnalyzedProjectIds((prev) => {
         const next = new Set(prev);

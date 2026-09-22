@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Loader2,
   Search,
@@ -23,6 +23,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Progress } from "@/components/ui/progress";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DEFAULT_FILTERS,
   EXTRACT_CAP_PER_SEED,
@@ -86,14 +93,26 @@ export function StageExtractPanel({
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(EXTRACT_PAGE_SIZE);
   const [proposalOpen, setProposalOpen] = useState(false);
+  const [sameIntentOpen, setSameIntentOpen] = useState(false);
   const classified = analyzed || analyzeLoading;
   const activeSheet: ExtractSheet =
     classified && sheet === "all" && analyzeLoading ? "category" : sheet;
+  const analyzeWasLoading = useRef(false);
+  useEffect(() => {
+    if (analyzeLoading) {
+      analyzeWasLoading.current = true;
+      return;
+    }
+    if (analyzeWasLoading.current) {
+      analyzeWasLoading.current = false;
+      setSheet("all");
+    }
+  }, [analyzeLoading]);
 
   const visible = useMemo(() => {
-    const source = analyzed ? filterKeywords(keywords, filters) : keywords;
-    if (!classified || activeSheet === "all") return source;
-    return source.filter((row) => row.sheet === activeSheet);
+    if (!analyzed) return keywords;
+    if (!classified || activeSheet === "all") return filterKeywords(keywords, filters);
+    return filterKeywords(keywords, filters, activeSheet);
   }, [keywords, filters, activeSheet, classified, analyzed]);
 
   useEffect(() => {
@@ -108,13 +127,13 @@ export function StageExtractPanel({
   );
   const tableColCount = !classified
     ? 4
-    : activeSheet === "excluded"
-      ? 5
-      : 6;
+    : activeSheet === "all" || activeSheet === "informational"
+      ? 6
+      : 5;
 
   const categoryKeywords = useMemo(
-    () => keywords.filter((row) => row.sheet === "category" && !row.sameIntentOf),
-    [keywords]
+    () => filterKeywords(keywords, filters, "category"),
+    [keywords, filters]
   );
 
   const totalPulled = keywords.length > 0
@@ -124,14 +143,12 @@ export function StageExtractPanel({
         0
       );
 
-  const categoryCount = useMemo(
-    () => keywords.filter((row) => row.sheet === "category" && !row.sameIntentOf).length,
+  const categoryCount = categoryKeywords.length;
+  const sameIntentRows = useMemo(
+    () => keywords.filter((row) => row.sameIntentOf),
     [keywords]
   );
-  const removedSameIntent = useMemo(
-    () => keywords.filter((row) => row.sameIntentOf).length,
-    [keywords]
-  );
+  const removedSameIntent = sameIntentRows.length;
   const informationalCount = useMemo(
     () => keywords.filter((k) => k.sheet === "informational").length,
     [keywords]
@@ -260,26 +277,42 @@ export function StageExtractPanel({
           Word count
           <Input
             type="number"
-            min={1}
+            min={filters.minWordCount}
             value={filters.minWordCount}
-            onChange={(e) =>
+            onChange={(e) => {
+              const nextMin = Math.max(
+                filters.minWordCount,
+                DEFAULT_FILTERS.minWordCount,
+                Math.floor(Number(e.target.value) || filters.minWordCount)
+              );
               setFilters((prev) => ({
                 ...prev,
-                minWordCount: Number(e.target.value) || 1,
-              }))
-            }
+                minWordCount: nextMin,
+                maxWordCount: Math.min(
+                  DEFAULT_FILTERS.maxWordCount,
+                  Math.max(nextMin, prev.maxWordCount)
+                ),
+              }));
+            }}
             className="h-8 w-[56px] text-xs"
             aria-label="Minimum word count"
           />
           <span>to</span>
           <Input
             type="number"
-            min={1}
+            min={filters.minWordCount}
+            max={DEFAULT_FILTERS.maxWordCount}
             value={filters.maxWordCount}
             onChange={(e) =>
               setFilters((prev) => ({
                 ...prev,
-                maxWordCount: Number(e.target.value) || 1,
+                maxWordCount: Math.min(
+                  DEFAULT_FILTERS.maxWordCount,
+                  Math.max(
+                    prev.minWordCount,
+                    Math.floor(Number(e.target.value) || prev.minWordCount)
+                  )
+                ),
               }))
             }
             className="h-8 w-[56px] text-xs"
@@ -371,10 +404,7 @@ export function StageExtractPanel({
                 <TableHead className="text-xs text-right">Volume</TableHead>
                 <TableHead className="text-xs text-right">KD</TableHead>
                 {!classified ? null : activeSheet === "category" ? (
-                  <>
-                    <TableHead className="text-xs">Concept / Tag</TableHead>
-                    <TableHead className="text-xs text-right">Products</TableHead>
-                  </>
+                  <TableHead className="text-xs">Concept / Tag</TableHead>
                 ) : activeSheet === "informational" ? (
                   <>
                     <TableHead className="text-xs">Question</TableHead>
@@ -436,14 +466,9 @@ export function StageExtractPanel({
                       {row.difficulty}
                     </TableCell>
                     {!classified ? null : activeSheet === "category" ? (
-                      <>
-                        <TableCell className="text-[11px] text-muted-foreground">
-                          {row.plpConcept || "Category PLP"}
-                        </TableCell>
-                        <TableCell className="text-xs tabular-nums text-right">
-                          {row.productMatches.toLocaleString("en-US")}
-                        </TableCell>
-                      </>
+                      <TableCell className="text-[11px] text-muted-foreground">
+                        {row.plpConcept || "Category PLP"}
+                      </TableCell>
                     ) : activeSheet === "informational" ? (
                       <>
                         <TableCell className="text-[11px] text-muted-foreground">
@@ -516,6 +541,16 @@ export function StageExtractPanel({
               terms. Open the proposal for 20 / 40 / 60% capture scenarios — catalog
               matching needs a live store in Growth Engine.
             </p>
+            <div className="flex shrink-0 items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs font-medium"
+              onClick={() => setSameIntentOpen(true)}
+            >
+              Cleaned terms ({removedSameIntent.toLocaleString("en-US")})
+            </Button>
             <Button
               size="sm"
               className="h-8 gap-1.5 text-xs font-medium"
@@ -525,6 +560,7 @@ export function StageExtractPanel({
               <FileText className="h-3.5 w-3.5" />
               Proposal ({categoryKeywords.length.toLocaleString("en-US")})
             </Button>
+            </div>
           </>
         ) : (
           <>
@@ -534,10 +570,7 @@ export function StageExtractPanel({
             <Button
               size="sm"
               className="h-8 gap-1.5 text-xs font-medium"
-              onClick={() => {
-                setSheet("category");
-                onAnalyze();
-              }}
+              onClick={onAnalyze}
               disabled={analyzeLoading || keywords.length === 0}
             >
               {analyzeLoading ? (
@@ -559,6 +592,38 @@ export function StageExtractPanel({
         )}
       </div>
 
+      <Dialog open={sameIntentOpen} onOpenChange={setSameIntentOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Same-intent terms removed</DialogTitle>
+            <DialogDescription>
+              {removedSameIntent > 0
+                ? "These category terms were the exact same search as a higher-volume wording. The kept term stays on Suitable for categories."
+                : "The cleanup ran after classification. No two suitable terms were the exact same search, so nothing was removed."}
+            </DialogDescription>
+          </DialogHeader>
+          {removedSameIntent > 0 ? (
+            <div className="max-h-80 overflow-auto rounded-xl border border-border/70">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 bg-muted/80 text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-1.5 text-left font-medium">Removed</th>
+                    <th className="px-3 py-1.5 text-left font-medium">Kept</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sameIntentRows.map((row) => (
+                    <tr key={row.id} className="border-t border-border/50">
+                      <td className="px-3 py-1.5">{row.keyword}</td>
+                      <td className="px-3 py-1.5">{row.sameIntentOf}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <AssessmentProposalDialog
         open={proposalOpen}
         onOpenChange={setProposalOpen}
