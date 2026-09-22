@@ -506,6 +506,11 @@ export function StageContentPanel({
                         onClick={() => content && setPreviewId(row.id)}
                       >
                         <span>{row.name}</span>
+                        {content?.ungenerated ? (
+                          <span className="text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                            Not generated
+                          </span>
+                        ) : null}
                       </button>
                       {liveUrl ? (
                         <a

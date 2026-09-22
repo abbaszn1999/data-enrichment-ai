@@ -7,7 +7,7 @@ import {
 import { runStage3SeedGeneration } from "@/lib/free-assessment/agent/stage3-seed-generator";
 import { saveProjectSliceAdmin } from "@/lib/free-assessment/storage-admin";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   let json: unknown;

@@ -75,6 +75,8 @@ export type ExtractedKeyword = {
    * classification has overlaid this row yet (still the extract default).
    */
   isAiGenerated?: boolean;
+  /** Kept keyword when this row is an exact same-intent copy and stays off the category sheet. */
+  sameIntentOf?: string;
 };
 
 export type SeedExtractProgress = {
@@ -167,6 +169,8 @@ export type CollectionContent = {
    */
   seoSyncedAt?: number;
   seoSyncError?: string;
+  /** True when Gemini could not write this collection after retries. */
+  ungenerated?: boolean;
 };
 
 export type OnPageInstructionField =
@@ -339,7 +343,7 @@ export function normalizeKeywordFilters(raw: unknown): KeywordFilters {
         ? Math.floor(minVolume)
         : DEFAULT_FILTERS.minVolume,
     maxKd: Number.isFinite(maxKd)
-      ? Math.min(100, Math.max(0, Math.floor(maxKd)))
+      ? Math.min(DEFAULT_FILTERS.maxKd, Math.max(0, Math.floor(maxKd)))
       : DEFAULT_FILTERS.maxKd,
     questionsOnly: value.questionsOnly === true,
     minWordCount: safeMinWordCount,
@@ -499,6 +503,7 @@ export function filterKeywords(
 ): ExtractedKeyword[] {
   return rows.filter((row) => {
     if (sheet && row.sheet !== sheet) return false;
+    if (sheet === "category" && row.sameIntentOf) return false;
     return keywordPassesFilters(row, filters);
   });
 }

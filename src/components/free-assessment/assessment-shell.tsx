@@ -73,7 +73,6 @@ import {
   loadFaStateApi,
   pollExtractApi,
   probeSeedsApi,
-  runClassifyArchiveLoop,
   saveFaStateApi,
   startExtractApi,
 } from "@/lib/free-assessment/client";
@@ -81,7 +80,6 @@ import { previewBalance } from "@/lib/free-assessment/billing";
 import { actualExtractCostUsd, estimateProbeCostUsd } from "@/lib/free-assessment/cost";
 import {
   appendKeywordRows,
-  applyKeywordClassifications,
   toExtractedKeyword,
 } from "@/lib/free-assessment/map-keywords";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -188,6 +186,7 @@ export function FreeAssessmentShell() {
   const [analyzeProgress, setAnalyzeProgress] = useState<{
     done: number;
     total: number;
+    phase?: "classify" | "same-intent";
   } | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
   const [preparingStage2, setPreparingStage2] = useState(false);
@@ -1291,35 +1290,42 @@ export function FreeAssessmentShell() {
     const gen = ++analyzeGen.current;
     setAnalyzeLoading(true);
     setAnalyzeProgress({ done: 0, total: currentKws.length });
-    let totalDegraded = 0;
-
     try {
-      const result = await runClassifyArchiveLoop(
-        workspaceId,
-        projectId,
-        (state) => {
-          if (analyzeGen.current !== gen) return;
-          setAnalyzeProgress({ done: state.nextOffset, total: state.total });
-          totalDegraded += state.degradedCount ?? 0;
-          if (state.classifications?.length) {
-            setKeywordsByProject((prev) => ({
-              ...prev,
-              [projectId]: applyKeywordClassifications(
-                prev[projectId] ?? [],
-                state.classifications ?? []
-              ),
-            }));
-          }
-        },
-        () => analyzeGen.current !== gen
-      );
-      if (analyzeGen.current !== gen) return;
-
-      if (!result) {
-        toast.error("Classification error", {
-          description: "Could not classify keywords. Please try again.",
+      const started = await fetch("/api/free-assessment/agent/classify-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, projectId }),
+      });
+      if (!started.ok) throw new Error("Could not start classification");
+      const { jobId } = (await started.json()) as { jobId: string };
+      const deadline = Date.now() + 45 * 60 * 1000;
+      for (;;) {
+        if (analyzeGen.current !== gen) return;
+        if (Date.now() > deadline) throw new Error("Classification is still running");
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const params = new URLSearchParams({ workspaceId, projectId, jobId });
+        const statusRes = await fetch(
+          `/api/free-assessment/agent/classify-job?${params.toString()}`
+        );
+        if (!statusRes.ok) throw new Error("Could not read classification progress");
+        const status = (await statusRes.json()) as {
+          pending: boolean;
+          status: string;
+          phase?: "classify" | "same-intent";
+          done: number;
+          total: number;
+          error?: string | null;
+        };
+        if (analyzeGen.current !== gen) return;
+        setAnalyzeProgress({
+          done: status.done,
+          total: Math.max(status.total, 1),
+          phase: status.phase ?? "classify",
         });
-        return;
+        if (status.status === "failed") {
+          throw new Error(status.error || "Classification failed");
+        }
+        if (!status.pending) break;
       }
 
       try {
@@ -1345,11 +1351,6 @@ export function FreeAssessmentShell() {
       // this toast is what makes sure it's never silently invisible, the
       // exact class of bug that used to let a heuristic guess pass as if
       // Gemini had classified it.
-      if (totalDegraded > 0) {
-        toast.warning("Some keywords used a fallback guess", {
-          description: `${totalDegraded} keyword${totalDegraded === 1 ? "" : "s"} couldn't be verified by Gemini and used a rule-based guess instead. Look for the "Estimated" tag in the table below.`,
-        });
-      }
     } catch (err) {
       if (analyzeGen.current !== gen) return;
       console.error("[handleAnalyze] Error:", err);

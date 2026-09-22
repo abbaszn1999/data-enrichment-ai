@@ -7,6 +7,7 @@ import { runGeminiMarketResearch } from "./gemini-runner";
 import { cosineSimilarity, contentHash } from "./embeddings";
 import { runWithConcurrency } from "@/lib/sync/core/batch-executor";
 import {
+  acceptCollectionExclusions,
   packGeminiTermBatches,
   type GeminiTermPayload,
 } from "./gemini-term-batches";
@@ -282,7 +283,7 @@ export function computeCollectionProductMatches(
 // full 05-collections.md skill text to this string (see gemini-runner.ts),
 // so the framework and exclusion rules live there once, not twice. This is
 // just the mechanical output contract.
-const CLUSTER_SYSTEM_INSTRUCTION = `Apply the single exclusion test from your instructions to every candidate product listed for every keyword below. Output strictly valid JSON matching this schema, one entry per input keyword, no more, no fewer:
+const CLUSTER_SYSTEM_INSTRUCTION = `Apply the single exclusion test from your instructions to every candidate product listed for every keyword below. Return one collections entry for every keywordId in THIS request, and no keywordId that was not in this request. Output strictly valid JSON matching this schema:
 {
   "collections": [
     {
@@ -461,62 +462,107 @@ export async function runStage5CollectionClustering(
 
   const keywordChunks = packGeminiTermBatches(geminiPayloads);
 
-  const chunkRun = await runWithConcurrency(
-    keywordChunks,
-    async (batch) => {
-      const userPrompt = `Store Name: "${input.storeName || "Store"}"
+  const EXCLUSION_ATTEMPTS = 3;
+
+  async function askExclusion(batch: GeminiTermPayload[]) {
+    const userPrompt = `Store Name: "${input.storeName || "Store"}"
 Total Store Products: ${products.length}
 
+These are the only collections in this request. Return one entry for each keywordId below, and no others.
 Review each collection opportunity and run the exclusion test on every candidate product:
 ${JSON.stringify(batch, null, 2)}`;
 
-      const callGemini = () =>
-        runGeminiMarketResearch<GeminiCurationResponse>({
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= EXCLUSION_ATTEMPTS; attempt += 1) {
+      try {
+        const geminiRes = await runGeminiMarketResearch<GeminiCurationResponse>({
           stage: 5,
           systemInstruction: CLUSTER_SYSTEM_INSTRUCTION,
           userPrompt,
         });
-
-      // One retry (short backoff) before this chunk counts as failed — a
-      // transient/rate-limit blip must not downgrade its candidates to
-      // "unreviewed" when a second attempt would have succeeded.
-      try {
-        const geminiRes = await callGemini();
-        return { batch, data: geminiRes.data };
+        return geminiRes.data;
       } catch (err) {
-        console.error("[Stage 5] Gemini validation batch failed, retrying once:", err);
-        await new Promise((resolve) => setTimeout(resolve, 800));
-        const geminiRes = await callGemini();
-        return { batch, data: geminiRes.data };
+        lastError = err;
+        console.error(
+          `[Stage 5] Gemini validation batch failed (attempt ${attempt}/${EXCLUSION_ATTEMPTS}):`,
+          err
+        );
+        if (attempt < EXCLUSION_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+        }
       }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Gemini exclusion batch failed after retries");
+  }
+
+  const chunkRun = await runWithConcurrency(
+    keywordChunks,
+    async (batch) => {
+      const data = await askExclusion(batch);
+      let { accepted, missingKeywordIds } = acceptCollectionExclusions(
+        batch,
+        data?.collections
+      );
+      if (missingKeywordIds.length > 0) {
+        const missing = batch.filter((piece) =>
+          missingKeywordIds.includes(piece.keywordId)
+        );
+        try {
+          const recovered = await askExclusion(missing);
+          const retry = acceptCollectionExclusions(missing, recovered?.collections);
+          for (const [keywordId, value] of retry.accepted) {
+            const existing = accepted.get(keywordId);
+            accepted.set(keywordId, {
+              matchedProductIds: [
+                ...new Set([
+                  ...(existing?.matchedProductIds ?? []),
+                  ...value.matchedProductIds,
+                ]),
+              ],
+              rationale: [existing?.rationale, value.rationale].filter(Boolean).join(" ") ||
+                value.rationale,
+            });
+          }
+          missingKeywordIds = retry.missingKeywordIds;
+        } catch (err) {
+          console.error(
+            `[Stage 5] Re-request for ${missingKeywordIds.length} omitted collection(s) failed:`,
+            err
+          );
+        }
+      }
+      if (missingKeywordIds.length > 0) {
+        console.warn(
+          `[Stage 5] Gemini omitted ${missingKeywordIds.length} collection(s) from a request that included them. Those collections stay unreviewed.`
+        );
+      }
+      return { batch, accepted };
     },
     { concurrency: 5 }
   );
 
   let anyAiSucceeded = false;
-  for (const { batch, data } of chunkRun.successes) {
+  for (const { batch, accepted } of chunkRun.successes) {
+    anyAiSucceeded = true;
     for (const piece of batch) {
+      if (!accepted.has(piece.keywordId)) continue;
       const seen = aiCoveredCandidateIds.get(piece.keywordId) ?? new Set<string>();
       for (const card of piece.candidateProducts) seen.add(card.id);
       aiCoveredCandidateIds.set(piece.keywordId, seen);
     }
-    if (data && Array.isArray(data.collections)) {
-      anyAiSucceeded = true;
-      for (const item of data.collections) {
-        if (item.keywordId && Array.isArray(item.matchedProductIds)) {
-          const existing = aiApprovedMap.get(item.keywordId);
-          const mergedIds = new Set([
+    for (const [keywordId, value] of accepted) {
+      const existing = aiApprovedMap.get(keywordId);
+      aiApprovedMap.set(keywordId, {
+        matchedProductIds: [
+          ...new Set([
             ...(existing?.matchedProductIds ?? []),
-            ...item.matchedProductIds,
-          ]);
-          aiApprovedMap.set(item.keywordId, {
-            matchedProductIds: Array.from(mergedIds),
-            rationale: [existing?.rationale, item.rationale]
-              .filter(Boolean)
-              .join(" "),
-          });
-        }
-      }
+            ...value.matchedProductIds,
+          ]),
+        ],
+        rationale: [existing?.rationale, value.rationale].filter(Boolean).join(" "),
+      });
     }
   }
   if (chunkRun.errors.length > 0) {

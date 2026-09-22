@@ -118,7 +118,7 @@ export function DeepWorkspace({
   onAnalyze: () => void;
   analyzeLoading: boolean;
   /** Live progress across the chunked classification requests (Layer 1). */
-  analyzeProgress?: { done: number; total: number } | null;
+  analyzeProgress?: { done: number; total: number; phase?: "classify" | "same-intent" } | null;
   /** Product embedding pass, driven in parallel with the Apify extract poll above. */
   productEmbedProgress?: { embedded: number; total: number; done: boolean } | null;
   analyzed: boolean;

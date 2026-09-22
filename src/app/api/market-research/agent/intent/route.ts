@@ -9,6 +9,7 @@ import {
   loadExtractRowsAdmin,
   appendClassifiedShardAdmin,
   clearClassifiedShardsAdmin,
+  clearSameIntentAdmin,
   loadClassifiedManifestAdmin,
   loadProjectSliceAdmin,
   type ClassifiedShardItem,
@@ -71,6 +72,13 @@ export async function POST(request: NextRequest) {
         parsed.data.projectId
       ).catch((err) =>
         console.error("[intent] Failed to clear classified shards for fresh pass:", err)
+      );
+      await clearSameIntentAdmin(
+        auth.admin,
+        parsed.data.workspaceId,
+        parsed.data.projectId
+      ).catch((err) =>
+        console.error("[intent] Failed to clear same-intent manifest for fresh pass:", err)
       );
     }
 

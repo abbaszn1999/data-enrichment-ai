@@ -37,8 +37,6 @@ import {
   dedupeCollectionsApi,
   pushCollectionsApi,
   runBuildInternalLinksLoop,
-  runClassifyArchiveLoop,
-  runClusterCollectionsLoop,
   runEmbedProductsLoop,
   runEmbedTermsLoop,
   runOnPageGenerationLoop,
@@ -62,7 +60,6 @@ import {
 import { clearSelectedContent } from "@/lib/market-research/collection-sheet";
 import {
   appendKeywordRows,
-  applyKeywordClassifications,
   toExtractedKeyword,
 } from "@/lib/market-research/map-keywords";
 import type {
@@ -436,6 +433,7 @@ export function MarketResearchShell() {
   const [analyzeProgress, setAnalyzeProgress] = useState<{
     done: number;
     total: number;
+    phase?: "classify" | "same-intent";
   } | null>(null);
   const [clustering, setClustering] = useState(false);
   /** Live progress across the Stage 5 cluster cursor job's offset pages. */
@@ -2678,40 +2676,43 @@ export function MarketResearchShell() {
     const gen = ++analyzeGen.current;
     setAnalyzeLoading(true);
     setAnalyzeProgress({ done: 0, total: currentKws.length });
-    let totalDegraded = 0;
 
-    // Classification now runs server-side as a cursor job over the FULL
-    // extract archive (not just a stale Extract-tab cache) — a
-    // 20k-keyword extract is 40+ pages at 500/page, each internally batched
-    // at 100 keywords/batch with concurrency 5. The client just loops on
-    // `offset` until `done`, same pattern as the Apify extract poll.
     try {
-      const result = await runClassifyArchiveLoop(
-        workspaceId,
-        projectId,
-        (state) => {
-          if (analyzeGen.current !== gen) return;
-          setAnalyzeProgress({ done: state.nextOffset, total: state.total });
-          totalDegraded += state.degradedCount ?? 0;
-          if (state.classifications?.length) {
-            setKeywordsByProject((prev) => ({
-              ...prev,
-              [projectId]: applyKeywordClassifications(
-                prev[projectId] ?? [],
-                state.classifications ?? []
-              ),
-            }));
-          }
-        },
-        () => analyzeGen.current !== gen
-      );
-      if (analyzeGen.current !== gen) return;
-
-      if (!result) {
-        toast.error("Classification error", {
-          description: "Could not classify keywords. Please try again.",
+      const started = await fetch("/api/market-research/agent/classify-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, projectId }),
+      });
+      if (!started.ok) throw new Error("Could not start classification");
+      const { jobId } = (await started.json()) as { jobId: string };
+      const deadline = Date.now() + 45 * 60 * 1000;
+      for (;;) {
+        if (analyzeGen.current !== gen) return;
+        if (Date.now() > deadline) throw new Error("Classification is still running");
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const params = new URLSearchParams({ workspaceId, projectId, jobId });
+        const statusRes = await fetch(
+          `/api/market-research/agent/classify-job?${params.toString()}`
+        );
+        if (!statusRes.ok) throw new Error("Could not read classification progress");
+        const status = (await statusRes.json()) as {
+          pending: boolean;
+          status: string;
+          phase?: "classify" | "same-intent";
+          done: number;
+          total: number;
+          error?: string | null;
+        };
+        if (analyzeGen.current !== gen) return;
+        setAnalyzeProgress({
+          done: status.done,
+          total: Math.max(status.total, 1),
+          phase: status.phase ?? "classify",
         });
-        return;
+        if (status.status === "failed") {
+          throw new Error(status.error || "Classification failed");
+        }
+        if (!status.pending) break;
       }
 
       // The route overlays verdicts onto the stored "keywords" slice by
@@ -2733,17 +2734,6 @@ export function MarketResearchShell() {
         return next;
       });
 
-      // Some keywords couldn't be verdicted by Gemini even after the
-      // hardened retries + targeted re-request, and used the regex
-      // heuristic instead. They're flagged per-row in the table below —
-      // this toast is what makes sure it's never silently invisible, the
-      // exact class of bug that used to let a heuristic guess pass as if
-      // Gemini had classified it.
-      if (totalDegraded > 0) {
-        toast.warning("Some keywords used a fallback guess", {
-          description: `${totalDegraded} keyword${totalDegraded === 1 ? "" : "s"} couldn't be verified by Gemini and used a rule-based guess instead. Look for the "Estimated" tag in the table below.`,
-        });
-      }
     } catch (err) {
       if (analyzeGen.current !== gen) return;
       console.error("[handleAnalyze] Error:", err);
@@ -2839,29 +2829,42 @@ export function MarketResearchShell() {
     // Stage 5 runs over the classified category archive after the Tab 4
     // Apply filters (volume / KD / query), not the unfiltered set.
     try {
-      const result = await runClusterCollectionsLoop(
-        workspaceId,
-        projectId,
-        (state) => {
-          if (clusterGen.current !== gen) return;
-          setProposedCollectionsByProject((prev) => ({
-            ...prev,
-            [projectId]: state.collections,
-          }));
-          setClusterProgress({ processed: state.nextOffset, total: state.total });
-        },
-        () => clusterGen.current !== gen,
-        categoryFilters
-      );
-      if (clusterGen.current !== gen) return;
-
-      if (!result) {
-        throw new Error("Clustering did not return a result");
+      const started = await fetch("/api/market-research/agent/collections-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, projectId, filters: categoryFilters }),
+      });
+      if (!started.ok) throw new Error("Could not start collection matching");
+      const { jobId } = (await started.json()) as { jobId: string };
+      const deadline = Date.now() + 45 * 60 * 1000;
+      for (;;) {
+        if (clusterGen.current !== gen) return;
+        if (Date.now() > deadline) throw new Error("Collection matching is still running");
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const params = new URLSearchParams({ workspaceId, projectId, jobId });
+        const statusRes = await fetch(
+          `/api/market-research/agent/collections-job?${params.toString()}`
+        );
+        if (!statusRes.ok) throw new Error("Could not read collection matching progress");
+        const status = (await statusRes.json()) as {
+          pending: boolean;
+          done: number;
+          total: number;
+        };
+        if (clusterGen.current !== gen) return;
+        setClusterProgress({ processed: status.done, total: Math.max(status.total, 1) });
+        if (!status.pending) break;
       }
-
+      const state = await loadMrStateApi(workspaceId);
+      if (clusterGen.current !== gen) return;
+      const collections = state.proposedCollectionsByProject?.[projectId] ?? [];
+      setProposedCollectionsByProject((prev) => ({
+        ...prev,
+        [projectId]: collections,
+      }));
       setClusterSelectionByProject((prev) => ({
         ...prev,
-        [projectId]: result.collections.map((c) => c.id),
+        [projectId]: collections.map((collection) => collection.id),
       }));
 
       // Stage 5 Phase 3 — one extra pass, still inside the same loading

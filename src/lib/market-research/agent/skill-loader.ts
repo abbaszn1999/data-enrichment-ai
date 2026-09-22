@@ -34,6 +34,7 @@ const STAGE_TO_FILE: Record<number, string> = {
   6: "06-on-page.md",
   7: "07-strategy.md",
   8: "08-duplicate-collections.md",
+  9: "09-same-intent.md",
 };
 
 const skillCache = new Map<string, MarketResearchSkill>();

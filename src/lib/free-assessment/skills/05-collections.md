@@ -112,6 +112,20 @@ to more than one collection is normal and expected — never exclude a candidate
 
 ---
 
+## Reply shape — exact
+
+The `collections` array contains **exactly one object per `keywordId` in this request**.
+
+- Do not add a `keywordId` you were not given. A collection from another request does not exist here.
+- Do not omit a `keywordId` you were given. If every product fails the tests, return that `keywordId` with `"matchedProductIds": []`.
+- `matchedProductIds` may contain only `id` values from that keyword's own `candidateProducts`. Never invent a product id.
+
+## Read the whole card
+
+Judge `title`, `shortDescription`, `productType`, `vendor`, `tags`, and `attributes` together. When the title and the description disagree, the description says what the product is. Do not exclude a product because of one size word in the title when the description says it is the thing the term asks for.
+
+Example: the term is "touchscreen tablets for drawing". A card titled "FlexPad Mini 8" whose description says "stylus support for notes and drawing" is a drawing tablet — keep it. A card titled "StudioTab 12.9" whose description says "reading, streaming and travel" and never mentions drawing is not — exclude it as the wrong product use. Do not call a product new, used, or a brand the card does not name.
+
 ## Strict Constraints — NEVER
 
 - **NEVER** exclude a candidate on `similarityScore` alone — the shortlist is already

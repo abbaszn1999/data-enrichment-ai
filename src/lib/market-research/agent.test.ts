@@ -16,9 +16,9 @@ vi.mock("./agent/gemini-runner", () => ({
 }));
 
 describe("Market Research Agent - Skills Loader", () => {
-  it("loads all 7 live-agent stage skills and validates frontmatter (stage 2 has no AI agent, so no skill file)", async () => {
+  it("loads all live-agent stage skills and validates frontmatter (stage 2 has no AI agent, so no skill file)", async () => {
     const skills = await getAllSkills();
-    const expectedStages = [1, 3, 4, 5, 6, 7, 8];
+    const expectedStages = [1, 3, 4, 5, 6, 7, 8, 9];
     expect(skills.length).toBe(expectedStages.length);
 
     skills.forEach((skill, i) => {
@@ -991,8 +991,8 @@ describe("Market Research Agent - Stage 5 scoped-lineage safety (go-live blocker
     // A total review failure must suppress the collection rather than
     // silently publish the raw, unreviewed cosine matches.
     expect(result.collections).toHaveLength(0);
-    // Exactly one retry per chunk, not unbounded retries.
-    expect(call).toBe(2);
+    // Three attempts, then the chunk stays unreviewed. Not an unbounded loop.
+    expect(call).toBe(3);
   });
 });
 

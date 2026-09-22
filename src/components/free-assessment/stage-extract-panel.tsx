@@ -68,7 +68,7 @@ export function StageExtractPanel({
   onAnalyze: () => void;
   analyzeLoading: boolean;
   /** Live progress across the chunked classification requests (Layer 1). */
-  analyzeProgress?: { done: number; total: number } | null;
+  analyzeProgress?: { done: number; total: number; phase?: "classify" | "same-intent" } | null;
   /**
    * Product embedding pass (Phase B), driven in parallel with the Apify
    * extract poll below — surfaced as a second line so the wait doesn't look
@@ -91,10 +91,10 @@ export function StageExtractPanel({
     classified && sheet === "all" && analyzeLoading ? "category" : sheet;
 
   const visible = useMemo(() => {
-    const filtered = filterKeywords(keywords, filters);
-    if (!classified || activeSheet === "all") return filtered;
-    return filtered.filter((row) => row.sheet === activeSheet);
-  }, [keywords, filters, activeSheet, classified]);
+    const source = analyzed ? filterKeywords(keywords, filters) : keywords;
+    if (!classified || activeSheet === "all") return source;
+    return source.filter((row) => row.sheet === activeSheet);
+  }, [keywords, filters, activeSheet, classified, analyzed]);
 
   useEffect(() => {
     setPageIndex(0);
@@ -113,7 +113,7 @@ export function StageExtractPanel({
       : 6;
 
   const categoryKeywords = useMemo(
-    () => keywords.filter((row) => row.sheet === "category"),
+    () => keywords.filter((row) => row.sheet === "category" && !row.sameIntentOf),
     [keywords]
   );
 
@@ -124,7 +124,14 @@ export function StageExtractPanel({
         0
       );
 
-  const categoryCount = categoryKeywords.length;
+  const categoryCount = useMemo(
+    () => keywords.filter((row) => row.sheet === "category" && !row.sameIntentOf).length,
+    [keywords]
+  );
+  const removedSameIntent = useMemo(
+    () => keywords.filter((row) => row.sameIntentOf).length,
+    [keywords]
+  );
   const informationalCount = useMemo(
     () => keywords.filter((k) => k.sheet === "informational").length,
     [keywords]
@@ -201,8 +208,13 @@ export function StageExtractPanel({
           <h2 className="text-base font-semibold tracking-tight">Extract</h2>
           <p className="text-[11px] text-muted-foreground">
             {totalPulled.toLocaleString("en-US")} keywords pulled ·{" "}
-            {formatUsd(chargedUsd)} charged from wallet. Filters below are
-            optional and do not change that bill.
+            {formatUsd(chargedUsd)} charged from wallet.
+            {analyzed
+              ? " Filters below narrow the classified terms and do not change that bill."
+              : ""}
+            {analyzed && removedSameIntent > 0
+              ? ` ${removedSameIntent.toLocaleString("en-US")} same-intent terms removed. The highest-volume wording was kept.`
+              : ""}
           </p>
           {csvHref && keywords.length > 0 ? (
             <a
@@ -242,6 +254,7 @@ export function StageExtractPanel({
         ) : null}
       </div>
 
+      {analyzed ? (
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card px-3 py-2 shrink-0">
         <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           Word count
@@ -277,12 +290,12 @@ export function StageExtractPanel({
           Min volume
           <Input
             type="number"
-            min={0}
+            min={1}
             value={filters.minVolume}
             onChange={(e) =>
               setFilters((prev) => ({
                 ...prev,
-                minVolume: Number(e.target.value) || 0,
+                minVolume: Math.max(1, Math.floor(Number(e.target.value) || 1)),
               }))
             }
             className="h-8 w-[88px] text-xs"
@@ -293,12 +306,15 @@ export function StageExtractPanel({
           <Input
             type="number"
             min={0}
-            max={100}
+            max={50}
             value={filters.maxKd}
             onChange={(e) =>
               setFilters((prev) => ({
                 ...prev,
-                maxKd: Number(e.target.value) || 0,
+                maxKd: Math.min(
+                  50,
+                  Math.max(0, Math.floor(Number(e.target.value) || 0))
+                ),
               }))
             }
             className="h-8 w-[72px] text-xs"
@@ -323,6 +339,7 @@ export function StageExtractPanel({
           Questions
         </button>
       </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70">
         <div className="min-h-0 flex-1 overflow-auto">
@@ -389,6 +406,15 @@ export function StageExtractPanel({
                     <TableCell className="text-sm font-medium">
                       <div className="flex items-center gap-1.5">
                         <span>{row.keyword}</span>
+                        {row.sameIntentOf ? (
+                          <Badge
+                            variant="outline"
+                            title={`Same search as “${row.sameIntentOf}”, which has the higher volume.`}
+                            className="shrink-0 text-[9px] font-normal px-1.5 py-0"
+                          >
+                            Same intent
+                          </Badge>
+                        ) : null}
                         {row.isAiGenerated === false ? (
                           <Badge
                             variant="outline"
@@ -520,9 +546,13 @@ export function StageExtractPanel({
                 <Search className="h-3.5 w-3.5" />
               )}
               {analyzeLoading
-                ? analyzeProgress && analyzeProgress.total > 0
-                  ? `Classifying ${analyzeProgress.done.toLocaleString()} / ${analyzeProgress.total.toLocaleString()}…`
-                  : "Classifying with Gemini…"
+                ? analyzeProgress?.phase === "same-intent"
+                  ? analyzeProgress.total > 0
+                    ? `Cleaning same-intent terms ${analyzeProgress.done.toLocaleString()} / ${analyzeProgress.total.toLocaleString()}…`
+                    : "Cleaning same-intent terms…"
+                  : analyzeProgress && analyzeProgress.total > 0
+                    ? `Classifying ${analyzeProgress.done.toLocaleString()} / ${analyzeProgress.total.toLocaleString()}…`
+                    : "Classifying with Gemini…"
                 : "Analyze with AI"}
             </Button>
           </>

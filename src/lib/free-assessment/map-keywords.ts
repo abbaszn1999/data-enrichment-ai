@@ -21,6 +21,11 @@ export type DisplayKeyword = {
    * classification has overlaid this row yet (still the extract default).
    */
   isAiGenerated?: boolean;
+  /**
+   * Set when this row was removed as the exact same search as another
+   * category term. The value is the keyword that was kept (highest volume).
+   */
+  sameIntentOf?: string;
 };
 
 
@@ -175,6 +180,71 @@ export function overlayKeywordSampleWithClassified<T extends {
   isAiGenerated?: boolean;
 }>(rows: T[], classified: ClassifiedVerdict[]): T[] {
   return applyKeywordClassifications(rows, classifiedVerdictsToPatches(classified));
+}
+
+function exactDisplayKey(keyword: string): string {
+  return keyword.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+export type SameIntentDrop = {
+  droppedKeyword: string;
+  keptKeyword: string;
+};
+
+/**
+ * Hide dropped category rows and, within a kept wording, keep only the
+ * highest-volume row. Rows on other sheets are left unchanged. An empty
+ * drop list clears a previous same-intent mark, then still collapses
+ * identical category wording in the sample.
+ */
+export function applySameIntentOverlay<
+  T extends {
+    keyword: string;
+    volume: number;
+    sheet: DisplayKeyword["sheet"];
+    sameIntentOf?: string;
+  },
+>(rows: T[], drops: SameIntentDrop[]): T[] {
+  const droppedToKept = new Map<string, string>();
+  for (const drop of drops) {
+    const key = exactDisplayKey(drop.droppedKeyword);
+    if (key) droppedToKept.set(key, drop.keptKeyword);
+  }
+
+  const marked = rows.map((row) => {
+    if (row.sheet !== "category") {
+      if (!row.sameIntentOf) return row;
+      const { sameIntentOf: _removed, ...rest } = row;
+      return rest as T;
+    }
+    const kept = droppedToKept.get(exactDisplayKey(row.keyword));
+    if (!kept) {
+      if (!row.sameIntentOf) return row;
+      const { sameIntentOf: _removed, ...rest } = row;
+      return rest as T;
+    }
+    return { ...row, sameIntentOf: kept };
+  });
+
+  const bestIndex = new Map<string, number>();
+  marked.forEach((row, index) => {
+    if (row.sheet !== "category" || row.sameIntentOf) return;
+    const key = exactDisplayKey(row.keyword);
+    const prev = bestIndex.get(key);
+    if (prev === undefined) {
+      bestIndex.set(key, index);
+      return;
+    }
+    const prevRow = marked[prev]!;
+    if (row.volume > prevRow.volume) bestIndex.set(key, index);
+  });
+
+  return marked.map((row, index) => {
+    if (row.sheet !== "category" || row.sameIntentOf) return row;
+    const winner = bestIndex.get(exactDisplayKey(row.keyword));
+    if (winner === undefined || winner === index) return row;
+    return { ...row, sameIntentOf: marked[winner]!.keyword };
+  });
 }
 
 export function keywordClassificationOverlayChanged<

@@ -65,9 +65,9 @@ export function decodeVectorInt8(base64: string, dims: number): number[] {
  */
 const vectorCache = new Map<string, number[]>();
 
-function cacheKey(text: string): string {
+function cacheKey(text: string, dimensions = EMBEDDING_DIMENSIONS): string {
   return createHash("sha256")
-    .update(`${EMBEDDING_MODEL}:${EMBEDDING_DIMENSIONS}:${text}`)
+    .update(`${EMBEDDING_MODEL}:${dimensions}:${text}`)
     .digest("hex");
 }
 
@@ -75,7 +75,10 @@ export function embeddingsAvailable(): boolean {
   return Boolean(process.env.OPENAI_API_KEY?.trim());
 }
 
-async function requestEmbeddings(inputs: string[]): Promise<number[][]> {
+async function requestEmbeddings(
+  inputs: string[],
+  dimensions = EMBEDDING_DIMENSIONS
+): Promise<number[][]> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
@@ -91,7 +94,7 @@ async function requestEmbeddings(inputs: string[]): Promise<number[][]> {
       },
       body: JSON.stringify({
         model: EMBEDDING_MODEL,
-        dimensions: EMBEDDING_DIMENSIONS,
+        dimensions,
         input: inputs,
       }),
       signal: controller.signal,
@@ -127,7 +130,8 @@ async function requestEmbeddings(inputs: string[]): Promise<number[][]> {
  * lexical scoring for it rather than treating it as dissimilar.
  */
 export async function embedTexts(
-  texts: string[]
+  texts: string[],
+  dimensions = EMBEDDING_DIMENSIONS
 ): Promise<Array<number[] | null>> {
   const result: Array<number[] | null> = new Array(texts.length).fill(null);
   if (texts.length === 0 || !embeddingsAvailable()) return result;
@@ -138,7 +142,7 @@ export async function embedTexts(
   texts.forEach((raw, index) => {
     const text = (raw || "").slice(0, MAX_CHARS_PER_INPUT).trim();
     if (!text) return;
-    const key = cacheKey(text);
+    const key = cacheKey(text, dimensions);
     const cached = vectorCache.get(key);
     if (cached) {
       result[index] = cached;
@@ -160,7 +164,10 @@ export async function embedTexts(
   for (let offset = 0; offset < uniquePending.length; offset += MAX_BATCH_SIZE) {
     const batch = uniquePending.slice(offset, offset + MAX_BATCH_SIZE);
     try {
-      const vectors = await requestEmbeddings(batch.map((b) => b.text));
+      const vectors = await requestEmbeddings(
+        batch.map((b) => b.text),
+        dimensions
+      );
       batch.forEach((item, i) => {
         const vector = vectors[i];
         if (Array.isArray(vector) && vector.length > 0) {

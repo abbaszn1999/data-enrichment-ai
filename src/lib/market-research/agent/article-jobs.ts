@@ -242,7 +242,23 @@ export async function startOrResumeArticleJob(
     return { job: existing, started: false };
   }
 
-  const started = await startArticleWrite(input);
+  let started: Awaited<ReturnType<typeof startArticleWrite>> | null = null;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      started = await startArticleWrite(input);
+      break;
+    } catch (error) {
+      lastError = error;
+      console.error(`[article-jobs] Start failed (attempt ${attempt}/3):`, error);
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+      }
+    }
+  }
+  if (!started) {
+    throw lastError instanceof Error ? lastError : new Error("Article start failed");
+  }
   const now = new Date().toISOString();
   const job = await saveArticleJob(admin, workspaceId, projectId, {
     articleId: input.articleId,

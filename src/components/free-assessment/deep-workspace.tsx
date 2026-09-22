@@ -50,7 +50,7 @@ export function DeepWorkspace({
   chargedUsd: number;
   onAnalyze: () => void;
   analyzeLoading: boolean;
-  analyzeProgress?: { done: number; total: number } | null;
+  analyzeProgress?: { done: number; total: number; phase?: "classify" | "same-intent" } | null;
   analyzed: boolean;
   onCancelExtract?: () => void;
   /** Export of every archived row, not just the on-screen table. */

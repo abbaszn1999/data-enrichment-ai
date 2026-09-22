@@ -3,12 +3,88 @@ import {
   agentAnalyzeBodySchema,
   jsonError,
   requireFaWrite,
+  workspaceIdSchema,
+  projectIdSchema,
 } from "@/lib/free-assessment/api-schema";
-import { csvRowsToCollectionItems } from "@/lib/free-assessment/agent/csv-catalog";
-import { runStage1NicheDiscovery } from "@/lib/free-assessment/agent/stage1-niche-discovery";
-import { saveProjectSliceAdmin } from "@/lib/free-assessment/storage-admin";
+import { loadProjectSliceAdmin, saveProjectSliceAdmin } from "@/lib/free-assessment/storage-admin";
+import { loadActiveJobForSession, loadJobRun } from "@/lib/jobs/repo";
+import type { Stage1Checkpoint } from "@/lib/free-assessment/agent/stage1-niche-discovery";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
+
+type NichesSlice = {
+  niches: unknown[];
+  structuredNiches: unknown[];
+  excludedItems?: unknown[];
+  agentConclusion?: string;
+  isAiGenerated?: boolean;
+};
+
+export async function GET(request: NextRequest) {
+  const workspaceId = workspaceIdSchema.safeParse(
+    request.nextUrl.searchParams.get("workspaceId")
+  );
+  const projectId = projectIdSchema.safeParse(
+    request.nextUrl.searchParams.get("projectId")
+  );
+  if (!workspaceId.success || !projectId.success) {
+    return jsonError("Invalid analyze status query", 400);
+  }
+  const auth = await requireFaWrite(workspaceId.data);
+  if (!auth.ok) return auth.response;
+
+  const job = await loadActiveJobForSession(auth.admin, {
+    kind: "fa_stage1",
+    sessionId: projectId.data,
+    workspaceId: workspaceId.data,
+  });
+  const niches = await loadProjectSliceAdmin<NichesSlice>(
+    auth.admin,
+    workspaceId.data,
+    projectId.data,
+    "niches"
+  ).catch(() => null);
+
+  if (job) {
+    const checkpoint = await loadProjectSliceAdmin<Stage1Checkpoint>(
+      auth.admin,
+      workspaceId.data,
+      projectId.data,
+      "stage1-job"
+    ).catch(() => null);
+    const total = Math.max(checkpoint?.candidates.length ?? 1, 1);
+    return NextResponse.json(
+      {
+        pending: true,
+        jobId: job.id,
+        status: job.status,
+        progress: checkpoint?.tree ? Math.min(1, (checkpoint.offset ?? 0) / total) : 0.05,
+      },
+      { headers: auth.headers }
+    );
+  }
+
+  const latestId = request.nextUrl.searchParams.get("jobId");
+  if (latestId) {
+    const finished = await loadJobRun(auth.admin, latestId);
+    if (finished?.status === "failed") {
+      return jsonError(finished.last_error || "Sheet analysis failed", 500);
+    }
+  }
+
+  return NextResponse.json(
+    {
+      pending: false,
+      niches: niches?.niches ?? [],
+      structuredNiches: niches?.structuredNiches ?? [],
+      excludedItems: niches?.excludedItems ?? [],
+      agentConclusion: niches?.agentConclusion ?? "",
+      beats: [],
+      isAiGenerated: niches?.isAiGenerated ?? false,
+    },
+    { headers: auth.headers }
+  );
+}
 
 export async function POST(request: NextRequest) {
   let json: unknown;
@@ -22,43 +98,46 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) {
     return jsonError("Invalid analyze payload", 400);
   }
+  if (!parsed.data.projectId) {
+    return jsonError("A project is required to analyze the sheet", 400);
+  }
 
   const auth = await requireFaWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {
-    const { collections, brands } = csvRowsToCollectionItems(parsed.data.plpRows);
-    const discovery = await runStage1NicheDiscovery({
-      storeName: "the uploaded catalog",
-      collections,
-      storeBrands: brands,
+    await saveProjectSliceAdmin(
+      auth.admin,
+      parsed.data.workspaceId,
+      parsed.data.projectId,
+      "catalog",
+      { plpRows: parsed.data.plpRows }
+    );
+    const existing = await loadActiveJobForSession(auth.admin, {
+      kind: "fa_stage1",
+      sessionId: parsed.data.projectId,
+      workspaceId: parsed.data.workspaceId,
     });
-
-    if (parsed.data.projectId) {
-      const projectId = parsed.data.projectId;
-      const workspaceId = parsed.data.workspaceId;
-      await Promise.all([
-        saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "catalog", {
-          plpRows: parsed.data.plpRows,
-        }).catch((err) => console.error("[fa-analyze] Error saving catalog slice:", err)),
-        saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "niches", {
-          niches: discovery.niches,
-          structuredNiches: discovery.structuredNiches,
-          excludedItems: discovery.excludedItems ?? [],
-        }).catch((err) => console.error("[fa-analyze] Error saving niches slice:", err)),
-      ]);
+    if (existing) {
+      return NextResponse.json(
+        { pending: true, jobId: existing.id, rowCount: parsed.data.plpRows.length },
+        { headers: auth.headers }
+      );
     }
 
+    const { insertJobRun } = await import("@/lib/jobs/repo");
+    const { dispatchJob } = await import("@/lib/jobs/dispatch");
+    const job = await insertJobRun(auth.admin, {
+      workspaceId: parsed.data.workspaceId,
+      kind: "fa_stage1",
+      sessionId: parsed.data.projectId,
+      createdBy: auth.user.id,
+      targetIds: parsed.data.plpRows.map((row) => row.name),
+      settings: { projectId: parsed.data.projectId },
+    });
+    await dispatchJob(job.id, "fa_stage1");
     return NextResponse.json(
-      {
-        rowCount: parsed.data.plpRows.length,
-        niches: discovery.niches,
-        structuredNiches: discovery.structuredNiches,
-        excludedItems: discovery.excludedItems ?? [],
-        agentConclusion: discovery.agentConclusion,
-        beats: discovery.beats,
-        isAiGenerated: discovery.isAiGenerated,
-      },
+      { pending: true, jobId: job.id, rowCount: parsed.data.plpRows.length },
       { headers: auth.headers }
     );
   } catch (err) {

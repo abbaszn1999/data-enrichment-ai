@@ -29,7 +29,7 @@ export const maxDuration = 60;
 // chunked into Gemini batches of 10 keywords, 5 batches running concurrently
 // — 200 keywords/page is 20 batches, 4 waves at concurrency 5, comfortably
 // inside the route's time budget even with thousands of surviving terms.
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 10;
 
 type SeedsSlicePayload = { seedRows: MockSeedRow[]; manualSeeds: MockSeedRow[] };
 type NichesSlicePayload = { niches: NicheReading[]; structuredNiches: MockNiche[] };

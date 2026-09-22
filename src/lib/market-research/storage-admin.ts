@@ -18,7 +18,8 @@ export type MrSliceName =
   | "strategy"
   | "articles"
   | "article-jobs"
-  | "internal-links";
+  | "internal-links"
+  | "stage1-job";
 
 /**
  * Merge-not-overwrite for cursor-driven writes: each page of a cursor job
@@ -797,11 +798,223 @@ export async function loadClassifiedItemsAdmin(
   return out;
 }
 
+function sameIntentKey(keyword: string): string {
+  return keyword.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+export type SameIntentDropRecord = {
+  droppedKeyword: string;
+  keptKeyword: string;
+};
+
+export type SameIntentState = {
+  phase: "embed" | "cluster" | "judge" | "done";
+  total: number;
+  embedOffset: number;
+  clusterOffset: number;
+  judgeOffset: number;
+  drops: SameIntentDropRecord[];
+  step: number;
+  updatedAt: string;
+};
+
+export type SameIntentSurvivorRecord = {
+  id: string;
+  keyword: string;
+  volume: number;
+  vector: string;
+};
+
+export type SameIntentLeaderRecord = {
+  id: string;
+  vector: string;
+};
+
+export type SameIntentClusterRecord = {
+  members: Array<{ id: string; keyword: string; volume: number }>;
+};
+
+function sameIntentFile(
+  workspaceId: string,
+  projectId: string,
+  name: string
+): string {
+  return `${mrProjectPath(workspaceId, projectId)}/same-intent/${name}.json`;
+}
+
+const SAME_INTENT_FILES = [
+  "manifest",
+  "survivors",
+  "leaders",
+  "assignments",
+  "clusters",
+] as const;
+
+export async function clearSameIntentAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<void> {
+  const paths = SAME_INTENT_FILES.map((name) =>
+    sameIntentFile(workspaceId, projectId, name)
+  );
+  const { error } = await admin.storage
+    .from(MARKET_RESEARCH_STORAGE_BUCKET)
+    .remove(paths);
+  if (error && !/not found|object not found/i.test(error.message || "")) {
+    console.error("[clearSameIntentAdmin] Failed to remove same-intent files:", error);
+  }
+}
+
+export async function loadSameIntentState(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<SameIntentState | null> {
+  return loadMrJsonAdmin<SameIntentState>(
+    admin,
+    sameIntentFile(workspaceId, projectId, "manifest")
+  );
+}
+
+export async function saveSameIntentState(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  state: SameIntentState
+): Promise<void> {
+  await saveMrJsonAdmin(
+    admin,
+    sameIntentFile(workspaceId, projectId, "manifest"),
+    state
+  );
+}
+
+export async function loadSameIntentDrops(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<SameIntentDropRecord[]> {
+  const state = await loadSameIntentState(admin, workspaceId, projectId);
+  return state?.drops ?? [];
+}
+
+export async function loadSameIntentSurvivors(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<SameIntentSurvivorRecord[]> {
+  return (
+    (await loadMrJsonAdmin<SameIntentSurvivorRecord[]>(
+      admin,
+      sameIntentFile(workspaceId, projectId, "survivors")
+    )) ?? []
+  );
+}
+
+export async function saveSameIntentSurvivors(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  rows: SameIntentSurvivorRecord[]
+): Promise<void> {
+  await saveMrJsonAdmin(
+    admin,
+    sameIntentFile(workspaceId, projectId, "survivors"),
+    rows
+  );
+}
+
+export async function loadSameIntentLeaders(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<SameIntentLeaderRecord[]> {
+  return (
+    (await loadMrJsonAdmin<SameIntentLeaderRecord[]>(
+      admin,
+      sameIntentFile(workspaceId, projectId, "leaders")
+    )) ?? []
+  );
+}
+
+export async function saveSameIntentLeaders(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  rows: SameIntentLeaderRecord[]
+): Promise<void> {
+  await saveMrJsonAdmin(
+    admin,
+    sameIntentFile(workspaceId, projectId, "leaders"),
+    rows
+  );
+}
+
+export async function loadSameIntentAssignments(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<Record<string, string>> {
+  return (
+    (await loadMrJsonAdmin<Record<string, string>>(
+      admin,
+      sameIntentFile(workspaceId, projectId, "assignments")
+    )) ?? {}
+  );
+}
+
+export async function saveSameIntentAssignments(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  assignments: Record<string, string>
+): Promise<void> {
+  await saveMrJsonAdmin(
+    admin,
+    sameIntentFile(workspaceId, projectId, "assignments"),
+    assignments
+  );
+}
+
+export async function loadSameIntentClusters(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string
+): Promise<SameIntentClusterRecord[]> {
+  return (
+    (await loadMrJsonAdmin<SameIntentClusterRecord[]>(
+      admin,
+      sameIntentFile(workspaceId, projectId, "clusters")
+    )) ?? []
+  );
+}
+
+export async function saveSameIntentClusters(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  clusters: SameIntentClusterRecord[]
+): Promise<void> {
+  await saveMrJsonAdmin(
+    admin,
+    sameIntentFile(workspaceId, projectId, "clusters"),
+    clusters
+  );
+}
+
 export async function loadClassifiedCategoryTerms(
   admin: SupabaseClient,
   workspaceId: string,
   projectId: string
 ): Promise<ClassifiedShardItem[]> {
-  const items = await loadClassifiedItemsAdmin(admin, workspaceId, projectId);
-  return items.filter((item) => item.sheet === "category");
+  const [items, drops] = await Promise.all([
+    loadClassifiedItemsAdmin(admin, workspaceId, projectId),
+    loadSameIntentDrops(admin, workspaceId, projectId),
+  ]);
+  const dropped = new Set(drops.map((drop) => sameIntentKey(drop.droppedKeyword)));
+  return items.filter(
+    (item) =>
+      item.sheet === "category" && !dropped.has(sameIntentKey(item.keyword))
+  );
 }

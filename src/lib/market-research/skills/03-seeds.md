@@ -246,6 +246,8 @@ subcategory tree at all.
 - **NEVER** extract or reference individual SKU/product-level attributes.
 - **NEVER** translate or transliterate a PLP's variations into a language different from that
   PLP's own name/description language.
+- **NEVER** omit a selected PLP. Every input id must appear once as `collectionId`.
+- **NEVER** invent a `collectionId` that was not in the input selection.
 - **NEVER** let the total output across the whole response exceed 100 rows.
 - **NEVER** settle for a shallow, low-effort variation set when few PLPs are selected and the
   100-row budget leaves ample room to go deeper.

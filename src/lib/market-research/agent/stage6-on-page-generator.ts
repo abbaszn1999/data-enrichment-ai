@@ -277,19 +277,6 @@ Output strictly valid JSON with this exact schema:
     }
   }
 
-  // Fallback for any collection missing in the AI response
-  for (const col of batchCollections) {
-    if (!batchContent[col.id]) {
-      const fallback = runHeuristicStage6OnPage({
-        ...input,
-        collections: [col],
-      });
-      if (fallback.contentById[col.id]) {
-        batchContent[col.id] = fallback.contentById[col.id];
-      }
-    }
-  }
-
   return batchContent;
 }
 
@@ -340,17 +327,39 @@ export async function runStage6OnPageGeneration(
   const chunkResults = await runWithConcurrency(
     chunks,
     async (chunk) => {
-      try {
-        const batchResult = await generateBatchStage6(enrichedInput, chunk);
-        return { contentById: batchResult, degraded: 0 };
-      } catch (err) {
-        console.error("[runStage6OnPageGeneration] Batch error, falling back to heuristic for chunk:", err);
-        const fallback = runHeuristicStage6OnPage({
-          ...enrichedInput,
-          collections: chunk,
-        });
-        return { contentById: fallback.contentById, degraded: chunk.length };
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          const batchResult = await generateBatchStage6(enrichedInput, chunk);
+          return { contentById: batchResult, degraded: 0 };
+        } catch (err) {
+          lastError = err;
+          console.error(
+            `[runStage6OnPageGeneration] Batch failed (attempt ${attempt}/3):`,
+            err
+          );
+          if (attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+          }
+        }
       }
+      console.error(
+        "[runStage6OnPageGeneration] Leaving collections ungenerated after retries:",
+        lastError
+      );
+      const contentById: Record<string, CollectionContent> = {};
+      for (const collection of chunk) {
+        contentById[collection.id] = {
+          collectionId: collection.id,
+          seoTitle: "",
+          seoDescription: "",
+          collectionDescription: "",
+          faqs: [],
+          links: [],
+          ungenerated: true,
+        };
+      }
+      return { contentById, degraded: chunk.length };
     },
     { concurrency: CHUNK_CONCURRENCY }
   );

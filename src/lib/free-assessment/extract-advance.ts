@@ -10,12 +10,14 @@ import {
   loadClassifiedItemsAdmin,
   loadExtractRowsAdmin,
   loadProjectSliceAdmin,
+  loadSameIntentDrops,
   saveExtractChunkAdmin,
   saveProjectSliceAdmin,
 } from "@/lib/free-assessment/storage-admin";
 import {
   MAX_DISPLAY_ROWS,
   applyKeywordClassifications,
+  applySameIntentOverlay,
   keywordClassificationOverlayChanged,
   keywordSampleNeedsRebuild,
   overlayKeywordSampleWithClassified,
@@ -375,6 +377,12 @@ export async function persistExtractKeywordSample(
   if (classified.length > 0) {
     sample = overlayKeywordSampleWithClassified(sample, classified);
   }
+  const sameIntentDrops = await loadSameIntentDrops(
+    admin,
+    params.workspaceId,
+    params.projectId
+  ).catch(() => []);
+  sample = applySameIntentOverlay(sample, sameIntentDrops);
   await saveProjectSliceAdmin(
     admin,
     params.workspaceId,
@@ -404,9 +412,22 @@ export async function overlayAndPersistKeywordClassifications(
     workspaceId,
     projectId
   ).catch(() => []);
-  if (classified.length === 0) return sample;
-  const next = overlayKeywordSampleWithClassified(sample, classified);
-  if (!keywordClassificationOverlayChanged(sample, next)) return sample;
+  const drops = await loadSameIntentDrops(admin, workspaceId, projectId).catch(
+    () => []
+  );
+  const classifiedNext =
+    classified.length === 0
+      ? sample
+      : overlayKeywordSampleWithClassified(sample, classified);
+  const next = applySameIntentOverlay(classifiedNext, drops);
+  if (
+    classified.length > 0 &&
+    !keywordClassificationOverlayChanged(sample, classifiedNext) &&
+    drops.length === 0 &&
+    sample.every((row, index) => row.sameIntentOf === next[index]?.sameIntentOf)
+  ) {
+    return sample;
+  }
   await saveProjectSliceAdmin(
     admin,
     workspaceId,

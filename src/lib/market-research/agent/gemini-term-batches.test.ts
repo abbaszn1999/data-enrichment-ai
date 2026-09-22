@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_GEMINI_PAYLOAD_CHARS,
   MAX_TERMS_PER_GEMINI_BATCH,
+  acceptCollectionExclusions,
   chunkTermPayload,
   packGeminiTermBatches,
   type GeminiCandidateCard,
@@ -108,5 +109,52 @@ describe("packGeminiTermBatches", () => {
         MAX_GEMINI_PAYLOAD_CHARS
       );
     }
+  });
+});
+
+describe("acceptCollectionExclusions", () => {
+  const batch = [
+    {
+      keywordId: "touchscreen tablets for drawing",
+      candidateProducts: [{ id: "p1" }, { id: "p2" }],
+    },
+    {
+      keywordId: "used touchscreen tablets",
+      candidateProducts: [{ id: "p1" }],
+    },
+  ];
+
+  it("drops keyword ids that were not in the request and product ids that were not sent", () => {
+    const { accepted, missingKeywordIds } = acceptCollectionExclusions(batch, [
+      {
+        keywordId: "touchscreen tablets for drawing",
+        matchedProductIds: ["p1", "not-sent"],
+        rationale: "kept",
+      },
+      {
+        keywordId: "touchscreen tablets that hook up with computers",
+        matchedProductIds: ["p1"],
+        rationale: "invented",
+      },
+    ]);
+    expect([...accepted.keys()]).toEqual(["touchscreen tablets for drawing"]);
+    expect(accepted.get("touchscreen tablets for drawing")?.matchedProductIds).toEqual([
+      "p1",
+    ]);
+    expect(missingKeywordIds).toEqual(["used touchscreen tablets"]);
+  });
+
+  it("treats an explicit empty list as reviewed, not missing", () => {
+    const { missingKeywordIds } = acceptCollectionExclusions(batch, [
+      {
+        keywordId: "touchscreen tablets for drawing",
+        matchedProductIds: [],
+      },
+      {
+        keywordId: "used touchscreen tablets",
+        matchedProductIds: ["p1"],
+      },
+    ]);
+    expect(missingKeywordIds).toEqual([]);
   });
 });

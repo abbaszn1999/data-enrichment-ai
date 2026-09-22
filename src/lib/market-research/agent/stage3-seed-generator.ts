@@ -187,6 +187,40 @@ interface GeminiSeedsResponse {
   }>;
 }
 
+function seedRowsFromReply(
+  parsed: GeminiSeedsResponse | undefined,
+  selected: SelectedScopeCollectionInput[]
+): MockSeedRow[] {
+  if (!parsed || !Array.isArray(parsed.collections)) return [];
+  const colMap = new Map(selected.map((col) => [col.id, col]));
+  const seedRows: MockSeedRow[] = [];
+  for (const item of parsed.collections) {
+    const sourceCol =
+      colMap.get(item.collectionId) ||
+      selected.find(
+        (col) => col.name.toLowerCase() === item.canonicalNicheSeed.toLowerCase()
+      );
+    if (!sourceCol || !Array.isArray(item.variations) || item.variations.length === 0) {
+      continue;
+    }
+    const canonical = item.canonicalNicheSeed || sourceCol.name;
+    item.variations.forEach((variation, index) => {
+      seedRows.push({
+        id: `${sourceCol.id}-gemini-${index + 1}-${slugifyTerm(variation.term)}`,
+        collectionId: sourceCol.id,
+        broadSeedVariation: variation.term,
+        canonicalNicheSeed: canonical,
+        selectedCollection: sourceCol.name,
+        broadParentNiche: sourceCol.parentNicheName,
+        productCount: sourceCol.productCount,
+        variationType: normalizeVariationType(variation.variationType),
+        scopeMatch: normalizeScopeMatch(variation.scopeMatch),
+      });
+    });
+  }
+  return seedRows;
+}
+
 export async function runStage3SeedGeneration(input: {
   storeName: string;
   selectedCollections: SelectedScopeCollectionInput[];
@@ -343,47 +377,28 @@ constraints.`;
     });
 
     const parsed = result.data;
-    if (parsed && Array.isArray(parsed.collections) && parsed.collections.length > 0) {
-      const colMap = new Map<string, SelectedScopeCollectionInput>(
-        input.selectedCollections.map((c) => [c.id, c])
-      );
-
-      const seedRows: MockSeedRow[] = [];
-
-      for (const item of parsed.collections) {
-        const sourceCol =
-          colMap.get(item.collectionId) ||
-          input.selectedCollections.find(
-            (c) => c.name.toLowerCase() === item.canonicalNicheSeed.toLowerCase()
-          ) ||
-          input.selectedCollections[0];
-
-        const canonical = item.canonicalNicheSeed || sourceCol.name;
-
-        if (Array.isArray(item.variations) && item.variations.length > 0) {
-          for (let i = 0; i < item.variations.length; i++) {
-            const v = item.variations[i];
-            seedRows.push({
-              id: `${sourceCol.id}-gemini-${i + 1}-${slugifyTerm(v.term)}`,
-              collectionId: sourceCol.id,
-              broadSeedVariation: v.term,
-              canonicalNicheSeed: canonical,
-              selectedCollection: sourceCol.name,
-              broadParentNiche: sourceCol.parentNicheName,
-              productCount: sourceCol.productCount,
-              variationType: normalizeVariationType(v.variationType),
-              scopeMatch: normalizeScopeMatch(v.scopeMatch),
-            });
-          }
-        }
+    const seedRows = seedRowsFromReply(parsed, input.selectedCollections);
+    const covered = new Set(seedRows.map((row) => row.collectionId));
+    const missing = input.selectedCollections.filter((col) => !covered.has(col.id));
+    if (missing.length > 0 && missing.length < input.selectedCollections.length) {
+      try {
+        const retry = await runGeminiMarketResearch<GeminiSeedsResponse>({
+          stage: 3,
+          systemInstruction,
+          userPrompt: `Store Name: ${input.storeName}
+These selected PLPs were missing from your previous reply. Return one entry for each, using its id exactly:
+${formatSelectionForPrompt(missing)}`,
+        });
+        seedRows.push(...seedRowsFromReply(retry.data, missing));
+      } catch (retryError) {
+        console.error("[runStage3SeedGeneration] Retry for missing PLPs failed:", retryError);
       }
-
-      if (seedRows.length > 0) {
-        return {
-          seedRows: capTotalSeedRows(seedRows),
-          isAiGenerated: true,
-        };
-      }
+    }
+    if (seedRows.length > 0) {
+      return {
+        seedRows: capTotalSeedRows(seedRows),
+        isAiGenerated: true,
+      };
     }
   } catch (error) {
     console.error("[runStage3SeedGeneration] Gemini 3.8 Flash seed call failed:", error);

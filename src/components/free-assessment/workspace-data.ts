@@ -67,6 +67,8 @@ export type ExtractedKeyword = {
    * classification has overlaid this row yet (still the extract default).
    */
   isAiGenerated?: boolean;
+  /** Kept keyword when this row is an exact same-intent copy and stays off the category sheet. */
+  sameIntentOf?: string;
 };
 
 export type SeedExtractProgress = {
@@ -432,6 +434,7 @@ export function filterKeywords(
 ): ExtractedKeyword[] {
   return rows.filter((row) => {
     if (sheet && row.sheet !== sheet) return false;
+    if (sheet === "category" && row.sameIntentOf) return false;
     if (row.volume < filters.minVolume) return false;
     // Semrush reports KD as "N/A" for terms it hasn't scored. Our provider
     // parser already coerces that to 0 (never undefined/NaN), so unscored

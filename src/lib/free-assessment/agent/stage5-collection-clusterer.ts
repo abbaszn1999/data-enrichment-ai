@@ -6,6 +6,7 @@ import type {
 import { runGeminiMarketResearch } from "./gemini-runner";
 import { cosineSimilarity, contentHash } from "./embeddings";
 import { runWithConcurrency } from "@/lib/sync/core/batch-executor";
+import { acceptCollectionExclusions } from "@/lib/market-research/agent/gemini-term-batches";
 
 export interface KeywordToCluster {
   id: string;
@@ -458,31 +459,55 @@ export async function runStage5CollectionClustering(
       const userPrompt = `Store Name: "${input.storeName || "Store"}"
 Total Store Products: ${products.length}
 
+These are the only collections in this request. Return one entry for each keywordId below, and no others.
 Review each collection opportunity and run the exclusion test on every candidate product:
 ${JSON.stringify(aiPayload, null, 2)}`;
 
-      const geminiRes = await runGeminiMarketResearch<GeminiCurationResponse>({
-        stage: 5,
-        systemInstruction: CLUSTER_SYSTEM_INSTRUCTION,
-        userPrompt,
-      });
-      return geminiRes.data;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          const geminiRes = await runGeminiMarketResearch<GeminiCurationResponse>({
+            stage: 5,
+            systemInstruction: CLUSTER_SYSTEM_INSTRUCTION,
+            userPrompt,
+          });
+          return { batch, data: geminiRes.data };
+        } catch (err) {
+          lastError = err;
+          console.error(
+            `[Stage 5] Gemini validation batch failed (attempt ${attempt}/3):`,
+            err
+          );
+          if (attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+          }
+        }
+      }
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("Gemini exclusion batch failed after retries");
     },
     { concurrency: 5 }
   );
 
   let anyAiSucceeded = false;
-  for (const data of chunkRun.successes) {
-    if (data && Array.isArray(data.collections)) {
-      anyAiSucceeded = true;
-      for (const item of data.collections) {
-        if (item.keywordId && Array.isArray(item.matchedProductIds)) {
-          aiApprovedMap.set(item.keywordId, {
-            matchedProductIds: item.matchedProductIds,
-            rationale: item.rationale,
-          });
-        }
-      }
+  for (const { batch, data } of chunkRun.successes) {
+    const { accepted } = acceptCollectionExclusions(
+      batch.map((kw) => {
+        const meta = keywordCandidateMap.get(kw.id);
+        return {
+          keywordId: kw.id,
+          candidateProducts: (meta?.candidates ?? [])
+            .slice(0, MAX_CANDIDATES_TO_GEMINI)
+            .map((c) => ({ id: c.productId })),
+        };
+      }),
+      data?.collections
+    );
+    if (accepted.size === 0) continue;
+    anyAiSucceeded = true;
+    for (const [keywordId, value] of accepted) {
+      aiApprovedMap.set(keywordId, value);
     }
   }
   if (chunkRun.errors.length > 0) {

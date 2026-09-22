@@ -9,7 +9,7 @@ import { runStage3SeedGeneration } from "@/lib/market-research/agent/stage3-seed
 import { saveProjectSliceAdmin } from "@/lib/market-research/storage-admin";
 import { markSliceSavedAdmin } from "@/lib/market-research/server-persist";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   let json: unknown;

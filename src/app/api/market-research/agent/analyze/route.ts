@@ -3,13 +3,90 @@ import {
   agentAnalyzeBodySchema,
   jsonError,
   requireMrWrite,
+  workspaceIdSchema,
+  projectIdSchema,
 } from "@/lib/market-research/api-schema";
 import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
-import { runStage1NicheDiscovery } from "@/lib/market-research/agent/stage1-niche-discovery";
-import { saveProjectSliceAdmin } from "@/lib/market-research/storage-admin";
-import { markSliceSavedAdmin } from "@/lib/market-research/server-persist";
+import { loadProjectSliceAdmin } from "@/lib/market-research/storage-admin";
+import type { Stage1Checkpoint } from "@/lib/market-research/agent/stage1-niche-discovery";
+import { loadActiveJobForSession, loadJobRun } from "@/lib/jobs/repo";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
+
+type NichesSlice = {
+  niches: unknown[];
+  structuredNiches: unknown[];
+  excludedItems?: unknown[];
+  agentConclusion?: string;
+  isAiGenerated?: boolean;
+};
+
+export async function GET(request: NextRequest) {
+  const workspaceId = workspaceIdSchema.safeParse(
+    request.nextUrl.searchParams.get("workspaceId")
+  );
+  const projectId = projectIdSchema.safeParse(
+    request.nextUrl.searchParams.get("projectId")
+  );
+  if (!workspaceId.success || !projectId.success) {
+    return jsonError("Invalid analyze status query", 400);
+  }
+  const auth = await requireMrWrite(workspaceId.data);
+  if (!auth.ok) return auth.response;
+
+  const job = await loadActiveJobForSession(auth.admin, {
+    kind: "mr_stage1",
+    sessionId: projectId.data,
+    workspaceId: workspaceId.data,
+  });
+  const niches = await loadProjectSliceAdmin<NichesSlice>(
+    auth.admin,
+    workspaceId.data,
+    projectId.data,
+    "niches"
+  ).catch(() => null);
+
+  if (job) {
+    const checkpoint = await loadProjectSliceAdmin<Stage1Checkpoint>(
+      auth.admin,
+      workspaceId.data,
+      projectId.data,
+      "stage1-job"
+    ).catch(() => null);
+    const total = Math.max(checkpoint?.candidates.length ?? 1, 1);
+    const done = checkpoint?.offset ?? 0;
+    return NextResponse.json(
+      {
+        pending: true,
+        jobId: job.id,
+        status: job.status,
+        progress: checkpoint?.tree ? Math.min(1, done / total) : 0.05,
+      },
+      { headers: auth.headers }
+    );
+  }
+
+  const latestId = request.nextUrl.searchParams.get("jobId");
+  if (latestId) {
+    const finished = await loadJobRun(auth.admin, latestId);
+    if (finished?.status === "failed") {
+      return jsonError(finished.last_error || "Store analysis failed", 500);
+    }
+  }
+
+  return NextResponse.json(
+    {
+      pending: false,
+      niches: niches?.niches ?? [],
+      structuredNiches: niches?.structuredNiches ?? [],
+      excludedItems: niches?.excludedItems ?? [],
+      agentConclusion: niches?.agentConclusion ?? "",
+      beats: [],
+      isAiGenerated: niches?.isAiGenerated ?? false,
+    },
+    { headers: auth.headers }
+  );
+}
 
 export async function POST(request: NextRequest) {
   let json: unknown;
@@ -27,56 +104,45 @@ export async function POST(request: NextRequest) {
   const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
+  if (!parsed.data.projectId) {
+    return jsonError("A project is required to analyze the store", 400);
+  }
+
   try {
-    const catalog = await fetchStoreCatalog(auth.admin, parsed.data.workspaceId);
-    const discovery = await runStage1NicheDiscovery({
-      storeName: catalog.storeName,
-      collections: catalog.collections,
-      storeBrands: catalog.storeBrands,
+    await fetchStoreCatalog(auth.admin, parsed.data.workspaceId);
+    const existing = await loadActiveJobForSession(auth.admin, {
+      kind: "mr_stage1",
+      sessionId: parsed.data.projectId,
+      workspaceId: parsed.data.workspaceId,
     });
-
-    if (parsed.data.projectId) {
-      const projectId = parsed.data.projectId;
-      const workspaceId = parsed.data.workspaceId;
-      await Promise.all([
-        saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "catalog", {
-          storeName: catalog.storeName,
-          provider: catalog.provider,
-          baseUrl: catalog.baseUrl,
-          collections: catalog.collections,
-          storeBrands: catalog.storeBrands,
-        }).catch((err) => console.error("[analyze] Error saving catalog slice:", err)),
-        saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "niches", {
-          niches: discovery.niches,
-          structuredNiches: discovery.structuredNiches,
-          excludedItems: discovery.excludedItems ?? [],
-        }).catch((err) => console.error("[analyze] Error saving niches slice:", err)),
-      ]);
-
-      // Written directly here, outside the client autosave path — record the
-      // fingerprint now so the next autosave doesn't compare a fresh niches
-      // slice against a stale hash and re-upload an older in-memory copy
-      // over it.
-      await markSliceSavedAdmin(auth.admin, projectId, "niches", {
-        niches: discovery.niches,
-        structuredNiches: discovery.structuredNiches,
-        excludedItems: discovery.excludedItems ?? [],
-      });
+    if (existing) {
+      return NextResponse.json(
+        { pending: true, jobId: existing.id },
+        { headers: auth.headers }
+      );
     }
 
-    return NextResponse.json(
-      {
-        storeName: catalog.storeName,
-        provider: catalog.provider,
-        baseUrl: catalog.baseUrl,
-        isMock: catalog.isMock,
-        niches: discovery.niches,
-        structuredNiches: discovery.structuredNiches,
-        excludedItems: discovery.excludedItems ?? [],
-        agentConclusion: discovery.agentConclusion,
-        beats: discovery.beats,
-        isAiGenerated: discovery.isAiGenerated,
+    const { data: workspace } = await auth.admin
+      .from("workspaces")
+      .select("slug")
+      .eq("id", parsed.data.workspaceId)
+      .maybeSingle();
+    const { insertJobRun } = await import("@/lib/jobs/repo");
+    const { dispatchJob } = await import("@/lib/jobs/dispatch");
+    const job = await insertJobRun(auth.admin, {
+      workspaceId: parsed.data.workspaceId,
+      kind: "mr_stage1",
+      sessionId: parsed.data.projectId,
+      createdBy: auth.user.id,
+      targetIds: [],
+      settings: {
+        projectId: parsed.data.projectId,
+        workspaceSlug: workspace?.slug,
       },
+    });
+    await dispatchJob(job.id, "mr_stage1");
+    return NextResponse.json(
+      { pending: true, jobId: job.id },
       { headers: auth.headers }
     );
   } catch (err) {

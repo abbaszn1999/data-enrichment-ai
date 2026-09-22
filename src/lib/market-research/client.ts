@@ -401,7 +401,27 @@ export async function analyzeStoreApi(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ workspaceId, projectId }),
   });
-  return readJson<AgentAnalyzeResponse>(response);
+  const started = await readJson<AgentAnalyzeResponse & { pending?: boolean; jobId?: string }>(
+    response
+  );
+  if (!started.pending || !projectId) return started;
+
+  const deadline = Date.now() + 30 * 60 * 1000;
+  let jobId = started.jobId;
+  for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error("Store analysis is still running. Refresh to see the result.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const params = new URLSearchParams({ workspaceId, projectId });
+    if (jobId) params.set("jobId", jobId);
+    const statusRes = await fetch(`/api/market-research/agent/analyze?${params.toString()}`);
+    const status = await readJson<
+      AgentAnalyzeResponse & { pending?: boolean; jobId?: string }
+    >(statusRes);
+    if (status.jobId) jobId = status.jobId;
+    if (!status.pending) return status;
+  }
 }
 
 export type AgentChatResponse = {
@@ -703,6 +723,43 @@ async function runCursorLoop<TState extends { done: boolean; nextOffset: number 
   }
   throw new Error(
     `${label} did not finish after ${MAX_ROUNDS * MAX_CALLS_PER_ROUND} calls. Please retry.`
+  );
+}
+
+export type SameIntentPageResponse = {
+  offset: number;
+  nextOffset: number;
+  done: boolean;
+  phase: "embed" | "cluster" | "judge" | "done";
+  processed: number;
+  total: number;
+  removedCount: number;
+};
+
+export async function sameIntentPageApi(
+  workspaceId: string,
+  projectId: string,
+  offset: number
+): Promise<SameIntentPageResponse> {
+  const response = await fetch("/api/market-research/agent/same-intent", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, projectId, mode: "archive", offset }),
+  });
+  return readJson<SameIntentPageResponse>(response);
+}
+
+export async function runSameIntentLoop(
+  workspaceId: string,
+  projectId: string,
+  onProgress?: (state: SameIntentPageResponse) => void,
+  isCancelled?: () => boolean
+): Promise<SameIntentPageResponse | null> {
+  return runCursorLoop(
+    (offset) => sameIntentPageApi(workspaceId, projectId, offset),
+    onProgress,
+    isCancelled,
+    "Same-intent cleanup"
   );
 }
 

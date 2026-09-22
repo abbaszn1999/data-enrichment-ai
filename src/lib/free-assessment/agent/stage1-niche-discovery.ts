@@ -285,6 +285,52 @@ const MAX_BATCH_ATTEMPTS = 2;
  * one failing/slow batch on a large catalog can never take down the whole
  * discovery.
  */
+async function placeOneStage1Batch(params: {
+  storeName: string;
+  outputLanguage: string;
+  tree: TaxonomyPassAOutput;
+  batch: TaxonomyCandidate[];
+  candidatesById: Map<string, TaxonomyCandidate>;
+}): Promise<{ assignments: TaxonomyAssignment[]; excluded: ExcludedItem[] }> {
+  let remaining = params.batch;
+  let batchAssignments: TaxonomyAssignment[] = [];
+  let batchExcluded: ExcludedItem[] = [];
+
+  for (let attempt = 1; attempt <= MAX_BATCH_ATTEMPTS && remaining.length > 0; attempt++) {
+    try {
+      const output = await runTaxonomyPassBBatch({
+        storeName: params.storeName,
+        outputLanguage: params.outputLanguage,
+        tree: params.tree,
+        batch: remaining,
+      });
+      batchAssignments = [...batchAssignments, ...(output.assignments || [])];
+      batchExcluded = [...batchExcluded, ...(output.excluded || [])];
+      const { missingIds } = verifyAssignmentCoverage(
+        remaining.map((c) => c.id),
+        output.assignments || [],
+        output.excluded || []
+      );
+      remaining = remaining.filter((c) => missingIds.includes(c.id));
+    } catch (error) {
+      console.error(
+        `[runTaxonomyPassB] batch attempt ${attempt} failed (${remaining.length} items):`,
+        error
+      );
+    }
+  }
+
+  const { missingIds } = verifyAssignmentCoverage(
+    params.batch.map((c) => c.id),
+    batchAssignments,
+    batchExcluded
+  );
+  if (missingIds.length > 0) {
+    batchExcluded.push(...routeMissingToUnresolved(missingIds, params.candidatesById));
+  }
+  return { assignments: batchAssignments, excluded: batchExcluded };
+}
+
 async function runTaxonomyPassBWithCoverage(params: {
   storeName: string;
   outputLanguage: string;
@@ -294,54 +340,154 @@ async function runTaxonomyPassBWithCoverage(params: {
   const { storeName, outputLanguage, tree, candidates } = params;
   const candidatesById = indexCandidatesById(candidates);
   const batches = batchCandidates(candidates);
-
   const allAssignments: TaxonomyAssignment[] = [];
   const allExcluded: ExcludedItem[] = [];
 
   for (const batch of batches) {
-    let remaining = batch;
-    let batchAssignments: TaxonomyAssignment[] = [];
-    let batchExcluded: ExcludedItem[] = [];
-
-    for (let attempt = 1; attempt <= MAX_BATCH_ATTEMPTS && remaining.length > 0; attempt++) {
-      try {
-        const output = await runTaxonomyPassBBatch({
-          storeName,
-          outputLanguage,
-          tree,
-          batch: remaining,
-        });
-        batchAssignments = [...batchAssignments, ...(output.assignments || [])];
-        batchExcluded = [...batchExcluded, ...(output.excluded || [])];
-
-        const { missingIds } = verifyAssignmentCoverage(
-          remaining.map((c) => c.id),
-          output.assignments || [],
-          output.excluded || []
-        );
-        remaining = remaining.filter((c) => missingIds.includes(c.id));
-      } catch (error) {
-        console.error(
-          `[runTaxonomyPassB] batch attempt ${attempt} failed (${remaining.length} items):`,
-          error
-        );
-      }
-    }
-
-    allAssignments.push(...batchAssignments);
-    allExcluded.push(...batchExcluded);
-
-    const { missingIds } = verifyAssignmentCoverage(
-      batch.map((c) => c.id),
-      batchAssignments,
-      batchExcluded
-    );
-    if (missingIds.length > 0) {
-      allExcluded.push(...routeMissingToUnresolved(missingIds, candidatesById));
-    }
+    const placed = await placeOneStage1Batch({
+      storeName,
+      outputLanguage,
+      tree,
+      batch,
+      candidatesById,
+    });
+    allAssignments.push(...placed.assignments);
+    allExcluded.push(...placed.excluded);
   }
 
   return { assignments: allAssignments, excluded: allExcluded };
+}
+
+/** Pages placed per saved worker step. Small enough to finish and persist. */
+export const STAGE1_PLACE_BATCH = 80;
+
+export type Stage1Checkpoint = {
+  storeName: string;
+  outputLanguage: string;
+  candidates: TaxonomyCandidate[];
+  foldedItems: import("./taxonomy-build").RawCandidateInput[];
+  foldedIntoEntries: Array<[string, string]>;
+  tree: TaxonomyPassAOutput;
+  assignments: TaxonomyAssignment[];
+  excluded: ExcludedItem[];
+  offset: number;
+  agentConclusion: string;
+};
+
+export async function advanceStage1Discovery(input: {
+  storeName: string;
+  collections: StoreCollectionItem[];
+  storeBrands?: StoreCollectionItem[];
+  market?: string;
+  checkpoint: Stage1Checkpoint | null;
+}): Promise<{
+  checkpoint: Stage1Checkpoint;
+  done: boolean;
+  result?: Stage1DiscoveryResult;
+}> {
+  const allItems = [...input.collections, ...(input.storeBrands ?? [])];
+  if (!process.env.GEMINI_API_KEY?.trim() || allItems.length === 0) {
+    const result = runHeuristicStage1Discovery(input);
+    const empty: Stage1Checkpoint = {
+      storeName: input.storeName,
+      outputLanguage: "en",
+      candidates: [],
+      foldedItems: [],
+      foldedIntoEntries: [],
+      tree: { categories: [], agentConclusion: result.agentConclusion },
+      assignments: [],
+      excluded: [],
+      offset: 0,
+      agentConclusion: result.agentConclusion,
+    };
+    return { checkpoint: empty, done: true, result };
+  }
+
+  let checkpoint = input.checkpoint;
+  if (!checkpoint) {
+    const { candidates, foldedInto, foldedItems } = prepareStage1Catalog(allItems);
+    const outputLanguage = detectOutputLanguage(candidates, input.market);
+    const passA = await runTaxonomyPassA({
+      storeName: input.storeName,
+      candidates,
+      outputLanguage,
+    });
+    if (!passA || !Array.isArray(passA.categories) || passA.categories.length === 0) {
+      throw new Error("Pass A returned no categories");
+    }
+    checkpoint = {
+      storeName: input.storeName,
+      outputLanguage,
+      candidates,
+      foldedItems,
+      foldedIntoEntries: [...foldedInto.entries()],
+      tree: passA,
+      assignments: [],
+      excluded: [],
+      offset: 0,
+      agentConclusion: passA.agentConclusion || "",
+    };
+    return { checkpoint, done: false };
+  }
+
+  const batch = checkpoint.candidates.slice(
+    checkpoint.offset,
+    checkpoint.offset + STAGE1_PLACE_BATCH
+  );
+  if (batch.length > 0) {
+    const placed = await placeOneStage1Batch({
+      storeName: checkpoint.storeName,
+      outputLanguage: checkpoint.outputLanguage,
+      tree: checkpoint.tree,
+      batch,
+      candidatesById: indexCandidatesById(checkpoint.candidates),
+    });
+    checkpoint = {
+      ...checkpoint,
+      assignments: [...checkpoint.assignments, ...placed.assignments],
+      excluded: [...checkpoint.excluded, ...placed.excluded],
+      offset: checkpoint.offset + batch.length,
+    };
+  }
+
+  if (checkpoint.offset < checkpoint.candidates.length) {
+    return { checkpoint, done: false };
+  }
+
+  const candidatesById = indexCandidatesById(checkpoint.candidates);
+  const finalAssignments = enforceWooParentPrimacy(
+    normalizeAssignments(checkpoint.assignments),
+    candidatesById
+  );
+  const foldedInto = new Map(checkpoint.foldedIntoEntries);
+  const { categories, totalUniqueProducts } = computeSkuTotals({
+    categories: checkpoint.tree.categories,
+    assignments: finalAssignments,
+    candidates: checkpoint.candidates,
+    foldedItems: checkpoint.foldedItems,
+    foldedInto,
+  });
+  const taxonomy: TaxonomyTree = {
+    categories,
+    assignments: finalAssignments,
+    excluded: checkpoint.excluded,
+    outputLanguage: checkpoint.outputLanguage,
+    totalUniqueProducts,
+  };
+  const { structuredNiches, nichesReadings, excludedItems } =
+    taxonomyToLegacyNiches(taxonomy, candidatesById);
+  const result: Stage1DiscoveryResult = {
+    niches: nichesReadings,
+    structuredNiches,
+    taxonomy,
+    excludedItems,
+    agentConclusion:
+      checkpoint.agentConclusion ||
+      `I organized ${checkpoint.storeName}'s catalog into ${categories.length} searchable categories covering ${totalUniqueProducts.toLocaleString()} unique products.`,
+    beats: [],
+    isAiGenerated: true,
+  };
+  return { checkpoint, done: true, result };
 }
 
 // ─── Legacy flattened view ────────────────────────────────────────────────
