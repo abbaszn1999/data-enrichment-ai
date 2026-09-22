@@ -10,7 +10,7 @@ import { normalizeSeedTerm } from "./keyword-provider";
 import type { SeedMetrics } from "./keyword-provider";
 import { parseSeedMetricsItem } from "./parse-seed-metrics";
 
-const PROBE_BUDGET_MS = 50_000;
+const PROBE_BUDGET_MS = 180_000;
 const POLL_MS = 2_000;
 const MAX_SEEDS = 100;
 

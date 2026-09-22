@@ -13,7 +13,7 @@ import {
   refundAssessmentWallet,
 } from "@/lib/free-assessment/wallet-ops";
 
-export const maxDuration = 60;
+export const maxDuration = 180;
 
 export async function POST(request: NextRequest) {
   let json: unknown;
