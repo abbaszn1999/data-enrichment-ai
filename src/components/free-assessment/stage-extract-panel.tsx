@@ -277,13 +277,16 @@ export function StageExtractPanel({
           Word count
           <Input
             type="number"
-            min={filters.minWordCount}
+            min={DEFAULT_FILTERS.minWordCount}
+            max={DEFAULT_FILTERS.maxWordCount}
             value={filters.minWordCount}
             onChange={(e) => {
-              const nextMin = Math.max(
-                filters.minWordCount,
-                DEFAULT_FILTERS.minWordCount,
-                Math.floor(Number(e.target.value) || filters.minWordCount)
+              const nextMin = Math.min(
+                DEFAULT_FILTERS.maxWordCount,
+                Math.max(
+                  DEFAULT_FILTERS.minWordCount,
+                  Math.floor(Number(e.target.value) || DEFAULT_FILTERS.minWordCount)
+                )
               );
               setFilters((prev) => ({
                 ...prev,
