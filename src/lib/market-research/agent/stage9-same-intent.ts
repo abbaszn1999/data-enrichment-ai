@@ -25,19 +25,24 @@ type SameIntentResponse = {
 const MAX_ATTEMPTS = 3;
 
 /**
- * Ask Gemini which ids are the exact same search. Returns null when every
- * attempt fails so the caller keeps the whole batch.
+ * Ask Gemini which ids inside each labelled candidate group are the exact
+ * same search. Returns null when every attempt fails so the caller keeps the
+ * whole request. The caller also rejects any answer that mixes two groups.
  */
 export async function judgeSameIntentTerms(
-  terms: IntentTerm[]
+  clusters: IntentTerm[][]
 ): Promise<string[][] | null> {
-  if (terms.length === 0) return [];
+  const candidateGroups = clusters.filter((cluster) => cluster.length >= 2);
+  if (candidateGroups.length === 0) return [];
 
   const userPrompt = JSON.stringify({
-    terms: terms.map((term) => ({
-      id: term.id,
-      keyword: term.keyword,
-      volume: term.volume,
+    candidateGroups: candidateGroups.map((cluster, index) => ({
+      groupId: `g${index + 1}`,
+      terms: cluster.map((term) => ({
+        id: term.id,
+        keyword: term.keyword,
+        volume: term.volume,
+      })),
     })),
   });
 

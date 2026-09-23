@@ -71,15 +71,36 @@ different search, even when the rest of the words match:
 
 ## Input
 
-One request is one close group, already shortlisted together. Other groups are separate requests. The terms in this request are candidates only — they are not already the same search. A group can hold up to 1,000 terms:
+One request holds several candidate groups, each with its own `groupId`. The terms inside a group
+were shortlisted together because their wording is close. They are candidates only — they are not
+already the same search. A request holds up to about 100 terms in total:
 
 ```json
 {
-  "terms": [
-    { "id": "pools for boys", "keyword": "pools for boys", "volume": 2400 }
+  "candidateGroups": [
+    {
+      "groupId": "g1",
+      "terms": [
+        { "id": "pools for boys", "keyword": "pools for boys", "volume": 2400 },
+        { "id": "boys pools", "keyword": "boys pools", "volume": 900 },
+        { "id": "girls pools", "keyword": "girls pools", "volume": 1100 }
+      ]
+    },
+    {
+      "groupId": "g2",
+      "terms": [
+        { "id": "running shoes", "keyword": "running shoes", "volume": 8000 },
+        { "id": "running shoe", "keyword": "running shoe", "volume": 1200 }
+      ]
+    }
   ]
 }
 ```
+
+Judge each candidate group on its own. Compare a term only with the other terms in the same
+`groupId`. Never put ids from two different groups into one set — a set that mixes groups is
+discarded. A group can hold several different searches: in `g1`, "pools for boys" and "boys pools"
+are one set, and "girls pools" stays out.
 
 `volume` is context only. Ignore it when deciding whether two keywords are the same search.
 
@@ -87,14 +108,15 @@ One request is one close group, already shortlisted together. Other groups are s
 
 ## Output
 
-Return JSON only. `groups` lists sets of two or more ids that are the exact same search.
-Omit every keyword that should stay, including every keyword that differs even slightly.
-Never invent an id. Never put an id in more than one group.
+Return JSON only. `groups` lists sets of two or more ids that are the exact same search, each set
+taken from inside one candidate group. Omit every keyword that should stay, including every keyword
+that differs even slightly. Never invent an id. Never put an id in more than one set.
 
 ```json
 {
   "groups": [
-    { "ids": ["pools for boys", "boys pools", "pools boys"] }
+    { "ids": ["pools for boys", "boys pools"] },
+    { "ids": ["running shoes", "running shoe"] }
   ]
 }
 ```

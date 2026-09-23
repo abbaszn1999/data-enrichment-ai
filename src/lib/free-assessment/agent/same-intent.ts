@@ -4,8 +4,13 @@ import { cosineSimilarity } from "./embeddings";
 export const SAME_INTENT_COSINE = 0.84;
 /** Full width of text-embedding-3-small for this shortlist. Other embeddings stay at 512. */
 export const SAME_INTENT_EMBEDDING_DIMENSIONS = 1536;
-/** One cluster can still be this large. It is sent alone and never split. */
-export const SAME_INTENT_REQUEST_LIMIT = 1000;
+/**
+ * Terms per Gemini request. Whole groups are packed until the next one would
+ * go over; a single group larger than this is sent alone and never split.
+ * Measured on a real project: 100 terms found 27 of the 29 duplicates that
+ * one-group-per-request found, 300 terms found only 24.
+ */
+export const SAME_INTENT_REQUEST_LIMIT = 100;
 export const SAME_INTENT_PARALLEL = 5;
 
 export type IntentTerm = {
@@ -117,20 +122,52 @@ export function clusterByLeaders(
 }
 
 /**
- * One Gemini request per cluster. Clusters are never merged and never split.
- * `limit` stays in the signature so a caller can still name the cap; a cluster
- * larger than that cap is sent whole.
+ * Pack whole clusters into requests of up to `limit` terms. A cluster is
+ * never split across requests; one larger than `limit` travels alone.
+ * Clusters of one term are skipped — there is nothing to compare.
  */
 export function packClusters<T>(
   clusters: T[][],
-  _limit = SAME_INTENT_REQUEST_LIMIT
+  limit = SAME_INTENT_REQUEST_LIMIT
 ): T[][][] {
   const bins: T[][][] = [];
+  let current: T[][] = [];
+  let count = 0;
   for (const cluster of clusters) {
     if (cluster.length < 2) continue;
-    bins.push([cluster]);
+    if (current.length > 0 && count + cluster.length > limit) {
+      bins.push(current);
+      current = [];
+      count = 0;
+    }
+    current.push(cluster);
+    count += cluster.length;
   }
+  if (current.length > 0) bins.push(current);
   return bins;
+}
+
+/**
+ * Keep only model groups whose ids all belong to one candidate cluster.
+ * A group mixing two clusters is ignored whole, so terms that were never
+ * shortlisted together can never be merged. Unknown ids are dropped.
+ */
+export function groupsWithinClusters(
+  clusters: IntentTerm[][],
+  groups: string[][]
+): string[][] {
+  const clusterById = new Map<string, number>();
+  clusters.forEach((cluster, index) => {
+    for (const term of cluster) clusterById.set(term.id, index);
+  });
+  const accepted: string[][] = [];
+  for (const group of groups) {
+    const known = group.filter((id) => clusterById.has(id));
+    const owners = new Set(known.map((id) => clusterById.get(id)));
+    if (known.length < 2 || owners.size !== 1) continue;
+    accepted.push(known);
+  }
+  return accepted;
 }
 
 /**
@@ -174,23 +211,22 @@ export function dropsFromGroups(
 }
 
 /**
- * Judge up to `parallel` packed requests. A null judgement keeps that
- * request's terms. Clusters inside a request are flattened for the model;
- * packing already kept each cluster whole.
+ * Judge up to `parallel` packed requests at once. Each request keeps its
+ * clusters labelled, and any answer that mixes two clusters is ignored. A
+ * failed or null judgement keeps every term in that request.
  */
 export async function judgePackedClusters(
   bins: IntentTerm[][][],
-  judge: (terms: IntentTerm[]) => Promise<string[][] | null>,
+  judge: (clusters: IntentTerm[][]) => Promise<string[][] | null>,
   parallel = SAME_INTENT_PARALLEL
 ): Promise<{ drops: SameIntentDrop[]; judgedBins: number }> {
   const wave = bins.slice(0, parallel);
   const settled = await Promise.all(
     wave.map(async (bin) => {
-      const terms = bin.flat();
       try {
-        const groups = await judge(terms);
+        const groups = await judge(bin);
         if (!groups) return [] as SameIntentDrop[];
-        return dropsFromGroups(terms, groups);
+        return dropsFromGroups(bin.flat(), groupsWithinClusters(bin, groups));
       } catch {
         return [] as SameIntentDrop[];
       }
