@@ -246,11 +246,9 @@ export async function generateGallery(params: {
   retryFailed?: boolean;
   /** Explicit UI value so generate never relies on a stale worksheet alone. */
   imagesPerRow?: number;
-  /** Explicit Main count (AI + Scraping) — same idea as imagesPerRow for Gallery. */
-  mainImagesPerRow?: number;
   /**
-   * Explicit UI choice: column name to copy as Main, or null to generate Main.
-   * Always send this so a stale worksheet cannot keep an old Images column.
+   * Explicit UI choice: the image column copied as Main. Required to start a
+   * run; always sent so a stale worksheet cannot keep an old Images column.
    */
   originalImageColumn?: string | null;
   /**
@@ -299,36 +297,4 @@ export async function requestGalleryGenerationStop(params: {
     }
   );
   return parseJson<{ accepted: true }>(res);
-}
-
-export async function exportGallery(params: {
-  workspaceId: string;
-  sessionId: string;
-  fileName?: string;
-}) {
-  const res = await fetch("/api/gallery/export", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      workspaceId: params.workspaceId,
-      sessionId: params.sessionId,
-    }),
-  });
-  if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new GalleryApiError(
-      String(data.error || `Export failed (${res.status})`),
-      res.status,
-      data
-    );
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = params.fileName || "gallery_export.xlsx";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }

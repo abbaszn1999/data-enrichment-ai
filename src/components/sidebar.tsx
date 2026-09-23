@@ -22,6 +22,9 @@ import {
   Lock,
   Search,
   FileEdit,
+  FolderTree,
+  Image as ImageIcon,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +60,10 @@ import {
   TONE_OPTIONS,
   getDefaultEnrichmentColumns,
   resolveEnrichmentModel,
+  PRODUCT_MODE_COLUMN_IDS,
+  isProductModeColumn,
+  catalogModeForRunColumns,
+  type CatalogSidebarMode,
   type OutputLanguage,
   type EnrichmentModel,
   type WritingTone,
@@ -76,6 +83,12 @@ import {
   overlayCatalogRowsForActiveRun,
   type CatalogPollRun,
 } from "@/lib/catalog/enrich-poll-merge";
+
+const SIDEBAR_MODES: { id: CatalogSidebarMode; label: string; icon: LucideIcon }[] = [
+  { id: "enrich", label: "Enrichment", icon: Sparkles },
+  { id: "categories", label: "Categories", icon: FolderTree },
+  { id: "images", label: "Image Finder", icon: ImageIcon },
+];
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -150,6 +163,8 @@ export function Sidebar() {
     sidebarOpen,
     setSidebarOpen,
     updateSettings,
+    enrichingTab,
+    enrichingNewColumns,
     setEnrichingContext,
   } = useSheetStore();
 
@@ -168,12 +183,22 @@ export function Sidebar() {
   const isPlp = sessionKind === "plp";
 
   const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
+  const [sidebarMode, setSidebarMode] = useState<CatalogSidebarMode>("enrich");
 
   // Functions (Math, Generate, Clean, Copy & Fill) act on matched product
   // rows — PLP has none of that, so it only ever gets the AI tab.
   useEffect(() => {
     if (isPlp) setSidebarTab("ai");
   }, [isPlp]);
+
+  // Categories and Image Finder are product-only; PLP and viewers keep the
+  // single-panel layout.
+  const hasModes = !isPlp && !isViewer;
+  const mode: CatalogSidebarMode = hasModes ? sidebarMode : "enrich";
+  const showFunctions = mode === "enrich" && sidebarTab === "functions";
+  const runningMode = isEnriching
+    ? catalogModeForRunColumns(enrichingTab, enrichingNewColumns)
+    : null;
   const [lastError, setLastError] = useState<string | null>(null);
   const [enrichSectionOpen, setEnrichSectionOpen] = useState(true);
   const [sourceSectionOpen, setSourceSectionOpen] = useState(true);
@@ -241,9 +266,40 @@ export function Sidebar() {
     setPendingPreset(null);
   }, [pendingPreset, applyEnrichmentPreset]);
 
-  const enabledColumns = enrichmentColumns
+  const enrichListColumns = useMemo(
+    () => enrichmentColumns.filter((col) => !isProductModeColumn(col.id, sessionKind)),
+    [enrichmentColumns, sessionKind]
+  );
+  const enabledColumns = enrichListColumns
     .filter((col) => col.enabled)
     .map((col) => col.id);
+  const modeColumn =
+    mode === "enrich"
+      ? null
+      : enrichmentColumns.find((col) => col.id === PRODUCT_MODE_COLUMN_IDS[mode]) ?? null;
+  const modeCount = !modeColumn
+    ? null
+    : mode === "categories"
+      ? { label: "Max categories", key: "maxCategories" as const, value: modeColumn.maxCategories ?? 3, max: 5 }
+      : { label: "Number of images", key: "imageCount" as const, value: modeColumn.imageCount ?? 3, max: 10 };
+
+  const [storeCategoryCount, setStoreCategoryCount] = useState<number | null>(null);
+  useEffect(() => {
+    const workspaceId = workspace?.id || sheetWorkspaceId;
+    if (mode !== "categories" || !workspaceId) return;
+    let cancelled = false;
+    fetch(`/api/categories?workspaceId=${workspaceId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { categories?: unknown[] } | null) => {
+        if (!cancelled) setStoreCategoryCount(data?.categories?.length ?? 0);
+      })
+      .catch(() => {
+        if (!cancelled) setStoreCategoryCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, workspace?.id, sheetWorkspaceId]);
 
   // Scope selection to active sheet
   const sheetRows = visibleCatalogRows(rows, {
@@ -376,7 +432,11 @@ export function Sidebar() {
     if (!run) return false;
     setIsEnriching(true);
     const enrichingContext = catalogEnrichingContextFromRun(run);
-    setEnrichingContext(enrichingContext.tab, enrichingContext.existingColumns);
+    setEnrichingContext(
+      enrichingContext.tab,
+      enrichingContext.existingColumns,
+      enrichingContext.newColumns
+    );
     setEnrichProgress(
       (run.completed_count ?? 0) + (run.failed_count ?? 0),
       run.target_ids?.length ?? 0
@@ -446,9 +506,20 @@ export function Sidebar() {
   ]);
 
   const handleEnrich = useCallback(async () => {
-    const isNewTab = enrichOutputTab === "new";
+    const isNewTab = mode !== "enrich" || enrichOutputTab === "new";
+    const runColumns =
+      mode === "enrich"
+        ? enrichListColumns.filter((c) => c.enabled)
+        : modeColumn
+          ? [{ ...modeColumn, enabled: true }]
+          : [];
+    const runColumnIds = runColumns.map((c) => c.id);
     if (useSheetStore.getState().isStoppingEnrich) return;
-    if ((isNewTab ? enabledColumns.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
+    if ((isNewTab ? runColumnIds.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
+    // Mode columns start hidden in the grid; show them once they are generated.
+    if (modeColumn && !modeColumn.enabled) {
+      updateEnrichmentColumnConfig(modeColumn.id, { enabled: true });
+    }
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (!workspaceId || !projectId) {
       toast.error("Session is not saved yet");
@@ -460,7 +531,11 @@ export function Sidebar() {
     setPaused(false);
     setEnrichProgress(0, enrichableRows.length);
     setLastError(null);
-    setEnrichingContext(isNewTab ? "new" : "existing", isNewTab ? [] : existingColumnsToEnrich);
+    setEnrichingContext(
+      isNewTab ? "new" : "existing",
+      isNewTab ? [] : existingColumnsToEnrich,
+      isNewTab ? runColumnIds : []
+    );
     // Show the per-cell spinners immediately instead of waiting for the first
     // status poll (~2.5 s) to report the run as running.
     for (const row of enrichableRows) {
@@ -484,7 +559,7 @@ export function Sidebar() {
 
     let workspaceCategories: CategoryItem[] | undefined;
     let categoriesRawRows: Record<string, string>[] | undefined;
-    const categoriesEnabled = enabledColumns.some((id) =>
+    const categoriesEnabled = runColumnIds.some((id) =>
       ["categories", "parentCategory", "internalLinks"].includes(id)
     );
     if (categoriesEnabled && workspaceId) {
@@ -526,11 +601,9 @@ export function Sidebar() {
           sessionId: projectId,
           rowIds: enrichableRows.map((r) => r.id),
           enabledColumns: isNewTab
-            ? enabledColumns
+            ? runColumnIds
             : existingColumnsToEnrich.map((c) => `existing__${c}`),
-          enrichmentColumns: isNewTab
-            ? enrichmentColumns.filter((c) => c.enabled)
-            : existingAsEnrichCols,
+          enrichmentColumns: isNewTab ? runColumns : existingAsEnrichCols,
           settings: enrichSettings,
           kind: sessionKind,
           cmsType: workspace?.cms_type || undefined,
@@ -591,12 +664,14 @@ export function Sidebar() {
       setEnrichingContext(null, []);
     }
   }, [
+    mode,
+    modeColumn,
+    enrichListColumns,
     enrichableRows,
     enrichOutputTab,
-    enabledColumns,
     existingColumnsToEnrich,
     existingColumnInstructions,
-    enrichmentColumns,
+    updateEnrichmentColumnConfig,
     enrichmentSettings,
     sourceColumns,
     sessionKind,
@@ -726,7 +801,7 @@ export function Sidebar() {
     setShowAddColumn(false);
   }, [newColLabel, newColPrompt, newColType, addCustomEnrichmentColumn]);
 
-  if (!sidebarOpen) {
+  if (!sidebarOpen && !hasModes) {
     return (
       <div className="w-12 border-r bg-muted/30 flex flex-col items-center py-3 gap-3 shrink-0">
         <Button
@@ -747,7 +822,7 @@ export function Sidebar() {
     );
   }
 
-  return (
+  const panel = (
     <div className="w-[320px] border-r bg-card flex flex-col shrink-0 h-full min-h-0 overflow-hidden">
       {/* Header with Tab Toggle */}
       <div className="border-b bg-muted/30 shrink-0">
@@ -762,6 +837,17 @@ export function Sidebar() {
             <div className="flex flex-1 items-center gap-1.5 px-2 py-1.5">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
               <span className="text-[11px] font-semibold">AI Enrichment</span>
+            </div>
+          ) : mode !== "enrich" ? (
+            <div className="flex flex-1 items-center gap-1.5 px-2 py-1.5">
+              {mode === "categories" ? (
+                <FolderTree className="h-3.5 w-3.5 text-primary" />
+              ) : (
+                <ImageIcon className="h-3.5 w-3.5 text-primary" />
+              )}
+              <span className="text-[11px] font-semibold">
+                {mode === "categories" ? "Categories" : "Image Finder"}
+              </span>
             </div>
           ) : (
           <div className="flex items-center bg-muted rounded-lg p-0.5 flex-1 mr-2">
@@ -789,14 +875,16 @@ export function Sidebar() {
             </button>
           </div>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0"
-            onClick={() => setSidebarOpen(false)}
-          >
-            <PanelLeftClose className="h-4 w-4" />
-          </Button>
+          {!hasModes && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={() => setSidebarOpen(false)}
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -816,10 +904,10 @@ export function Sidebar() {
       )}
 
       {/* Functions Tab */}
-      {!isViewer && sidebarTab === "functions" && <FunctionsPanel />}
+      {!isViewer && showFunctions && <FunctionsPanel />}
 
       {/* AI Tab */}
-      {!isViewer && sidebarTab === "ai" && (
+      {!isViewer && !showFunctions && (
       <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar min-h-0">
         <div className="p-4 space-y-5">
           {/* Selection Info */}
@@ -835,11 +923,13 @@ export function Sidebar() {
               variant="secondary"
               className="text-[10px] font-mono px-1.5 py-0"
             >
-              {enrichableRows.length} to enrich
+              {enrichableRows.length} to{" "}
+              {mode === "categories" ? "categorize" : mode === "images" ? "search" : "enrich"}
             </Badge>
           </div>
 
           {/* Saved settings — applies to everything below */}
+          {mode === "enrich" && (
           <div className="flex items-center gap-1.5">
             <select
               value={selectedPresetId}
@@ -869,10 +959,12 @@ export function Sidebar() {
               Save
             </button>
           </div>
+          )}
 
           <Separator />
 
           {/* AI Enrichment Columns */}
+          {mode === "enrich" && (
           <div>
             <div className="flex items-center justify-between w-full group">
               <div
@@ -1033,7 +1125,7 @@ export function Sidebar() {
 
             {enrichSectionOpen && enrichOutputTab === "new" && (
               <div className="mt-2.5 space-y-0.5 pl-6">
-                {enrichmentColumns.map((col) => {
+                {enrichListColumns.map((col) => {
                   const isExpanded = expandedColumns.has(col.id);
                   const toggleExpand = (e: React.MouseEvent) => {
                     e.stopPropagation();
@@ -1050,7 +1142,6 @@ export function Sidebar() {
                   const hasToneControls = col.type === "text" && !col.isCustom;
                   const hasSettings =
                     col.isCustom ||
-                    col.type === "imageUrls" ||
                     col.type === "sourceUrls" ||
                     col.type === "categories" ||
                     col.type === "faq" ||
@@ -1238,38 +1329,6 @@ export function Sidebar() {
                                 </div>
                               </div>
                             </>
-                          )}
-
-                          {/* Image Count — only for imageUrls */}
-                          {col.type === "imageUrls" && (
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  Number of images
-                                </label>
-                                <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
-                                  {col.imageCount ?? 3}
-                                </span>
-                              </div>
-                              <input
-                                type="range"
-                                min={1}
-                                max={10}
-                                value={col.imageCount ?? 3}
-                                onChange={(e) =>
-                                  updateEnrichmentColumnConfig(col.id, {
-                                    imageCount: parseInt(e.target.value),
-                                  })
-                                }
-                                disabled={isEnriching}
-                                className="w-full h-1.5 accent-primary disabled:opacity-50"
-                              />
-                              <div className="flex justify-between text-[8px] text-muted-foreground/50">
-                                <span>1</span>
-                                <span>5</span>
-                                <span>10</span>
-                              </div>
-                            </div>
                           )}
 
                           {/* Source Count — only for sourceUrls */}
@@ -1511,6 +1570,93 @@ export function Sidebar() {
               </div>
             )}
           </div>
+          )}
+
+          {/* Categories / Image Finder — one column each, run on its own */}
+          {modeColumn && modeCount && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                {mode === "categories" ? (
+                  <FolderTree className="h-4 w-4 text-primary" />
+                ) : (
+                  <ImageIcon className="h-4 w-4 text-primary" />
+                )}
+                <span className="text-xs font-semibold">
+                  {mode === "categories" ? "Category Assignment" : "Product Images"}
+                </span>
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                {mode === "categories"
+                  ? "Assigns each selected product to your store categories and writes them to the Categories column."
+                  : "Searches the web for images of the exact product and writes direct image links to the Image URLs column."}
+              </p>
+
+              {mode === "categories" && storeCategoryCount !== null && (
+                <div
+                  className={`rounded-md border px-2.5 py-2 text-[10px] leading-relaxed ${
+                    storeCategoryCount > 0
+                      ? "border-primary/15 bg-primary/[0.04] text-foreground"
+                      : "border-amber-300/60 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-300"
+                  }`}
+                >
+                  {storeCategoryCount > 0
+                    ? `${storeCategoryCount} store categories loaded. The AI picks only from this list.`
+                    : "No store categories found. The AI will suggest categories in your CMS format."}
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-medium text-muted-foreground">
+                    {modeCount.label}
+                  </label>
+                  <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
+                    {modeCount.value}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={modeCount.max}
+                  value={modeCount.value}
+                  onChange={(e) =>
+                    updateEnrichmentColumnConfig(modeColumn.id, {
+                      [modeCount.key]: parseInt(e.target.value),
+                    })
+                  }
+                  disabled={isEnriching}
+                  className="w-full h-1.5 accent-primary disabled:opacity-50"
+                />
+                <div className="flex justify-between text-[8px] text-muted-foreground/50">
+                  <span>1</span>
+                  <span>{Math.ceil(modeCount.max / 2)}</span>
+                  <span>{modeCount.max}</span>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-muted-foreground">
+                  Custom instruction
+                </label>
+                <textarea
+                  rows={2}
+                  value={modeColumn.customInstruction ?? ""}
+                  onChange={(e) =>
+                    updateEnrichmentColumnConfig(modeColumn.id, {
+                      customInstruction: e.target.value,
+                    })
+                  }
+                  disabled={isEnriching}
+                  placeholder={
+                    mode === "categories"
+                      ? "e.g. Prefer the most specific subcategory"
+                      : "e.g. White background, front view only"
+                  }
+                  className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 resize-none"
+                />
+              </div>
+            </div>
+          )}
 
           <Separator />
 
@@ -1651,16 +1797,19 @@ export function Sidebar() {
                 <Settings2 className="h-4 w-4 text-amber-500" />
                 <span className="text-xs font-semibold">Settings</span>
               </div>
-              <Badge variant="secondary" className="text-[9px] px-1.5 py-0 font-mono">
-                {enrichmentSettings.outputLanguage === "custom"
-                  ? enrichmentSettings.customLanguage || "Custom"
-                  : enrichmentSettings.outputLanguage}
-              </Badge>
+              {mode !== "images" && (
+                <Badge variant="secondary" className="text-[9px] px-1.5 py-0 font-mono">
+                  {enrichmentSettings.outputLanguage === "custom"
+                    ? enrichmentSettings.customLanguage || "Custom"
+                    : enrichmentSettings.outputLanguage}
+                </Badge>
+              )}
             </div>
 
             {settingsSectionOpen && (
               <div className="mt-3 space-y-4 pl-2">
                 {/* Output Language */}
+                {mode !== "images" && (
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                     Output Language
@@ -1687,6 +1836,7 @@ export function Sidebar() {
                     />
                   )}
                 </div>
+                )}
 
                 {/* Enrichment Model */}
                 <div className="space-y-1.5">
@@ -1738,7 +1888,13 @@ export function Sidebar() {
                 <span className="text-foreground flex items-center gap-2">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
                   <span className="font-medium text-xs">
-                    {isStoppingEnrich ? "Stopping..." : "Enriching..."}
+                    {isStoppingEnrich
+                      ? "Stopping..."
+                      : runningMode === "categories"
+                        ? "Categorizing..."
+                        : runningMode === "images"
+                          ? "Finding images..."
+                          : "Enriching..."}
                   </span>
                 </span>
                 <div className="flex items-center gap-2">
@@ -1808,21 +1964,36 @@ export function Sidebar() {
         <div className="p-4 border-t bg-muted/20 shrink-0">
           <ExportDialog />
         </div>
-      ) : sidebarTab === "ai" && (
+      ) : !showFunctions && (
       <div className="p-4 border-t bg-muted/20 space-y-2 shrink-0">
         {!isEnriching && (
           <Button
             onClick={handleEnrich}
             disabled={
-              (enrichOutputTab === "new" ? enabledColumns.length === 0 : existingColumnsToEnrich.length === 0) ||
+              (mode !== "enrich"
+                ? !modeColumn
+                : enrichOutputTab === "new"
+                  ? enabledColumns.length === 0
+                  : existingColumnsToEnrich.length === 0) ||
               enrichableRows.length === 0 ||
               sourceColumns.length === 0
             }
             className="w-full gap-2 font-medium h-10 shadow-sm"
             size="sm"
           >
-            <Zap className="h-4 w-4" />
-            Enrich {enrichableRows.length} Row
+            {mode === "categories" ? (
+              <FolderTree className="h-4 w-4" />
+            ) : mode === "images" ? (
+              <ImageIcon className="h-4 w-4" />
+            ) : (
+              <Zap className="h-4 w-4" />
+            )}
+            {mode === "categories"
+              ? "Categorize"
+              : mode === "images"
+                ? "Find Images for"
+                : "Enrich"}{" "}
+            {enrichableRows.length} Row
             {enrichableRows.length !== 1 ? "s" : ""}
           </Button>
         )}
@@ -1927,6 +2098,58 @@ export function Sidebar() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+
+  if (!hasModes) return panel;
+
+  return (
+    <div className="flex h-full min-h-0 shrink-0">
+      <div className="w-12 border-r bg-muted/30 flex flex-col items-center py-3 gap-3 shrink-0">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          aria-label={sidebarOpen ? "Collapse panel" : "Expand panel"}
+        >
+          {sidebarOpen ? (
+            <PanelLeftClose className="h-4 w-4" />
+          ) : (
+            <PanelLeft className="h-4 w-4" />
+          )}
+        </Button>
+        <Separator className="w-6" />
+        <div className="flex flex-col items-center gap-1.5">
+          {SIDEBAR_MODES.map(({ id, label, icon: Icon }) => {
+            const isActive = sidebarOpen && mode === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                title={label}
+                aria-label={label}
+                aria-pressed={isActive}
+                onClick={() => {
+                  setSidebarMode(id);
+                  setSidebarOpen(true);
+                }}
+                className={`relative flex h-8 w-8 items-center justify-center rounded-md transition-colors ${
+                  isActive
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {runningMode === id && (
+                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {sidebarOpen && panel}
     </div>
   );
 }

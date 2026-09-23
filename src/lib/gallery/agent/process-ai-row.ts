@@ -17,6 +17,7 @@ import type {
 } from "@/lib/gallery/types";
 import {
   getRowMainImagePaths,
+  MISSING_ORIGINAL_IMAGE_MESSAGE,
   resolveGalleryRunPhase,
 } from "@/lib/gallery/types";
 import { deductGalleryCredits } from "@/lib/gallery/agent/process-row";
@@ -31,7 +32,6 @@ import {
   planGalleryImages,
   type GalleryPlannerPlan,
 } from "@/lib/gallery/agents/ai-planner-agent";
-import { generateAiMainImage } from "@/lib/gallery/agents/ai-main-agent";
 import { generateAiGalleryImage } from "@/lib/gallery/agents/ai-gallery-agent";
 
 async function loadStoredReference(
@@ -79,7 +79,6 @@ export async function processAiRow(params: {
     requested: params.runPhase ?? null,
     provider: "ai",
   });
-  const generateMain = runPhase === "full";
   const runGallery = runPhase === "gallery" || runPhase === "full";
   const model: AiImageModel =
     settings.tier === "premium"
@@ -219,11 +218,18 @@ export async function processAiRow(params: {
     if (!canonicalProduct) {
       return fail("Could not load the existing main image for gallery generation");
     }
-  } else if (!generateMain) {
+  } else {
     await copyOriginalsAsMain();
     if (!canonicalProduct) {
       await removeGalleryPathsAdmin(newlyStoredPaths);
-      return fail("Find main images first before generating the gallery");
+      const hasColumnUrls =
+        !!worksheet.originalImageColumn &&
+        parseImageUrls(row.originalData[worksheet.originalImageColumn]).length > 0;
+      return fail(
+        hasColumnUrls
+          ? "Could not download the image from the selected image column"
+          : MISSING_ORIGINAL_IMAGE_MESSAGE
+      );
     }
   }
 
@@ -276,7 +282,6 @@ export async function processAiRow(params: {
   const galleryTarget = runGallery
     ? Math.min(Math.max(settings.imagesPerRow || 4, 1), 8)
     : 0;
-  const needGeneratedMain = generateMain && !canonicalProduct;
   const originalUrls = worksheet.originalImageColumn
     ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
     : [];
@@ -285,7 +290,6 @@ export async function processAiRow(params: {
     runPhase,
     imagesPerRow: settings.imagesPerRow,
     galleryTarget,
-    needGeneratedMain,
     hasOriginalColumn: !!worksheet.originalImageColumn,
     originalImageCount: originalUrls.length,
     mainReferenceCount: mainProductReferences.length,
@@ -301,7 +305,7 @@ export async function processAiRow(params: {
       worksheet,
       row,
       galleryCount: Math.max(galleryTarget, 1),
-      needMain: needGeneratedMain,
+      needMain: false,
       productImage: canonicalProduct,
       hasSceneReference: !!sceneReference,
       hasLogo: !!logoReference,
@@ -321,74 +325,10 @@ export async function processAiRow(params: {
     return fail("Gallery planner failed");
   }
 
-  if (needGeneratedMain) {
-    if (!plan.main?.visualBrief) {
-      await removeGalleryPathsAdmin(newlyStoredPaths);
-      return fail("Gallery planner did not return a Main brief");
-    }
-    await params.onCheckpoint?.({ generationStage: "main" });
-    ensureTime(35_000);
-    try {
-      const references = [
-        ...mainProductReferences,
-        ...supportingReferences,
-      ].slice(0, model === "gemini-3-pro-image" ? 6 : 10);
-      const generated = await generateAiMainImage({
-        ai,
-        model,
-        worksheet,
-        row,
-        references,
-        brief: plan.main,
-      });
-      costs.push(generated.cost);
-      const ext = extensionForMime(generated.contentType);
-      const path = getGalleryRowImagePath(
-        workspaceId,
-        sessionId,
-        row.id,
-        "main",
-        ext
-      );
-      await uploadGalleryBytesAdmin(path, generated.buffer, generated.contentType);
-      newlyStoredPaths.push(path);
-      aiGeneratedPaths.push(path);
-      mainPaths.push(path);
-      mainPath = mainPaths[0];
-      const generatedReference: AiReferenceImage = {
-        label:
-          "canonical generated main product image; preserve this exact product identity",
-        buffer: generated.buffer,
-        contentType: generated.contentType,
-      };
-      mainProductReferences.push(generatedReference);
-      canonicalProduct = generatedReference;
-      await params.onCheckpoint?.({
-        mainImagePaths: [...mainPaths],
-        mainImagePath: mainPath,
-        galleryImagePaths: runGallery ? [] : oldGalleryPaths,
-        generationStage: runGallery ? "gallery" : "finalizing",
-        sourceMeta: {
-          ...row.sourceMeta,
-          provider: "ai",
-          plan,
-        },
-      });
-    } catch (error) {
-      galleryError("ai-image:row", "Main image generation failed", error);
-      await removeGalleryPathsAdmin(newlyStoredPaths);
-      return fail(
-        error instanceof Error
-          ? error.message
-          : "AI could not create the main product image"
-      );
-    }
-  }
-
   if (runGallery) {
     if (!canonicalProduct || mainProductReferences.length === 0) {
       await removeGalleryPathsAdmin(newlyStoredPaths);
-      return fail("AI could not create the main product image");
+      return fail(MISSING_ORIGINAL_IMAGE_MESSAGE);
     }
     await params.onCheckpoint?.({
       generationStage: "gallery",
@@ -451,10 +391,10 @@ export async function processAiRow(params: {
 
   if (!mainPath) {
     await removeGalleryPathsAdmin(newlyStoredPaths);
-    return fail("AI could not create the main product image");
+    return fail(MISSING_ORIGINAL_IMAGE_MESSAGE);
   }
 
-  const finalMainPaths = generateMain || newlyStoredPaths.length > 0
+  const finalMainPaths = newlyStoredPaths.length > 0
     ? mainPaths
     : oldMainPaths.length > 0
       ? oldMainPaths
@@ -484,7 +424,6 @@ export async function processAiRow(params: {
         requestedImages: galleryTarget,
         generatedImages: aiGeneratedPaths.length,
         galleryImages: finalGalleryPaths.length,
-        generatedMain: needGeneratedMain && !!mainPath,
         usedOriginalImage: originalUrls.length > 0,
         usedSceneReference: !!sceneReference,
         brandingEnabled: settings.brandingEnabled,
@@ -514,9 +453,6 @@ export async function processAiRow(params: {
 
   try {
     await removeGalleryPathsAdmin([
-      ...(generateMain
-        ? oldMainPaths.filter((path) => !finalMainPaths.includes(path))
-        : []),
       ...(runGallery
         ? oldGalleryPaths.filter((path) => !finalGalleryPaths.includes(path))
         : []),

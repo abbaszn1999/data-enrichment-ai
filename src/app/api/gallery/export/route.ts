@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireGalleryAuth } from "@/lib/gallery/auth";
 import { isContextSubscriptionActive } from "@/lib/workspace-context";
-import { buildGalleryExportBuffer } from "@/lib/gallery/export-builder";
+import { buildGalleryExportTable } from "@/lib/gallery/export-builder";
 import { loadGalleryWorksheetMatchingRevisionAdmin } from "@/lib/gallery/storage-admin";
 import { getGalleryExportPath } from "@/lib/gallery/storage-paths";
 import { galleryWarn } from "@/lib/gallery/log";
@@ -10,12 +10,27 @@ import {
   applyGalleryProjectSettings,
   getGalleryProjectSettingsFromWorksheet,
 } from "@/lib/gallery/types";
+import {
+  parseTableExportOptions,
+  selectTableColumns,
+  serializeTableExport,
+} from "@/lib/export/table-file";
+import { deliverExportFile } from "@/lib/export/deliver";
 
 export const maxDuration = 120;
 
-/** POST /api/gallery/export — { workspaceId, sessionId } */
+/**
+ * POST /api/gallery/export
+ * { workspaceId, sessionId, format?: "xlsx" | "csv" | "json", rowIds?: string[], columns?: string[] }
+ */
 export async function POST(request: NextRequest) {
-  let body: { workspaceId?: string; sessionId?: string };
+  let body: {
+    workspaceId?: string;
+    sessionId?: string;
+    format?: unknown;
+    rowIds?: unknown;
+    columns?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -29,6 +44,7 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+  const options = parseTableExportOptions(body);
 
   const auth = await requireGalleryAuth({
     workspaceId,
@@ -74,53 +90,30 @@ export async function POST(request: NextRequest) {
   }
   worksheet = applyGalleryProjectSettings(worksheet, settings);
 
-  const buffer = await buildGalleryExportBuffer(worksheet, async (path) => {
-    if (/^https?:\/\//i.test(path)) return path;
-    const url = new URL("/api/gallery/images", request.nextUrl.origin);
-    url.searchParams.set("workspaceId", workspaceId);
-    url.searchParams.set("sessionId", sessionId);
-    url.searchParams.set("path", path);
-    return url.toString();
-  });
-
-  const exportPath = getGalleryExportPath(workspaceId, sessionId, "xlsx");
-  const { error: uploadError } = await auth.admin.storage
-    .from("workspace-files")
-    .upload(exportPath, buffer, {
-    contentType:
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    upsert: true,
-  });
-
-  let exportUrl = "";
-  if (uploadError) {
-    galleryWarn("export", "Export download succeeded but persistence failed", {
-      error: uploadError.message,
-    });
-  } else {
-    const { data: signed, error: signError } = await auth.admin.storage
-      .from("workspace-files")
-      .createSignedUrl(exportPath, 60 * 60);
-    if (signError) {
-      galleryWarn("export", "Could not sign persisted export", {
-        error: signError.message,
-      });
-    } else {
-      exportUrl = signed?.signedUrl || "";
-    }
-  }
-
-  const fileName = `${(session.name || "gallery").replace(/[^\w.-]+/g, "_")}_export.xlsx`;
-
-  return new NextResponse(new Uint8Array(buffer), {
-    status: 200,
-    headers: {
-      ...auth.headers,
-      "Content-Type":
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="${fileName}"`,
-      ...(uploadError ? {} : { "X-Export-Path": exportPath }),
-      ...(exportUrl ? { "X-Export-Url": exportUrl } : {}),
+  const table = await buildGalleryExportTable(
+    worksheet,
+    async (path) => {
+      const url = new URL("/api/gallery/images", request.nextUrl.origin);
+      url.searchParams.set("workspaceId", workspaceId);
+      url.searchParams.set("sessionId", sessionId);
+      url.searchParams.set("path", path);
+      return url.toString();
     },
+    options.rowIds
+  );
+  const { buffer, contentType, extension } = await serializeTableExport(
+    selectTableColumns(table, options.columns),
+    options.format
+  );
+
+  return deliverExportFile({
+    admin: auth.admin,
+    path: getGalleryExportPath(workspaceId, sessionId, extension),
+    buffer,
+    contentType,
+    fileName: `${(session.name || "gallery").replace(/[^\w.-]+/g, "_")}_export.${extension}`,
+    headers: auth.headers,
+    onStorageError: (error) =>
+      galleryWarn("export", "Export storage failed; sending file inline", { error }),
   });
 }

@@ -47,14 +47,10 @@ type Body = {
   estimateOnly?: boolean;
   retryFailed?: boolean;
   imagesPerRow?: number;
-  /** Explicit Main images count from the UI (avoids stale worksheet settings). */
-  mainImagesPerRow?: number;
   originalImageColumn?: string | null;
   /**
    * Optional explicit phase. When omitted (or for mixed selections), each row
    * independently resolves its own phase via resolveGalleryRunPhase.
-   * Scraping: no Main and no original → Main only then stop.
-   * AI: no Main and no original → full (planner + 1 Main, then Gallery).
    */
   runPhase?: GalleryRunPhase;
 };
@@ -277,42 +273,12 @@ async function generateSynchronously(request: NextRequest) {
     else worksheet.settings.scraping.imagesPerRow = imagesPerRow;
   }
 
-  if (body.mainImagesPerRow !== undefined) {
-    const mainImagesPerRow = Number(body.mainImagesPerRow);
-    if (
-      !Number.isInteger(mainImagesPerRow) ||
-      mainImagesPerRow < 1 ||
-      mainImagesPerRow > 6
-    ) {
-      return NextResponse.json(
-        { error: "mainImagesPerRow must be between 1 and 6" },
-        { status: 400, headers: auth.headers }
-      );
-    }
-    if (provider === "ai") {
-      worksheet.settings.ai.main = {
-        ...worksheet.settings.ai.main,
-        imagesPerRow: 1,
-        instructions: "",
-      };
-    } else {
-      worksheet.settings.scraping.main = {
-        ...worksheet.settings.scraping.main,
-        imagesPerRow: mainImagesPerRow,
-      };
-    }
-  }
-
   galleryLog("generate:settings", "Applied generate overrides from UI", {
     provider,
     galleryImagesPerRow:
       provider === "ai"
         ? worksheet.settings.ai.imagesPerRow
         : worksheet.settings.scraping.imagesPerRow,
-    mainImagesPerRow:
-      provider === "ai"
-        ? worksheet.settings.ai.main?.imagesPerRow
-        : worksheet.settings.scraping.main?.imagesPerRow,
   });
 
   if ("originalImageColumn" in body) {
@@ -331,6 +297,12 @@ async function generateSynchronously(request: NextRequest) {
     worksheet.originalImageSelectionExplicit = true;
   } else if (!worksheet.originalImageSelectionExplicit) {
     worksheet.originalImageColumn = null;
+  }
+  if (!worksheet.originalImageColumn) {
+    return NextResponse.json(
+      { error: "Select the image column before generating the gallery" },
+      { status: 400, headers: auth.headers }
+    );
   }
 
   worksheet.settings.provider = provider;
@@ -365,20 +337,6 @@ async function generateSynchronously(request: NextRequest) {
           return typeof value === "string" && value.trim().length > 0;
         }).length
       : 0;
-  const generateMainCount =
-    provider === "ai"
-      ? targetIds.filter((id) => {
-          const row = rowsById.get(id)!;
-          return (
-            resolveGalleryRunPhase({
-              originalImageColumn: worksheet.originalImageColumn,
-              row,
-              requested: body.runPhase ?? null,
-              provider: "ai",
-            }) === "full"
-          );
-        }).length
-      : 0;
   const estimateRange =
     provider === "scraping"
       ? estimateScrapingCreditRange({
@@ -391,7 +349,7 @@ async function generateSynchronously(request: NextRequest) {
   const estimatedCredits =
     estimateRange?.max ??
     estimateGalleryCredits(provider, targetIds.length, worksheet.settings.ai, {
-      generateMainCount,
+      generateMainCount: 0,
       searchDepth: worksheet.settings.scraping.searchDepth,
       rowsWithOriginal,
       tier: worksheet.settings.scraping.tier,
@@ -549,10 +507,6 @@ async function generateSynchronously(request: NextRequest) {
       provider === "ai"
         ? runtimeSettings.ai.imagesPerRow
         : runtimeSettings.scraping.imagesPerRow,
-    mainImagesPerRow:
-      provider === "ai"
-        ? runtimeSettings.ai.main.imagesPerRow
-        : runtimeSettings.scraping.main.imagesPerRow,
   });
 
   return NextResponse.json(

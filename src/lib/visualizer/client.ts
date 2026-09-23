@@ -308,38 +308,6 @@ export async function deleteVisualizerAsset(params: {
   }>(res);
 }
 
-export async function exportVisualizer(params: {
-  workspaceId: string;
-  sessionId: string;
-  fileName?: string;
-}) {
-  const res = await fetch(
-    `/api/visualizer/sessions/${params.sessionId}/export`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId: params.workspaceId }),
-    }
-  );
-  if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new VisualizerApiError(
-      String(data.error || `Export failed (${res.status})`),
-      res.status,
-      data
-    );
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = params.fileName || "visualizer_export.xlsx";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 export function visualizerExportUrl(workspaceId: string, sessionId: string) {
   return `/api/visualizer/sessions/${sessionId}/export?workspaceId=${encodeURIComponent(workspaceId)}`;
 }

@@ -95,7 +95,7 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     label: "Categories",
     description: "Assign product categories based on available store categories or AI suggestion.",
     type: "categories",
-    enabled: true,
+    enabled: false,
     maxCategories: 3,
     customInstruction: "Pick the most relevant product categories",
   },
@@ -104,7 +104,7 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     label: "Image URLs",
     description: "Find product images from the web using OpenAI web image search.",
     type: "imageUrls",
-    enabled: true,
+    enabled: false,
     imageCount: 3,
     customInstruction: "Find high-quality product images, preferably on white background",
   },
@@ -259,6 +259,39 @@ export function getDefaultEnrichmentColumns(
   const source =
     kind === "plp" ? PLP_ENRICHMENT_COLUMNS : DEFAULT_ENRICHMENT_COLUMNS;
   return source.map((col) => ({ ...col }));
+}
+
+/**
+ * Product columns that run from their own Catalog Intelligence mode rather
+ * than the Enrichment list. Their `enabled` flag only controls grid visibility.
+ */
+export const PRODUCT_MODE_COLUMN_IDS = {
+  categories: "categories",
+  images: "imageUrls",
+} as const;
+
+export type CatalogSidebarMode = "enrich" | keyof typeof PRODUCT_MODE_COLUMN_IDS;
+
+export function isProductModeColumn(
+  id: string,
+  kind: SessionKind | null | undefined
+): boolean {
+  return (
+    kind !== "plp" &&
+    (id === PRODUCT_MODE_COLUMN_IDS.categories || id === PRODUCT_MODE_COLUMN_IDS.images)
+  );
+}
+
+/** Which sidebar mode a run belongs to, from the column ids it generates. */
+export function catalogModeForRunColumns(
+  tab: "existing" | "new" | null,
+  columnIds: string[]
+): CatalogSidebarMode {
+  if (tab === "new" && columnIds.length === 1) {
+    if (columnIds[0] === PRODUCT_MODE_COLUMN_IDS.categories) return "categories";
+    if (columnIds[0] === PRODUCT_MODE_COLUMN_IDS.images) return "images";
+  }
+  return "enrich";
 }
 
 export interface EnrichmentEvent {
@@ -566,6 +599,8 @@ export interface SheetState {
   existingColumnInstructions: Record<string, string>;
   enrichingTab: "existing" | "new" | null;
   enrichingExistingColumns: string[];
+  /** AI column ids the active "new" run is generating; other columns keep their values on screen. */
+  enrichingNewColumns: string[];
   undoVersion: number;
   saveStatus: "saved" | "saving" | "unsaved" | "error";
   lastSavedAt: number | null;

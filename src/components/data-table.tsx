@@ -9,8 +9,9 @@ import {
   getPaginationRowModel,
   flexRender,
   type ColumnDef,
+  type ColumnSizingState,
   type SortingState,
-  type ColumnResizeMode,
+  type Updater,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -74,6 +75,20 @@ import { Badge } from "@/components/ui/badge";
 import { TableSelectHeader } from "@/components/table-select-header";
 import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import {
+  CLAMPED_TEXT_STYLE,
+  DEFAULT_ROW_HEIGHT,
+  MAX_ROW_HEIGHT,
+  MIN_ROW_HEIGHT,
+  rowLinesFor,
+  trackPointerDrag,
+  useProjectSizeMap,
+} from "@/components/sheet/sheet-sizing";
+import { CellText, CellTextDialog } from "@/components/sheet/cell-text-dialog";
+import { RowResizeHandle } from "@/components/sheet/resize-handles";
+
+/** Leading checkbox + row-number columns: the only place the row resize grip lives. */
+const ROW_HEADER_COLUMNS = new Set(["select", "rowNum"]);
 import type { ProductRow } from "@/types";
 import { FileSpreadsheet, Package, Cloud, CloudOff } from "lucide-react";
 import {
@@ -365,6 +380,10 @@ function SmartImageUrlCell({
   );
 }
 
+function displayColumnName(column: string): string {
+  return column.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col");
+}
+
 // --- Editable Cell ---
 function EditableCell({
   value,
@@ -378,56 +397,29 @@ function EditableCell({
   isEditable: boolean;
 }) {
   const { updateCellValue } = useSheetStore();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
+  const [open, setOpen] = useState(false);
 
-  const handleDoubleClick = useCallback(() => {
-    if (!isEditable) return;
-    setDraft(value);
-    setEditing(true);
-  }, [isEditable, value]);
-
-  const handleBlur = useCallback(() => {
-    setEditing(false);
-    if (draft !== value) {
-      updateCellValue(rowId, column, draft);
-    }
-  }, [draft, value, rowId, column, updateCellValue]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter") {
-        (e.target as HTMLInputElement).blur();
-      }
-      if (e.key === "Escape") {
-        setDraft(value);
-        setEditing(false);
-      }
-    },
-    [value]
-  );
-
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={handleBlur}
-        onKeyDown={handleKeyDown}
-        className="w-full bg-background border border-primary/40 rounded px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-primary/50"
-      />
-    );
-  }
+  const dialog = open ? (
+    <CellTextDialog
+      title={displayColumnName(column)}
+      value={value}
+      isEditable={isEditable}
+      onSave={(next) => updateCellValue(rowId, column, next)}
+      onClose={() => setOpen(false)}
+    />
+  ) : null;
 
   if (!value || value.trim() === "") {
     return (
-      <span
-        className={`text-muted-foreground/30 text-xs block w-full min-h-[20px] ${isEditable ? "cursor-text" : "cursor-default"}`}
-        onClick={handleDoubleClick}
-      >
-        {isEditable ? "Click to add" : "—"}
-      </span>
+      <>
+        <span
+          className={`text-muted-foreground/30 text-xs block w-full min-h-[20px] ${isEditable ? "cursor-pointer" : "cursor-default"}`}
+          onClick={isEditable ? () => setOpen(true) : undefined}
+        >
+          {isEditable ? "Click to add" : "—"}
+        </span>
+        {dialog}
+      </>
     );
   }
 
@@ -468,12 +460,17 @@ function EditableCell({
   }
 
   return (
-    <div
-      onClick={handleDoubleClick}
-      className={`text-xs leading-relaxed break-words whitespace-pre-wrap w-full ${isEditable ? "cursor-text" : "cursor-default"}`}
-    >
-      {str}
-    </div>
+    <>
+      <div
+        onClick={() => setOpen(true)}
+        title={isEditable ? "Click to view and edit" : "Click to view"}
+        className="w-full min-w-0 cursor-pointer break-words whitespace-pre-wrap text-xs leading-4"
+        style={CLAMPED_TEXT_STYLE}
+      >
+        <CellText text={str} />
+      </div>
+      {dialog}
+    </>
   );
 }
 
@@ -1221,121 +1218,64 @@ function EditableEnrichedCell({
   value,
   rowId,
   enrichKey,
+  label,
   isEditable,
   maxChars,
 }: {
   value: unknown;
   rowId: string;
   enrichKey: string;
+  label: string;
   isEditable: boolean;
   /** SEO character budget; shows a live counter and an over-budget warning. */
   maxChars?: number;
 }) {
   const { updateEnrichedCellValue } = useSheetStore();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [draftArray, setDraftArray] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  const isList = Array.isArray(value);
+  const openEditor = isEditable ? () => setOpen(true) : undefined;
 
-  const startEditString = useCallback(() => {
-    if (!isEditable) return;
-    setDraft(String(value || ""));
-    setEditing(true);
-  }, [isEditable, value]);
-
-  const startEditArray = useCallback(() => {
-    if (!isEditable) return;
-    setDraftArray([...(value as string[])]);
-    setEditing(true);
-  }, [isEditable, value]);
-
-  const commitString = useCallback(() => {
-    setEditing(false);
-    if (draft !== String(value || "")) {
-      updateEnrichedCellValue(rowId, enrichKey as any, draft);
-    }
-  }, [draft, value, rowId, enrichKey, updateEnrichedCellValue]);
-
-  const commitArray = useCallback(() => {
-    setEditing(false);
-    const cleaned = draftArray.filter((s) => s.trim() !== "");
-    updateEnrichedCellValue(rowId, enrichKey as any, cleaned);
-  }, [draftArray, rowId, enrichKey, updateEnrichedCellValue]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setEditing(false);
+  const dialog = open ? (
+    <CellTextDialog
+      title={label}
+      value={isList ? (value as string[]).join("\n") : String(value ?? "")}
+      isEditable={isEditable}
+      maxChars={isList ? undefined : maxChars}
+      listMode={isList}
+      onSave={(next) =>
+        updateEnrichedCellValue(
+          rowId,
+          enrichKey as any,
+          isList
+            ? next.split("\n").map((item) => item.trim()).filter(Boolean)
+            : next
+        )
       }
-    },
-    []
-  );
+      onClose={() => setOpen(false)}
+    />
+  ) : null;
 
-  // Show editing UI first — must come before empty checks
-  if (editing && !Array.isArray(value)) {
-    return (
-      <div className="w-full" onKeyDown={handleKeyDown}>
-        <textarea
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={Math.min(6, Math.max(2, Math.ceil(draft.length / 40)))}
-          className="w-full bg-background border border-primary/30 rounded px-1.5 py-1 text-[11px] leading-snug outline-none focus:ring-1 focus:ring-primary/50 resize-y min-h-[2rem]"
-        />
-        <div className="flex items-center justify-end gap-1 mt-1">
-          {maxChars != null && (
-            <span
-              className={`mr-auto font-mono text-[9px] ${
-                draft.length > maxChars
-                  ? "font-semibold text-destructive"
-                  : draft.length > maxChars * 0.9
-                    ? "text-amber-600"
-                    : "text-muted-foreground/60"
-              }`}
-              title={`Recommended limit: ${maxChars} characters`}
-            >
-              {draft.length}/{maxChars}
-            </span>
-          )}
-          <button
-            onClick={() => setEditing(false)}
-            className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={commitString}
-            className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded hover:bg-primary/90 transition-colors font-medium"
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Empty
-  if (value === undefined || value === null || value === "") {
-    return (
+  const emptyCell = (
+    <>
       <div
-        onClick={startEditString}
-        className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-text hover:text-muted-foreground/50 transition-colors" : ""}`}
+        onClick={openEditor}
+        className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-pointer hover:text-muted-foreground/50 transition-colors" : ""}`}
       >
         {isEditable ? "Click to add" : "—"}
       </div>
-    );
+      {dialog}
+    </>
+  );
+
+  // Empty
+  if (value === undefined || value === null || value === "") {
+    return emptyCell;
   }
 
   // Array types
   if (Array.isArray(value)) {
     if (value.length === 0) {
-      return (
-        <div
-          onClick={startEditArray}
-          className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-text hover:text-muted-foreground/50" : ""}`}
-        >
-          {isEditable ? "Click to add" : "—"}
-        </div>
-      );
+      return emptyCell;
     }
 
     // Image URLs - show as thumbnails with links
@@ -1356,174 +1296,53 @@ function EditableEnrichedCell({
       return <FaqCell items={faq} isEditable={isEditable} rowId={rowId} enrichKey={enrichKey} />;
     }
 
-    // Editable string array (features, keywords, bullets)
-    if (editing) {
-      return (
-        <div className="space-y-1 w-full" onKeyDown={handleKeyDown}>
-          {draftArray.map((item, i) => (
-            <div key={i} className="flex items-center gap-1">
-              <input
-                autoFocus={i === 0}
-                value={item}
-                onChange={(e) => {
-                  const next = [...draftArray];
-                  next[i] = e.target.value;
-                  setDraftArray(next);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    const next = [...draftArray];
-                    next.splice(i + 1, 0, "");
-                    setDraftArray(next);
-                    setTimeout(() => {
-                      const inputs = (e.target as HTMLElement).parentElement?.parentElement?.querySelectorAll("input");
-                      inputs?.[i + 1]?.focus();
-                    }, 0);
-                  }
-                  if (e.key === "Backspace" && item === "" && draftArray.length > 1) {
-                    e.preventDefault();
-                    const next = draftArray.filter((_, idx) => idx !== i);
-                    setDraftArray(next);
-                  }
-                }}
-                className="flex-1 min-w-0 bg-background border border-primary/30 rounded px-1.5 py-0.5 text-[11px] outline-none focus:ring-1 focus:ring-primary/50"
-              />
-              <button
-                onClick={() => setDraftArray(draftArray.filter((_, idx) => idx !== i))}
-                className="text-muted-foreground/40 hover:text-destructive shrink-0"
-                tabIndex={-1}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-          <div className="flex gap-1 pt-0.5">
-            <button
-              onClick={() => setDraftArray([...draftArray, ""])}
-              className="text-[10px] text-primary/70 hover:text-primary transition-colors"
-            >
-              + Add item
-            </button>
-            <div className="flex-1" />
-            <button
-              onClick={() => setEditing(false)}
-              className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={commitArray}
-              className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded hover:bg-primary/90 transition-colors font-medium"
-            >
-              Save
-            </button>
-          </div>
-        </div>
-      );
-    }
-
+    // String list (features, keywords, bullets)
     return (
-      <div
-        onClick={startEditArray}
-        className={`flex flex-col gap-0.5 group ${isEditable ? "cursor-text" : ""}`}
-      >
-        {(value as string[]).slice(0, 4).map((item, i) => (
-          <div key={i} className="flex items-start gap-1">
-            <span className="text-[9px] mt-0.5 opacity-40 shrink-0">•</span>
-            <span className="text-[11px] leading-snug break-words whitespace-pre-wrap">{item}</span>
-          </div>
-        ))}
-        {value.length > 4 && (
-          <span className="text-[10px] text-muted-foreground mt-0.5">+{value.length - 4} more</span>
-        )}
-        {isEditable && (
-          <span className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors mt-0.5">
-            Click to edit
-          </span>
-        )}
-      </div>
+      <>
+        <div
+          onClick={() => setOpen(true)}
+          title={isEditable ? "Click to view and edit" : "Click to view"}
+          className="w-full min-w-0 cursor-pointer text-[11px] leading-4 break-words"
+          style={CLAMPED_TEXT_STYLE}
+        >
+          {(value as string[]).map((item, i) => (
+            <span key={i}>
+              {i > 0 && <span className="px-1 opacity-40">•</span>}
+              {item}
+            </span>
+          ))}
+        </div>
+        {dialog}
+      </>
     );
   }
 
   // String types (title, description, category)
   const str = String(value);
 
-  if (editing) {
-    return (
-      <div className="w-full" onKeyDown={handleKeyDown}>
-        <textarea
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={Math.min(6, Math.max(2, Math.ceil(str.length / 40)))}
-          className="w-full bg-background border border-primary/30 rounded px-1.5 py-1 text-[11px] leading-snug outline-none focus:ring-1 focus:ring-primary/50 resize-y min-h-[2rem]"
-        />
-        <div className="flex justify-end gap-1 mt-1">
-          <button
-            onClick={() => setEditing(false)}
-            className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={commitString}
-            className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded hover:bg-primary/90 transition-colors font-medium"
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const overBudget = maxChars != null && str.length > maxChars;
   const budgetBadge = overBudget ? (
     <span
-      className="ml-1 inline-block align-middle rounded bg-destructive/10 px-1 font-mono text-[9px] font-semibold text-destructive"
+      className="mr-1 inline-block align-middle rounded bg-destructive/10 px-1 font-mono text-[9px] font-semibold text-destructive"
       title={`${str.length} characters — over the ${maxChars} character limit`}
     >
       {str.length}/{maxChars}
     </span>
   ) : null;
 
-  if (str.length > 80) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div
-            onClick={startEditString}
-            className={`text-[11px] leading-snug break-words whitespace-pre-wrap w-full group ${isEditable ? "cursor-text" : "cursor-default"}`}
-          >
-            {str}
-            {budgetBadge}
-            {isEditable && (
-              <span className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors block mt-0.5">
-                Click to edit
-              </span>
-            )}
-          </div>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-md whitespace-pre-wrap text-xs p-3 leading-relaxed z-50">
-          {str}
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
-
   return (
-    <div
-      onClick={startEditString}
-      className={`text-[11px] leading-snug break-words whitespace-pre-wrap w-full group ${isEditable ? "cursor-text" : ""}`}
-    >
-      {str}
-      {budgetBadge}
-      {isEditable && (
-        <span className="text-[9px] text-primary/0 group-hover:text-primary/50 transition-colors block mt-0.5">
-          Click to edit
-        </span>
-      )}
-    </div>
+    <>
+      <div
+        onClick={() => setOpen(true)}
+        title={isEditable ? "Click to view and edit" : "Click to view"}
+        className="w-full min-w-0 cursor-pointer text-[11px] leading-4 break-words whitespace-pre-wrap"
+        style={CLAMPED_TEXT_STYLE}
+      >
+        {budgetBadge}
+        <CellText text={str} />
+      </div>
+      {dialog}
+    </>
   );
 }
 
@@ -1767,8 +1586,10 @@ export function DataTable() {
     saveStatus,
     enrichingTab,
     enrichingExistingColumns,
+    enrichingNewColumns,
     sessionKind,
     productGroupColumn,
+    projectId,
   } = useSheetStore();
 
   const { role } = useWorkspaceStore();
@@ -1792,9 +1613,32 @@ export function DataTable() {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const currentPageRowIdsRef = useRef<string[]>([]);
   const [pageRowIds, setPageRowIds] = useState<string[]>([]);
-  const columnResizeMode: ColumnResizeMode = "onChange";
   const [dragOverColId, setDragOverColId] = useState<string | null>(null);
   const dragColIdRef = useRef<string | null>(null);
+
+  // Row heights and column widths set by dragging; remembered per project.
+  const [rowHeights, updateRowHeights] = useProjectSizeMap("catalog", "row-heights", projectId);
+  const [columnSizing, updateColumnSizing] = useProjectSizeMap("catalog", "column-sizes", projectId);
+  const tableInnerRef = useRef<HTMLDivElement>(null);
+  const setRowHeight = useCallback(
+    (rowId: string, height: number | null) => {
+      updateRowHeights((current) => {
+        const heights = { ...current };
+        if (height === null || height === DEFAULT_ROW_HEIGHT) delete heights[rowId];
+        else heights[rowId] = height;
+        return heights;
+      });
+    },
+    [updateRowHeights]
+  );
+  const onColumnSizingChange = useCallback(
+    (updater: Updater<ColumnSizingState>) => {
+      updateColumnSizing((current) =>
+        typeof updater === "function" ? updater(current) : updater
+      );
+    },
+    [updateColumnSizing]
+  );
 
   const groupIndex = useMemo(
     () => buildProductGroupIndex(rows, productGroupColumn),
@@ -2109,7 +1953,11 @@ export function DataTable() {
           </div>
         ),
         cell: ({ row }) => {
-          if (row.original.status === "processing" && enrichCol.enabled && enrichingTab === "new") {
+          const isGenerating =
+            enrichingNewColumns.length > 0
+              ? enrichingNewColumns.includes(enrichCol.id)
+              : enrichCol.enabled;
+          if (row.original.status === "processing" && isGenerating && enrichingTab === "new") {
             return (
               <div className="py-1 space-y-1.5 w-full">
                 <div className="h-1.5 w-3/4 bg-primary/10 animate-pulse rounded-full" />
@@ -2124,6 +1972,7 @@ export function DataTable() {
               value={row.original.enrichedData[enrichCol.id]}
               rowId={row.original.id}
               enrichKey={enrichCol.id}
+              label={enrichCol.label}
               isEditable={canEditEnriched}
               maxChars={enrichCol.maxChars}
             />
@@ -2161,6 +2010,7 @@ export function DataTable() {
     activeSheet,
     enrichingTab,
     enrichingExistingColumns,
+    enrichingNewColumns,
     groupIndex,
     productGroupColumn,
   ]);
@@ -2173,15 +2023,16 @@ export function DataTable() {
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     globalFilterFn,
-    columnResizeMode,
     state: {
       globalFilter,
       sorting,
       pagination,
+      columnSizing,
     },
     onGlobalFilterChange: setGlobalFilter,
     onSortingChange: setSorting,
     onPaginationChange: setPagination,
+    onColumnSizingChange,
     enableColumnResizing: true,
   });
 
@@ -2201,27 +2052,106 @@ export function DataTable() {
         : ids
     );
   }, [tableRows]);
-  const columnSizingState = table.getState().columnSizing;
+  const rowHeightFor = (rowId: string | undefined) =>
+    (rowId && rowHeights[rowId]) || DEFAULT_ROW_HEIGHT;
   const rowVirtualizer = useVirtualizer({
     count: tableRows.length,
     getScrollElement: () => tableContainerRef.current,
-    estimateSize: () => 44,
+    estimateSize: (index) => rowHeightFor(tableRows[index]?.original.id),
     overscan: 20,
-    measureElement:
-      typeof window !== "undefined" && navigator.userAgent.indexOf("Firefox") === -1
-        ? (element) => element?.getBoundingClientRect().height
-        : undefined,
   });
 
-  // Re-measure all rows when column sizes change
   useEffect(() => {
     rowVirtualizer.measure();
-  }, [columnSizingState, rowVirtualizer]);
+  }, [rowHeights, rowVirtualizer]);
+
+  // Resizes write straight to the DOM while dragging (no React render per
+  // mouse move) and commit to state once on release.
+  const startRowResize = (
+    event: React.PointerEvent<HTMLElement>,
+    index: number,
+    rowId: string,
+    startHeight: number
+  ) => {
+    const rowEl = event.currentTarget.closest<HTMLElement>("[data-index]");
+    const body = rowEl?.parentElement;
+    if (!rowEl || !body) return;
+    const starts = new Map(
+      rowVirtualizer.getVirtualItems().map((item) => [item.index, item.start])
+    );
+    const followers = Array.from(body.children).flatMap((el) => {
+      const i = Number((el as HTMLElement).dataset.index);
+      return i > index ? [{ el: el as HTMLElement, start: starts.get(i) ?? 0 }] : [];
+    });
+    const startTotal = rowVirtualizer.getTotalSize();
+    let height = startHeight;
+    trackPointerDrag(event, "row-resize", {
+      onMove: (_dx, dy) => {
+        height = Math.round(
+          Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, startHeight + dy))
+        );
+        const delta = height - startHeight;
+        rowEl.style.height = `${height}px`;
+        rowEl.style.setProperty("--row-lines", String(rowLinesFor(height)));
+        for (const follower of followers) {
+          follower.el.style.transform = `translateY(${follower.start + delta}px)`;
+        }
+        body.style.height = `${startTotal + delta}px`;
+      },
+      onEnd: () => {
+        if (height === startHeight) return;
+        rowVirtualizer.resizeItem(index, height);
+        setRowHeight(rowId, height);
+      },
+    });
+  };
+
+  const startColumnResize = (
+    event: React.PointerEvent<HTMLDivElement>,
+    columnId: string
+  ) => {
+    const column = table.getColumn(columnId);
+    const inner = tableInnerRef.current;
+    const varIndex = table.getVisibleLeafColumns().findIndex((c) => c.id === columnId);
+    if (!column || !inner || varIndex < 0) return;
+    const varName = `--col-${varIndex}`;
+    // The header cell is draggable for column reordering; a native drag would
+    // swallow the resize, so switch it off until the pointer is released.
+    const headerEl = event.currentTarget.parentElement;
+    const wasDraggable = headerEl?.draggable ?? false;
+    if (headerEl) headerEl.draggable = false;
+    const startWidth = column.getSize();
+    const startTotal = table.getCenterTotalSize();
+    const min = column.columnDef.minSize ?? 40;
+    const max = column.columnDef.maxSize ?? 1200;
+    let width = startWidth;
+    trackPointerDrag(event, "col-resize", {
+      onMove: (dx) => {
+        width = Math.round(Math.min(max, Math.max(min, startWidth + dx)));
+        inner.style.setProperty(varName, `${width}px`);
+        inner.style.minWidth = `${startTotal + width - startWidth}px`;
+      },
+      onEnd: () => {
+        if (headerEl) headerEl.draggable = wasDraggable;
+        if (width !== startWidth) {
+          table.setColumnSizing((prev) => ({ ...prev, [columnId]: width }));
+        }
+      },
+    });
+  };
 
   if (rows.length === 0) return null;
 
   const filteredCount = table.getFilteredRowModel().rows.length;
   const totalTableWidth = table.getCenterTotalSize();
+  // Column widths live in CSS variables so a resize drag can update one
+  // variable instead of re-rendering every cell.
+  const leafColumns = table.getVisibleLeafColumns();
+  const columnVar = new Map(leafColumns.map((c, i) => [c.id, `var(--col-${i})`]));
+  const tableInnerStyle = {
+    minWidth: totalTableWidth,
+    ...Object.fromEntries(leafColumns.map((c, i) => [`--col-${i}`, `${c.getSize()}px`])),
+  } as React.CSSProperties;
 
   return (
     <div className="flex-1 flex min-w-0 h-full overflow-hidden">
@@ -2415,7 +2345,7 @@ export function DataTable() {
           ref={tableContainerRef}
           className="flex-1 overflow-auto custom-scrollbar"
         >
-          <div style={{ minWidth: totalTableWidth }}>
+          <div ref={tableInnerRef} style={tableInnerStyle}>
             {/* Sticky Header */}
             <div className="sticky top-0 z-10 bg-muted/90 backdrop-blur-md border-b border-border/40">
               {table.getHeaderGroups().map((headerGroup) => (
@@ -2426,7 +2356,7 @@ export function DataTable() {
                 return (
                   <div
                     key={header.id}
-                    className={`h-9 px-3 flex items-center border-r last:border-r-0 relative transition-all group/dragcol ${
+                    className={`h-9 px-3 flex flex-shrink-0 items-center border-r last:border-r-0 relative transition-colors group/dragcol ${
                       header.column.id === "select" ? "overflow-visible z-20" : "overflow-hidden"
                     } ${
                       isDragOver && isOrigCol
@@ -2434,8 +2364,8 @@ export function DataTable() {
                         : "border-border/40"
                     }`}
                     style={{
-                      width: header.getSize(),
-                      minWidth: header.getSize(),
+                      width: columnVar.get(header.column.id),
+                      minWidth: columnVar.get(header.column.id),
                     }}
                     draggable={isOrigCol && !isEnriching}
                     onDragStart={isOrigCol ? (e) => {
@@ -2479,12 +2409,21 @@ export function DataTable() {
                     {/* Column resize handle */}
                     {header.column.getCanResize() && (
                       <div
-                        onMouseDown={header.getResizeHandler()}
-                        onTouchStart={header.getResizeHandler()}
-                        className={`absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none hover:bg-primary/50 transition-colors ${
-                          header.column.getIsResizing() ? "bg-primary/60" : "bg-transparent"
-                        }`}
-                      />
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="Resize column"
+                        title="Drag to resize column · double-click to reset"
+                        draggable={false}
+                        onPointerDown={(e) => startColumnResize(e, header.column.id)}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          header.column.resetSize();
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="group/resize absolute right-0 top-0 z-10 flex h-full w-2.5 cursor-col-resize touch-none select-none justify-end"
+                      >
+                        <span className="h-full w-0.5 bg-transparent group-hover/resize:bg-primary/60 group-active/resize:bg-primary" />
+                      </div>
                     )}
                   </div>
                 );
@@ -2507,12 +2446,12 @@ export function DataTable() {
                 const isSelected = selectedRowIds.has(row.original.id);
                 const status = row.original.status;
                 const isPreviewing = previewRowId === row.original.id;
+                const rowHeight = rowHeightFor(row.original.id);
 
                 return (
                   <div
                     key={row.id}
                     data-index={virtualRow.index}
-                    ref={(node) => rowVirtualizer.measureElement(node)}
                     className={`
                       flex border-b border-border/20 text-[12px] absolute w-full
                       ${isSelected ? "bg-primary/[0.03]" : ""}
@@ -2523,17 +2462,23 @@ export function DataTable() {
                       ${isPreviewing ? "ring-1 ring-primary/40 bg-primary/5" : ""}
                       hover:bg-muted/40 transition-colors
                     `}
-                    style={{
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
+                    style={
+                      {
+                        transform: `translateY(${virtualRow.start}px)`,
+                        height: rowHeight,
+                        "--row-lines": rowLinesFor(rowHeight),
+                      } as React.CSSProperties
+                    }
                   >
                     {row.getVisibleCells().map((cell) => (
                       <div
                         key={cell.id}
-                        className="px-3 py-2 border-r last:border-r-0 border-border/20 flex-shrink-0 overflow-x-hidden"
+                        className={`px-3 py-2 border-r last:border-r-0 border-border/20 flex-shrink-0 overflow-hidden ${
+                          ROW_HEADER_COLUMNS.has(cell.column.id) ? "relative" : ""
+                        }`}
                         style={{
-                          width: cell.column.getSize(),
-                          minWidth: cell.column.getSize(),
+                          width: columnVar.get(cell.column.id),
+                          minWidth: columnVar.get(cell.column.id),
                         }}
                         onClick={() => {
                           if (cell.column.id === "rowNum") {
@@ -2547,6 +2492,14 @@ export function DataTable() {
                           </span>
                         ) : (
                           flexRender(cell.column.columnDef.cell, cell.getContext())
+                        )}
+                        {ROW_HEADER_COLUMNS.has(cell.column.id) && (
+                          <RowResizeHandle
+                            onPointerDown={(e) =>
+                              startRowResize(e, virtualRow.index, row.original.id, rowHeight)
+                            }
+                            onReset={() => setRowHeight(row.original.id, null)}
+                          />
                         )}
                       </div>
                     ))}

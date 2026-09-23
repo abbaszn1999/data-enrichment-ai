@@ -28,23 +28,21 @@ export type GalleryGenerationStage =
 export type GalleryProvider = "scraping" | "ai";
 
 /**
- * Explicit generation phase.
- * Scraping:
- * - main: find Main only, then stop
- * - gallery: find Gallery using an existing Main
- * - full: copy original-column photo as Main, then find Gallery
- * AI Generate:
- * - gallery: planner + Gallery shots using sheet photo or existing Main
- * - full: planner + generate 1 Main, wait, then Gallery (never stop after Main)
- * - main is remapped to full (AI never uses stop-after-Main)
+ * Generation phase. Gallery never finds or creates a Main image — it comes
+ * from the selected image column (Catalog Intelligence owns image finding).
+ * - gallery: build Gallery from the existing Main (AI copies the column photo
+ *   as Main first when the row has none)
+ * - full: Scraping only — copy the image-column photo as Main, then find Gallery
+ * - main: legacy (find/create Main); no longer produced
  */
 export type GalleryRunPhase = "main" | "gallery" | "full";
 
+export const MISSING_ORIGINAL_IMAGE_MESSAGE =
+  "No image in the selected image column. Add an image URL to this product, then retry.";
+
 /**
- * Decide which generation phase to run for a row.
- * Explicit request wins, except AI remaps `main` → `full`.
- * Scraping default: original URLs → full; existing Main → gallery; else main.
- * AI default: original URLs or existing Main → gallery; else full.
+ * Decide which generation phase to run for a row. Only an explicit `gallery`
+ * request is honoured; legacy `main` / `full` requests resolve like no request.
  */
 export function resolveGalleryRunPhase(params: {
   originalImageColumn?: string | null;
@@ -53,24 +51,11 @@ export function resolveGalleryRunPhase(params: {
   requested?: GalleryRunPhase | null;
   provider?: GalleryProvider | null;
 }): GalleryRunPhase {
-  const isAi = params.provider === "ai";
-  if (isAi && params.requested === "main") return "full";
-  if (
-    params.requested === "main" ||
-    params.requested === "gallery" ||
-    params.requested === "full"
-  ) {
-    return params.requested;
-  }
+  if (params.requested === "gallery" || params.provider === "ai") return "gallery";
   const originalUrls = params.originalImageColumn
     ? parseImageUrls(params.row.originalData?.[params.originalImageColumn])
     : [];
-  if (isAi) {
-    if (originalUrls.length > 0) return "gallery";
-    return getRowMainImagePaths(params.row).length > 0 ? "gallery" : "full";
-  }
-  if (originalUrls.length > 0) return "full";
-  return getRowMainImagePaths(params.row).length > 0 ? "gallery" : "main";
+  return originalUrls.length > 0 ? "full" : "gallery";
 }
 
 /**
@@ -84,11 +69,9 @@ export function resolveSelectionRunPhase(params: {
   >;
   provider?: GalleryProvider | null;
 }): { phase: GalleryRunPhase | "mixed"; label: string } {
+  const label = "Generate gallery";
   if (params.rows.length === 0) {
-    return {
-      phase: "full",
-      label: params.provider === "ai" ? "Generate full" : "Generate images",
-    };
+    return { phase: params.provider === "ai" ? "gallery" : "full", label };
   }
   const phases = new Set(
     params.rows.map((row) =>
@@ -99,19 +82,8 @@ export function resolveSelectionRunPhase(params: {
       })
     )
   );
-  if (phases.size === 1) {
-    const phase = [...phases][0]!;
-    const label =
-      phase === "gallery"
-        ? "Generate gallery"
-        : phase === "main"
-          ? "Generate main"
-          : params.provider === "ai"
-            ? "Generate full"
-            : "Generate images";
-    return { phase, label };
-  }
-  return { phase: "mixed", label: "Generate selected" };
+  if (phases.size === 1) return { phase: [...phases][0]!, label };
+  return { phase: "mixed", label };
 }
 
 export type GalleryRunStatus =

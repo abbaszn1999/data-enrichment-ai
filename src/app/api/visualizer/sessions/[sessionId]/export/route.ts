@@ -4,11 +4,19 @@ import {
   loadVisualizerWorksheetMatchingRevisionAdmin,
   signVisualizerWorksheetImages,
 } from "@/lib/visualizer/storage-admin";
-import { buildVisualizerResultsBuffer } from "@/lib/visualizer/results-xlsx";
+import { buildVisualizerResultsTable } from "@/lib/visualizer/results-xlsx";
 import { resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
 import { applyVisualizerProjectSettings } from "@/lib/visualizer/types";
 import { parseVisualizerProjectSettings } from "@/lib/visualizer/settings-schema";
 import { visualizerWarn } from "@/lib/visualizer/log";
+import {
+  parseTableExportOptions,
+  selectTableColumns,
+  serializeTableExport,
+  type TableExportOptions,
+} from "@/lib/export/table-file";
+import { deliverExportFile } from "@/lib/export/deliver";
+import { getVisualizerPrefix } from "@/lib/visualizer/storage-paths";
 
 export const maxDuration = 120;
 
@@ -17,7 +25,9 @@ type Ctx = { params: Promise<{ sessionId: string }> };
 async function exportVisualizerWorkbook(
   request: NextRequest,
   sessionId: string,
-  workspaceId: string
+  workspaceId: string,
+  options: TableExportOptions = { format: "xlsx" },
+  redirect = false
 ) {
   const auth = await requireVisualizerAuth({ workspaceId });
   if (!auth.ok) return auth.response;
@@ -54,10 +64,14 @@ async function exportVisualizerWorkbook(
     settings = worksheet.settings;
   }
   const hydrated = applyVisualizerProjectSettings(worksheet, settings);
+  // Only the exported rows need image links; headers still come from the full sheet.
+  const exportRows = options.rowIds
+    ? hydrated.rows.filter((row) => options.rowIds!.has(row.id))
+    : hydrated.rows;
 
   // Signing is best-effort: export must still succeed with raw HTML if Storage is flaky.
   const signedUrls = await signVisualizerWorksheetImages(
-    hydrated,
+    { ...hydrated, rows: exportRows },
     60 * 60 * 24 * 7
   ).catch((signError) => {
     visualizerWarn("export", "Could not sign image URLs for export", {
@@ -67,37 +81,54 @@ async function exportVisualizerWorkbook(
     return {} as Record<string, string>;
   });
 
-  const resolved = {
-    ...hydrated,
-    rows: hydrated.rows.map((row) => ({
-      ...row,
-      generatedDescription: row.generatedDescription
+  const resolvedById = new Map(
+    exportRows.map((row) => [
+      row.id,
+      row.generatedDescription
         ? resolveVisualizerHtmlImages(row.generatedDescription, signedUrls)
         : row.generatedDescription,
-    })),
+    ])
+  );
+  const resolved = {
+    ...hydrated,
+    rows: hydrated.rows.map((row) =>
+      resolvedById.has(row.id)
+        ? { ...row, generatedDescription: resolvedById.get(row.id) }
+        : row
+    ),
   };
 
-  const buffer = await buildVisualizerResultsBuffer(resolved, signedUrls);
+  const { buffer, contentType, extension } = await serializeTableExport(
+    selectTableColumns(
+      buildVisualizerResultsTable(resolved, signedUrls, options.rowIds),
+      options.columns
+    ),
+    options.format
+  );
   const safeName = String(session.name || "visualizer")
     .replace(/[^a-zA-Z0-9._-]+/g, "_")
     .slice(0, 80);
 
-  return new NextResponse(new Uint8Array(buffer), {
-    status: 200,
-    headers: {
-      ...auth.headers,
-      "Content-Type":
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="${safeName}-results.xlsx"`,
-      "Cache-Control": "no-store",
-    },
+  return deliverExportFile({
+    admin: auth.admin,
+    path: `${getVisualizerPrefix(workspaceId, sessionId)}/exports/${Date.now()}.${extension}`,
+    buffer,
+    contentType,
+    fileName: `${safeName}-results.${extension}`,
+    headers: auth.headers,
+    redirect,
+    onStorageError: (message) =>
+      visualizerWarn("export", "Export storage failed; sending file inline", { error: message }),
   });
 }
 
-/** POST /api/visualizer/sessions/[sessionId]/export — { workspaceId } */
+/**
+ * POST /api/visualizer/sessions/[sessionId]/export
+ * { workspaceId, format?: "xlsx" | "csv" | "json", rowIds?: string[], columns?: string[] }
+ */
 export async function POST(request: NextRequest, context: Ctx) {
   const { sessionId } = await context.params;
-  let body: { workspaceId?: string };
+  let body: { workspaceId?: string; format?: unknown; rowIds?: unknown; columns?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -110,7 +141,12 @@ export async function POST(request: NextRequest, context: Ctx) {
       { status: 400 }
     );
   }
-  return exportVisualizerWorkbook(request, sessionId, workspaceId);
+  return exportVisualizerWorkbook(
+    request,
+    sessionId,
+    workspaceId,
+    parseTableExportOptions(body)
+  );
 }
 
 /** GET kept for compatibility; prefer POST + blob download like Gallery. */
@@ -120,5 +156,5 @@ export async function GET(request: NextRequest, context: Ctx) {
   if (!workspaceId) {
     return NextResponse.json({ error: "workspaceId is required" }, { status: 400 });
   }
-  return exportVisualizerWorkbook(request, sessionId, workspaceId);
+  return exportVisualizerWorkbook(request, sessionId, workspaceId, { format: "xlsx" }, true);
 }

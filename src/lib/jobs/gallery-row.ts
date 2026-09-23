@@ -80,7 +80,6 @@ export async function resolveGalleryRowWorksheet(params: {
   galleryLog("row:hydrate", "Applied gallery run settings", {
     source: fromJob ? "job" : runtimeSettings ? "session" : "worksheet-default",
     galleryImagesPerRow: active.imagesPerRow,
-    mainImagesPerRow: active.main?.imagesPerRow,
   });
   return hydrated;
 }

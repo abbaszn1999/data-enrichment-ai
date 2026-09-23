@@ -4,12 +4,12 @@ import {
   type AiCallCost,
 } from "@/lib/ai-pricing";
 import { updateCachedCredits } from "@/lib/workspace-context";
-import { searchScrapingMainImages } from "@/lib/gallery/agents/scraping-main-agent";
 import { searchScrapingGalleryImages } from "@/lib/gallery/agents/scraping-gallery-agent";
 import { removeGalleryAssets } from "@/lib/gallery/storage-assets";
 import { downloadGalleryBytesAdmin } from "@/lib/gallery/storage-admin";
 import {
   getRowMainImagePaths,
+  MISSING_ORIGINAL_IMAGE_MESSAGE,
   resolveGalleryRunPhase,
   type GalleryImageProvenance,
   type GalleryRow,
@@ -96,9 +96,9 @@ export async function deductGalleryCredits(params: {
 
 /**
  * OpenAI-only Scraping row:
- * - Main and Gallery are separate run phases when finding new Main images.
- * - Main is copied into private Storage; Gallery keeps verified source URLs.
- * - With an original column, one full run copies Main then finds Gallery.
+ * - Main always comes from the selected image column (full) or an existing
+ *   Main (gallery); this pipeline never searches for a Main image.
+ * - Gallery keeps verified source URLs.
  */
 export async function processScrapingRow(params: {
   admin: Admin;
@@ -109,7 +109,7 @@ export async function processScrapingRow(params: {
   ownerUserId: string;
   actorUserId: string;
   runId: string;
-  /** Defaults to full when an original column is set, otherwise main. */
+  /** Defaults to full when the row has an image-column URL, otherwise gallery. */
   runPhase?: GalleryRunPhase;
   deadlineAt?: number;
   onCheckpoint?: (patch: Partial<GalleryRow>) => Promise<void>;
@@ -144,7 +144,6 @@ export async function processScrapingRow(params: {
   galleryLog("row", `Processing row ${row.id} (index ${row.rowIndex}) via Scraping`, {
     runPhase,
     galleryImagesPerRow: settings.imagesPerRow,
-    mainImagesPerRow: settings.main?.imagesPerRow,
   });
   const costs: AiCallCost[] = [];
   const recordUsage = async (_stageKey: string, cost: AiCallCost | null) => {
@@ -160,8 +159,6 @@ export async function processScrapingRow(params: {
   const hasUsableOriginal =
     !!worksheet.originalImageColumn && originalImageUrls.length > 0;
 
-  const needMain = !hasUsableOriginal;
-  const mainCount = Math.min(6, Math.max(1, settings.main?.imagesPerRow || 1));
   const galleryCount = runGallery ? Math.max(1, settings.imagesPerRow || 4) : 0;
 
   let mainPaths: string[] = [];
@@ -233,131 +230,57 @@ export async function processScrapingRow(params: {
   };
 
   if (runMain) {
-    if (worksheet.originalImageColumn && !hasUsableOriginal) {
+    if (!hasUsableOriginal) {
+      return fail(MISSING_ORIGINAL_IMAGE_MESSAGE, { stage: "main" });
+    }
+
+    ensureTime(5_000, "original reference");
+    trace.stage("main", "Keeping original image URL(s) as Main");
+    await params.onCheckpoint?.({ generationStage: "main" });
+
+    // Scraping stores public URLs only — OpenAI/Gemini fetch them later.
+    for (const originalUrl of originalImageUrls) {
+      if (!isHttpUrl(originalUrl)) {
+        galleryWarn("row", "Skipping non-HTTP original image URL", {
+          rowId: row.id,
+          originalUrl,
+        });
+        continue;
+      }
+      mainPaths.push(originalUrl);
+      mainAttachments.push({ url: originalUrl });
+      sourceMetaImages.push({
+        ref: originalUrl,
+        url: originalUrl,
+        persistence: "external",
+        sourceUrl: originalUrl,
+        pageUrl: originalUrl,
+        title: "original",
+        role: "main",
+        fallbackUrl: originalUrl,
+      });
+    }
+
+    mainPath = mainPaths[0] ?? null;
+    if (!mainPath) {
       return fail("The selected original image is not a valid image URL");
     }
-
-    if (hasUsableOriginal) {
-      ensureTime(5_000, "original reference");
-      trace.stage("main", "Keeping original image URL(s) as Main");
-      await params.onCheckpoint?.({ generationStage: "main" });
-
-      // Scraping stores public URLs only — OpenAI/Gemini fetch them later.
-      for (const originalUrl of originalImageUrls) {
-        if (!isHttpUrl(originalUrl)) {
-          galleryWarn("row", "Skipping non-HTTP original image URL", {
-            rowId: row.id,
-            originalUrl,
-          });
-          continue;
-        }
-        mainPaths.push(originalUrl);
-        mainAttachments.push({ url: originalUrl });
-        sourceMetaImages.push({
-          ref: originalUrl,
-          url: originalUrl,
-          persistence: "external",
-          sourceUrl: originalUrl,
-          pageUrl: originalUrl,
-          title: "original",
-          role: "main",
-          fallbackUrl: originalUrl,
-        });
-      }
-
-      mainPath = mainPaths[0] ?? null;
-      if (!mainPath) {
-        return fail("The selected original image is not a valid image URL");
-      }
-      // Reveal Main paths only once the full Main set is ready (no partial UI flash).
-      await params.onCheckpoint?.({
-        mainImagePaths: mainPaths,
-        mainImagePath: mainPath,
-        generationStage: runGallery ? "gallery" : "finalizing",
-        sourceMeta: {
-          ...(row.sourceMeta ?? {}),
-          provider: "scraping",
-          images: [...sourceMetaImages],
-        },
-      });
-    } else {
-      ensureTime(120_000, "OpenAI product image search");
-      trace.stage("searching", "Finding Main images with OpenAI");
-      await params.onCheckpoint?.({ generationStage: "searching" });
-
-      try {
-        const mainSearch = await searchScrapingMainImages({
-          rowData: row.originalData,
-          selectedColumns: selected,
-          settings,
-        });
-        await recordUsage("openai-search", mainSearch.cost);
-        productIdentity = mainSearch.productIdentity;
-        searchQueryCount += mainSearch.searchCallCount;
-        if (mainSearch.mainCandidates.length === 0) {
-          return fail("No suitable main image found for this product", {
-            stage: "main",
-            notes: mainSearch.notes,
-            imageResultCount: mainSearch.allImageResults.length,
-          });
-        }
-
-        await params.onCheckpoint?.({ generationStage: "main" });
-        const mainPicks = mainSearch.mainCandidates.slice(0, mainCount);
-        for (const candidate of mainPicks) {
-          if (!isHttpUrl(candidate.imageUrl)) {
-            galleryWarn("row", "Skipping non-HTTP Main image URL", {
-              rowId: row.id,
-              sourceDomain: candidate.sourceDomain,
-            });
-            continue;
-          }
-          mainPaths.push(candidate.imageUrl);
-          mainAttachments.push({ url: candidate.imageUrl });
-          sourceMetaImages.push({
-            ref: candidate.imageUrl,
-            url: candidate.imageUrl,
-            persistence: "external",
-            sourceUrl: candidate.imageUrl,
-            pageUrl: candidate.pageUrl,
-            title: candidate.title,
-            role: "main",
-            fallbackUrl: candidate.imageUrl,
-          });
-        }
-        mainPath = mainPaths[0] ?? null;
-        if (!mainPath) {
-          return fail("No suitable Main image URL was selected", {
-            stage: "main",
-          });
-        }
-        // Batch reveal — avoid streaming Main thumbnails one-by-one in the table.
-        await params.onCheckpoint?.({
-          mainImagePaths: mainPaths,
-          mainImagePath: mainPath,
-          generationStage: runGallery ? "gallery" : "finalizing",
-          sourceMeta: {
-            ...(row.sourceMeta ?? {}),
-            provider: "scraping",
-            images: [...sourceMetaImages],
-          },
-        });
-      } catch (error) {
-        return fail(
-          error instanceof Error ? error.message : "OpenAI image search failed",
-          { stage: "searching" }
-        );
-      }
-    }
-
-    if (!mainPath) {
-      return fail("Main image is required before gallery sourcing");
-    }
+    // Reveal Main paths only once the full Main set is ready (no partial UI flash).
+    await params.onCheckpoint?.({
+      mainImagePaths: mainPaths,
+      mainImagePath: mainPath,
+      generationStage: runGallery ? "gallery" : "finalizing",
+      sourceMeta: {
+        ...(row.sourceMeta ?? {}),
+        provider: "scraping",
+        images: [...sourceMetaImages],
+      },
+    });
   } else {
     mainPaths = previousMainPaths;
     mainPath = mainPaths[0] ?? null;
     if (!mainPath) {
-      return fail("Find main images first before generating the gallery");
+      return fail(MISSING_ORIGINAL_IMAGE_MESSAGE, { stage: "main" });
     }
   }
 
@@ -504,7 +427,6 @@ export async function processScrapingRow(params: {
             galleryTarget: galleryCount,
             galleryFound: galleryPaths.length,
             noGallery: !!galleryNote,
-            needMain,
             hasUsableOriginalImage: hasUsableOriginal,
           },
         })
@@ -528,17 +450,9 @@ export async function processScrapingRow(params: {
       : []),
   ]);
 
-  const partialWarning =
-    [
-      runMain && !hasUsableOriginal && mainPaths.length < mainCount
-        ? `Found ${mainPaths.length} of ${mainCount} requested main images`
-        : undefined,
-      runGallery
-        ? galleryNote || getGalleryWarning(galleryPaths.length, galleryCount)
-        : undefined,
-    ]
-      .filter(Boolean)
-      .join(". ") || undefined;
+  const partialWarning = runGallery
+    ? galleryNote || getGalleryWarning(galleryPaths.length, galleryCount)
+    : undefined;
 
   galleryLog("row:done", "Row completed", {
     rowId: row.id,

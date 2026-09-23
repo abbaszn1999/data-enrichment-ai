@@ -27,15 +27,16 @@ export type CatalogPollRun = {
 export function catalogEnrichingContextFromRun(run: CatalogPollRun | null | undefined): {
   tab: "new" | "existing";
   existingColumns: string[];
+  newColumns: string[];
 } {
   const enabled = (run?.settings?.enabledColumns ?? []).map(String);
   const existingColumns = enabled
     .filter((id) => id.startsWith("existing__"))
     .map((id) => id.slice("existing__".length));
   if (existingColumns.length > 0) {
-    return { tab: "existing", existingColumns };
+    return { tab: "existing", existingColumns, newColumns: [] };
   }
-  return { tab: "new", existingColumns: [] };
+  return { tab: "new", existingColumns: [], newColumns: enabled };
 }
 
 export function isCatalogEnrichRunActive(

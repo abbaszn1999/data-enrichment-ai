@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Clock3,
   Cloud,
+  Copy,
   Download,
   Eye,
   EyeOff,
@@ -59,7 +60,6 @@ import {
   createVisualizerSession,
   deleteVisualizerSession,
   deleteVisualizerAsset,
-  exportVisualizer,
   generateVisualizerFull,
   getVisualizerProgress,
   getVisualizerSession,
@@ -94,6 +94,28 @@ import {
   type VisualizerSessionStatus,
   type VisualizerWorksheetJson,
 } from "@/lib/visualizer/types";
+import { buildVisualizerResultsHeaders } from "@/lib/visualizer/results-xlsx";
+import {
+  ExportWizard,
+  fetchExportFile,
+  type ExportColumnOption,
+  type ExportRequest,
+  type ExportScope,
+} from "@/components/sheet/export-wizard";
+import {
+  CellText,
+  CellTextDialog,
+  htmlToPlainText,
+} from "@/components/sheet/cell-text-dialog";
+import { ColumnResizeHandle, RowResizeHandle } from "@/components/sheet/resize-handles";
+import {
+  CELL_BOX_STYLE,
+  CLAMPED_TEXT_STYLE,
+  clampRowHeight,
+  rowLinesFor,
+  trackPointerDrag,
+  useProjectSizeMap,
+} from "@/components/sheet/sheet-sizing";
 
 const STATUS_LABEL: Record<VisualizerSessionStatus, string> = {
   draft: "Draft",
@@ -106,6 +128,13 @@ const STATUS_LABEL: Record<VisualizerSessionStatus, string> = {
 
 const RESULT_DESCRIPTION = "\u0000visualizer:description";
 const RESULT_IMAGES = "\u0000visualizer:images";
+const SELECT_COLUMN = "\u0000visualizer:select";
+
+/** Default sheet sizes; users resize by dragging row/column edges. */
+const VISUALIZER_ROW_HEIGHT = 80;
+const VISUALIZER_COLUMN_WIDTHS = { select: 56, description: 280, images: 190, text: 200 } as const;
+const VISUALIZER_MIN_COLUMN = 60;
+const VISUALIZER_MAX_COLUMN = 900;
 
 function FieldImageSkeletons({
   count,
@@ -264,7 +293,7 @@ export default function ProductsVisualizerPage() {
   const [worksheetPageIndex, setWorksheetPageIndex] = useState(0);
   const [worksheetPageSize, setWorksheetPageSize] = useState(25);
   const [reviewRowId, setReviewRowId] = useState<string | null>(null);
-  const [reviewTab, setReviewTab] = useState<"preview" | "html" | "briefs">(
+  const [reviewTab, setReviewTab] = useState<"preview" | "html" | "split" | "briefs">(
     "preview"
   );
   const [imageDialogRowId, setImageDialogRowId] = useState<string | null>(null);
@@ -276,7 +305,8 @@ export default function ProductsVisualizerPage() {
     completed: number;
     runId?: string;
   } | null>(null);
-  const [isExporting, setIsExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [cellDialog, setCellDialog] = useState<{ rowId: string; column: string } | null>(null);
   const [tableScrollWidth, setTableScrollWidth] = useState(0);
   const [tableViewportWidth, setTableViewportWidth] = useState(0);
   const tableScrollRef = useRef<HTMLDivElement>(null);
@@ -1086,10 +1116,83 @@ export default function ProductsVisualizerPage() {
     ];
   }, [settings.productImageColumn, worksheet]);
 
-  const tableMinWidthPx = useMemo(
-    () => Math.max(900, (canEdit ? 72 : 0) + displayColumns.length * 160),
-    [canEdit, displayColumns.length]
-  );
+  // Sheet sizing: widths live in CSS variables on the <table> and row heights
+  // on each <tr>, so drags write straight to the DOM and commit on release.
+  // The first column (checkbox / row number) also hosts the row resize grip.
+  const [columnSizes, updateColumnSizes] = useProjectSizeMap("visualizer", "column-sizes", projectId);
+  const [rowHeights, updateRowHeights] = useProjectSizeMap("visualizer", "row-heights", projectId);
+  const sheetColumns = useMemo(() => [SELECT_COLUMN, ...displayColumns], [displayColumns]);
+  const columnWidthFor = (column: string) =>
+    columnSizes[column] ??
+    (column === SELECT_COLUMN
+      ? VISUALIZER_COLUMN_WIDTHS.select
+      : column === RESULT_DESCRIPTION
+        ? VISUALIZER_COLUMN_WIDTHS.description
+        : column === RESULT_IMAGES
+          ? VISUALIZER_COLUMN_WIDTHS.images
+          : VISUALIZER_COLUMN_WIDTHS.text);
+  const tableWidthPx = sheetColumns.reduce((sum, column) => sum + columnWidthFor(column), 0);
+  const tableSizeStyle = {
+    width: tableWidthPx,
+    ...Object.fromEntries(sheetColumns.map((column, i) => [`--vcol-${i}`, `${columnWidthFor(column)}px`])),
+  } as React.CSSProperties;
+
+  const startColumnResize = (event: React.PointerEvent<HTMLElement>, column: string) => {
+    const table = event.currentTarget.closest("table");
+    const index = sheetColumns.indexOf(column);
+    if (!table || index < 0) return;
+    const startWidth = columnWidthFor(column);
+    let width = startWidth;
+    trackPointerDrag(event, "col-resize", {
+      onMove: (dx) => {
+        width = Math.round(
+          Math.min(VISUALIZER_MAX_COLUMN, Math.max(VISUALIZER_MIN_COLUMN, startWidth + dx))
+        );
+        table.style.setProperty(`--vcol-${index}`, `${width}px`);
+        table.style.width = `${tableWidthPx + width - startWidth}px`;
+      },
+      onEnd: () => {
+        if (width !== startWidth) updateColumnSizes((map) => ({ ...map, [column]: width }));
+      },
+    });
+  };
+  const resetColumnWidth = (column: string) =>
+    updateColumnSizes((map) => {
+      const next = { ...map };
+      delete next[column];
+      return next;
+    });
+
+  const rowHeightFor = (rowId: string) => rowHeights[rowId] ?? VISUALIZER_ROW_HEIGHT;
+  const startRowResize = (event: React.PointerEvent<HTMLElement>, rowId: string) => {
+    const tr = event.currentTarget.closest("tr");
+    if (!tr) return;
+    const startHeight = rowHeightFor(rowId);
+    let height = startHeight;
+    trackPointerDrag(event, "row-resize", {
+      onMove: (_dx, dy) => {
+        height = clampRowHeight(startHeight + dy);
+        tr.style.height = `${height}px`;
+        tr.style.setProperty("--row-h", `${height}px`);
+        tr.style.setProperty("--row-lines", String(rowLinesFor(height)));
+      },
+      onEnd: () => {
+        if (height === startHeight) return;
+        updateRowHeights((map) => {
+          const next = { ...map };
+          if (height === VISUALIZER_ROW_HEIGHT) delete next[rowId];
+          else next[rowId] = height;
+          return next;
+        });
+      },
+    });
+  };
+  const resetRowHeight = (rowId: string) =>
+    updateRowHeights((map) => {
+      const next = { ...map };
+      delete next[rowId];
+      return next;
+    });
 
   useEffect(() => {
     const viewport = tableScrollRef.current;
@@ -1450,24 +1553,48 @@ export default function ProductsVisualizerPage() {
     }
   };
 
-  const handleExport = async () => {
-    if (!workspace || !session) return;
-    setIsExporting(true);
-    try {
-      await exportVisualizer({
-        workspaceId: workspace.id,
-        sessionId: session.id,
-        fileName: `${session.name || "visualizer"}_export.xlsx`,
-      });
-    } catch (error) {
-      toast.error(
-        error instanceof VisualizerApiError
-          ? error.message
-          : "Export failed"
-      );
-    } finally {
-      setIsExporting(false);
-    }
+  const exportRowsFor = (scope: ExportScope) =>
+    scope === "selected" ? rows.filter((row) => selectedRowIds.has(row.id)) : rows;
+
+  const exportColumnsFor = (): ExportColumnOption[] => {
+    if (!worksheet) return [];
+    return buildVisualizerResultsHeaders(worksheet).map((header) => ({
+      key: header,
+      label: header,
+      tag:
+        header === "AI Description"
+          ? "AI"
+          : /^Image \d+ URL$/.test(header)
+            ? "Image"
+            : undefined,
+    }));
+  };
+
+  const handleExport = async ({ scope, format, columnKeys, onProgress, signal }: ExportRequest) => {
+    if (!workspace || !session) throw new Error("Project is not loaded");
+    const exportRows = exportRowsFor(scope);
+    const blob = await fetchExportFile(
+      `/api/visualizer/sessions/${session.id}/export`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          format,
+          columns: columnKeys,
+          ...(scope === "all" ? {} : { rowIds: exportRows.map((row) => row.id) }),
+        }),
+        signal,
+      },
+      onProgress
+    );
+    const baseName = String(session.name || "visualizer").replace(/[^\w.-]+/g, "_");
+    return {
+      blob,
+      filename: `${baseName}_${scope === "selected" ? "selected" : "export"}.${format}`,
+      rows: exportRows.length,
+      columns: columnKeys.length,
+    };
   };
 
   if (projectId) {
@@ -1498,63 +1625,6 @@ export default function ProductsVisualizerPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {canEdit &&
-              (showGenerationBanner ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                disabled={stopping}
-                onClick={() => void stopGeneration()}
-                className="h-8 gap-1.5 rounded-lg bg-[#400095] text-[10px] text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
-              >
-                {stopping ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Square className="h-3.5 w-3.5" />
-                )}
-                {stopping ? "Stopping…" : "Stop"}
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                size="sm"
-                disabled={
-                  !settingsReady ||
-                  selectedRowIds.size === 0 ||
-                  selectedGenerateTargets.length === 0 ||
-                  session.status === "processing"
-                }
-                onClick={() => void runGenerate(false)}
-                className="h-8 gap-1.5 rounded-lg border-border/60 text-[10px]"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                Generate
-                {selectedRowIds.size > 0
-                  ? ` (${selectedGenerateTargets.length})`
-                  : ""}
-              </Button>
-            ))}
-            {(imagesReadyCount > 0 ||
-              session.status === "completed" ||
-              session.status === "paused" ||
-              rows.some((row) => !!row.generatedDescription)) && (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="gap-1.5 text-xs"
-                disabled={isExporting || generating || stopping || !!generationRun}
-                onClick={() => void handleExport()}
-              >
-                {isExporting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Download className="h-3.5 w-3.5" />
-                )}
-                Export
-              </Button>
-            )}
             <Button
               type="button"
               size="sm"
@@ -1587,7 +1657,8 @@ export default function ProductsVisualizerPage() {
         </header>
 
         <div className="grid min-h-0 flex-1 lg:grid-cols-[320px_1fr]">
-          <aside className="space-y-5 overflow-y-auto border-r border-border/60 bg-gradient-to-b from-[#400095]/[0.035] to-background p-4">
+          <aside className="flex min-h-0 flex-col overflow-hidden border-r border-border/60 bg-gradient-to-b from-[#400095]/[0.035] to-background">
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
             <section className="space-y-3">
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1952,6 +2023,57 @@ export default function ProductsVisualizerPage() {
                 </div>
               ) : null}
             </section>
+            </div>
+
+            {/* Primary actions — same place as Catalog Intelligence */}
+            <div className="shrink-0 space-y-2 border-t bg-muted/20 p-4">
+              {canEdit &&
+                (showGenerationBanner ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    className="h-10 w-full gap-2 font-medium shadow-sm"
+                    disabled={stopping}
+                    onClick={() => void stopGeneration()}
+                  >
+                    {stopping ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Square className="h-4 w-4 fill-current" />
+                    )}
+                    {stopping ? "Stopping…" : "Stop"}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-10 w-full gap-2 font-medium shadow-sm"
+                    disabled={
+                      !settingsReady ||
+                      selectedRowIds.size === 0 ||
+                      selectedGenerateTargets.length === 0 ||
+                      session.status === "processing"
+                    }
+                    onClick={() => void runGenerate(false)}
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Generate
+                    {selectedRowIds.size > 0 ? ` (${selectedGenerateTargets.length})` : ""}
+                  </Button>
+                ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 w-full gap-2 font-medium"
+                disabled={rows.length === 0 || generating || stopping || !!generationRun}
+                onClick={() => setExportOpen(true)}
+              >
+                <Download className="h-4 w-4" />
+                Export ({rows.length} rows)
+              </Button>
+            </div>
           </aside>
 
           <main className="flex min-h-0 flex-col overflow-hidden bg-muted/[0.08] p-4">
@@ -2025,15 +2147,18 @@ export default function ProductsVisualizerPage() {
                 className="min-h-0 w-full flex-1 overflow-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               >
                 <table
-                  className="w-full text-left text-xs"
-                  style={{
-                    minWidth: `${Math.max(tableMinWidthPx, tableViewportWidth || 0)}px`,
-                  }}
+                  className="table-fixed text-left text-xs"
+                  style={tableSizeStyle}
                 >
+                  <colgroup>
+                    {sheetColumns.map((column, i) => (
+                      <col key={column} style={{ width: `var(--vcol-${i})` }} />
+                    ))}
+                  </colgroup>
                   <thead className="sticky top-0 z-20 overflow-visible border-b bg-muted text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm">
                     <tr>
-                      {canEdit && (
-                        <th className="sticky left-0 top-0 z-30 w-16 overflow-visible bg-muted px-2 py-3">
+                      <th className="sticky left-0 top-0 z-30 overflow-visible bg-muted px-2 py-3 text-center">
+                        {canEdit ? (
                           <TableSelectHeader
                             allSelected={pageAllSelected}
                             someSelected={pageSomeSelected}
@@ -2044,19 +2169,25 @@ export default function ProductsVisualizerPage() {
                             onSelectAll={selectAllRows}
                             onClear={clearRowSelection}
                           />
-                        </th>
-                      )}
+                        ) : (
+                          "#"
+                        )}
+                      </th>
                       {displayColumns.map((column) => (
                         <th
                           key={column}
-                          className={`whitespace-nowrap bg-muted px-3 py-3 ${
-                            column === RESULT_DESCRIPTION ||
-                            column === RESULT_IMAGES
-                              ? "min-w-[220px] text-foreground"
-                              : "min-w-[160px]"
+                          className={`relative truncate whitespace-nowrap bg-muted px-3 py-3 ${
+                            column === RESULT_DESCRIPTION || column === RESULT_IMAGES
+                              ? "text-foreground"
+                              : ""
                           }`}
+                          title={columnLabel(column)}
                         >
                           {columnLabel(column)}
+                          <ColumnResizeHandle
+                            onPointerDown={(e) => startColumnResize(e, column)}
+                            onReset={() => resetColumnWidth(column)}
+                          />
                         </th>
                       ))}
                     </tr>
@@ -2065,7 +2196,7 @@ export default function ProductsVisualizerPage() {
                     {rows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={displayColumns.length + (canEdit ? 1 : 0)}
+                          colSpan={sheetColumns.length}
                           className="px-3 py-8 text-center text-muted-foreground"
                         >
                           No rows in this worksheet.
@@ -2088,35 +2219,54 @@ export default function ProductsVisualizerPage() {
                             row.errorMessage ||
                             "—";
                         const placeholders = row.imagePlaceholders ?? [];
+                        const descriptionText = hasDescription
+                          ? htmlToPlainText(row.generatedDescription ?? "")
+                          : "";
+                        const rowHeight = rowHeightFor(row.id);
                         return (
                           <tr
                             key={row.id}
                             className={`border-b transition-colors last:border-0 hover:bg-muted/40 ${
                               selectedRowIds.has(row.id) ? "bg-primary/5" : ""
                             }`}
+                            style={
+                              {
+                                height: rowHeight,
+                                "--row-h": `${rowHeight}px`,
+                                "--row-lines": rowLinesFor(rowHeight),
+                              } as React.CSSProperties
+                            }
                           >
-                            {canEdit && (
                             <td
-                              className={`sticky left-0 z-10 px-2 py-3 ${
+                              className={`sticky left-0 z-10 px-2 py-2 align-top ${
                                 selectedRowIds.has(row.id)
                                   ? "bg-primary/5"
                                   : "bg-background"
                               }`}
                             >
-                              <input
-                                type="checkbox"
-                                checked={selectedRowIds.has(row.id)}
-                                onChange={() => toggleRow(row.id)}
-                                className="mx-auto block h-3.5 w-3.5 accent-primary"
-                                aria-label={`Select row ${row.rowIndex + 1}`}
+                              {canEdit ? (
+                                <input
+                                  type="checkbox"
+                                  checked={selectedRowIds.has(row.id)}
+                                  onChange={() => toggleRow(row.id)}
+                                  className="mx-auto mt-0.5 block h-3.5 w-3.5 accent-primary"
+                                  aria-label={`Select row ${row.rowIndex + 1}`}
+                                />
+                              ) : (
+                                <span className="block text-center font-mono text-[10px] text-muted-foreground/60">
+                                  {row.rowIndex + 1}
+                                </span>
+                              )}
+                              <RowResizeHandle
+                                onPointerDown={(e) => startRowResize(e, row.id)}
+                                onReset={() => resetRowHeight(row.id)}
                               />
                             </td>
-                            )}
                             {displayColumns.map((column) => {
                               if (column === RESULT_DESCRIPTION) {
                                 return (
-                                  <td key={column} className="px-3 py-3 align-top">
-                                    <div className="flex min-w-[200px] items-start gap-2">
+                                  <td key={column} className="px-3 py-2 align-top">
+                                    <div className="flex items-start gap-2" style={CELL_BOX_STYLE}>
                                       {descriptionIsLoading ? (
                                         <div className="relative mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded border border-primary/40 bg-primary/15">
                                           <div className="absolute inset-0 animate-pulse bg-primary/25" />
@@ -2154,17 +2304,8 @@ export default function ProductsVisualizerPage() {
                                         </button>
                                       )}
                                       <div className="min-w-0 flex-1">
-                                        <p
-                                          className={`truncate text-[11px] leading-relaxed ${
-                                            descriptionIsLoading
-                                              ? "text-primary"
-                                              : "text-foreground"
-                                          }`}
-                                        >
-                                          {snippet}
-                                        </p>
                                         <span
-                                          className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-medium capitalize ${rowStatusTone(row.status)}`}
+                                          className={`mb-1 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-medium capitalize ${rowStatusTone(row.status)}`}
                                         >
                                           {descriptionIsLoading
                                             ? "writing description"
@@ -2172,6 +2313,26 @@ export default function ProductsVisualizerPage() {
                                               ? "generating images"
                                               : row.status.replaceAll("_", " ")}
                                         </span>
+                                        <p
+                                          onClick={
+                                            hasDescription
+                                              ? () => {
+                                                  setReviewRowId(row.id);
+                                                  setReviewTab("preview");
+                                                }
+                                              : undefined
+                                          }
+                                          className={`whitespace-pre-wrap break-words text-[11px] leading-4 ${
+                                            descriptionIsLoading
+                                              ? "text-primary"
+                                              : "text-foreground"
+                                          } ${hasDescription ? "cursor-pointer" : ""}`}
+                                          style={CLAMPED_TEXT_STYLE}
+                                        >
+                                          {hasDescription && !descriptionIsLoading
+                                            ? descriptionText
+                                            : snippet}
+                                        </p>
                                       </div>
                                     </div>
                                   </td>
@@ -2210,8 +2371,9 @@ export default function ProductsVisualizerPage() {
                                 return (
                                   <td
                                     key={column}
-                                    className="min-w-[180px] px-3 py-3 align-top"
+                                    className="px-3 py-2 align-top"
                                   >
+                                    <div style={CELL_BOX_STYLE}>
                                     {imagesIsLoading ? (
                                       <FieldImageSkeletons
                                         count={
@@ -2269,6 +2431,7 @@ export default function ProductsVisualizerPage() {
                                         —
                                       </span>
                                     )}
+                                    </div>
                                   </td>
                                 );
                               }
@@ -2276,22 +2439,35 @@ export default function ProductsVisualizerPage() {
                               const isImageCol =
                                 column === settings.productImageColumn &&
                                 /^https?:\/\//i.test(value.trim());
+                              const openCell = () => setCellDialog({ rowId: row.id, column });
                               return (
                                 <td
                                   key={column}
-                                  className="max-w-[220px] px-3 py-3 align-top"
+                                  className="px-3 py-2 align-top"
                                 >
                                   {isImageCol ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img
-                                      src={value.trim()}
-                                      alt=""
-                                      className="h-12 w-12 rounded border object-cover"
-                                    />
+                                    <button
+                                      type="button"
+                                      onClick={openCell}
+                                      title={value}
+                                      className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={value.trim()}
+                                        alt=""
+                                        className="h-12 w-12 rounded border object-cover"
+                                      />
+                                    </button>
                                   ) : (
-                                    <span className="line-clamp-3 break-words text-[11px] text-muted-foreground">
-                                      {value || "—"}
-                                    </span>
+                                    <div
+                                      onClick={openCell}
+                                      title="Click to view"
+                                      className="cursor-pointer whitespace-pre-wrap break-words text-[11px] leading-4 text-muted-foreground"
+                                      style={CLAMPED_TEXT_STYLE}
+                                    >
+                                      {value ? <CellText text={value} /> : "—"}
+                                    </div>
                                   )}
                                 </td>
                               );
@@ -2362,6 +2538,29 @@ export default function ProductsVisualizerPage() {
                     }</figure>`;
                   }
                 );
+              const sourceHtml = resolveVisualizerHtmlImages(rawHtml, signedUrls);
+              const previewDoc = `<!doctype html><html><head><meta charset="utf-8"/><style>
+                  body{font-family:Georgia,serif;line-height:1.55;color:#111;margin:0;padding:12px 8px;max-width:980px}
+                  h1,h2,h3{line-height:1.25;margin:1.2em 0 .5em}
+                  p,ul{margin:.75em 0}
+                  section{box-sizing:border-box}
+                  figure{margin:0}
+                  img{max-width:100%;height:auto;border-radius:8px;display:block}
+                  figure:has(img[data-missing]){padding:1rem;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc;color:#475569;font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px}
+                </style></head><body dir="auto">${html}</body></html>`;
+              const previewFrame = (
+                <iframe
+                  title="Generated description preview"
+                  sandbox=""
+                  srcDoc={previewDoc}
+                  className="h-[min(60vh,560px)] w-full rounded-md border bg-white"
+                />
+              );
+              const sourcePane = (
+                <pre className="h-[min(60vh,560px)] overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-[11px] leading-relaxed text-foreground">
+                  {sourceHtml}
+                </pre>
+              );
 
               return (
                 <Dialog
@@ -2382,27 +2581,46 @@ export default function ProductsVisualizerPage() {
                           ? ` · ${reviewRow.errorMessage}`
                           : ""}
                       </DialogDescription>
-                      <div className="mt-3 flex w-fit rounded-lg bg-muted p-1">
-                        {(
-                          [
-                            ["preview", "Preview"],
-                            ["html", "HTML"],
-                            ["briefs", "Image prompts"],
-                          ] as const
-                        ).map(([id, label]) => (
-                          <button
-                            key={id}
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <div className="flex w-fit rounded-lg bg-muted p-1">
+                          {(
+                            [
+                              ["preview", "Preview"],
+                              ["html", "HTML"],
+                              ["split", "Split"],
+                              ["briefs", "Image prompts"],
+                            ] as const
+                          ).map(([id, label]) => (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setReviewTab(id)}
+                              className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                                reviewTab === id
+                                  ? "bg-background shadow-sm"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        {rawHtml && (
+                          <Button
                             type="button"
-                            onClick={() => setReviewTab(id)}
-                            className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                              reviewTab === id
-                                ? "bg-background shadow-sm"
-                                : "text-muted-foreground"
-                            }`}
+                            variant="outline"
+                            size="sm"
+                            className="h-7 gap-1.5 text-[11px]"
+                            onClick={() => {
+                              void navigator.clipboard
+                                .writeText(sourceHtml)
+                                .then(() => toast.success("HTML copied"))
+                                .catch(() => toast.error("Could not copy HTML"));
+                            }}
                           >
-                            {label}
-                          </button>
-                        ))}
+                            <Copy className="h-3 w-3" /> Copy HTML
+                          </Button>
+                        )}
                       </div>
                     </DialogHeader>
                     <div className="min-h-0 flex-1 overflow-auto p-5">
@@ -2411,24 +2629,14 @@ export default function ProductsVisualizerPage() {
                           Generate descriptions to review output here.
                         </div>
                       ) : reviewTab === "preview" && html ? (
-                        <iframe
-                          title="Generated description preview"
-                          sandbox=""
-                          srcDoc={`<!doctype html><html><head><meta charset="utf-8"/><style>
-                              body{font-family:Georgia,serif;line-height:1.55;color:#111;margin:0;padding:12px 8px;max-width:980px}
-                              h1,h2,h3{line-height:1.25;margin:1.2em 0 .5em}
-                              p,ul{margin:.75em 0}
-                              section{box-sizing:border-box}
-                              figure{margin:0}
-                              img{max-width:100%;height:auto;border-radius:8px;display:block}
-                              figure:has(img[data-missing]){padding:1rem;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc;color:#475569;font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px}
-                            </style></head><body>${html}</body></html>`}
-                          className="h-[min(60vh,560px)] w-full rounded-md border bg-white"
-                        />
+                        previewFrame
                       ) : reviewTab === "html" && rawHtml ? (
-                        <pre className="overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-[11px] leading-relaxed text-foreground">
-                          {resolveVisualizerHtmlImages(rawHtml, signedUrls)}
-                        </pre>
+                        sourcePane
+                      ) : reviewTab === "split" && rawHtml ? (
+                        <div className="grid grid-cols-2 gap-3">
+                          {sourcePane}
+                          {previewFrame}
+                        </div>
                       ) : reviewTab === "briefs" ? (
                         placeholders.length === 0 ? (
                           <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -2638,6 +2846,47 @@ export default function ProductsVisualizerPage() {
                 }));
                 setSaveStatus("dirty");
               }}
+            />
+
+            {(() => {
+              const cellRow = cellDialog
+                ? rows.find((row) => row.id === cellDialog.rowId) ?? null
+                : null;
+              if (!cellDialog || !cellRow) return null;
+              return (
+                <CellTextDialog
+                  key={`${cellDialog.rowId}:${cellDialog.column}`}
+                  title={columnLabel(cellDialog.column)}
+                  value={cellRow.originalData[cellDialog.column] ?? ""}
+                  isEditable={false}
+                  onClose={() => setCellDialog(null)}
+                />
+              );
+            })()}
+
+            <ExportWizard
+              open={exportOpen}
+              onOpenChange={setExportOpen}
+              defaultScope={selectedRowIds.size > 0 ? "selected" : "all"}
+              scopes={[
+                {
+                  id: "selected",
+                  title: "Selected products",
+                  description:
+                    selectedRowIds.size === 0
+                      ? "Select products in the table to use this option"
+                      : "Only the products you checked in the table",
+                  count: selectedRowIds.size,
+                },
+                {
+                  id: "all",
+                  title: "All products",
+                  description: "Every product in this project",
+                  count: rows.length,
+                },
+              ]}
+              getColumns={exportColumnsFor}
+              onExport={handleExport}
             />
           </main>
         </div>

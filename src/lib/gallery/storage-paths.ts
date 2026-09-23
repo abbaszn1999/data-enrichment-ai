@@ -68,7 +68,7 @@ export function getGalleryAiAssetsLegacyFolder(
 export function getGalleryExportPath(
   workspaceId: string,
   sessionId: string,
-  ext: "xlsx" | "csv" = "xlsx"
+  ext: "xlsx" | "csv" | "json" = "xlsx"
 ): string {
   return `${getGalleryPrefix(workspaceId, sessionId)}/exports/${Date.now()}.${ext}`;
 }

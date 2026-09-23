@@ -1,5 +1,5 @@
-import ExcelJS from "exceljs";
 import type { VisualizerWorksheetJson } from "@/lib/visualizer/types";
+import { serializeTableExport, type TableExport } from "@/lib/export/table-file";
 
 function exportImageCount(worksheet: VisualizerWorksheetJson): number {
   const maxPlaceholders = Math.max(
@@ -32,39 +32,39 @@ export function buildVisualizerResultsHeaders(
   ];
 }
 
+/** Flat results table; `rowIds` limits the rows (sheet order is kept). */
+export function buildVisualizerResultsTable(
+  worksheet: VisualizerWorksheetJson,
+  signedUrls: Record<string, string> = {},
+  rowIds?: Set<string>
+): TableExport {
+  const imageCount = exportImageCount(worksheet);
+  const rows = rowIds
+    ? worksheet.rows.filter((row) => rowIds.has(row.id))
+    : worksheet.rows;
+  return {
+    sheetName: "Descriptions",
+    headers: buildVisualizerResultsHeaders(worksheet),
+    rows: rows.map((row) => {
+      const values = worksheet.columns.map((column) => String(row.originalData[column] ?? ""));
+      values.push(String(row.generatedDescription ?? ""));
+      for (let index = 1; index <= imageCount; index += 1) {
+        const path = row.imagePlaceholders?.find((item) => item.index === index)?.storagePath;
+        values.push(path ? signedUrls[path] || path : "");
+      }
+      values.push(row.status, row.errorMessage ?? "");
+      return values;
+    }),
+  };
+}
+
 export async function buildVisualizerResultsBuffer(
   worksheet: VisualizerWorksheetJson,
   signedUrls: Record<string, string> = {}
 ): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("Descriptions");
-  const headers = buildVisualizerResultsHeaders(worksheet);
-  const imageCount = exportImageCount(worksheet);
-  sheet.addRow(headers);
-
-  for (const row of worksheet.rows) {
-    const values: string[] = [];
-    for (const column of worksheet.columns) {
-      values.push(String(row.originalData[column] ?? ""));
-    }
-    values.push(String(row.generatedDescription ?? ""));
-    for (let index = 1; index <= imageCount; index += 1) {
-      const placeholder = row.imagePlaceholders?.find(
-        (item) => item.index === index
-      );
-      const path = placeholder?.storagePath;
-      values.push(
-        path
-          ? signedUrls[path] || (/^https?:\/\//i.test(path) ? path : path)
-          : ""
-      );
-    }
-    values.push(row.status);
-    values.push(row.errorMessage ?? "");
-    sheet.addRow(values);
-  }
-
-  sheet.getColumn(worksheet.columns.length + 1).width = 60;
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
+  const { buffer } = await serializeTableExport(
+    buildVisualizerResultsTable(worksheet, signedUrls),
+    "xlsx"
+  );
+  return buffer;
 }

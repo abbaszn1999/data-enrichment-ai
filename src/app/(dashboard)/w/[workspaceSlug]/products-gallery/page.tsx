@@ -30,7 +30,6 @@ import {
   Loader2,
   Maximize2,
   Palette,
-  Pencil,
   Plus,
   Search,
   Square,
@@ -81,7 +80,6 @@ import {
   saveGallerySettings,
   generateGallery,
   requestGalleryGenerationStop,
-  exportGallery,
   deleteGallerySession,
   deleteGalleryImage,
   deleteGalleryRows,
@@ -119,6 +117,31 @@ import {
   mergePolledGenerationWorksheet,
 } from "@/lib/gallery/generation-worksheet-merge";
 import { maxRevision, snapshotRevision } from "@/lib/jobs/snapshot-clock";
+import { buildGalleryExportHeaders } from "@/lib/gallery/export-builder";
+import {
+  ExportWizard,
+  fetchExportFile,
+  type ExportColumnOption,
+  type ExportRequest,
+  type ExportScope,
+} from "@/components/sheet/export-wizard";
+import { CellText, CellTextDialog } from "@/components/sheet/cell-text-dialog";
+import { ColumnResizeHandle, RowResizeHandle } from "@/components/sheet/resize-handles";
+import {
+  CELL_BOX_STYLE,
+  CLAMPED_TEXT_STYLE,
+  clampRowHeight,
+  rowLinesFor,
+  trackPointerDrag,
+  useProjectSizeMap,
+} from "@/components/sheet/sheet-sizing";
+
+/** Default sheet sizes; users resize by dragging row/column edges. */
+const GALLERY_ROW_HEIGHT = 72;
+const GALLERY_COLUMN_WIDTHS = { select: 56, result: 170, text: 180 } as const;
+const GALLERY_MIN_COLUMN = 60;
+const GALLERY_MAX_COLUMN = 800;
+const SELECT_COLUMN = "\u0000gallery:select";
 
 type ImageUploadPreview = {
   name: string;
@@ -324,8 +347,6 @@ export default function ProductsGalleryPage() {
     originalImageSelectionExplicit,
     setOriginalImageSelectionExplicit,
   ] = useState(false);
-  const [scrapingMainImages, setScrapingMainImages] = useState("1");
-  const [scrapingMainInstructions, setScrapingMainInstructions] = useState("");
   const [scrapingImages, setScrapingImages] = useState("4");
   const [scrapingInstructions, setScrapingInstructions] = useState("");
   const [scrapingModel, setScrapingModel] = useState<"standard" | "pro">("standard");
@@ -369,7 +390,8 @@ export default function ProductsGalleryPage() {
   } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [cellDialog, setCellDialog] = useState<{ rowId: string; column: string } | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [tableScrollWidth, setTableScrollWidth] = useState(0);
@@ -480,8 +502,6 @@ export default function ProductsGalleryPage() {
     setActiveTab(ws.settings.provider === "ai" ? "ai" : "scraping");
 
     const g = ws.settings.scraping ?? DEFAULT_SCRAPING_SETTINGS;
-    setScrapingMainImages(String(g.main?.imagesPerRow ?? 1));
-    setScrapingMainInstructions(g.main?.instructions || "");
     setScrapingImages(String(g.imagesPerRow ?? 4));
     setScrapingInstructions(g.instructions || "");
     setScrapingModel(g.tier === "premium" ? "pro" : "standard");
@@ -583,8 +603,8 @@ export default function ProductsGalleryPage() {
   const buildSettingsPatch = useCallback((): GalleryProjectSettings => {
     const scraping: GalleryScrapingSettings = {
       main: {
-        imagesPerRow: Number(scrapingMainImages) || 1,
-        instructions: scrapingMainInstructions.slice(0, 2_000),
+        imagesPerRow: 1,
+        instructions: "",
       },
       tier: scrapingModel === "pro" ? "premium" : "standard",
       imagesPerRow: Number(scrapingImages) || 4,
@@ -655,8 +675,6 @@ export default function ProductsGalleryPage() {
     brandColors,
     brandingEnabled,
     brandGuideMode,
-    scrapingMainImages,
-    scrapingMainInstructions,
     scrapingAspectRatio,
     scrapingImages,
     scrapingInstructions,
@@ -1292,14 +1310,74 @@ export default function ProductsGalleryPage() {
     worksheetColumns,
   ]);
 
-  const tableMinWidthPx = useMemo(
-    () =>
-      Math.max(
-        900,
-        (canEdit ? 72 : 0) + displayColumns.length * 160 + (canEdit ? 80 : 0)
-      ),
-    [canEdit, displayColumns.length]
-  );
+  // Sheet sizing: widths live in CSS variables on the <table> and row heights
+  // on each <tr>, so drags write straight to the DOM and commit on release.
+  const [columnSizes, updateColumnSizes] = useProjectSizeMap("gallery", "column-sizes", projectId);
+  const [rowHeights, updateRowHeights] = useProjectSizeMap("gallery", "row-heights", projectId);
+  // First column: checkbox for editors, row number for viewers; it also hosts
+  // the row resize grip.
+  const sheetColumns = useMemo(() => [SELECT_COLUMN, ...displayColumns], [displayColumns]);
+  const columnWidthFor = (column: string) =>
+    columnSizes[column] ??
+    (column === SELECT_COLUMN
+      ? GALLERY_COLUMN_WIDTHS.select
+      : column === RESULT_MAIN || column === RESULT_GALLERY
+        ? GALLERY_COLUMN_WIDTHS.result
+        : GALLERY_COLUMN_WIDTHS.text);
+  const tableWidthPx = sheetColumns.reduce((sum, column) => sum + columnWidthFor(column), 0);
+  const tableSizeStyle = {
+    width: tableWidthPx,
+    ...Object.fromEntries(sheetColumns.map((column, i) => [`--gcol-${i}`, `${columnWidthFor(column)}px`])),
+  } as React.CSSProperties;
+
+  const startColumnResize = (event: React.PointerEvent<HTMLElement>, column: string) => {
+    const table = event.currentTarget.closest("table");
+    const index = sheetColumns.indexOf(column);
+    if (!table || index < 0) return;
+    const startWidth = columnWidthFor(column);
+    let width = startWidth;
+    trackPointerDrag(event, "col-resize", {
+      onMove: (dx) => {
+        width = Math.round(Math.min(GALLERY_MAX_COLUMN, Math.max(GALLERY_MIN_COLUMN, startWidth + dx)));
+        table.style.setProperty(`--gcol-${index}`, `${width}px`);
+        table.style.width = `${tableWidthPx + width - startWidth}px`;
+      },
+      onEnd: () => {
+        if (width !== startWidth) updateColumnSizes((map) => ({ ...map, [column]: width }));
+      },
+    });
+  };
+
+  const rowHeightFor = (rowId: string) => rowHeights[rowId] ?? GALLERY_ROW_HEIGHT;
+  const startRowResize = (event: React.PointerEvent<HTMLElement>, rowId: string) => {
+    const tr = event.currentTarget.closest("tr");
+    if (!tr) return;
+    const startHeight = rowHeightFor(rowId);
+    let height = startHeight;
+    trackPointerDrag(event, "row-resize", {
+      onMove: (_dx, dy) => {
+        height = clampRowHeight(startHeight + dy);
+        tr.style.height = `${height}px`;
+        tr.style.setProperty("--row-h", `${height}px`);
+        tr.style.setProperty("--row-lines", String(rowLinesFor(height)));
+      },
+      onEnd: () => {
+        if (height === startHeight) return;
+        updateRowHeights((map) => {
+          const next = { ...map };
+          if (height === GALLERY_ROW_HEIGHT) delete next[rowId];
+          else next[rowId] = height;
+          return next;
+        });
+      },
+    });
+  };
+  const resetRowHeight = (rowId: string) =>
+    updateRowHeights((map) => {
+      const next = { ...map };
+      delete next[rowId];
+      return next;
+    });
 
   const rows = useMemo(() => worksheet?.rows ?? [], [worksheet?.rows]);
 
@@ -1692,8 +1770,6 @@ export default function ProductsGalleryPage() {
         worksheetRevision: worksheetRevisionRef.current,
         imagesPerRow:
           Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4,
-        mainImagesPerRow:
-          Number(activeTab === "scraping" ? scrapingMainImages : "1") || 1,
         // Mixed selections omit runPhase so the server resolves per row.
         ...(selectionPhase.phase === "mixed"
           ? {}
@@ -1870,8 +1946,6 @@ export default function ProductsGalleryPage() {
         retryFailed: true,
         imagesPerRow:
           Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4,
-        mainImagesPerRow:
-          Number(activeTab === "scraping" ? scrapingMainImages : "1") || 1,
         ...(retryPhase.phase === "mixed"
           ? {}
           : { runPhase: retryPhase.phase }),
@@ -1936,14 +2010,6 @@ export default function ProductsGalleryPage() {
       }
       invalidateCredits();
     }
-  };
-
-  const startEditingRow = (row: GalleryRow) => {
-    const signature = JSON.stringify(row.originalData);
-    lastSavedRowSignatureRef.current = signature;
-    currentRowSignatureRef.current = signature;
-    setEditingRowId(row.id);
-    setRowDraft({ id: row.id, originalData: { ...row.originalData } });
   };
 
   const persistRowDraft = useCallback(async (draft: RowDraft) => {
@@ -2020,14 +2086,29 @@ export default function ProductsGalleryPage() {
     }
   }, [editingRowId, rowDraft, saveStatus]);
 
-  const saveRow = async () => {
-    if (!rowDraft) return;
+  /** Saves one cell edited in the popup; the sheet updates immediately. */
+  const saveCellValue = async (row: GalleryRow, column: string, value: string) => {
+    const previous = row.originalData;
+    const originalData = { ...previous, [column]: value };
+    lastSavedRowSignatureRef.current = JSON.stringify(previous);
+    currentRowSignatureRef.current = JSON.stringify(originalData);
+    const applyRowData = (data: Record<string, string>) =>
+      setWorksheet((current) =>
+        current
+          ? {
+              ...current,
+              rows: current.rows.map((item) =>
+                item.id === row.id ? { ...item, originalData: data } : item
+              ),
+            }
+          : current
+      );
+    applyRowData(originalData);
     try {
-      await persistRowDraft(rowDraft);
-      setEditingRowId(null);
-      setRowDraft(null);
+      await persistRowDraft({ id: row.id, originalData });
     } catch (err) {
-      toast.error((err as Error)?.message || "Failed to save row");
+      applyRowData(previous);
+      toast.error((err as Error)?.message || "Failed to save cell");
     }
   };
 
@@ -2066,20 +2147,53 @@ export default function ProductsGalleryPage() {
     }
   };
 
-  const handleExport = async () => {
-    if (!workspace || !projectId) return;
-    setIsExporting(true);
-    try {
-      await exportGallery({
-        workspaceId: workspace.id,
-        sessionId: projectId,
-        fileName: `${activeSession?.name || "gallery"}_export.xlsx`,
-      });
-    } catch (err) {
-      toast.error((err as Error)?.message || "Export failed");
-    } finally {
-      setIsExporting(false);
-    }
+  const exportRowsFor = (scope: ExportScope) =>
+    scope === "selected"
+      ? rows.filter((row) => selectedRowIds.has(row.id))
+      : scope === "sheet"
+        ? visibleRows
+        : rows;
+
+  const exportColumnsFor = (): ExportColumnOption[] => {
+    if (!worksheet) return [];
+    const imageHeaders = new Set(["Main Image", "Gallery Images"]);
+    return buildGalleryExportHeaders({
+      ...worksheet,
+      originalImageColumn: hasOriginalImageColumn ? originalImageColumn : null,
+    }).map((header) => ({
+      key: header,
+      label: header,
+      tag: imageHeaders.has(header) || header === originalImageColumn ? "Image" : undefined,
+    }));
+  };
+
+  const handleExport = async ({ scope, format, columnKeys, onProgress, signal }: ExportRequest) => {
+    if (!workspace || !projectId) throw new Error("Project is not loaded");
+    const exportRows = exportRowsFor(scope);
+    const blob = await fetchExportFile(
+      "/api/gallery/export",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          sessionId: projectId,
+          format,
+          columns: columnKeys,
+          ...(scope === "all" ? {} : { rowIds: exportRows.map((row) => row.id) }),
+        }),
+        signal,
+      },
+      onProgress
+    );
+    const baseName = (activeSession?.name || "gallery").replace(/[^\w.-]+/g, "_");
+    const suffix = scope === "selected" ? "selected" : scope === "sheet" ? "filtered" : "export";
+    return {
+      blob,
+      filename: `${baseName}_${suffix}.${format}`,
+      rows: exportRows.length,
+      columns: columnKeys.length,
+    };
   };
 
   const resolvePathUrl = (path: string | null | undefined): string | null => {
@@ -2442,10 +2556,7 @@ export default function ProductsGalleryPage() {
     (worksheet?.activeRun
       ? worksheet.activeRun.completed + worksheet.activeRun.failed
       : 0);
-  const expectedMainSlots = Math.max(
-    1,
-    Number(activeTab === "scraping" ? scrapingMainImages : "1") || 1
-  );
+  const expectedMainSlots = 1;
   const expectedGallerySlots = Math.max(
     1,
     Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4
@@ -2468,6 +2579,9 @@ export default function ProductsGalleryPage() {
       );
     }
 
+    const cellDialogRow = cellDialog
+      ? rows.find((row) => row.id === cellDialog.rowId) ?? null
+      : null;
     const title = activeSession?.name ?? "Gallery project";
     const fileLabel = activeSession?.source_file_name ?? "Worksheet";
     const productCount = activeSession?.total_rows ?? rows.length;
@@ -2478,7 +2592,8 @@ export default function ProductsGalleryPage() {
       isGenerating ||
       !!aiAssetBusy ||
       isSavingSettings ||
-      !!editingRowId;
+      !!editingRowId ||
+      !hasOriginalImageColumn;
     const selectedRowsForPhase = rows.filter((row) => selectedRowIds.has(row.id));
     const selectionPhase = resolveSelectionRunPhase({
       originalImageColumn:
@@ -2554,25 +2669,12 @@ export default function ProductsGalleryPage() {
                     ? "Retry save"
                     : "Saved"}
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5 rounded-lg border-border/60 text-[10px]"
-              disabled={isExporting || !worksheet || !!generationRun || isGenerating || isStoppingGeneration}
-              onClick={handleExport}
-            >
-              {isExporting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Download className="h-3.5 w-3.5" />
-              )}
-              Export
-            </Button>
           </div>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <aside className="max-h-[40vh] w-full shrink-0 overflow-y-auto border-b bg-gradient-to-b from-[#400095]/[0.035] to-background md:h-full md:max-h-none md:w-[320px] md:border-b-0 md:border-r">
+          <aside className="flex max-h-[40vh] w-full shrink-0 flex-col overflow-hidden border-b bg-gradient-to-b from-[#400095]/[0.035] to-background md:h-full md:max-h-none md:w-[320px] md:border-b-0 md:border-r">
+            <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="border-b p-4">
               <div className="grid grid-cols-2 rounded-xl bg-muted/60 p-1">
                 <button
@@ -2608,9 +2710,10 @@ export default function ProductsGalleryPage() {
                   <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
                   <h3 className="text-xs font-semibold">Original product image</h3>
                   <InfoTip>
-                    {activeTab === "ai"
-                      ? "Select a column only when its first URL should be the trusted main-image reference. Otherwise AI generates a new main image for every product."
-                      : "This is never detected automatically. Select a column only when its first URL should be the trusted main-image reference. Otherwise the agent finds a new main image for every product."}
+                    Pick the column that holds each product&apos;s image URL. It becomes the
+                    Main image and the reference for the gallery. Products without an image
+                    here are skipped. To find missing images, use Image Finder in Catalog
+                    Intelligence.
                   </InfoTip>
                 </div>
                 <select
@@ -2631,10 +2734,8 @@ export default function ProductsGalleryPage() {
                   disabled={!canEdit}
                   className="h-8 w-full rounded-lg border border-border/60 bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-[#6B358D]/40"
                 >
-                  <option value="none">
-                    {activeTab === "ai"
-                      ? "Create a new main image with AI"
-                      : "Find a new main image"}
+                  <option value="none" disabled>
+                    Select the image column
                   </option>
                   {originalImageCandidateColumns.map((column) => (
                     <option key={column} value={column}>
@@ -2642,43 +2743,15 @@ export default function ProductsGalleryPage() {
                     </option>
                   ))}
                 </select>
-                {originalImageCandidateColumns.length === 0 &&
-                originalImageColumn === "none" ? (
+                {originalImageCandidateColumns.length === 0 ? (
                   <p className="text-[11px] leading-snug text-muted-foreground">
-                    {activeTab === "ai"
-                      ? "No URL columns detected in this sheet. Use “Create with AI” or add a column with image/page links."
-                      : "No URL columns detected in this sheet. Use “Find a new main image” or add a column with image/page links."}
+                    No image URL columns found in this sheet. Find images with Image Finder in
+                    Catalog Intelligence, export the sheet, and upload it here.
                   </p>
-                ) : null}
-                {originalImageColumn === "none" && activeTab === "scraping" ? (
-                  <>
-                    <ConfigSelect
-                      label="Main images per product"
-                      value={scrapingMainImages}
-                      onChange={setScrapingMainImages}
-                      options={[
-                        { value: "1", label: "1 image" },
-                        { value: "2", label: "2 images" },
-                        { value: "3", label: "3 images" },
-                        { value: "4", label: "4 images" },
-                        { value: "5", label: "5 images" },
-                        { value: "6", label: "6 images" },
-                      ]}
-                    />
-                    <label className="block space-y-1.5">
-                      <span className="text-[11px] font-medium text-muted-foreground">
-                        Main · Custom instructions
-                      </span>
-                      <textarea
-                        value={scrapingMainInstructions}
-                        onChange={(event) =>
-                          setScrapingMainInstructions(event.target.value)
-                        }
-                        className="min-h-28 w-full resize-none rounded-md border bg-background p-3 text-xs leading-relaxed outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
-                        placeholder="Prefer clean white-background packshots, front-facing product shots, official brand photography..."
-                      />
-                    </label>
-                  </>
+                ) : !hasOriginalImageColumn ? (
+                  <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-400">
+                    Select the column with product image URLs to start.
+                  </p>
                 ) : null}
               </section>
 
@@ -2756,10 +2829,9 @@ export default function ProductsGalleryPage() {
                       <div className="flex items-center gap-1.5">
                         <h3 className="text-xs font-semibold">Find product images</h3>
                         <InfoTip>
-                          One web image-search request identifies the exact product and selects Main
-                          plus distinct Gallery angles together. If you provide an original image,
-                          it is kept as Main and used as the visual reference. If no reliable Gallery
-                          images are found, the cell shows “No gallery images found”.
+                          Uses the image column as Main and as the visual reference, then searches
+                          the web for distinct Gallery angles of the same product. If no reliable
+                          Gallery images are found, the cell shows “No gallery images found”.
                         </InfoTip>
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
@@ -2821,7 +2893,7 @@ export default function ProductsGalleryPage() {
                       <div className="flex items-center gap-1.5">
                         <h3 className="text-xs font-semibold">Generate product images</h3>
                         <InfoTip>
-                          Creates a main product image when necessary, then matching gallery images.
+                          Creates gallery images that match the product in the image column.
                         </InfoTip>
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
@@ -2866,7 +2938,7 @@ export default function ProductsGalleryPage() {
                       ]}
                     />
                     <p className="text-[11px] text-muted-foreground -mt-1">
-                      Main Image is separate: copied from the original column when selected, otherwise generated. It is never counted here.
+                      Main Image is copied from the image column and is not counted here.
                     </p>
                     <div className="grid grid-cols-2 gap-2.5">
                       <ConfigSelect
@@ -3325,6 +3397,48 @@ export default function ProductsGalleryPage() {
                 Settings and worksheet edits save automatically.
               </div>
             </fieldset>
+            </div>
+
+            {/* Primary actions — same place as Catalog Intelligence */}
+            <div className="shrink-0 space-y-2 border-t bg-muted/20 p-4">
+              {canEdit &&
+                (showGenerationBanner ? (
+                  <Button
+                    variant="destructive"
+                    className="h-10 w-full gap-2 font-medium shadow-sm"
+                    size="sm"
+                    disabled={isStoppingGeneration}
+                    onClick={() => void stopGeneration()}
+                  >
+                    {isStoppingGeneration ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Square className="h-4 w-4 fill-current" />
+                    )}
+                    {isStoppingGeneration ? "Stopping…" : "Stop"}
+                  </Button>
+                ) : (
+                  <Button
+                    className="h-10 w-full gap-2 font-medium shadow-sm"
+                    size="sm"
+                    disabled={generateDisabled}
+                    onClick={() => runGeneration(Array.from(selectedRowIds))}
+                  >
+                    <WandSparkles className="h-4 w-4" />
+                    {generateButtonLabel}
+                  </Button>
+                ))}
+              <Button
+                variant="outline"
+                className="h-9 w-full gap-2 font-medium"
+                size="sm"
+                disabled={!worksheet || rows.length === 0 || generationIsActive || isGenerating}
+                onClick={() => setExportOpen(true)}
+              >
+                <Download className="h-4 w-4" />
+                Export ({rows.length} rows)
+              </Button>
+            </div>
           </aside>
 
           <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -3378,35 +3492,6 @@ export default function ProductsGalleryPage() {
                         Delete ({selectedRowIds.size})
                       </Button>
                     )}
-                    {canEdit &&
-                      (showGenerationBanner ? (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="gap-1.5 text-xs"
-                          disabled={isStoppingGeneration}
-                          onClick={() => void stopGeneration()}
-                        >
-                          {isStoppingGeneration ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Square className="h-3.5 w-3.5 fill-current" />
-                          )}
-                          {isStoppingGeneration ? "Stopping…" : "Stop"}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          className="gap-1.5 text-xs"
-                          disabled={generateDisabled}
-                          onClick={() =>
-                            runGeneration(Array.from(selectedRowIds))
-                          }
-                        >
-                          <WandSparkles className="h-3.5 w-3.5" />
-                          {generateButtonLabel}
-                        </Button>
-                      ))}
                   </div>
                 </div>
               </div>
@@ -3456,13 +3541,18 @@ export default function ProductsGalleryPage() {
                 className="min-h-0 w-full flex-1 overflow-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               >
                 <table
-                  className="text-left text-xs"
-                  style={{ minWidth: `${tableMinWidthPx}px`, width: "max-content" }}
+                  className="table-fixed text-left text-xs"
+                  style={tableSizeStyle}
                 >
+                  <colgroup>
+                    {sheetColumns.map((column, i) => (
+                      <col key={column} style={{ width: `var(--gcol-${i})` }} />
+                    ))}
+                  </colgroup>
                   <thead className="sticky top-0 z-20 overflow-visible border-b bg-muted text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm">
                     <tr>
-                      {canEdit && (
-                        <th className="sticky left-0 top-0 z-30 w-16 overflow-visible bg-muted px-2 py-3">
+                      <th className="sticky left-0 top-0 z-30 overflow-visible bg-muted px-2 py-3 text-center">
+                        {canEdit ? (
                           <TableSelectHeader
                             allSelected={pageAllSelected}
                             someSelected={pageSomeSelected}
@@ -3473,34 +3563,40 @@ export default function ProductsGalleryPage() {
                             onSelectAll={selectAllFilteredRows}
                             onClear={clearRowSelection}
                           />
-                        </th>
-                      )}
+                        ) : (
+                          "#"
+                        )}
+                      </th>
                       {displayColumns.map((column) => (
                         <th
                           key={column}
-                          className={`whitespace-nowrap bg-muted px-3 py-3 ${
+                          className={`relative truncate whitespace-nowrap bg-muted px-3 py-3 ${
                             column === RESULT_MAIN || column === RESULT_GALLERY
-                              ? "min-w-[140px] text-foreground"
-                              : "min-w-[160px]"
+                              ? "text-foreground"
+                              : ""
                           }`}
+                          title={columnLabel(column)}
                         >
                           {columnLabel(column)}
+                          <ColumnResizeHandle
+                            onPointerDown={(e) => startColumnResize(e, column)}
+                            onReset={() =>
+                              updateColumnSizes((map) => {
+                                const next = { ...map };
+                                delete next[column];
+                                return next;
+                              })
+                            }
+                          />
                         </th>
                       ))}
-                      {canEdit && (
-                        <th className="sticky right-0 top-0 z-30 w-16 border-l bg-muted px-3 py-3 shadow-[-8px_0_12px_-10px_rgba(0,0,0,0.65)]">
-                          Edit
-                        </th>
-                      )}
                     </tr>
                   </thead>
                   <tbody>
                     {visibleRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={
-                            displayColumns.length + (canEdit ? 2 : 0)
-                          }
+                          colSpan={sheetColumns.length}
                           className="px-3 py-8 text-center text-muted-foreground"
                         >
                           {rows.length === 0
@@ -3510,7 +3606,6 @@ export default function ProductsGalleryPage() {
                       </tr>
                     ) : (
                       pageRows.map((row) => {
-                        const isEditing = editingRowId === row.id && rowDraft;
                         const rowIsBusy =
                           row.status === "generating" || row.status === "queued";
                         const mainIsLoading =
@@ -3529,28 +3624,44 @@ export default function ProductsGalleryPage() {
                               row.generationTarget === "gallery") ||
                             (!row.generationStage &&
                               row.generationTarget === "gallery"));
+                        const rowHeight = rowHeightFor(row.id);
                         return (
                           <tr
                             key={row.id}
                             className={`border-b transition-colors last:border-0 hover:bg-muted/40 ${
                               selectedRowIds.has(row.id) ? "bg-primary/5" : ""
                             }`}
+                            style={
+                              {
+                                height: rowHeight,
+                                "--row-h": `${rowHeight}px`,
+                                "--row-lines": rowLinesFor(rowHeight),
+                              } as React.CSSProperties
+                            }
                           >
-                            {canEdit && (
                             <td
-                              className={`sticky left-0 z-10 px-2 py-3 ${
+                              className={`sticky left-0 z-10 px-2 py-2 align-top ${
                                 selectedRowIds.has(row.id) ? "bg-primary/5" : "bg-background"
                               }`}
                             >
-                              <input
-                                type="checkbox"
-                                checked={selectedRowIds.has(row.id)}
-                                onChange={() => toggleRow(row.id)}
-                                className="mx-auto block h-3.5 w-3.5 accent-primary"
-                                aria-label={`Select row ${row.rowIndex + 1}`}
+                              {canEdit ? (
+                                <input
+                                  type="checkbox"
+                                  checked={selectedRowIds.has(row.id)}
+                                  onChange={() => toggleRow(row.id)}
+                                  className="mx-auto mt-0.5 block h-3.5 w-3.5 accent-primary"
+                                  aria-label={`Select row ${row.rowIndex + 1}`}
+                                />
+                              ) : (
+                                <span className="block text-center font-mono text-[10px] text-muted-foreground/60">
+                                  {row.rowIndex + 1}
+                                </span>
+                              )}
+                              <RowResizeHandle
+                                onPointerDown={(e) => startRowResize(e, row.id)}
+                                onReset={() => resetRowHeight(row.id)}
                               />
                             </td>
-                            )}
                             {displayColumns.map((column) => {
                               if (column === RESULT_MAIN) {
                                 const mainImages = getRowMainPaths(row)
@@ -3569,15 +3680,12 @@ export default function ProductsGalleryPage() {
                                     } => !!item.src
                                   );
                                 return (
-                                  <td key={column} className="min-w-[140px] px-3 py-3">
+                                  <td key={column} className="px-3 py-2 align-top">
+                                    <div className="overflow-hidden" style={CELL_BOX_STYLE}>
                                     {mainIsLoading ? (
                                       <FieldImageSkeletons
                                         count={expectedMainSlots}
-                                        label={
-                                          row.generationStage === "searching"
-                                            ? "Searching for main images"
-                                            : "Generating main images"
-                                        }
+                                        label="Loading main image"
                                       />
                                     ) : mainImages.length > 0 ? (
                                       <div className="flex items-center gap-1">
@@ -3649,7 +3757,7 @@ export default function ProductsGalleryPage() {
                                           )
                                             ? "No suitable main image found for this product"
                                             : row.errorMessage ||
-                                              "Main image generation failed"}
+                                              "Main image unavailable"}
                                         </p>
                                         {!/no suitable main image found/i.test(
                                           row.errorMessage || ""
@@ -3669,6 +3777,7 @@ export default function ProductsGalleryPage() {
                                         <ImageIcon className="h-3.5 w-3.5" />
                                       </div>
                                     )}
+                                    </div>
                                   </td>
                                 );
                               }
@@ -3691,7 +3800,8 @@ export default function ProductsGalleryPage() {
                                       !!item.src
                                   );
                                 return (
-                                  <td key={column} className="min-w-[180px] px-3 py-3">
+                                  <td key={column} className="px-3 py-2 align-top">
+                                    <div className="overflow-hidden" style={CELL_BOX_STYLE}>
                                     {galleryIsLoading ? (
                                       <FieldImageSkeletons
                                         count={expectedGallerySlots}
@@ -3793,82 +3903,58 @@ export default function ProductsGalleryPage() {
                                     ) : (
                                       <span className="text-[10px] text-muted-foreground">—</span>
                                     )}
+                                    </div>
                                   </td>
                                 );
                               }
 
-                              const value = isEditing
-                                ? rowDraft.originalData[column] ?? ""
-                                : row.originalData[column] ?? "";
+                              const value = row.originalData[column] ?? "";
                               const isImageCol =
                                 column === originalImageColumn && hasOriginalImageColumn;
+                              const openCell = () => setCellDialog({ rowId: row.id, column });
                               return (
                                 <td
                                   key={column}
-                                  className="min-w-[160px] max-w-72 px-3 py-3 text-muted-foreground"
+                                  className="px-3 py-2 align-top text-muted-foreground"
                                 >
-                                  {isEditing ? (
-                                    <Input
-                                      value={value}
-                                      onChange={(event) =>
-                                        setRowDraft({
-                                          ...rowDraft,
-                                          originalData: {
-                                            ...rowDraft.originalData,
-                                            [column]: event.target.value,
-                                          },
-                                        })
-                                      }
-                                      className="h-7 text-xs"
-                                    />
-                                  ) : isImageCol ? (
-                                    getRowOriginalSrc(row) ? (
-                                      <img
-                                        className="h-9 w-9 rounded object-cover"
-                                        src={getRowOriginalSrc(row)!}
-                                        alt=""
-                                      />
-                                    ) : (
-                                      <div className="flex h-9 w-9 items-center justify-center rounded border border-dashed text-muted-foreground">
-                                        <ImageIcon className="h-3.5 w-3.5" />
-                                      </div>
-                                    )
+                                  {isImageCol ? (
+                                    <button
+                                      type="button"
+                                      onClick={openCell}
+                                      title={value || "Add image URL"}
+                                      className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                    >
+                                      {getRowOriginalSrc(row) ? (
+                                        <img
+                                          className="h-9 w-9 rounded object-cover"
+                                          src={getRowOriginalSrc(row)!}
+                                          alt=""
+                                        />
+                                      ) : (
+                                        <div className="flex h-9 w-9 items-center justify-center rounded border border-dashed text-muted-foreground">
+                                          <ImageIcon className="h-3.5 w-3.5" />
+                                        </div>
+                                      )}
+                                    </button>
                                   ) : (
-                                    <span className="line-clamp-2">{value || "—"}</span>
+                                    <div
+                                      onClick={openCell}
+                                      title={canEdit ? "Click to view and edit" : "Click to view"}
+                                      className="cursor-pointer whitespace-pre-wrap break-words leading-4"
+                                      style={CLAMPED_TEXT_STYLE}
+                                    >
+                                      {value ? (
+                                        <CellText text={value} />
+                                      ) : (
+                                        <span className="text-muted-foreground/40">
+                                          {canEdit ? "Click to add" : "—"}
+                                        </span>
+                                      )}
+                                    </div>
                                   )}
                                 </td>
                               );
                             })}
-                            {canEdit && (
-                            <td className="sticky right-0 z-20 border-l bg-background px-3 py-3 shadow-[-8px_0_12px_-10px_rgba(0,0,0,0.65)]">
-                              {isEditing ? (
-                                <button
-                                  type="button"
-                                  onClick={saveRow}
-                                  disabled={savingRowId === row.id}
-                                  className="rounded p-1 text-emerald-600 hover:bg-emerald-500/10"
-                                  aria-label="Finish editing"
-                                  title="Finish editing — changes save automatically"
-                                >
-                                  {savingRowId === row.id ? (
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  ) : (
-                                    <Check className="h-3.5 w-3.5" />
-                                  )}
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={!!editingRowId && editingRowId !== row.id}
-                                  onClick={() => startEditingRow(row)}
-                                  className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-                                  aria-label={`Edit row ${row.rowIndex + 1}`}
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </td>
-                            )}
                           </tr>
                         );
                       })
@@ -3910,6 +3996,47 @@ export default function ProductsGalleryPage() {
             </div>
           </main>
         </div>
+        {cellDialogRow && cellDialog && (
+          <CellTextDialog
+            key={`${cellDialog.rowId}:${cellDialog.column}`}
+            title={columnLabel(cellDialog.column)}
+            value={cellDialogRow.originalData[cellDialog.column] ?? ""}
+            isEditable={canEdit && !generationIsActive && !isStoppingGeneration}
+            onSave={(next) => void saveCellValue(cellDialogRow, cellDialog.column, next)}
+            onClose={() => setCellDialog(null)}
+          />
+        )}
+        <ExportWizard
+          open={exportOpen}
+          onOpenChange={setExportOpen}
+          defaultScope={selectedRowIds.size > 0 ? "selected" : "all"}
+          scopes={[
+            {
+              id: "selected",
+              title: "Selected products",
+              description:
+                selectedRowIds.size === 0
+                  ? "Select products in the table to use this option"
+                  : "Only the products you checked in the table",
+              count: selectedRowIds.size,
+            },
+            {
+              id: "sheet",
+              title: "Current view",
+              description: "Products matching the current search and filter",
+              count: visibleRows.length,
+              disabled: visibleRows.length === rows.length,
+            },
+            {
+              id: "all",
+              title: "All products",
+              description: "Every product in this project",
+              count: rows.length,
+            },
+          ]}
+          getColumns={exportColumnsFor}
+          onExport={handleExport}
+        />
         <Dialog
           open={showDeleteRows && canEdit}
           onOpenChange={(open) => {

@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { mapLimit } from "@/lib/async/map-limit";
 import {
   getVisualizerPrefix,
   getVisualizerResultsPath,
@@ -284,9 +285,15 @@ export async function createVisualizerSignedUrlsAdmin(
   if (unique.length === 0) return {};
 
   const CHUNK = 40;
+  const CONCURRENCY = 6;
   const map: Record<string, string> = {};
+  const offsets = Array.from(
+    { length: Math.ceil(unique.length / CHUNK) },
+    (_, i) => i * CHUNK
+  );
 
-  for (let offset = 0; offset < unique.length; offset += CHUNK) {
+  // Several chunks in flight so large sheets (thousands of images) sign in seconds.
+  await mapLimit(offsets, CONCURRENCY, async (offset) => {
     const chunk = unique.slice(offset, offset + CHUNK);
     const partial = await withStorageRetry(
       `create visualizer signed URLs (${offset + 1}-${offset + chunk.length}/${unique.length})`,
@@ -310,7 +317,7 @@ export async function createVisualizerSignedUrlsAdmin(
       }
     );
     Object.assign(map, partial);
-  }
+  });
 
   return map;
 }
