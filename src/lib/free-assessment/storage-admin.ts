@@ -207,6 +207,18 @@ export async function saveProjectSliceAdmin<T>(
   return path;
 }
 
+export async function removeProjectSliceAdmin(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  sliceName: FaSliceName
+): Promise<void> {
+  const { error } = await admin.storage
+    .from(FREE_ASSESSMENT_STORAGE_BUCKET)
+    .remove([mrSlicePath(workspaceId, projectId, sliceName)]);
+  if (error && !/not found|object not found/i.test(error.message || "")) throw error;
+}
+
 export async function loadProjectSliceAdmin<T>(
   admin: SupabaseClient,
   workspaceId: string,

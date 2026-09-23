@@ -30,18 +30,17 @@ export async function GET(request: NextRequest) {
         sessionId: projectId.data,
         workspaceId: workspaceId.data,
       });
-  if (!job || job.status === "completed") {
+  if (!job) {
     return NextResponse.json({ pending: false, status: "completed" }, { headers: auth.headers });
-  }
-  if (job.status === "failed") {
-    return jsonError(job.last_error || "Collection matching failed", 500);
   }
   return NextResponse.json(
     {
-      pending: true,
+      pending: job.status === "queued" || job.status === "running",
       status: job.status,
+      phase: job.settings.phase === "duplicates" ? "duplicates" : "match",
       done: job.completed_count,
       total: Number(job.settings.total ?? 0),
+      error: job.last_error,
     },
     { headers: auth.headers }
   );

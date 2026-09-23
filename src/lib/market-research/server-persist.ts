@@ -99,6 +99,52 @@ export async function markSliceSavedAdmin(
   }
 }
 
+/**
+ * Saves demand-check results on the project from the server, so extract/start
+ * can price the hold from what Apify actually returned instead of the
+ * estimate the browser sends.
+ */
+export async function mergeProjectProbesAdmin(
+  admin: PersistAdmin,
+  projectId: string,
+  probes: Record<string, SeedProbe>
+): Promise<void> {
+  if (Object.keys(probes).length === 0) return;
+  try {
+    const { data: row } = await admin
+      .from("mr_projects")
+      .select("state")
+      .eq("id", projectId)
+      .maybeSingle();
+    const state: MrProjectStateJson =
+      row?.state && typeof row.state === "object"
+        ? (row.state as MrProjectStateJson)
+        : {};
+    const { error } = await admin
+      .from("mr_projects")
+      .update({ state: { ...state, probes: { ...(state.probes ?? {}), ...probes } } })
+      .eq("id", projectId);
+    if (error) throw error;
+  } catch (err) {
+    console.error(`[mergeProjectProbesAdmin] Failed to save probes for ${projectId}:`, err);
+  }
+}
+
+/** Demand-check results saved on the project, keyed by seed id. */
+export async function loadProjectProbesAdmin(
+  admin: PersistAdmin,
+  projectId: string
+): Promise<Record<string, SeedProbe>> {
+  const { data: row } = await admin
+    .from("mr_projects")
+    .select("state")
+    .eq("id", projectId)
+    .maybeSingle();
+  const state =
+    row?.state && typeof row.state === "object" ? (row.state as MrProjectStateJson) : {};
+  return (state.probes as Record<string, SeedProbe> | undefined) ?? {};
+}
+
 type NichesSlicePayload = {
   niches: NicheReading[];
   structuredNiches: MockNiche[];

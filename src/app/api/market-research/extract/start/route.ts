@@ -8,11 +8,12 @@ import {
   cappedKeywordEstimate,
   estimateExtractCostUsd,
   EXTRACT_CAP_PER_SEED,
+  RAW_KEYWORD_SELECTION_CAP,
   roundUsd,
 } from "@/lib/market-research/cost";
 import { getKeywordProvider } from "@/lib/market-research/providers";
 import { marketToSemrushDb } from "@/lib/market-research/providers/keyword-provider";
-import { getMrProject } from "@/lib/market-research/server-persist";
+import { getMrProject, loadProjectProbesAdmin } from "@/lib/market-research/server-persist";
 import { chargeMrWallet, refundMrWallet } from "@/lib/market-research/wallet-ops";
 
 export const maxDuration = 60;
@@ -40,18 +41,36 @@ export async function POST(request: NextRequest) {
   );
   if (!project) return jsonError("Project not found", 404);
 
-  const database = marketToSemrushDb(parsed.data.market);
-  const provider = getKeywordProvider();
-  const extractId = crypto.randomUUID();
-  const estimatedRows = parsed.data.seeds.reduce(
+  // Price the hold from the demand check saved on the server, not the
+  // estimate in the request. A seed without a saved result holds the full
+  // per-seed cap; the unused part is refunded when the extract settles.
+  const savedProbes = await loadProjectProbesAdmin(auth.admin, parsed.data.projectId).catch(
+    () => ({} as Record<string, { rawKeywords?: number; failed?: boolean }>)
+  );
+  const seeds = parsed.data.seeds.map((seed) => {
+    const probe = savedProbes[seed.id];
+    const rawKeywordEstimate =
+      probe && !probe.failed && typeof probe.rawKeywords === "number"
+        ? Math.max(0, Math.floor(probe.rawKeywords))
+        : EXTRACT_CAP_PER_SEED;
+    return { ...seed, rawKeywordEstimate };
+  });
+  const estimatedRows = seeds.reduce(
     (sum, seed) => sum + cappedKeywordEstimate(seed.rawKeywordEstimate),
     0
   );
+  if (estimatedRows > RAW_KEYWORD_SELECTION_CAP) {
+    return jsonError(
+      `This selection is ${estimatedRows.toLocaleString("en-US")} raw keywords. The maximum is ${RAW_KEYWORD_SELECTION_CAP.toLocaleString("en-US")}. Deselect seeds and try again.`,
+      400
+    );
+  }
+
+  const database = marketToSemrushDb(parsed.data.market);
+  const provider = getKeywordProvider();
+  const extractId = crypto.randomUUID();
   const heldUsd = roundUsd(
-    parsed.data.seeds.reduce(
-      (sum, seed) => sum + estimateExtractCostUsd(seed.rawKeywordEstimate),
-      0
-    )
+    seeds.reduce((sum, seed) => sum + estimateExtractCostUsd(seed.rawKeywordEstimate), 0)
   );
 
   const { error: extractInsertError } = await auth.admin.from("mr_extracts").insert({
@@ -77,7 +96,7 @@ export async function POST(request: NextRequest) {
     workspaceId: parsed.data.workspaceId,
     userId: auth.user.id,
     amountUsd: heldUsd,
-    description: `Keyword extract hold · ${parsed.data.seeds.length} seeds`,
+    description: `Keyword extract hold · ${seeds.length} seeds`,
     idempotencyKey: `apify_keyword_extract:hold:${extractId}`,
     details: { extractId, projectId: parsed.data.projectId, estimatedRows },
   });
@@ -101,7 +120,7 @@ export async function POST(request: NextRequest) {
   }> = [];
 
   try {
-    for (const seed of parsed.data.seeds) {
+    for (const seed of seeds) {
       const handle = await provider.startKeywordIdeas(seed.term, database, {
         limitPerSeed: EXTRACT_CAP_PER_SEED,
         minVolume: parsed.data.minVolume,

@@ -7,11 +7,9 @@ import {
 import { estimateProbeCostUsd } from "@/lib/market-research/cost";
 import { getKeywordProvider } from "@/lib/market-research/providers";
 import { marketToSemrushDb } from "@/lib/market-research/providers/keyword-provider";
-import { getMrProject } from "@/lib/market-research/server-persist";
-import {
-  chargeMrWallet,
-  refundMrWallet,
-} from "@/lib/market-research/wallet-ops";
+import { getMrProject, mergeProjectProbesAdmin } from "@/lib/market-research/server-persist";
+import { chargeMrWallet } from "@/lib/market-research/wallet-ops";
+import { readWorkspaceWallet } from "@/lib/wallet/server";
 
 export const maxDuration = 180;
 
@@ -40,28 +38,32 @@ export async function POST(request: NextRequest) {
     return jsonError("Project not found", 404);
   }
 
-  const holdUsd = estimateProbeCostUsd(parsed.data.seeds.length);
-  const charged = await chargeMrWallet(auth.admin, {
-    workspaceId: parsed.data.workspaceId,
-    userId: auth.user.id,
-    amountUsd: holdUsd,
-    description: `Demand check · ${parsed.data.seeds.length} seeds`,
-    idempotencyKey: `apify_seed_probe:${parsed.data.attemptId}`,
-    details: {
-      projectId: parsed.data.projectId,
-      market: parsed.data.market,
-      seedCount: parsed.data.seeds.length,
-    },
-  });
-  if (!charged.ok) {
-    const status = charged.reason === "insufficient_funds" ? 402 : 500;
+  // Check the balance up front, but charge only after Apify answers. If the
+  // server restarts during the wait, nothing has been taken from the wallet.
+  const maxUsd = estimateProbeCostUsd(parsed.data.seeds.length);
+  const wallet = await readWorkspaceWallet(auth.admin, parsed.data.workspaceId);
+  if (wallet.balance < maxUsd) {
     return NextResponse.json(
-      { error: charged.message || "Not enough wallet balance" },
-      { status, headers: auth.headers }
+      { error: "Not enough wallet balance" },
+      { status: 402, headers: auth.headers }
     );
   }
 
   const database = marketToSemrushDb(parsed.data.market);
+  let results: Array<
+    | { seedId: string; failed: true }
+    | {
+        seedId: string;
+        failed: false;
+        volume: number;
+        keywordDifficulty: number;
+        cpcUsd: number;
+        intents: string[];
+        keywordIdeasTotal: number;
+        keywordIdeasTotalVolume: number;
+        sampleKeywords: string[];
+      }
+  >;
   try {
     const metrics = await getKeywordProvider().fetchSeedMetrics(
       parsed.data.seeds.map((seed) => seed.term),
@@ -70,7 +72,7 @@ export async function POST(request: NextRequest) {
     const byTerm = new Map(
       metrics.map((row) => [row.seed.toLowerCase(), row])
     );
-    const results = parsed.data.seeds.map((seed) => {
+    results = parsed.data.seeds.map((seed) => {
       const match = byTerm.get(seed.term.trim().toLowerCase());
       if (!match) {
         return { seedId: seed.id, failed: true as const };
@@ -90,39 +92,7 @@ export async function POST(request: NextRequest) {
         ],
       };
     });
-    const succeeded = results.filter((row) => !row.failed).length;
-    const actualUsd = estimateProbeCostUsd(succeeded);
-    const refundUsd = Math.max(0, Math.round((holdUsd - actualUsd) * 100) / 100);
-    if (refundUsd > 0) {
-      await refundMrWallet(auth.admin, {
-        workspaceId: parsed.data.workspaceId,
-        userId: auth.user.id,
-        amountUsd: refundUsd,
-        description: `Demand check refund · ${parsed.data.seeds.length - succeeded} seeds failed`,
-        idempotencyKey: `apify_seed_probe:refund:${parsed.data.attemptId}`,
-        details: { projectId: parsed.data.projectId, succeeded },
-      });
-    }
-
-    return NextResponse.json(
-      {
-        market: parsed.data.market,
-        database,
-        probeCostUsd: actualUsd,
-        chargedUsd: actualUsd,
-        results,
-      },
-      { headers: auth.headers }
-    );
   } catch (error) {
-    await refundMrWallet(auth.admin, {
-      workspaceId: parsed.data.workspaceId,
-      userId: auth.user.id,
-      amountUsd: holdUsd,
-      description: "Demand check refund · probe failed",
-      idempotencyKey: `apify_seed_probe:refund:${parsed.data.attemptId}`,
-      details: { projectId: parsed.data.projectId, failed: true },
-    });
     // Never forward the raw provider error to the client — it can carry our
     // vendor's name, actor ids, or request paths in its message.
     console.error("[mr-probe] Demand probe failed:", error);
@@ -131,4 +101,69 @@ export async function POST(request: NextRequest) {
       { status: 502, headers: auth.headers }
     );
   }
+
+  const succeeded = results.filter((row) => !row.failed).length;
+  const actualUsd = estimateProbeCostUsd(succeeded);
+  if (actualUsd > 0) {
+    const charged = await chargeMrWallet(auth.admin, {
+      workspaceId: parsed.data.workspaceId,
+      userId: auth.user.id,
+      amountUsd: actualUsd,
+      description: `Demand check · ${succeeded} seed${succeeded === 1 ? "" : "s"}`,
+      idempotencyKey: `apify_seed_probe:${parsed.data.attemptId}`,
+      details: {
+        projectId: parsed.data.projectId,
+        market: parsed.data.market,
+        seedCount: parsed.data.seeds.length,
+        succeeded,
+      },
+    });
+    if (!charged.ok) {
+      const status = charged.reason === "insufficient_funds" ? 402 : 500;
+      return NextResponse.json(
+        { error: charged.message || "Not enough wallet balance" },
+        { status, headers: auth.headers }
+      );
+    }
+  }
+
+  const checkedAt = Date.now();
+  await mergeProjectProbesAdmin(
+    auth.admin,
+    parsed.data.projectId,
+    Object.fromEntries(
+      results.map((row) => [
+        row.seedId,
+        row.failed
+          ? {
+              seedId: row.seedId,
+              market: parsed.data.market,
+              rawKeywords: 0,
+              searchVolume: 0,
+              sampleKeywords: [],
+              checkedAt,
+              failed: true,
+            }
+          : {
+              seedId: row.seedId,
+              market: parsed.data.market,
+              rawKeywords: row.keywordIdeasTotal,
+              searchVolume: row.keywordIdeasTotalVolume,
+              sampleKeywords: row.sampleKeywords.slice(0, 5),
+              checkedAt,
+            },
+      ])
+    )
+  );
+
+  return NextResponse.json(
+    {
+      market: parsed.data.market,
+      database,
+      probeCostUsd: actualUsd,
+      chargedUsd: actualUsd,
+      results,
+    },
+    { headers: auth.headers }
+  );
 }

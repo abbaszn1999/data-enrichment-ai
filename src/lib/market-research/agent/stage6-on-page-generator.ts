@@ -331,7 +331,33 @@ export async function runStage6OnPageGeneration(
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
           const batchResult = await generateBatchStage6(enrichedInput, chunk);
-          return { contentById: batchResult, degraded: 0 };
+          // A reply can succeed and still leave collections out. Ask once
+          // more for those, then mark anything still missing as not
+          // generated instead of leaving a silent gap in the sheet.
+          let omitted = chunk.filter((collection) => !batchResult[collection.id]);
+          if (omitted.length > 0) {
+            try {
+              Object.assign(batchResult, await generateBatchStage6(enrichedInput, omitted));
+            } catch (retryErr) {
+              console.error(
+                `[runStage6OnPageGeneration] Re-request for ${omitted.length} omitted collection(s) failed:`,
+                retryErr
+              );
+            }
+            omitted = chunk.filter((collection) => !batchResult[collection.id]);
+            for (const collection of omitted) {
+              batchResult[collection.id] = {
+                collectionId: collection.id,
+                seoTitle: "",
+                seoDescription: "",
+                collectionDescription: "",
+                faqs: [],
+                links: [],
+                ungenerated: true,
+              };
+            }
+          }
+          return { contentById: batchResult, degraded: omitted.length };
         } catch (err) {
           lastError = err;
           console.error(

@@ -20,6 +20,10 @@ export interface ExistingCollectionForDuplicateCheck {
 
 export type { DuplicateExclusionResult, DuplicateMatch } from "./duplicate-matches";
 
+const DUPLICATE_CHECK_ATTEMPTS = 3;
+/** The check runs inside the collections job, so one call may take longer than a web request. */
+const DUPLICATE_CHECK_TIMEOUT_MS = 300_000;
+
 interface GeminiDuplicateExclusionResponse {
   duplicates: Array<{
     id: string;
@@ -67,41 +71,42 @@ export async function runDuplicateCollectionExclusion(
     return empty;
   }
 
+  // Names only: the skill judges intent from the name, and live PLP
+  // descriptions (often long HTML) would multiply the prompt on big stores.
   const userPrompt = `Compare every new collection against the existing collections and flag duplicates by shopper-intent coverage. When you flag a duplicate, include the matching existing collection id and name if you can:
-${JSON.stringify(
-  {
-    newCollections: newCollections.map((c) => ({
-      id: c.id,
-      name: c.name,
-      description: c.description || undefined,
-    })),
-    existingCollections: existingCollections.map((c) => ({
-      id: c.id,
-      name: c.name,
-      description: c.description || undefined,
-    })),
-  },
-  null,
-  2
-)}`;
+${JSON.stringify({
+  newCollections: newCollections.map((c) => ({ id: c.id, name: c.name })),
+  existingCollections: existingCollections.map((c) => ({ id: c.id, name: c.name })),
+})}`;
 
-  try {
-    const geminiRes = await runGeminiMarketResearch<GeminiDuplicateExclusionResponse>({
-      stage: 8,
-      systemInstruction: DUPLICATE_EXCLUSION_SYSTEM_INSTRUCTION,
-      userPrompt,
-    });
-
-    const newIds = new Set(newCollections.map((c) => c.id));
-    const existingById = new Map(
-      existingCollections.map((c) => [c.id, c.name] as const)
-    );
-    return parseDuplicateExclusionResponse(geminiRes.data, newIds, existingById);
-  } catch (error) {
-    console.warn(
-      "[Stage 5 Phase 3] Duplicate-collection exclusion call failed; duplicate status is unknown, not \"new\":",
-      error
-    );
-    return { duplicateIds: new Set(), matchesById: new Map(), checked: false };
+  const newIds = new Set(newCollections.map((c) => c.id));
+  const existingById = new Map(
+    existingCollections.map((c) => [c.id, c.name] as const)
+  );
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= DUPLICATE_CHECK_ATTEMPTS; attempt += 1) {
+    try {
+      const geminiRes = await runGeminiMarketResearch<GeminiDuplicateExclusionResponse>({
+        stage: 8,
+        systemInstruction: DUPLICATE_EXCLUSION_SYSTEM_INSTRUCTION,
+        userPrompt,
+        timeoutMs: DUPLICATE_CHECK_TIMEOUT_MS,
+      });
+      return parseDuplicateExclusionResponse(geminiRes.data, newIds, existingById);
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[Stage 5 Phase 3] Duplicate check failed (attempt ${attempt}/${DUPLICATE_CHECK_ATTEMPTS}):`,
+        error
+      );
+      if (attempt < DUPLICATE_CHECK_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
+    }
   }
+  console.warn(
+    "[Stage 5 Phase 3] Duplicate check failed after retries; duplicate status is unknown, not \"new\":",
+    lastError
+  );
+  return { duplicateIds: new Set(), matchesById: new Map(), checked: false };
 }

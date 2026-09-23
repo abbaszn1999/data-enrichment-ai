@@ -1,11 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runStage4IntentClassification } from "@/lib/free-assessment/agent/stage4-intent-classifier";
-import { advanceSameIntent } from "@/lib/free-assessment/agent/same-intent-job";
+import { runSameIntentInMemory } from "@/lib/free-assessment/agent/same-intent-job";
 import {
   appendClassifiedShardAdmin,
   clearClassifiedShardsAdmin,
   clearSameIntentAdmin,
-  loadClassifiedManifestAdmin,
+  loadClassifiedItemsAdmin,
   loadExtractRowsAdmin,
   loadProjectSliceAdmin,
   type ClassifiedShardItem,
@@ -16,35 +16,84 @@ import { overlayAndPersistKeywordClassifications } from "@/lib/free-assessment/e
 
 const PAGE_SIZE = 500;
 
-export async function advanceFaClassifyPage(
+/** Saved in `job_runs.settings.checkpoint` after every page so a restart resumes. */
+export type ClassifyCheckpoint = {
+  phase: "classify" | "same-intent";
+  classifyOffset: number;
+};
+
+export type ClassifyProgress = {
+  phase: "classify" | "same-intent";
+  done: number;
+  total: number;
+  checkpoint: ClassifyCheckpoint;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Verdicts saved by an earlier run of this job. Fails rather than resuming on a short read. */
+async function loadClassifiedAtLeast(
   admin: SupabaseClient,
   workspaceId: string,
   projectId: string,
-  offset: number
-) {
+  expected: number
+): Promise<ClassifiedShardItem[]> {
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    const items = await loadClassifiedItemsAdmin(admin, workspaceId, projectId);
+    if (items.length >= expected) return items;
+    await sleep(1500 * attempt);
+  }
+  throw new Error(
+    `Only part of the saved classification could be read back (expected ${expected}). Run Analyze again.`
+  );
+}
+
+export async function runFaClassifyThenClean(
+  admin: SupabaseClient,
+  workspaceId: string,
+  projectId: string,
+  opts: {
+    resume?: ClassifyCheckpoint | null;
+    onProgress?: (progress: ClassifyProgress) => Promise<void>;
+  } = {}
+): Promise<void> {
   const archive = await loadExtractRowsAdmin(admin, workspaceId, projectId);
   const total = archive.length;
-  const start = Math.min(offset, total);
-  const batchRows = archive.slice(start, start + PAGE_SIZE);
-  const nextOffset = start + batchRows.length;
-  const done = nextOffset >= total;
+  let offset = Math.min(Math.max(0, opts.resume?.classifyOffset ?? 0), total);
 
-  if (start === 0) {
+  let classified: ClassifiedShardItem[] = [];
+  if (offset === 0) {
     await clearClassifiedShardsAdmin(admin, workspaceId, projectId).catch((err) =>
       console.error("[fa-classify] Failed to clear classified shards:", err)
     );
     await clearSameIntentAdmin(admin, workspaceId, projectId).catch((err) =>
       console.error("[fa-classify] Failed to clear same-intent manifest:", err)
     );
+  } else {
+    classified = await loadClassifiedAtLeast(admin, workspaceId, projectId, offset);
   }
 
-  let degradedCount = 0;
-  if (batchRows.length > 0) {
+  let sample = await loadProjectSliceAdmin<ExtractedKeyword[]>(
+    admin,
+    workspaceId,
+    projectId,
+    "keywords"
+  ).catch(() => null);
+  if (!Array.isArray(sample) || sample.length === 0) {
+    sample = archive
+      .slice(0, MAX_DISPLAY_ROWS)
+      .map((row, index) => toExtractedKeyword(row, row.seedId || row.seed || "seed", index));
+  }
+
+  while (offset < total) {
+    const batchRows = archive.slice(offset, offset + PAGE_SIZE);
+    const nextOffset = offset + batchRows.length;
     const byPhrase = new Map(batchRows.map((row) => [row.phrase.trim().toLowerCase(), row]));
     const result = await runStage4IntentClassification({
       keywords: batchRows.map((row) => ({ id: row.phrase, keyword: row.phrase })),
     });
-    degradedCount = result.degradedCount;
     const items: ClassifiedShardItem[] = result.classified.map((item) => ({
       id: item.id,
       keyword: item.keyword,
@@ -54,54 +103,45 @@ export async function advanceFaClassifyPage(
       plpConcept: item.plpConcept,
       isAiGenerated: item.isAiGenerated,
     }));
-    await appendClassifiedShardAdmin(admin, workspaceId, projectId, items, { done });
-    let stored = await loadProjectSliceAdmin<ExtractedKeyword[]>(
+    await appendClassifiedShardAdmin(admin, workspaceId, projectId, items, {
+      done: nextOffset >= total,
+    });
+    classified = [...classified, ...items];
+    offset = nextOffset;
+    sample = await overlayAndPersistKeywordClassifications(
       admin,
       workspaceId,
       projectId,
-      "keywords"
-    ).catch(() => null);
-    if (!Array.isArray(stored) || stored.length === 0) {
-      stored = archive.slice(0, MAX_DISPLAY_ROWS).map((row, index) =>
-        toExtractedKeyword(row, row.seedId || row.seed || "seed", index)
-      );
-    }
-    await overlayAndPersistKeywordClassifications(admin, workspaceId, projectId, stored);
-  }
-
-  const manifest = await loadClassifiedManifestAdmin(admin, workspaceId, projectId);
-  return {
-    offset: start,
-    nextOffset,
-    done,
-    total,
-    degradedCount,
-    categoryCount: manifest?.categoryCount ?? 0,
-  };
-}
-
-export async function runFaClassifyThenClean(
-  admin: SupabaseClient,
-  workspaceId: string,
-  projectId: string,
-  onProgress?: (progress: { phase: "classify" | "same-intent"; done: number; total: number }) => Promise<void>
-): Promise<void> {
-  let offset = 0;
-  for (;;) {
-    const page = await advanceFaClassifyPage(admin, workspaceId, projectId, offset);
-    await onProgress?.({ phase: "classify", done: page.nextOffset, total: page.total });
-    if (page.done) break;
-    offset = page.nextOffset;
-  }
-  offset = 0;
-  for (;;) {
-    const page = await advanceSameIntent(admin, workspaceId, projectId, offset);
-    await onProgress?.({
-      phase: "same-intent",
-      done: page.processed,
-      total: Math.max(page.total, 1),
+      sample,
+      { classified, drops: [] }
+    );
+    await opts.onProgress?.({
+      phase: "classify",
+      done: offset,
+      total,
+      checkpoint: {
+        phase: offset >= total ? "same-intent" : "classify",
+        classifyOffset: offset,
+      },
     });
-    if (page.done) break;
-    offset = page.nextOffset;
   }
+
+  const drops = await runSameIntentInMemory(
+    admin,
+    workspaceId,
+    projectId,
+    classified,
+    async (progress) => {
+      await opts.onProgress?.({
+        phase: "same-intent",
+        done: progress.done,
+        total: progress.total,
+        checkpoint: { phase: "same-intent", classifyOffset: offset },
+      });
+    }
+  );
+  await overlayAndPersistKeywordClassifications(admin, workspaceId, projectId, sample, {
+    classified,
+    drops,
+  });
 }

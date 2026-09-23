@@ -1,8 +1,31 @@
 import { createAdminClient } from "@/lib/supabase-admin";
 import { notifyJobEvent } from "./notify";
-import { finishJobRun, loadJobRun } from "./repo";
+import { finishJobRun, loadJobRun, touchJobHeartbeat } from "./repo";
 import { isTerminalJobStatus } from "./types";
 import { recordWorkerHeapBytes } from "@/lib/observability/metrics";
+
+/**
+ * Keeps `heartbeat_at` fresh while one long step runs (a single Gemini call
+ * can take minutes). Without it the sweep treats the job as stale after
+ * JOB_HEARTBEAT_STALE_MINUTES and starts a second worker on the same job.
+ */
+export async function withHeartbeat<T>(
+  jobId: string,
+  fn: () => Promise<T>,
+  everyMs = 60_000
+): Promise<T> {
+  const admin = createAdminClient();
+  const timer = setInterval(() => {
+    void touchJobHeartbeat(admin, jobId).catch((error) =>
+      console.error("[jobs] heartbeat failed", jobId, error)
+    );
+  }, everyMs);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
+}
 
 export async function runJobWithFailureGuard(
   runId: string,

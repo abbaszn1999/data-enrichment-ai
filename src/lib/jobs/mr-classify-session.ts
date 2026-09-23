@@ -1,6 +1,9 @@
 import { createAdminClient } from "@/lib/supabase-admin";
-import { runMrClassifyThenClean } from "@/lib/market-research/classify-page";
-import { runJobWithFailureGuard } from "./guard";
+import {
+  runMrClassifyThenClean,
+  type ClassifyCheckpoint,
+} from "@/lib/market-research/classify-page";
+import { runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
   finishJobRun,
@@ -20,17 +23,28 @@ async function runMrClassifySessionInner(runId: string): Promise<void> {
   if (!job || job.kind !== "mr_classify") return;
   const projectId = String(job.settings.projectId || job.session_id);
   const workspaceId = job.workspace_id;
+  const resume = (job.settings.checkpoint as ClassifyCheckpoint | undefined) ?? null;
   await markJobRunning(admin, job.id);
 
-  await runMrClassifyThenClean(admin, workspaceId, projectId, async (progress) => {
-    if (await isJobCancelRequested(admin, job.id)) {
-      throw new Error("Classification cancelled");
-    }
-    await touchJobHeartbeat(admin, job.id, {
-      completed: progress.done,
-      settings: { ...job.settings, phase: progress.phase, total: progress.total },
-    });
-  });
+  await withHeartbeat(job.id, () =>
+    runMrClassifyThenClean(admin, workspaceId, projectId, {
+      resume,
+      onProgress: async (progress) => {
+        if (await isJobCancelRequested(admin, job.id)) {
+          throw new Error("Classification cancelled");
+        }
+        await touchJobHeartbeat(admin, job.id, {
+          completed: progress.done,
+          settings: {
+            ...job.settings,
+            phase: progress.phase,
+            total: progress.total,
+            checkpoint: progress.checkpoint,
+          },
+        });
+      },
+    })
+  );
 
   const finished = await finishJobRun(admin, job.id, {
     status: "completed",

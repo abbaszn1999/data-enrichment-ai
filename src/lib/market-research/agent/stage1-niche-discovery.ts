@@ -114,6 +114,10 @@ const PASS_A_RESPONSE_SCHEMA = {
   required: ["categories", "agentConclusion"],
 };
 
+const PASS_A_ATTEMPTS = 3;
+/** Pass A runs inside the Tab 1 job, not a web request, so one call can take up to 10 minutes. */
+const PASS_A_TIMEOUT_MS = 600_000;
+
 async function runTaxonomyPassA(params: {
   storeName: string;
   candidates: TaxonomyCandidate[];
@@ -157,14 +161,32 @@ ${JSON.stringify(candidateSummary)}
 
 Propose the full category/subcategory label tree now.`;
 
-  const result = await runGeminiMarketResearch<TaxonomyPassAOutput>({
-    stage: 1,
-    systemInstruction,
-    userPrompt,
-    responseSchema: PASS_A_RESPONSE_SCHEMA,
-  });
-
-  return result.data;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= PASS_A_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await runGeminiMarketResearch<TaxonomyPassAOutput>({
+        stage: 1,
+        systemInstruction,
+        userPrompt,
+        responseSchema: PASS_A_RESPONSE_SCHEMA,
+        timeoutMs: PASS_A_TIMEOUT_MS,
+      });
+      if (Array.isArray(result.data?.categories) && result.data.categories.length > 0) {
+        return result.data;
+      }
+      lastError = new Error("Pass A returned no categories");
+    } catch (err) {
+      lastError = err;
+    }
+    console.error(
+      `[runTaxonomyPassA] attempt ${attempt}/${PASS_A_ATTEMPTS} failed:`,
+      lastError
+    );
+    if (attempt < PASS_A_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Pass A failed");
 }
 
 // ─── Pass B — place a batch of ids onto the fixed tree ────────────────────
@@ -372,6 +394,8 @@ export type Stage1Checkpoint = {
   excluded: ExcludedItem[];
   offset: number;
   agentConclusion: string;
+  /** Job that wrote this checkpoint. A new Analyze job never resumes another job's tree. */
+  jobId?: string;
 };
 
 export async function advanceStage1Discovery(input: {

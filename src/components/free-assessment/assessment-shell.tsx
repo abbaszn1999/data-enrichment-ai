@@ -961,6 +961,17 @@ export function FreeAssessmentShell() {
       pulled: 0,
     }));
     let sample: ExtractedKeyword[] = input.initialSample ?? [];
+    // Safety caps so a stuck billing settlement or an unreachable poll
+    // endpoint can't spin this loop forever in an open tab.
+    let billingPendingAttempts = 0;
+    const MAX_BILLING_PENDING_ATTEMPTS = 60; // 60 * 2s = 2 minutes
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 20; // 20 * 800ms = 16s of unbroken failures
+
+    const giveUp = (message: string) => {
+      setExtracting(false);
+      toast.error("Extract status unknown", { description: message });
+    };
 
     const tick = async () => {
       if (extractGen.current !== input.gen) return;
@@ -976,6 +987,7 @@ export function FreeAssessmentShell() {
           }))
         );
         if (extractGen.current !== input.gen) return;
+        consecutiveFailures = 0;
 
         for (const row of poll.seeds) {
           const local = pollState.find((seed) => seed.id === row.seedId);
@@ -1016,6 +1028,13 @@ export function FreeAssessmentShell() {
 
         if (poll.allDone) {
           if (poll.billingPending) {
+            billingPendingAttempts += 1;
+            if (billingPendingAttempts >= MAX_BILLING_PENDING_ATTEMPTS) {
+              giveUp(
+                "Billing settlement is taking longer than expected. Your keywords are safe — refresh the page in a moment to see the final charge."
+              );
+              return;
+            }
             window.setTimeout(() => {
               void tick();
             }, 2000);
@@ -1045,8 +1064,16 @@ export function FreeAssessmentShell() {
           );
           return;
         }
-      } catch {
+      } catch (err) {
         if (extractGen.current !== input.gen) return;
+        consecutiveFailures += 1;
+        console.error("[runExtractPollLoop] Poll failed:", err);
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          giveUp(
+            "Couldn't reach the extract status endpoint. Your keywords collected so far were kept — refresh the page to check the latest status."
+          );
+          return;
+        }
       }
 
       window.setTimeout(() => {
@@ -1324,6 +1351,9 @@ export function FreeAssessmentShell() {
         });
         if (status.status === "failed") {
           throw new Error(status.error || "Classification failed");
+        }
+        if (status.status === "cancelled") {
+          throw new Error("Classification was cancelled");
         }
         if (!status.pending) break;
       }

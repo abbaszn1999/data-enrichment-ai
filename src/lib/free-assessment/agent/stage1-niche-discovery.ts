@@ -28,12 +28,12 @@ import type {
 } from "./taxonomy-types";
 
 export type Stage1DiscoveryResult = {
-  /** Legacy flattened view — kept so Tab 1/2 and every downstream stage
+  /** Legacy flattened view â€” kept so Tab 1/2 and every downstream stage
    *  keep working unchanged until they read `taxonomy` directly. Built from
    *  `taxonomy` when a fresh discovery ran; only includes each subcategory's
    *  PRIMARY member(s), so it never double-counts an overlap the taxonomy
    *  engine already resolved. Non-primary duplicates and excluded PLPs are
-   *  omitted here (they are not lost — see `taxonomy.assignments`/`excluded`)
+   *  omitted here (they are not lost â€” see `taxonomy.assignments`/`excluded`)
    *  until Tab 1/2 render the tree directly. */
   niches: NicheReading[];
   structuredNiches: MockNiche[];
@@ -42,7 +42,7 @@ export type Stage1DiscoveryResult = {
    *  projects persisted before this rewrite. */
   taxonomy?: TaxonomyTree;
   /** Non-taxonomic PLPs the agent excluded (promotional, attribute-only,
-   *  duplicate, empty, unresolved) — visible in Tab 2, never selectable,
+   *  duplicate, empty, unresolved) â€” visible in Tab 2, never selectable,
    *  zero SKUs. Present alongside `taxonomy` on a fresh Gemini-backed run. */
   excludedItems?: MockExcludedItem[];
   agentConclusion: string;
@@ -81,7 +81,7 @@ function toMockCollection(item: {
   };
 }
 
-// ─── Pass A — propose the category/subcategory label tree ────────────────
+// â”€â”€â”€ Pass A â€” propose the category/subcategory label tree â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const PASS_A_RESPONSE_SCHEMA = {
   type: "object",
@@ -114,6 +114,10 @@ const PASS_A_RESPONSE_SCHEMA = {
   required: ["categories", "agentConclusion"],
 };
 
+const PASS_A_ATTEMPTS = 3;
+/** Pass A runs inside the Tab 1 job, not a web request, so one call can take up to 10 minutes. */
+const PASS_A_TIMEOUT_MS = 600_000;
+
 async function runTaxonomyPassA(params: {
   storeName: string;
   candidates: TaxonomyCandidate[];
@@ -128,14 +132,14 @@ async function runTaxonomyPassA(params: {
     productCount: c.productCount,
   }));
 
-  const systemInstruction = `## Pass A of Stage 1 — propose the label tree only
+  const systemInstruction = `## Pass A of Stage 1 â€” propose the label tree only
 
-You are naming the tree in this call — you are NOT placing any item id yet
+You are naming the tree in this call â€” you are NOT placing any item id yet
 (a separate Pass B call handles that afterwards, batched). Do not output any
 item id here.
 
 Required output language for every "name" and the "agentConclusion":
-"${outputLanguage}" — the same language/script the store's own PLP names use.
+"${outputLanguage}" â€” the same language/script the store's own PLP names use.
 
 Output strictly valid JSON matching this exact schema:
 {
@@ -157,17 +161,35 @@ ${JSON.stringify(candidateSummary)}
 
 Propose the full category/subcategory label tree now.`;
 
-  const result = await runGeminiMarketResearch<TaxonomyPassAOutput>({
-    stage: 1,
-    systemInstruction,
-    userPrompt,
-    responseSchema: PASS_A_RESPONSE_SCHEMA,
-  });
-
-  return result.data;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= PASS_A_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await runGeminiMarketResearch<TaxonomyPassAOutput>({
+        stage: 1,
+        systemInstruction,
+        userPrompt,
+        responseSchema: PASS_A_RESPONSE_SCHEMA,
+        timeoutMs: PASS_A_TIMEOUT_MS,
+      });
+      if (Array.isArray(result.data?.categories) && result.data.categories.length > 0) {
+        return result.data;
+      }
+      lastError = new Error("Pass A returned no categories");
+    } catch (err) {
+      lastError = err;
+    }
+    console.error(
+      `[runTaxonomyPassA] attempt ${attempt}/${PASS_A_ATTEMPTS} failed:`,
+      lastError
+    );
+    if (attempt < PASS_A_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Pass A failed");
 }
 
-// ─── Pass B — place a batch of ids onto the fixed tree ────────────────────
+// â”€â”€â”€ Pass B â€” place a batch of ids onto the fixed tree â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const PASS_B_RESPONSE_SCHEMA = {
   type: "object",
@@ -221,10 +243,10 @@ async function runTaxonomyPassBBatch(params: {
     }))
   );
 
-  const systemInstruction = `## Pass B of Stage 1 — place these items onto the fixed tree
+  const systemInstruction = `## Pass B of Stage 1 â€” place these items onto the fixed tree
 
 The category/subcategory tree below is already final for this store in this
-run — never rename, merge, or invent a category/subcategory here; that
+run â€” never rename, merge, or invent a category/subcategory here; that
 already happened in Pass A. Your only job is to place each candidate id
 below onto exactly one (or, only for a genuine brand+product PLP or a
 confirmed sibling duplicate, exactly two) of these existing subcategory ids,
@@ -234,7 +256,7 @@ Fixed tree (subcategoryId -> category):
 ${JSON.stringify(flatSubcategories)}
 
 For every item id in "Candidates to place" below, output exactly one of:
-- One assignment {"itemId","subcategoryId","primary": true} — the normal case.
+- One assignment {"itemId","subcategoryId","primary": true} â€” the normal case.
 - Two assignments for the same itemId when it is a genuine brand+product PLP
   (e.g. a collection literally named "Nike Shoes"): primary: true under the
   product subcategory, primary: false under the brand subcategory.
@@ -245,7 +267,7 @@ For every item id in "Candidates to place" below, output exactly one of:
   "duplicate", "empty") when the item is not real taxonomic content at all.
 
 Every item id below must appear at least once, in "assignments" or
-"excluded" — never omitted from both. Output language: "${outputLanguage}".
+"excluded" â€” never omitted from both. Output language: "${outputLanguage}".
 
 Output strictly valid JSON:
 { "assignments": [...], "excluded": [...] }`;
@@ -281,7 +303,7 @@ const MAX_BATCH_ATTEMPTS = 2;
  * comes back with missing ids is retried with only those ids; a batch that
  * throws (network/parse failure) is retried in full. Either way, whatever
  * is still missing after `MAX_BATCH_ATTEMPTS` is routed to `unresolved`
- * rather than silently dropped or absorbed into an unrelated category —
+ * rather than silently dropped or absorbed into an unrelated category â€”
  * one failing/slow batch on a large catalog can never take down the whole
  * discovery.
  */
@@ -372,6 +394,8 @@ export type Stage1Checkpoint = {
   excluded: ExcludedItem[];
   offset: number;
   agentConclusion: string;
+  /** Job that wrote this checkpoint. A new Analyze job never resumes another job's tree. */
+  jobId?: string;
 };
 
 export async function advanceStage1Discovery(input: {
@@ -490,7 +514,7 @@ export async function advanceStage1Discovery(input: {
   return { checkpoint, done: true, result };
 }
 
-// ─── Legacy flattened view ────────────────────────────────────────────────
+// â”€â”€â”€ Legacy flattened view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function taxonomyToLegacyNiches(
   taxonomy: TaxonomyTree,
@@ -518,7 +542,7 @@ function taxonomyToLegacyNiches(
     });
 
     // Always the full flattened list, even though `subcategories` above
-    // carries the same PLPs nested — legacy consumers (seed generation, CSV
+    // carries the same PLPs nested â€” legacy consumers (seed generation, CSV
     // export, product counting) only ever look at `collections`.
     const collections: MockCollection[] = subcategories.flatMap(
       (s) => s.collections
@@ -549,7 +573,7 @@ function taxonomyToLegacyNiches(
   return { structuredNiches, nichesReadings, excludedItems };
 }
 
-// ─── Orchestration ─────────────────────────────────────────────────────────
+// â”€â”€â”€ Orchestration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function runStage1NicheDiscovery(input: {
   storeName: string;
@@ -558,7 +582,7 @@ export async function runStage1NicheDiscovery(input: {
    * Every brand/vendor PLP on the store (Shopify `vendor` pages or the
    * WooCommerce brand taxonomy/attribute archives), each already shaped as a
    * full `StoreCollectionItem` with `kind: "brand"` and a real product
-   * count. Merged straight into the working candidate list — a brand is
+   * count. Merged straight into the working candidate list â€” a brand is
    * classified exactly like any other item, never treated as a separate
    * "signal-only" input.
    */
@@ -650,9 +674,9 @@ export async function runStage1NicheDiscovery(input: {
   return runHeuristicStage1Discovery(input);
 }
 
-// ─── Heuristic fallback (no API key / Gemini failure) ─────────────────────
+// â”€â”€â”€ Heuristic fallback (no API key / Gemini failure) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
-// A coarse, name-matching safety net — not held to the same search-language
+// A coarse, name-matching safety net â€” not held to the same search-language
 // bar as the Gemini-backed path above. It only needs to keep the pipeline
 // usable when the model is unavailable.
 
@@ -746,7 +770,7 @@ export function runHeuristicStage1Discovery(input: {
   const groupKeyById = new Map<string, string>();
 
   // A subcategory (depth > 0) must land in the same group as its top-level
-  // ancestor — classifying "Board Games" and "Strategy Games" independently
+  // ancestor â€” classifying "Board Games" and "Strategy Games" independently
   // by name would otherwise fragment one WooCommerce category tree into two
   // unrelated niches. Shopify collections have no parentId, so they always
   // fall straight through to name-based classification below. Brand PLPs
@@ -787,7 +811,7 @@ export function runHeuristicStage1Discovery(input: {
   }
 
   // Without an LLM there is no reliable way to look up what a brand name
-  // commercially sells — "Ray-Ban" gives a keyword-matcher nothing to key
+  // commercially sells â€” "Ray-Ban" gives a keyword-matcher nothing to key
   // off. Every brand PLP is routed into the store's single largest/most
   // dominant niche group instead of guessing, mirroring the skill's rule for
   // any item that resolves nowhere else. A single-niche store makes this

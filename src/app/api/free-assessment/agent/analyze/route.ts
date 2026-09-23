@@ -127,6 +127,15 @@ export async function POST(request: NextRequest) {
 
     const { insertJobRun } = await import("@/lib/jobs/repo");
     const { dispatchJob } = await import("@/lib/jobs/dispatch");
+    const { removeProjectSliceAdmin } = await import("@/lib/free-assessment/storage-admin");
+    // A new Analyze builds a new tree. The session also refuses a checkpoint
+    // written by another job, so a failed delete cannot reuse the old tree.
+    await removeProjectSliceAdmin(
+      auth.admin,
+      parsed.data.workspaceId,
+      parsed.data.projectId,
+      "stage1-job"
+    ).catch((err) => console.error("[fa-analyze] Failed to clear Tab 1 checkpoint:", err));
     const job = await insertJobRun(auth.admin, {
       workspaceId: parsed.data.workspaceId,
       kind: "fa_stage1",

@@ -49,6 +49,89 @@ function fingerprintOf(payload: unknown): string {
   return `${json.length.toString(36)}-${h1.toString(36)}-${h2.toString(36)}`;
 }
 
+/**
+ * Records a slice the server just wrote, so the next client autosave sees
+ * the fingerprint as unchanged and does not overwrite it with an older copy.
+ */
+export async function markSliceSavedAdmin(
+  admin: PersistAdmin,
+  projectId: string,
+  sliceName: FaSliceName,
+  payload: unknown
+): Promise<void> {
+  try {
+    const { data: row } = await admin
+      .from("fa_projects")
+      .select("state")
+      .eq("id", projectId)
+      .maybeSingle();
+    const state: FaProjectStateJson =
+      row?.state && typeof row.state === "object"
+        ? (row.state as FaProjectStateJson)
+        : {};
+    const sliceHashes = {
+      ...(state.sliceHashes ?? {}),
+      [sliceName]: fingerprintOf(payload),
+    };
+    const { error } = await admin
+      .from("fa_projects")
+      .update({ state: { ...state, sliceHashes } })
+      .eq("id", projectId);
+    if (error) throw error;
+  } catch (err) {
+    console.error(
+      `[markSliceSavedAdmin] Failed to record ${sliceName} fingerprint for project ${projectId}:`,
+      err
+    );
+  }
+}
+
+/**
+ * Saves demand-check results on the project from the server, so extract/start
+ * can price the hold from what Apify actually returned instead of the
+ * estimate the browser sends.
+ */
+export async function mergeProjectProbesAdmin(
+  admin: PersistAdmin,
+  projectId: string,
+  probes: Record<string, SeedProbe>
+): Promise<void> {
+  if (Object.keys(probes).length === 0) return;
+  try {
+    const { data: row } = await admin
+      .from("fa_projects")
+      .select("state")
+      .eq("id", projectId)
+      .maybeSingle();
+    const state: FaProjectStateJson =
+      row?.state && typeof row.state === "object"
+        ? (row.state as FaProjectStateJson)
+        : {};
+    const { error } = await admin
+      .from("fa_projects")
+      .update({ state: { ...state, probes: { ...(state.probes ?? {}), ...probes } } })
+      .eq("id", projectId);
+    if (error) throw error;
+  } catch (err) {
+    console.error(`[mergeProjectProbesAdmin] Failed to save probes for ${projectId}:`, err);
+  }
+}
+
+/** Demand-check results saved on the project, keyed by seed id. */
+export async function loadProjectProbesAdmin(
+  admin: PersistAdmin,
+  projectId: string
+): Promise<Record<string, SeedProbe>> {
+  const { data: row } = await admin
+    .from("fa_projects")
+    .select("state")
+    .eq("id", projectId)
+    .maybeSingle();
+  const state =
+    row?.state && typeof row.state === "object" ? (row.state as FaProjectStateJson) : {};
+  return (state.probes as Record<string, SeedProbe> | undefined) ?? {};
+}
+
 type NichesSlicePayload = {
   niches: NicheReading[];
   structuredNiches: MockNiche[];

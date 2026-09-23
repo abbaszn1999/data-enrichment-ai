@@ -131,17 +131,42 @@ export async function POST(request: NextRequest) {
   }
   const integration = integrationRow as IntegrationRecord;
 
+  // A collection that already has a store id was created on an earlier push.
+  // Creating it again would put a second copy on the store and charge again.
+  const alreadyPushedIds = ids.filter((id) => {
+    const col = collectionById.get(id);
+    return Boolean(col?.storeHandle || col?.storeCollectionId);
+  });
+  const toPush = ids.filter((id) => !alreadyPushedIds.includes(id));
+  if (toPush.length === 0) {
+    return NextResponse.json(
+      {
+        ok: true,
+        duplicate: false,
+        chargedUsd: 0,
+        refundedUsd: 0,
+        remaining: undefined,
+        pushedCount: 0,
+        failedCount: 0,
+        pushedIds: alreadyPushedIds,
+        alreadyPushedIds,
+        storeResults: [],
+      },
+      { headers: auth.headers }
+    );
+  }
+
   // Validation passed — hold the full amount. Any failed creates below are
   // refunded once we know the real outcome, so the customer is only ever
   // charged for collections that actually landed on their store.
-  const amountUsd = collectionPushCostUsd(ids.length);
+  const amountUsd = collectionPushCostUsd(toPush.length);
   const charged = await chargeMrWallet(auth.admin, {
     workspaceId: parsed.data.workspaceId,
     userId: auth.user.id,
     amountUsd,
-    description: `Push ${ids.length} collection${ids.length === 1 ? "" : "s"}`,
-    idempotencyKey: `collection_push:hold:${parsed.data.projectId}:${ids.join(",")}`,
-    details: { projectId: parsed.data.projectId, collectionIds: ids },
+    description: `Push ${toPush.length} collection${toPush.length === 1 ? "" : "s"}`,
+    idempotencyKey: `collection_push:hold:${parsed.data.projectId}:${toPush.join(",")}`,
+    details: { projectId: parsed.data.projectId, collectionIds: toPush },
   });
 
   if (!charged.ok) {
@@ -162,8 +187,8 @@ export async function POST(request: NextRequest) {
     error?: string;
   }> = [];
 
-  for (let i = 0; i < ids.length; i += 1) {
-    const colId = ids[i]!;
+  for (let i = 0; i < toPush.length; i += 1) {
+    const colId = toPush[i]!;
     if (i > 0) {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
@@ -234,10 +259,22 @@ export async function POST(request: NextRequest) {
               productIds: wooProductIds,
             });
           } catch (assignErr) {
+            // A category with none of its products is not a delivered
+            // collection: report it failed so it is refunded, not charged.
+            const msg =
+              assignErr instanceof Error ? assignErr.message : "Product assignment failed";
             console.error(
               `[push] WooCommerce category "${storeTitle}" created but product assignment failed:`,
               assignErr
             );
+            createdStoreResults.push({
+              id: colId,
+              name: colName,
+              storeTitle,
+              success: false,
+              error: `Category created without products: ${msg}`,
+            });
+            continue;
           }
         }
         createdStoreResults.push({
@@ -326,7 +363,8 @@ export async function POST(request: NextRequest) {
       remaining,
       pushedCount: successResults.length,
       failedCount: failedResults.length,
-      pushedIds: successResults.map((r) => r.id),
+      pushedIds: [...alreadyPushedIds, ...successResults.map((r) => r.id)],
+      alreadyPushedIds,
       storeResults: createdStoreResults,
     },
     { headers: auth.headers }

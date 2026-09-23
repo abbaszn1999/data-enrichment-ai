@@ -404,17 +404,19 @@ export async function overlayAndPersistKeywordClassifications(
   admin: Admin,
   workspaceId: string,
   projectId: string,
-  sample: DisplayKeyword[]
+  sample: DisplayKeyword[],
+  known?: {
+    classified?: Awaited<ReturnType<typeof loadClassifiedItemsAdmin>>;
+    drops?: Awaited<ReturnType<typeof loadSameIntentDrops>>;
+  }
 ): Promise<DisplayKeyword[]> {
   if (sample.length === 0) return sample;
-  const classified = await loadClassifiedItemsAdmin(
-    admin,
-    workspaceId,
-    projectId
-  ).catch(() => []);
-  const drops = await loadSameIntentDrops(admin, workspaceId, projectId).catch(
-    () => []
-  );
+  const classified =
+    known?.classified ??
+    (await loadClassifiedItemsAdmin(admin, workspaceId, projectId).catch(() => []));
+  const drops =
+    known?.drops ??
+    (await loadSameIntentDrops(admin, workspaceId, projectId).catch(() => []));
   const classifiedNext =
     classified.length === 0
       ? sample

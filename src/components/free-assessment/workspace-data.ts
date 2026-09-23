@@ -298,6 +298,40 @@ export const DEFAULT_FILTERS: KeywordFilters = {
   maxWordCount: 12,
 };
 
+/**
+ * Keeps filters inside the allowed range: volume at least 1, KD at most 50,
+ * word count from 2 up to 12 with "to" never below "from". Same rules as
+ * Growth Engine.
+ */
+export function normalizeKeywordFilters(raw: unknown): KeywordFilters {
+  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const minVolume = Number(value.minVolume);
+  const maxKd = Number(value.maxKd);
+  const minWordCount = Number(value.minWordCount);
+  const maxWordCount = Number(value.maxWordCount);
+  const safeMinWordCount = Number.isFinite(minWordCount)
+    ? Math.max(DEFAULT_FILTERS.minWordCount, Math.floor(minWordCount))
+    : DEFAULT_FILTERS.minWordCount;
+  const safeMaxWordCount = Number.isFinite(maxWordCount)
+    ? Math.min(
+        DEFAULT_FILTERS.maxWordCount,
+        Math.max(safeMinWordCount, Math.floor(maxWordCount))
+      )
+    : DEFAULT_FILTERS.maxWordCount;
+  return {
+    minVolume:
+      Number.isFinite(minVolume) && minVolume > 0
+        ? Math.max(DEFAULT_FILTERS.minVolume, Math.floor(minVolume))
+        : DEFAULT_FILTERS.minVolume,
+    maxKd: Number.isFinite(maxKd)
+      ? Math.min(DEFAULT_FILTERS.maxKd, Math.max(0, Math.floor(maxKd)))
+      : DEFAULT_FILTERS.maxKd,
+    questionsOnly: value.questionsOnly === true,
+    minWordCount: safeMinWordCount,
+    maxWordCount: safeMaxWordCount,
+  };
+}
+
 function hash(value: string): number {
   let h = 0;
   for (let i = 0; i < value.length; i += 1) {
@@ -429,9 +463,10 @@ export function keywordsFromSeeds(
 
 export function filterKeywords(
   rows: ExtractedKeyword[],
-  filters: KeywordFilters,
+  rawFilters: KeywordFilters,
   sheet?: KeywordSheet
 ): ExtractedKeyword[] {
+  const filters = normalizeKeywordFilters(rawFilters);
   return rows.filter((row) => {
     if (sheet && row.sheet !== sheet) return false;
     if (sheet === "category" && row.sameIntentOf) return false;

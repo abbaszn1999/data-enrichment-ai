@@ -10,7 +10,8 @@ import { normalizeSeedTerm } from "./keyword-provider";
 import type { SeedMetrics } from "./keyword-provider";
 import { parseSeedMetricsItem } from "./parse-seed-metrics";
 
-const PROBE_BUDGET_MS = 180_000;
+/** Leaves time inside the 180s probe route to page the dataset after the run finishes. */
+const PROBE_BUDGET_MS = 170_000;
 const POLL_MS = 2_000;
 const MAX_SEEDS = 100;
 
@@ -79,22 +80,12 @@ export async function fetchApifySeedMetrics(
     bySeed.set(parsed.seed.toLowerCase(), parsed);
   }
 
-  return unique.map((seed) => {
+  // A seed Apify returned no row for is left out, so the caller reports it
+  // as failed and does not charge for it, instead of a zero-demand result.
+  const found: SeedMetrics[] = [];
+  for (const seed of unique) {
     const existing = bySeed.get(seed.toLowerCase());
-    if (existing) return { ...existing, seed };
-    return {
-      seed,
-      database,
-      volume: 0,
-      cpcUsd: 0,
-      keywordDifficulty: 0,
-      competition: 0,
-      intents: [],
-      trend12m: [],
-      keywordIdeasTotal: 0,
-      keywordIdeasTotalVolume: 0,
-      relatedKeywords: [],
-      questions: [],
-    };
-  });
+    if (existing) found.push({ ...existing, seed });
+  }
+  return found;
 }

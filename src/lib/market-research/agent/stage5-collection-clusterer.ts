@@ -178,7 +178,8 @@ export function scoreCollectionAgainstIndex(
   collectionName: string,
   targetKeyword: string,
   index: ProductTermVector[],
-  minCosineThreshold = 0.01
+  minCosineThreshold = 0.01,
+  topCap = 200
 ): CollectionProductMatch[] {
   const queryText = `${collectionName} ${targetKeyword}`;
   const queryTokens = tokenize(queryText);
@@ -216,7 +217,7 @@ export function scoreCollectionAgainstIndex(
     }
   }
   candidates.sort((a, b) => b.score - a.score);
-  return candidates;
+  return candidates.slice(0, topCap);
 }
 
 /**
@@ -501,10 +502,9 @@ ${JSON.stringify(batch, null, 2)}`;
     keywordChunks,
     async (batch) => {
       const data = await askExclusion(batch);
-      let { accepted, missingKeywordIds } = acceptCollectionExclusions(
-        batch,
-        data?.collections
-      );
+      const firstPass = acceptCollectionExclusions(batch, data?.collections);
+      const accepted = firstPass.accepted;
+      let missingKeywordIds = firstPass.missingKeywordIds;
       if (missingKeywordIds.length > 0) {
         const missing = batch.filter((piece) =>
           missingKeywordIds.includes(piece.keywordId)

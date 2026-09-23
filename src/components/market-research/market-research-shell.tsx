@@ -2712,6 +2712,9 @@ export function MarketResearchShell() {
         if (status.status === "failed") {
           throw new Error(status.error || "Classification failed");
         }
+        if (status.status === "cancelled") {
+          throw new Error("Classification was cancelled");
+        }
         if (!status.pending) break;
       }
 
@@ -2873,11 +2876,19 @@ export function MarketResearchShell() {
         if (!statusRes.ok) throw new Error("Could not read collection matching progress");
         const status = (await statusRes.json()) as {
           pending: boolean;
+          status: string;
           done: number;
           total: number;
+          error?: string | null;
         };
         if (clusterGen.current !== gen) return;
         setClusterProgress({ processed: status.done, total: Math.max(status.total, 1) });
+        if (status.status === "failed") {
+          throw new Error(status.error || "Collection matching failed");
+        }
+        if (status.status === "cancelled") {
+          throw new Error("Collection matching was cancelled");
+        }
         if (!status.pending) break;
       }
       let collections: ProposedCollection[] = [];
@@ -2898,33 +2909,18 @@ export function MarketResearchShell() {
         [projectId]: collections.map((collection) => collection.id),
       }));
 
-      // Stage 5 Phase 3 — one extra pass, still inside the same loading
-      // state, that flags any of the collections just proposed above whose
-      // shopper-intent coverage duplicates something already live in the
-      // merchant's store. Never blocks or fails the tab, but a failed check
-      // is never silently treated as "cleared" either — those collections
-      // come back stamped dedupeCheckStatus "unknown" and publish is
-      // blocked server-side until the merchant retries.
-      try {
-        const dedupeResult = await dedupeCollectionsApi(workspaceId, projectId);
-        if (clusterGen.current !== gen) return;
-        if (dedupeResult.collections.length > 0) {
-          setProposedCollectionsByProject((prev) => ({
-            ...prev,
-            [projectId]: dedupeResult.collections,
-          }));
-        }
-        if (dedupeResult.dedupeCheckFailed) {
-          toast.warning("Couldn't fully verify duplicates", {
-            description:
-              "The live catalog or AI comparison failed for some collections. They won't be publishable until you retry the duplicate check.",
-          });
-        }
-      } catch (dedupeErr) {
-        console.error("[handleNextCollections] Duplicate-collection check failed:", dedupeErr);
-        toast.warning("Couldn't verify duplicates", {
+      // The collections job runs the live-store duplicate check as its last
+      // step. A failed check stamps "new" collections "unknown", and push is
+      // blocked server-side until Recheck clears them.
+      if (
+        collections.some(
+          (collection) =>
+            collection.status !== "duplicate" && collection.dedupeCheckStatus === "unknown"
+        )
+      ) {
+        toast.warning("Couldn't fully verify duplicates", {
           description:
-            "The duplicate check request failed. Please retry it from Tab 5 before publishing.",
+            "The live catalog or AI comparison failed for some collections. They won't be publishable until you retry the duplicate check.",
         });
       }
       void hydrateProjectProducts(projectId, true);
