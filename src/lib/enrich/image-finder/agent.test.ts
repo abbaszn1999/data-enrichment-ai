@@ -100,7 +100,7 @@ describe("Image Finder agent", () => {
     // wider search pool above.
     expect(request.text.format.schema.properties.imageUrls.maxItems).toBe(2);
     const prompt = request.input[0].content.at(-1).text as string;
-    expect(prompt).toContain('- Brand (column "Brand"): Acme');
+    expect(prompt).toContain("- Brand: Acme");
     expect(prompt).toContain(
       "## Custom instruction (store owner, highest priority)\nFront view first"
     );

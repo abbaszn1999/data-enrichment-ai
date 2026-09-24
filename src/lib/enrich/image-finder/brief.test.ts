@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildImageFinderBrief, clampImageCount } from "./brief";
 
 describe("buildImageFinderBrief", () => {
-  it("puts identity fields first, then context, reference, count and instruction", () => {
+  it("lists every column flat, in sheet order, with no identity/other split", () => {
     const brief = buildImageFinderBrief({
       rowData: {
         Description: "<p>Lightweight <b>running</b> shoe</p>",
@@ -21,8 +21,7 @@ describe("buildImageFinderBrief", () => {
     });
 
     const order = [
-      "## Product identity",
-      "## Other product data",
+      "## Product data",
       "## Reference image",
       "## Number of images",
       "## Custom instruction",
@@ -30,24 +29,32 @@ describe("buildImageFinderBrief", () => {
     expect(order.every((index) => index >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
 
-    expect(brief.text).toContain('- Brand (column "Vendor"): Nike');
-    expect(brief.text).toContain('- Model / MPN (column "MPN"): FD2722-600');
-    expect(brief.text).toContain('- SKU (column "Variant SKU"): NK-123-RED-42');
-    expect(brief.text).toContain(
-      '- Barcode (GTIN / EAN / UPC) (column "Barcode"): 0196975123456'
-    );
-    expect(brief.text).toContain('- Title (column "Title"): Air Zoom Pegasus 41');
-    expect(brief.text).toContain('- Category (column "Product Type"): Running Shoes');
-    expect(brief.text).toContain(
-      '- Variant: column "Option1 Value": Red; column "Size": 42'
-    );
+    // No categorization: every non-image column appears as its own plain
+    // line under its own column name, in the sheet's own order, with no
+    // "Brand" / "SKU" relabeling and no separate Variant section.
+    expect(brief.text).not.toContain("## Product identity");
+    expect(brief.text).not.toContain("## Other product data");
+    expect(brief.text).not.toContain("- Variant:");
+    expect(brief.text).toContain("- Vendor: Nike");
+    expect(brief.text).toContain("- Variant SKU: NK-123-RED-42");
+    expect(brief.text).toContain("- Title: Air Zoom Pegasus 41");
+    expect(brief.text).toContain("- Product Type: Running Shoes");
+    expect(brief.text).toContain("- Option1 Value: Red");
+    expect(brief.text).toContain("- Size: 42");
+    expect(brief.text).toContain("- MPN: FD2722-600");
+    expect(brief.text).toContain("- Barcode: 0196975123456");
     expect(brief.text).toContain("- Description: Lightweight running shoe");
+
+    const fieldOrder = ["Description", "Vendor", "Variant SKU", "Title", "Product Type"].map(
+      (key) => brief.text.indexOf(`- ${key}:`)
+    );
+    expect([...fieldOrder].sort((a, b) => a - b)).toEqual(fieldOrder);
+
     expect(brief.text).toContain("1 reference image is attached");
     expect(brief.text).toContain("Return up to 4 images of this exact product.");
     expect(brief.text).toContain(
       "## Custom instruction (store owner, highest priority)\nWhite background, front view first"
     );
-    expect(brief.text).not.toContain("## Website rules");
     expect(brief.text).not.toContain("https://cdn.example.com/pegasus.jpg");
     expect(brief.referenceImageUrls).toEqual(["https://cdn.example.com/pegasus.jpg"]);
     expect(brief.imageCount).toBe(4);
@@ -63,18 +70,14 @@ describe("buildImageFinderBrief", () => {
     expect(brief.text).toContain("None attached.");
   });
 
-  it("falls back to context when no identity column is recognised", () => {
-    const brief = buildImageFinderBrief({ rowData: { __EMPTY_2: "Blue kettle 1.7L" } });
-    expect(brief.text).toContain("No identity fields were detected");
-    expect(brief.text).toContain("- Col 2: Blue kettle 1.7L");
+  it("falls back to a placeholder line when there is no usable product data", () => {
+    const brief = buildImageFinderBrief({ rowData: { Empty: "" } });
+    expect(brief.text).toContain("No usable product data was provided.");
   });
 
-  it("prefers the original title over an AI-enhanced title", () => {
-    const brief = buildImageFinderBrief({
-      rowData: { enhancedTitle: "Nice Widget Pro", Title: "Widget WX-1" },
-    });
-    expect(brief.text).toContain('- Title (column "Title"): Widget WX-1');
-    expect(brief.text).toContain("- enhancedTitle: Nice Widget Pro");
+  it("keeps __EMPTY-style column names readable", () => {
+    const brief = buildImageFinderBrief({ rowData: { __EMPTY_2: "Blue kettle 1.7L" } });
+    expect(brief.text).toContain("- Col 2: Blue kettle 1.7L");
   });
 
   it("adds enforced website rules after the custom instruction", () => {

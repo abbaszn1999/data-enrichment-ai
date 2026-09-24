@@ -46,7 +46,7 @@ function imageFinderSchema(imageCount: number): Record<string, unknown> {
       notes: {
         type: "string",
         description:
-          "One or two short sentences: which identifiers were trusted, which were set aside as unreliable and why, and why any candidates were rejected or the list is shorter than requested.",
+          "One or two short sentences: which identifiers were trusted or set aside and why, which sources were confirmed, and why any candidates were rejected or the list is shorter than requested.",
       },
     },
     required: [IMAGE_COLUMN_ID, "notes"],
