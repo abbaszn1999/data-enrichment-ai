@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { calculateOpenAiWebSearchCost, costToCredits } from "@/lib/ai-pricing";
-import { EnrichBilledAttemptError } from "@/lib/enrich/openai";
+import { EnrichBilledAttemptError, EnrichCancelledError } from "@/lib/enrich/openai";
 import type { ProjectRow } from "@/lib/storage-helpers";
 import type { CatalogJobSettings } from "./types";
 
@@ -100,6 +100,30 @@ describe("processCatalogRow billing", () => {
     const outcome = await run();
     expect(outcome.ok).toBe(false);
     expect("credits" in outcome).toBe(false);
-    expect(enrichRowMock).toHaveBeenCalledTimes(3);
+    // JOB_ROW_ATTEMPTS is 2, not 3 — a single call can now run up to
+    // ENRICH_CALL_TIMEOUT_MS, so fewer full attempts fit the row's time budget.
+    expect(enrichRowMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops immediately on cancellation — no retry, not charged, even if an earlier attempt was billed", async () => {
+    enrichRowMock.mockRejectedValueOnce(
+      new EnrichCancelledError("Cancelled by user", [billedCall])
+    );
+    const outcome = await run();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.cancelled).toBe(true);
+    expect("credits" in outcome).toBe(false);
+    // Never retried after a cancel, even though JOB_ROW_ATTEMPTS allows more.
+    expect(enrichRowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes shouldCancel through to enrichRow", async () => {
+    const shouldCancel = async () => false;
+    enrichRowMock.mockResolvedValueOnce({ data: { imageUrls: [] }, costs: [billedCall] });
+    await processCatalogRow({ sessionId: "s", workspaceId: "w", row, settings, shouldCancel });
+    expect(enrichRowMock).toHaveBeenCalledWith(
+      expect.objectContaining({ shouldCancel })
+    );
   });
 });

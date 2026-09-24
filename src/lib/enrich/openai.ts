@@ -5,6 +5,7 @@ import {
   resolveEnrichReasoningEffort,
   resolveEnrichSearchContextSize,
   type EnrichOpenAiModelId,
+  type EnrichReasoningEffort,
 } from "./models";
 import type { EnrichToolPolicy } from "./policy";
 import type {
@@ -22,6 +23,17 @@ import {
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
 /**
+ * Ceiling on a single OpenAI call. Raised from the previous 180s because Stop
+ * now aborts an in-flight call directly (see `shouldCancel` below) instead of
+ * only blocking new rows — a longer ceiling no longer means a longer stuck
+ * wait after the user clicks Stop.
+ */
+export const ENRICH_CALL_TIMEOUT_MS = 240_000;
+
+/** How often an in-flight call re-checks `shouldCancel` while waiting on OpenAI. */
+const CANCEL_POLL_MS = 5_000;
+
+/**
  * An attempt that OpenAI billed (the response carried `usage`) but whose
  * result could not be used. Callers that retry add `costs` to the row total.
  */
@@ -36,7 +48,31 @@ export class EnrichBilledAttemptError extends Error {
 }
 
 export function billedCostsOf(error: unknown): AiCallCost[] {
-  return error instanceof EnrichBilledAttemptError ? error.costs : [];
+  if (error instanceof EnrichBilledAttemptError) return error.costs;
+  if (error instanceof EnrichCancelledError) return error.costs;
+  return [];
+}
+
+/**
+ * The user clicked Stop while this call was in flight. The cancelled attempt
+ * itself is never billed (OpenAI never returned a response for it), but an
+ * earlier attempt on the same row may have been billed before the cancel —
+ * `costs` carries that forward so the row is still charged for what OpenAI
+ * actually billed. Callers must not retry this: retrying after a
+ * user-requested stop would defeat the point of Stop.
+ */
+export class EnrichCancelledError extends Error {
+  readonly costs: AiCallCost[];
+
+  constructor(message = "Cancelled by user", costs: AiCallCost[] = []) {
+    super(message);
+    this.name = "EnrichCancelledError";
+    this.costs = costs;
+  }
+}
+
+export function isEnrichCancelledError(error: unknown): boolean {
+  return error instanceof EnrichCancelledError;
 }
 
 export type EnrichResponseParser = (input: {
@@ -118,6 +154,25 @@ export async function runEnrichOpenAiResponse(params: {
    * don't set this keep today's exact behavior.
    */
   imageSearchPoolSize?: number;
+  /**
+   * Overrides the tier's default reasoning effort (e.g. "xhigh" for a deeper,
+   * slower search than the shared "high" ceiling). Only pass this for agents
+   * that specifically need it — it is not the shared per-tier default.
+   */
+  reasoningEffortOverride?: EnrichReasoningEffort | "xhigh" | "max";
+  /**
+   * Sets `web_search.return_token_budget: "unlimited"` so a many-page search
+   * is not cut off by the standard returned-token cap. Costs more and is
+   * slower — only set this for agents that specifically need deep research.
+   */
+  unlimitedSearchContentBudget?: boolean;
+  /**
+   * Polled every few seconds while the call is in flight. Returning true
+   * aborts the in-flight OpenAI request immediately (not billed) instead of
+   * waiting for it to finish naturally — this is what makes Stop actually
+   * stop instead of only blocking rows that have not started yet.
+   */
+  shouldCancel?: () => Promise<boolean>;
 }): Promise<{
   data: Record<string, unknown>;
   /** Every billed call for this result, including a failed first attempt. */
@@ -127,7 +182,7 @@ export async function runEnrichOpenAiResponse(params: {
 }> {
   const apiKey = requireOpenAiApiKey();
   const model = resolveEnrichOpenAiModel(params.tier);
-  const reasoningEffort = resolveEnrichReasoningEffort(params.tier);
+  const reasoningEffort = params.reasoningEffortOverride ?? resolveEnrichReasoningEffort(params.tier);
   const searchContextSize = resolveEnrichSearchContextSize(params.tier);
 
   const webSearchTool: Record<string, unknown> = {
@@ -135,6 +190,9 @@ export async function runEnrichOpenAiResponse(params: {
     search_context_size: searchContextSize,
     external_web_access: true,
   };
+  if (params.unlimitedSearchContentBudget) {
+    webSearchTool.return_token_budget = "unlimited";
+  }
 
   if (params.policy.searchContentTypes.includes("image")) {
     webSearchTool.search_content_types = params.policy.searchContentTypes;
@@ -160,6 +218,10 @@ export async function runEnrichOpenAiResponse(params: {
   if (params.policy.includeResults) include.push("web_search_call.results");
   if (params.policy.includeSources) include.push("web_search_call.action.sources");
 
+  // Shared by every attempt this call makes (fallback retries below reuse it),
+  // so one user Stop click cancels all of them, not just the first.
+  let cancelledByUser = false;
+
   const postOnce = async (imageUrls: string[], withFilters: boolean) => {
     const tool = withFilters ? { ...webSearchTool, filters } : webSearchTool;
     const content: Array<Record<string, unknown>> = [
@@ -179,32 +241,61 @@ export async function runEnrichOpenAiResponse(params: {
       domainFilters: withFilters ? filters : undefined,
     });
 
-    const response = await fetch(OPENAI_RESPONSES_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        ...(params.instructions ? { instructions: params.instructions } : {}),
-        reasoning: { effort: reasoningEffort },
-        tools: [tool],
-        tool_choice: params.policy.toolChoice,
-        ...(include.length > 0 ? { include } : {}),
-        input: [{ role: "user", content }],
-        text: {
-          format: {
-            type: "json_schema",
-            name: params.schemaName,
-            strict: true,
-            schema: params.schema,
-          },
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(new Error("timeout")),
+      ENRICH_CALL_TIMEOUT_MS
+    );
+    const pollId = params.shouldCancel
+      ? setInterval(() => {
+          void params.shouldCancel!().then((cancelled) => {
+            if (!cancelled) return;
+            cancelledByUser = true;
+            controller.abort(new Error("cancelled"));
+          });
+        }, CANCEL_POLL_MS)
+      : undefined;
+
+    let response: Response;
+    try {
+      response = await fetch(OPENAI_RESPONSES_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
         },
-        store: true,
-      }),
-      signal: AbortSignal.timeout(180_000),
-    });
+        body: JSON.stringify({
+          model,
+          ...(params.instructions ? { instructions: params.instructions } : {}),
+          reasoning: { effort: reasoningEffort },
+          tools: [tool],
+          tool_choice: params.policy.toolChoice,
+          ...(include.length > 0 ? { include } : {}),
+          input: [{ role: "user", content }],
+          text: {
+            format: {
+              type: "json_schema",
+              name: params.schemaName,
+              strict: true,
+              schema: params.schema,
+            },
+          },
+          store: true,
+        }),
+        signal: controller.signal,
+      });
+    } catch (fetchError) {
+      // The abort itself is what makes the fetch reject — catch it here (not
+      // after, since a rejected fetch never reaches the line below) and only
+      // convert it when the user actually caused it; a timeout abort keeps
+      // its original error so existing timeout handling is unaffected.
+      if (cancelledByUser) throw new EnrichCancelledError();
+      throw fetchError;
+    } finally {
+      clearTimeout(timeoutId);
+      if (pollId) clearInterval(pollId);
+    }
+    if (cancelledByUser) throw new EnrichCancelledError();
 
     const rawText = await response.text();
     let body: OpenAiResponse;
@@ -279,6 +370,12 @@ export async function runEnrichOpenAiResponse(params: {
       const result = await postOnce(imageUrls, withFilters);
       return { ...result, costs: [...priorCosts, ...result.costs] };
     } catch (error) {
+      // A user Stop click always wins — never retried, never billed for the
+      // cancelled attempt itself, but any earlier billed attempt's cost on
+      // this same row still reaches the caller.
+      if (isEnrichCancelledError(error)) {
+        throw new EnrichCancelledError((error as Error).message, priorCosts);
+      }
       const message = error instanceof Error ? error.message : String(error);
       priorCosts.push(...billedCostsOf(error));
       if (inputImageParts(imageUrls).length > 0 && isOpenAiInputImageDownloadError(message)) {

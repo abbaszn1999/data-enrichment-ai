@@ -4,7 +4,7 @@ import {
   resolveEnrichOpenAiModel,
   type EnrichSettings,
 } from "@/lib/enrich";
-import { billedCostsOf } from "@/lib/enrich/openai";
+import { billedCostsOf, isEnrichCancelledError } from "@/lib/enrich/openai";
 import {
   resolveEnrichmentModel,
   type CategoryItem,
@@ -16,7 +16,7 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { deductCreditsIdempotent, isInsufficientCredits } from "./credits";
 import { JOB_ROW_ATTEMPTS } from "./config";
 import { loadProjectJsonAdmin } from "./project-json";
-import { loadJobRun } from "./repo";
+import { isJobCancelRequested, loadJobRun } from "./repo";
 import type { CatalogJobSettings } from "./types";
 import type { ProjectRow } from "@/lib/storage-helpers";
 
@@ -39,6 +39,8 @@ export type EnrichRowOutcome =
       rowId: string;
       error: string;
       noCredits?: boolean;
+      /** Stopped by the user mid-call, not a real failure — don't mark the row done. */
+      cancelled?: boolean;
     };
 
 export function catalogCreditIdempotencyKey(runId: string, rowId: string): string {
@@ -99,6 +101,7 @@ export async function processCatalogRow(params: {
   workspaceId: string;
   row: ProjectRow;
   settings: CatalogJobSettings;
+  shouldCancel?: () => Promise<boolean>;
 }): Promise<EnrichRowOutcome> {
   const { row, settings } = params;
   const enrichSettings: EnrichSettings = {
@@ -139,6 +142,7 @@ export async function processCatalogRow(params: {
         cmsType: settings.cmsType,
         workspaceCategories: settings.workspaceCategories as CategoryItem[] | undefined,
         categoriesRawRows: settings.categoriesRawRows,
+        shouldCancel: params.shouldCancel,
       });
       const billed = [...failedAttemptCosts, ...enriched.costs];
       const costs = sumCosts(billed);
@@ -153,6 +157,11 @@ export async function processCatalogRow(params: {
         billedAttempts: billed.length,
       };
     } catch (error) {
+      // Stop wins immediately — no retry, and (like any row that never
+      // succeeds) not charged, even if an attempt along the way was billed.
+      if (isEnrichCancelledError(error)) {
+        return { ok: false, rowId: row.id, error: "Cancelled by user", cancelled: true };
+      }
       failedAttemptCosts.push(...billedCostsOf(error));
       lastError = error instanceof Error ? error.message : "Enrichment failed";
       if (attempt < JOB_ROW_ATTEMPTS) {
@@ -233,5 +242,8 @@ export async function executeCatalogRow(
     workspaceId: run.workspace_id,
     row,
     settings,
+    // Each row runs as its own Render task, so it needs its own poll rather
+    // than sharing the session worker's in-memory check.
+    shouldCancel: () => isJobCancelRequested(admin, run.id),
   });
 }

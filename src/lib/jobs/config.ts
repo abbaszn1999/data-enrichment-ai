@@ -6,7 +6,13 @@
  * build minutes is the bottleneck.
  */
 export const JOB_BATCH_SIZE = 8;
-export const JOB_ROW_ATTEMPTS = 3;
+/**
+ * 2, not 3: a single OpenAI call can now run up to ENRICH_CALL_TIMEOUT_MS
+ * (240s, see src/lib/enrich/openai.ts) instead of the old fixed 180s, so 3
+ * full attempts could exceed ENRICH_ROW_TIMEOUT_SECONDS below in the worst
+ * case. 2 attempts x 240s stays safely inside the 600s row budget.
+ */
+export const JOB_ROW_ATTEMPTS = 2;
 export const JOB_HEARTBEAT_STALE_MINUTES = 10;
 export const JOB_SWEEP_LIMIT = 5;
 

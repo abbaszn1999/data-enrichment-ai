@@ -172,6 +172,11 @@ export async function findProductImages(
     // answer at brief.imageCount, so this only gives the model more real
     // candidates to be confident about, never more images than requested.
     imageSearchPoolSize: imageFinderCandidatePoolSize(brief.imageCount),
+    // Image identification is the highest-stakes, most search-heavy agent in
+    // the app — worth the extra depth and cost on Premium specifically.
+    reasoningEffortOverride: tier === "premium" ? "xhigh" : undefined,
+    unlimitedSearchContentBudget: true,
+    shouldCancel: params.shouldCancel,
   });
 
   return { data: result.data, costs: result.costs };

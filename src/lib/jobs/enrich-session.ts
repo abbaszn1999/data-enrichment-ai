@@ -188,6 +188,7 @@ async function runEnrichSessionInner(
               workspaceId: run.workspace_id,
               row,
               settings,
+              shouldCancel: () => isJobCancelRequested(admin, run.id),
             });
           })();
 
@@ -214,6 +215,13 @@ async function runEnrichSessionInner(
           return [outcome.rowId];
         }
         if (!outcome.ok) {
+          if (outcome.cancelled) {
+            // Stop was clicked mid-row: leave it pending (not processed, not
+            // failed) so a future run picks it up, exactly like the
+            // out-of-credits pause below.
+            stopObserved = true;
+            return [];
+          }
           row.status = "error";
           row.errorMessage = outcome.error;
           failed += 1;

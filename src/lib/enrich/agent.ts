@@ -81,6 +81,7 @@ export async function enrichRow(
     categoriesRawRows,
     cmsType,
     maxCategories,
+    shouldCancel: params.shouldCancel,
   });
 
   return {

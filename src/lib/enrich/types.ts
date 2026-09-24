@@ -49,6 +49,8 @@ export interface EnrichAgentParams {
   cmsType?: string;
   workspaceCategories?: CategoryItem[];
   categoriesRawRows?: Record<string, string>[];
+  /** Polled during the OpenAI call; returning true aborts it immediately (Stop). */
+  shouldCancel?: () => Promise<boolean>;
 }
 
 export type OpenAiImageResult = {

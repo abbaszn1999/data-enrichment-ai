@@ -154,15 +154,28 @@ describe("Image Finder agent", () => {
     expect(images[1]!.title).toBe("low confidence — matched on title match only. Product image");
   });
 
-  it("uses high effort and search context on Premium", async () => {
+  it("uses xhigh effort, high search context, and an unlimited search budget on Premium", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify(openAiBody({ images: [], notes: "" })), { status: 200 })
     );
     await enrichRow({ ...params, settings: { enrichmentModel: "premium", outputLanguage: "English" } });
     const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(request.model).toBe("gpt-6-sol");
-    expect(request.reasoning).toEqual({ effort: "high" });
+    // Image identification is the highest-stakes, most search-heavy agent in
+    // the app, so Premium goes past the shared "high" ceiling to "xhigh".
+    expect(request.reasoning).toEqual({ effort: "xhigh" });
     expect(request.tools[0].search_context_size).toBe("high");
+    expect(request.tools[0].return_token_budget).toBe("unlimited");
+  });
+
+  it("stays on medium effort but still gets the unlimited search budget on Standard", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(openAiBody({ images: [], notes: "" })), { status: 200 })
+    );
+    await enrichRow(params);
+    const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(request.reasoning).toEqual({ effort: "medium" });
+    expect(request.tools[0].return_token_budget).toBe("unlimited");
   });
 
   it("reports the cost of a billed but unusable response", async () => {
