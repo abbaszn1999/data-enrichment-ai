@@ -72,7 +72,14 @@ describe("Image Finder agent", () => {
       new Response(
         JSON.stringify(
           openAiBody({
-            imageUrls: ["https://cdn.example.com/b.jpg", "https://example.com/a"],
+            images: [
+              {
+                url: "https://cdn.example.com/b.jpg",
+                confidence: "high",
+                matchedOn: "SKU verified on source page",
+              },
+              { url: "https://example.com/a", confidence: "high", matchedOn: "brand+model" },
+            ],
             notes: "Confident match",
           })
         ),
@@ -98,7 +105,12 @@ describe("Image Finder agent", () => {
     expect(request.text.format.name).toBe("catalog_image_finder");
     // The output cap still matches what was actually requested, not the
     // wider search pool above.
-    expect(request.text.format.schema.properties.imageUrls.maxItems).toBe(2);
+    expect(request.text.format.schema.properties.images.maxItems).toBe(2);
+    expect(request.text.format.schema.properties.images.items.properties.confidence.enum).toEqual([
+      "high",
+      "medium",
+      "low",
+    ]);
     const prompt = request.input[0].content.at(-1).text as string;
     expect(prompt).toContain("- Brand: Acme");
     expect(prompt).toContain(
@@ -107,9 +119,10 @@ describe("Image Finder agent", () => {
     expect(request.tools[0].filters).toBeUndefined();
 
     // Only the approved, exact image_url survives; no padding with "a.jpg".
+    // High confidence leaves the caption untouched.
     expect(result.data).toEqual({
       imageUrls: [
-        expect.objectContaining({ imageUrl: "https://cdn.example.com/b.jpg" }),
+        expect.objectContaining({ imageUrl: "https://cdn.example.com/b.jpg", title: "Product image" }),
       ],
       [notFoundKey]: "",
     });
@@ -119,9 +132,31 @@ describe("Image Finder agent", () => {
     expect(result.costs[0].totalCost).toBeCloseTo(expected.totalCost, 10);
   });
 
+  it("annotates but never drops a low- or medium-confidence match", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          openAiBody({
+            images: [
+              { url: "https://cdn.example.com/a.jpg", confidence: "medium", matchedOn: "brand+model only" },
+              { url: "https://cdn.example.com/b.jpg", confidence: "low", matchedOn: "title match only" },
+            ],
+            notes: "Two uncertain matches, both included.",
+          })
+        ),
+        { status: 200 }
+      )
+    );
+    const result = await enrichRow(params);
+    const images = result.data.imageUrls as Array<{ imageUrl: string; title: string }>;
+    expect(images).toHaveLength(2);
+    expect(images[0]!.title).toBe("medium confidence — matched on brand+model only. Product image");
+    expect(images[1]!.title).toBe("low confidence — matched on title match only. Product image");
+  });
+
   it("uses high effort and search context on Premium", async () => {
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify(openAiBody({ imageUrls: [], notes: "" })), { status: 200 })
+      new Response(JSON.stringify(openAiBody({ images: [], notes: "" })), { status: 200 })
     );
     await enrichRow({ ...params, settings: { enrichmentModel: "premium", outputLanguage: "English" } });
     const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
@@ -144,7 +179,10 @@ describe("Image Finder agent", () => {
       new Response(
         JSON.stringify(
           openAiBody({
-            imageUrls: ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"],
+            images: [
+              { url: "https://cdn.example.com/a.jpg" },
+              { url: "https://cdn.example.com/b.jpg" },
+            ],
             notes: "",
           })
         ),
@@ -177,7 +215,7 @@ describe("Image Finder agent", () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify(
-          openAiBody({ imageUrls: ["https://cdn.example.com/a.jpg"], notes: "" })
+          openAiBody({ images: [{ url: "https://cdn.example.com/a.jpg" }], notes: "" })
         ),
         { status: 200 }
       )
@@ -200,7 +238,7 @@ describe("Image Finder agent", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify(
-            openAiBody({ imageUrls: ["https://cdn.example.com/a.jpg"], notes: "" })
+            openAiBody({ images: [{ url: "https://cdn.example.com/a.jpg" }], notes: "" })
           ),
           { status: 200 }
         )
@@ -221,7 +259,7 @@ describe("Image Finder agent", () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify(
-          openAiBody({ imageUrls: [], notes: "SKU pointed to a different product; no confident match." })
+          openAiBody({ images: [], notes: "SKU pointed to a different product; no confident match." })
         ),
         { status: 200 }
       )
@@ -237,7 +275,7 @@ describe("Image Finder agent", () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify(
-          openAiBody({ imageUrls: ["https://cdn.example.com/a.jpg"], notes: "Confident match" })
+          openAiBody({ images: [{ url: "https://cdn.example.com/a.jpg" }], notes: "Confident match" })
         ),
         { status: 200 }
       )

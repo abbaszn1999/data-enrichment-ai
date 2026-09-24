@@ -61,6 +61,29 @@ describe("IMAGE_FINDER_SKILL", () => {
     expect(IMAGE_FINDER_SKILL).toContain("there is no pre-sorted");
   });
 
+  it("requires real query variety before returning empty (recall-first gate)", () => {
+    expect(IMAGE_FINDER_SKILL).toContain("Do not return an empty list after only one query");
+    expect(IMAGE_FINDER_SKILL).toContain(
+      "you must have tried at minimum: the strongest identifier alone in quotes, brand + model, and one further variation"
+    );
+  });
+
+  it("makes confidence informational only — never a reason to drop an image", () => {
+    expect(IMAGE_FINDER_SKILL).toContain(
+      "## Confidence is informational, never a reason to drop an image"
+    );
+    expect(IMAGE_FINDER_SKILL).toContain(
+      "never use it to exclude an image you would otherwise include"
+    );
+    expect(IMAGE_FINDER_SKILL).toContain("confidence is not");
+  });
+
+  it("describes the three confidence levels", () => {
+    expect(IMAGE_FINDER_SKILL).toContain("high: the identifier was verified on the source page");
+    expect(IMAGE_FINDER_SKILL).toContain("medium: brand and model matched");
+    expect(IMAGE_FINDER_SKILL).toContain("low: the best available match");
+  });
+
   it("still carries the hard URL and website enforcement rules", () => {
     expect(IMAGE_FINDER_SKILL).toContain("imageUrls must contain only image_url values");
     expect(IMAGE_FINDER_SKILL).toContain("## Website rules");

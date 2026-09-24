@@ -12,6 +12,13 @@
  * more real galleries to draw the requested count from. web_search may be
  * called more than once in this same response, and its open_page /
  * find_in_page actions are free to use — use both.
+ *
+ * Recall-first by design: a mandatory query-variety gate must be satisfied
+ * before returning empty (biases toward finding a real image over an early
+ * "not found"), and per-image confidence is informational only — a low- or
+ * medium-confidence match is still returned, never silently dropped. Only the
+ * hard URL rules, website rules, and exact-match/domain filtering in code can
+ * remove a candidate; confidence never does.
  */
 export const IMAGE_FINDER_SKILL = `# Product Image Finder
 
@@ -40,7 +47,14 @@ Only the hard URL rules and website rules outrank it.
 3. Confirm every source you find, not just the first, that clearly shows this exact base product — the same brand and model. Ignore color, size, or material differences between sources unless the custom instruction says a specific variant is required; the goal is the correct parent product, not a specific variant of it. Two or more independent sources agreeing on the same product is strong confirmation; one page where you have verified the identifier is present is also enough on its own.
 4. Once one or more sources are confirmed, they are your galleries. For each confirmed domain, run a site-restricted image search (domain + identifier) to pull its other photos — different angles, packaging, use cases — before searching blindly elsewhere. More confirmed sources means more real photos available to fill the requested count; do not stop at the first source if you still need more images and other confirmed sources have more to offer.
 5. Apply the custom instruction on top of all of this: a required variant, angle or feature preferences, or which field to trust when identifiers disagree.
-6. If nothing is confirmed after trying the strongest identifiers and the query variations above, stop — return an empty list and state in notes exactly which identifiers and queries you tried.
+6. Do not return an empty list after only one query. Before concluding nothing exists, you must have tried at minimum: the strongest identifier alone in quotes, brand + model, and one further variation (another language, or the manufacturer/factory name) from step 2. Only after that real effort, if still nothing is confirmed, stop — return an empty list and state in notes exactly which identifiers and queries you tried.
+
+## Confidence is informational, never a reason to drop an image
+For every image you return, judge your own confidence honestly:
+- high: the identifier was verified on the source page, or two or more independent sources agree.
+- medium: brand and model matched, but you could not independently verify the identifier on the page.
+- low: the best available match, with meaningful uncertainty remaining.
+Report this confidence for every image — but never use it to exclude an image you would otherwise include. A medium- or low-confidence match is still a real candidate and must still be returned, clearly labeled, rather than omitted. Only the acceptance bar, the hard URL rules, and the website rules are reasons to leave an image out — confidence is not.
 
 ## Acceptance bar (every image must pass all of these)
 - Shows the exact same base product: same brand and model. Match the specific variant only when the custom instruction requires one; otherwise any correct photo of the base product is acceptable.
@@ -61,5 +75,5 @@ Images outside these rules are removed after you answer, so selecting them only 
 
 ## Output
 Return JSON matching the schema:
-- imageUrls: best first, up to the requested number, only images that pass the acceptance bar above. An empty list is a valid, complete answer.
+- images: best first, up to the requested number, only images that pass the acceptance bar above. Each entry is the image_url plus your honest confidence and a short phrase for what confirmed it. An empty list is a valid, complete answer.
 - notes: one or two short sentences stating which identifiers you trusted or set aside and why, which sources you confirmed, and why any candidates were rejected or the list is shorter than requested (or empty).`;
