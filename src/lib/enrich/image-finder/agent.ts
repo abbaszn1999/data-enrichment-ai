@@ -13,6 +13,8 @@ import { buildEnrichToolPolicy } from "../policy";
 import { collectToolImages, pickImagesFromSelection } from "../tool-results";
 import type { EnrichAgentParams, EnrichAgentResult } from "../types";
 import { buildImageFinderBrief } from "./brief";
+import { imageFinderNotFoundKey } from "./not-found";
+import { imageFinderCandidatePoolSize } from "./pool-size";
 import { IMAGE_FINDER_SKILL } from "./skill";
 
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
@@ -44,7 +46,7 @@ function imageFinderSchema(imageCount: number): Record<string, unknown> {
       notes: {
         type: "string",
         description:
-          "One short sentence on identity confidence and why any candidates were rejected.",
+          "One or two short sentences: which identifiers were trusted, which were set aside as unreliable and why, and why any candidates were rejected or the list is shorter than requested.",
       },
     },
     required: [IMAGE_COLUMN_ID, "notes"],
@@ -80,14 +82,22 @@ export async function findProductImages(
 
   // Keep only images the model approved that exactly match tool results and
   // pass the website rules; no padding with unvetted candidates.
-  const parse: EnrichResponseParser = ({ selection, response }) => ({
-    [IMAGE_COLUMN_ID]: pickImagesFromSelection(
+  const parse: EnrichResponseParser = ({ selection, response }) => {
+    const images = pickImagesFromSelection(
       selection[IMAGE_COLUMN_ID],
       filterImagesByDomainRules(collectToolImages(response), domainRules),
       brief.imageCount,
       { pad: false }
-    ),
-  });
+    );
+    // Always write the reason key so a later successful run clears a stale
+    // one from an earlier empty run — never leave the grid showing a
+    // "Not found" reason that no longer reflects the current result.
+    const notes = typeof selection.notes === "string" ? selection.notes.trim() : "";
+    return {
+      [IMAGE_COLUMN_ID]: images,
+      [imageFinderNotFoundKey(IMAGE_COLUMN_ID)]: images.length === 0 ? notes : "",
+    };
+  };
 
   const result = await runEnrichOpenAiResponse({
     tier,
@@ -103,6 +113,10 @@ export async function findProductImages(
     instructions: IMAGE_FINDER_SKILL,
     parse,
     webSearchFilters: hasDomainRules(domainRules) ? domainRules : undefined,
+    // Cast a wide net per search call; the schema above still caps the final
+    // answer at brief.imageCount, so this only gives the model more real
+    // candidates to be confident about, never more images than requested.
+    imageSearchPoolSize: imageFinderCandidatePoolSize(brief.imageCount),
   });
 
   return { data: result.data, costs: result.costs };

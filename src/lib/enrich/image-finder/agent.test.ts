@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { calculateOpenAiWebSearchCost } from "@/lib/ai-pricing";
 import { enrichRow } from "../agent";
 import { EnrichBilledAttemptError } from "../openai";
+import { imageFinderNotFoundKey } from "./not-found";
 import { IMAGE_FINDER_SKILL } from "./skill";
+
+const notFoundKey = imageFinderNotFoundKey("imageUrls");
 
 const usage = {
   input_tokens: 3_000,
@@ -88,9 +91,13 @@ describe("Image Finder agent", () => {
       type: "web_search",
       search_context_size: "medium",
       search_content_types: ["image", "text"],
-      image_settings: { max_results: 2, caption: true },
+      // Over-fetches well beyond the requested 2, so the model has real
+      // candidates to choose from instead of being handed exactly the target.
+      image_settings: { max_results: 20, caption: true },
     });
     expect(request.text.format.name).toBe("catalog_image_finder");
+    // The output cap still matches what was actually requested, not the
+    // wider search pool above.
     expect(request.text.format.schema.properties.imageUrls.maxItems).toBe(2);
     const prompt = request.input[0].content.at(-1).text as string;
     expect(prompt).toContain('- Brand (column "Brand"): Acme');
@@ -104,6 +111,7 @@ describe("Image Finder agent", () => {
       imageUrls: [
         expect.objectContaining({ imageUrl: "https://cdn.example.com/b.jpg" }),
       ],
+      [notFoundKey]: "",
     });
     expect(result.costs).toHaveLength(1);
     const expected = calculateOpenAiWebSearchCost("gpt-6-sol", usage, 1);
@@ -178,7 +186,7 @@ describe("Image Finder agent", () => {
       ...params,
       enrichmentColumns: [{ ...params.enrichmentColumns[0], allowedDomains: ["lego.com"] }],
     });
-    expect(result.data).toEqual({ imageUrls: [] });
+    expect(result.data).toEqual({ imageUrls: [], [notFoundKey]: "" });
   });
 
   it("retries without filters when OpenAI rejects them, still enforcing the rules", async () => {
@@ -204,9 +212,40 @@ describe("Image Finder agent", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const retry = JSON.parse(fetchMock.mock.calls[1][1].body as string);
     expect(retry.tools[0].filters).toBeUndefined();
-    expect(result.data).toEqual({ imageUrls: [] });
+    expect(result.data).toEqual({ imageUrls: [], [notFoundKey]: "" });
     // The rejected request carried no usage, so only the retry is billed.
     expect(result.costs).toHaveLength(1);
+  });
+
+  it("records the model's own reason when it finds nothing", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          openAiBody({ imageUrls: [], notes: "SKU pointed to a different product; no confident match." })
+        ),
+        { status: 200 }
+      )
+    );
+    const result = await enrichRow(params);
+    expect(result.data).toEqual({
+      imageUrls: [],
+      [notFoundKey]: "SKU pointed to a different product; no confident match.",
+    });
+  });
+
+  it("clears the not-found reason once a run finds real images", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          openAiBody({ imageUrls: ["https://cdn.example.com/a.jpg"], notes: "Confident match" })
+        ),
+        { status: 200 }
+      )
+    );
+    const result = await enrichRow(params);
+    // A prior empty run may have left a stale reason on this row; a successful
+    // run must always overwrite it with an empty string, never leave it stale.
+    expect(result.data[notFoundKey]).toBe("");
   });
 
   it("leaves mixed column runs on the generic enrichment prompt", async () => {

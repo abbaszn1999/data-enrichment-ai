@@ -73,6 +73,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TableSelectHeader } from "@/components/table-select-header";
+import { imageFinderNotFoundKey } from "@/lib/enrich/image-finder/not-found";
 import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {
@@ -1221,6 +1222,7 @@ function EditableEnrichedCell({
   label,
   isEditable,
   maxChars,
+  notFoundReason,
 }: {
   value: unknown;
   rowId: string;
@@ -1229,11 +1231,19 @@ function EditableEnrichedCell({
   isEditable: boolean;
   /** SEO character budget; shows a live counter and an over-budget warning. */
   maxChars?: number;
+  /** Set when an agent (e.g. Image Finder) ran and explicitly found nothing. */
+  notFoundReason?: string;
 }) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
   const isList = Array.isArray(value);
   const openEditor = isEditable ? () => setOpen(true) : undefined;
+  const isEmptyValue =
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0);
+  const notFound = isEmptyValue && !!notFoundReason;
 
   const dialog = open ? (
     <CellTextDialog
@@ -1259,9 +1269,14 @@ function EditableEnrichedCell({
     <>
       <div
         onClick={openEditor}
-        className={`text-muted-foreground/30 text-xs ${isEditable ? "cursor-pointer hover:text-muted-foreground/50 transition-colors" : ""}`}
+        title={notFound ? notFoundReason : undefined}
+        className={
+          notFound
+            ? `text-[11px] font-medium text-destructive ${isEditable ? "cursor-pointer hover:text-destructive/80 transition-colors" : ""}`
+            : `text-muted-foreground/30 text-xs ${isEditable ? "cursor-pointer hover:text-muted-foreground/50 transition-colors" : ""}`
+        }
       >
-        {isEditable ? "Click to add" : "—"}
+        {notFound ? "Not found" : isEditable ? "Click to add" : "—"}
       </div>
       {dialog}
     </>
@@ -1967,6 +1982,8 @@ export function DataTable() {
             );
           }
           const canEditEnriched = !isViewer && row.original.status !== "processing";
+          const notFoundReason =
+            row.original.enrichedData[imageFinderNotFoundKey(enrichCol.id)];
           return (
             <EditableEnrichedCell
               value={row.original.enrichedData[enrichCol.id]}
@@ -1975,6 +1992,9 @@ export function DataTable() {
               label={enrichCol.label}
               isEditable={canEditEnriched}
               maxChars={enrichCol.maxChars}
+              notFoundReason={
+                typeof notFoundReason === "string" ? notFoundReason : undefined
+              }
             />
           );
         },

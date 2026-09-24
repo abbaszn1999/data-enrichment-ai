@@ -111,6 +111,13 @@ export async function runEnrichOpenAiResponse(params: {
   parse?: EnrichResponseParser;
   /** web_search `filters`: only / never search these domains (≤100 each). */
   webSearchFilters?: { allowedDomains?: string[]; blockedDomains?: string[] };
+  /**
+   * Overrides `image_settings.max_results` (raw candidates OpenAI's search
+   * returns), independent of `policy.imageCount` (the final output cap in
+   * the schema's `maxItems`). Defaults to `policy.imageCount` so callers that
+   * don't set this keep today's exact behavior.
+   */
+  imageSearchPoolSize?: number;
 }): Promise<{
   data: Record<string, unknown>;
   /** Every billed call for this result, including a failed first attempt. */
@@ -132,7 +139,7 @@ export async function runEnrichOpenAiResponse(params: {
   if (params.policy.searchContentTypes.includes("image")) {
     webSearchTool.search_content_types = params.policy.searchContentTypes;
     webSearchTool.image_settings = {
-      max_results: params.policy.imageCount,
+      max_results: params.imageSearchPoolSize ?? params.policy.imageCount,
       caption: true,
     };
   } else {
