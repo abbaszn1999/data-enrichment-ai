@@ -50,6 +50,8 @@ export interface CatalogJobSettings extends JobRunSettings {
     itemCount?: number;
     maxChars?: number;
     customInstruction?: string;
+    allowedDomains?: string[];
+    blockedDomains?: string[];
     writingTone?: string;
     contentLength?: string;
     isCustom?: boolean;

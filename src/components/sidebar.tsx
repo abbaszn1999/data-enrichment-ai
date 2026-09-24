@@ -53,6 +53,10 @@ import {
 import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { ExportDialog } from "@/components/export-dialog";
+import {
+  CustomInstructionButton,
+  WebsiteRulesButton,
+} from "@/components/catalog-mode-settings";
 import { FunctionsPanel } from "@/components/functions-panel";
 import {
   LANGUAGE_OPTIONS,
@@ -1634,27 +1638,46 @@ export function Sidebar() {
                 </div>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <label className="text-[10px] font-medium text-muted-foreground">
                   Custom instruction
                 </label>
-                <textarea
-                  rows={2}
-                  value={modeColumn.customInstruction ?? ""}
-                  onChange={(e) =>
+                <CustomInstructionButton
+                  value={modeColumn.customInstruction}
+                  onSave={(value) =>
                     updateEnrichmentColumnConfig(modeColumn.id, {
-                      customInstruction: e.target.value,
+                      customInstruction: value,
                     })
                   }
                   disabled={isEnriching}
                   placeholder={
                     mode === "categories"
                       ? "e.g. Prefer the most specific subcategory"
-                      : "e.g. White background, front view only"
+                      : "e.g. This is a toys store. Barcodes in this sheet are unreliable, search by SKU and product name. White background, front view first."
                   }
-                  className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 resize-none"
+                  helpText={
+                    mode === "categories"
+                      ? "Tell the AI how to assign categories for this catalog."
+                      : "Tell the agent what you know about this catalog: your industry, which columns to trust or ignore, preferred websites, and image style. It outranks the agent's defaults."
+                  }
                 />
               </div>
+
+              {mode === "images" && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-medium text-muted-foreground">
+                    Websites
+                  </label>
+                  <WebsiteRulesButton
+                    allowedDomains={modeColumn.allowedDomains}
+                    blockedDomains={modeColumn.blockedDomains}
+                    onSave={(rules) =>
+                      updateEnrichmentColumnConfig(modeColumn.id, rules)
+                    }
+                    disabled={isEnriching}
+                  />
+                </div>
+              )}
             </div>
           )}
 

@@ -6,6 +6,10 @@
 //   Model           Input  Cached  Cache writes  Output | Input  Cached  Cache writes  Output
 //   gpt-5.6-sol     $5.00  $0.50   $6.25         $30.00 | $10.00 $1.00   $12.50        $45.00
 //   gpt-5.6-terra   $2.00  $0.20   $2.50         $12.00 | $4.00  $0.40   $5.00         $18.00
+// OpenAI GPT-6 Sol verified against developers.openai.com/api/docs/models/gpt-6-sol (2026-09-24):
+//   gpt-6-sol       $2.00  $0.20   $2.50         $10.00 | $4.00  $0.40   $5.00         $15.00
+// Hosted web search: $10 / 1k billable `search` actions (open_page / find_in_page are free);
+// retrieved search content is billed as input tokens and is already in `usage`.
 //
 // ─── Serper.dev Pricing ──────────────────────────────────────────────
 // Source: https://serper.dev/ (top-up model, no subscription)
@@ -21,14 +25,14 @@ export const SERPER_COST_PER_QUERY = 0.001; // $0.001 per search query
 // Volume plans drop toward ~$0.009–$0.015; we keep Starter so preflight never underquotes.
 export const SERPAPI_COST_PER_SEARCH = 0.025;
 
-/** OpenAI GPT-5.6 long-context threshold (input tokens). */
+/** OpenAI GPT-5.6 / GPT-6 long-context threshold (input tokens). */
 export const OPENAI_LONG_CONTEXT_INPUT_TOKENS = 272_000;
 
 export interface ModelPricing {
   inputPerMillion: number;
   outputPerMillion: number;
   cachedInputPerMillion: number;
-  /** Prompt-cache writes (1.25× uncached input for GPT-5.6). */
+  /** Prompt-cache writes (1.25× uncached input for GPT-5.6 / GPT-6). */
   cacheWritePerMillion?: number;
   /** When set, requests whose input tokens exceed this use the long-* rates. */
   longContextThresholdTokens?: number;
@@ -40,7 +44,7 @@ export interface ModelPricing {
   freeSearchQuota: number;
 }
 
-function openAiGpt56Pricing(params: {
+function openAiTieredPricing(params: {
   input: number;
   cached: number;
   cacheWrite: number;
@@ -67,8 +71,18 @@ function openAiGpt56Pricing(params: {
 }
 
 export const MODEL_PRICING: Record<string, ModelPricing> = {
+  "gpt-6-sol": openAiTieredPricing({
+    input: 2.0,
+    cached: 0.2,
+    cacheWrite: 2.5,
+    output: 10.0,
+    longInput: 4.0,
+    longCached: 0.4,
+    longCacheWrite: 5.0,
+    longOutput: 15.0,
+  }),
   // gpt-5.6 alias routes to Sol per OpenAI docs.
-  "gpt-5.6": openAiGpt56Pricing({
+  "gpt-5.6": openAiTieredPricing({
     input: 5.0,
     cached: 0.5,
     cacheWrite: 6.25,
@@ -78,7 +92,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     longCacheWrite: 12.5,
     longOutput: 45.0,
   }),
-  "gpt-5.6-sol": openAiGpt56Pricing({
+  "gpt-5.6-sol": openAiTieredPricing({
     input: 5.0,
     cached: 0.5,
     cacheWrite: 6.25,
@@ -88,7 +102,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     longCacheWrite: 12.5,
     longOutput: 45.0,
   }),
-  "gpt-5.6-terra": openAiGpt56Pricing({
+  "gpt-5.6-terra": openAiTieredPricing({
     input: 2.0,
     cached: 0.2,
     cacheWrite: 2.5,
@@ -523,7 +537,10 @@ export function createSerpApiCost(searchCount: number = 1): AiCallCost {
  * Example: $0.075 = 0.750 credits, $1.00 = 10.000 credits
  */
 export function costToCredits(dollarCost: number): number {
-  return Math.ceil(dollarCost * 10 * 1000) / 1000;
+  // Round away float noise (0.07 * 10000 = 700.0000000000001) before rounding
+  // up to the nearest 0.001 credit, so exact amounts are never bumped a step.
+  const milliCredits = Math.round(dollarCost * 10 * 1000 * 1e6) / 1e6;
+  return Math.ceil(milliCredits) / 1000;
 }
 
 export function creditsToDollars(credits: number): number {

@@ -1026,7 +1026,7 @@ export const STAGE_META: Record<
     shortLabel: "Extract",
     agentPrompt: "Extracted keywords classified into commercial categories, informational guides, and excluded SKUs.",
     agentDetail:
-      "Phrase match extraction with instant hold settlement and Gemini 3.7 Flash search intent classification. After Analyze, open the proposal for 20 / 40 / 60% capture scenarios — collection matching needs a live store in Growth Engine.",
+      "Phrase match extraction with instant hold settlement and AI-powered search intent classification. After Analyze, open the proposal for 20 / 40 / 60% capture scenarios — collection matching needs a live store in Growth Engine.",
   },
   5: {
     label: "Collection clustering",

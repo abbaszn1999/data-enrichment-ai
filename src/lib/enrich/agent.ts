@@ -4,6 +4,7 @@ import { buildEnrichToolPolicy } from "./policy";
 import { buildEnrichJsonSchema } from "./schema";
 import { buildEnrichPrompt } from "./prompt";
 import { runEnrichOpenAiResponse } from "./openai";
+import { findProductImages, isImageFinderRun } from "./image-finder/agent";
 
 /**
  * Enrich a single row with one OpenAI Responses call (hosted web_search +
@@ -26,6 +27,9 @@ export async function enrichRow(
 
   if (!enabledColumns.length) {
     throw new Error("No enrichment columns selected");
+  }
+  if (isImageFinderRun(kind, enabledColumns)) {
+    return findProductImages(params);
   }
 
   const tier = resolveEnrichmentModel(settings?.enrichmentModel);
@@ -81,7 +85,7 @@ export async function enrichRow(
 
   return {
     data: result.data,
-    costs: [result.cost],
+    costs: result.costs,
   };
 }
 

@@ -1,5 +1,5 @@
 // Import row enrichment API — one row per request (called by concurrent
-// sidebar workers). Uses OpenAI Responses (Terra/Sol + web_search).
+// sidebar workers). Uses OpenAI Responses (GPT-6 Sol + web_search).
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
@@ -45,6 +45,8 @@ type EnrichBody = {
     itemCount?: number;
     maxChars?: number;
     customInstruction?: string;
+    allowedDomains?: string[];
+    blockedDomains?: string[];
     writingTone?: string;
     contentLength?: string;
   }>;
@@ -144,6 +146,8 @@ export async function POST(request: NextRequest) {
         itemCount: c.itemCount,
         maxChars: c.maxChars,
         customInstruction: c.customInstruction,
+        allowedDomains: c.allowedDomains,
+        blockedDomains: c.blockedDomains,
         writingTone: c.writingTone as WritingTone | undefined,
         contentLength: c.contentLength as ContentLength | undefined,
       })),

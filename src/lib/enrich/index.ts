@@ -1,5 +1,5 @@
 /**
- * Import AI enrichment — OpenAI Responses agent (Terra / Sol).
+ * Import AI enrichment — OpenAI Responses agent (GPT-6 Sol).
  * Public surface for `/api/catalog-intelligence` and related callers.
  */
 
@@ -24,6 +24,7 @@ export {
   buildCategoryAllowlist,
 } from "./categories";
 export { enrichRow, enrichProductRow } from "./agent";
+export { findProductImages, isImageFinderRun } from "./image-finder/agent";
 export {
   getColumnSpec,
   hasColumnSpec,

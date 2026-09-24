@@ -1,5 +1,10 @@
-import { sumCosts } from "@/lib/ai-pricing";
-import { enrichRow, type EnrichSettings } from "@/lib/enrich";
+import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
+import {
+  enrichRow,
+  resolveEnrichOpenAiModel,
+  type EnrichSettings,
+} from "@/lib/enrich";
+import { billedCostsOf } from "@/lib/enrich/openai";
 import {
   resolveEnrichmentModel,
   type CategoryItem,
@@ -26,6 +31,8 @@ export type EnrichRowOutcome =
       credits: number;
       cost: number;
       tokens: number;
+      /** OpenAI calls billed for this row, including failed attempts before the success. */
+      billedAttempts: number;
     }
   | {
       ok: false;
@@ -102,6 +109,9 @@ export async function processCatalogRow(params: {
   const productData = buildRowSourceData(row, settings.sourceColumns, enrichmentColumnIds);
 
   let lastError = "Enrichment failed";
+  // OpenAI bills attempts whose output we could not use; a row that finally
+  // succeeds is charged for all of them. Rows that never succeed stay free.
+  const failedAttemptCosts: AiCallCost[] = [];
   for (let attempt = 1; attempt <= JOB_ROW_ATTEMPTS; attempt += 1) {
     try {
       const enriched = await enrichRow({
@@ -119,6 +129,8 @@ export async function processCatalogRow(params: {
           itemCount: c.itemCount,
           maxChars: c.maxChars,
           customInstruction: c.customInstruction,
+          allowedDomains: c.allowedDomains,
+          blockedDomains: c.blockedDomains,
           writingTone: c.writingTone as WritingTone | undefined,
           contentLength: c.contentLength as ContentLength | undefined,
         })),
@@ -128,7 +140,8 @@ export async function processCatalogRow(params: {
         workspaceCategories: settings.workspaceCategories as CategoryItem[] | undefined,
         categoriesRawRows: settings.categoriesRawRows,
       });
-      const costs = sumCosts(enriched.costs);
+      const billed = [...failedAttemptCosts, ...enriched.costs];
+      const costs = sumCosts(billed);
       return {
         ok: true,
         rowId: row.id,
@@ -137,8 +150,10 @@ export async function processCatalogRow(params: {
         credits: costs.totalCredits,
         cost: costs.totalCost,
         tokens: costs.totalTokens,
+        billedAttempts: billed.length,
       };
     } catch (error) {
+      failedAttemptCosts.push(...billedCostsOf(error));
       lastError = error instanceof Error ? error.message : "Enrichment failed";
       if (attempt < JOB_ROW_ATTEMPTS) {
         await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
@@ -157,6 +172,7 @@ export async function chargeCatalogRow(params: {
   credits: number;
   cost: number;
   tokens: number;
+  billedAttempts?: number;
   settings: CatalogJobSettings;
 }): Promise<{ ok: true; remaining?: number } | { ok: false; noCredits: boolean; error: string }> {
   if (params.credits <= 0) return { ok: true };
@@ -173,6 +189,8 @@ export async function chargeCatalogRow(params: {
       sessionId: params.sessionId,
       rowIndex: params.rowIndex,
       enrichmentModel: params.settings.enrichmentModel,
+      model: resolveEnrichOpenAiModel(params.settings.enrichmentModel),
+      billedAttempts: params.billedAttempts ?? 1,
       totalCost: params.cost,
       totalTokens: params.tokens,
     },

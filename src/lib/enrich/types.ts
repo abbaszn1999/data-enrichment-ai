@@ -28,6 +28,8 @@ export type EnrichColumnConfig = Pick<
   | "itemCount"
   | "maxChars"
   | "customInstruction"
+  | "allowedDomains"
+  | "blockedDomains"
   | "writingTone"
   | "contentLength"
 >;

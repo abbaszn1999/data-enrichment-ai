@@ -321,7 +321,7 @@ export function StageCollectionSheet({
         <p className="max-w-sm text-center text-[11px] text-muted-foreground">
           {termsStillEmbedding
             ? "Embedding surviving category terms with their collection context before matching starts."
-            : "Gemini 3.7 Flash is clustering category keywords and calculating cosine similarity with your catalog products."}
+            : "Clustering category keywords and calculating similarity with your catalog products."}
         </p>
         {termsStillEmbedding && termEmbedProgress.total > 0 ? (
           <p className="text-[11px] tabular-nums text-muted-foreground">

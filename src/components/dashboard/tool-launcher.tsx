@@ -106,11 +106,6 @@ function ToolCard({
               </motion.div>
 
               <div className="flex items-center gap-1.5">
-                {tool.model && (
-                  <span className="hidden rounded-md bg-muted px-1.5 py-0.5 font-mono text-[9px] font-medium text-muted-foreground sm:inline">
-                    {tool.model}
-                  </span>
-                )}
                 <motion.span
                   animate={hovered ? { x: 2, y: -2, opacity: 1 } : { x: -2, y: 2, opacity: 0.25 }}
                   transition={{ type: "spring", stiffness: 320, damping: 22 }}

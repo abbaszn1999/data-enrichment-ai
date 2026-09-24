@@ -67,6 +67,8 @@ export interface EnrichmentColumn {
   itemCount?: number; // Number of items to return, for faq / internalLinks / keywords types
   maxChars?: number; // Hard character budget enforced server-side (SEO meta limits)
   customInstruction?: string; // Custom instruction for this column
+  allowedDomains?: string[]; // Image Finder: only use these websites (max 100, subdomains included)
+  blockedDomains?: string[]; // Image Finder: never use these websites (max 100)
   writingTone?: WritingTone; // Per-column writing tone (for text columns)
   contentLength?: ContentLength; // Per-column content length (for text columns)
 }
@@ -306,7 +308,7 @@ export interface EnrichmentEvent {
 
 export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turkish" | "German" | "Chinese" | "Japanese" | "custom";
 
-/** UI tier: Standard = Terra, Premium = Sol. */
+/** UI tier: Standard is balanced; Premium reasons and searches deeper. */
 export type EnrichmentModel = "standard" | "premium";
 
 /**
@@ -378,8 +380,8 @@ export const LANGUAGE_OPTIONS: { value: OutputLanguage; label: string; flag: str
 ];
 
 export const MODEL_OPTIONS: { value: EnrichmentModel; label: string; description: string; icon: string }[] = [
-  { value: "standard", label: "Standard", description: "Balanced quality and cost (Terra)", icon: "⚡" },
-  { value: "premium", label: "Premium", description: "Highest quality, deeper search (Sol)", icon: "✨" },
+  { value: "standard", label: "Standard", description: "Balanced quality and cost", icon: "⚡" },
+  { value: "premium", label: "Premium", description: "Highest quality, deeper search", icon: "✨" },
 ];
 
 export const TONE_OPTIONS: { value: WritingTone; label: string; description: string }[] = [

@@ -2,6 +2,7 @@ import {
   calculateOpenAiWebSearchCost,
   type AiCallCost,
 } from "@/lib/ai-pricing";
+import { countWebSearchCalls } from "@/lib/enrich/tool-results";
 import type { SerperImageCandidate } from "@/lib/gallery/agent/filters";
 import { galleryLog, galleryWarn } from "@/lib/gallery/log";
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
@@ -76,7 +77,7 @@ export type OpenAiResponse = {
   output?: Array<{
     type?: string;
     results?: OpenAiImageResult[];
-    action?: { results?: OpenAiImageResult[] };
+    action?: { type?: string; results?: OpenAiImageResult[] };
     content?: Array<{
       type?: string;
       text?: string;
@@ -355,9 +356,7 @@ export async function runOpenAiWebImageSearch(params: {
 
   const indexedImages = collectImageResults(body);
   const selection = parseJsonObject(responseText(body));
-  const searchCallCount = (body.output ?? []).filter(
-    (item) => item.type === "web_search_call"
-  ).length;
+  const searchCallCount = countWebSearchCalls(body);
   const cost = calculateOpenAiWebSearchCost(
     model,
     body.usage,

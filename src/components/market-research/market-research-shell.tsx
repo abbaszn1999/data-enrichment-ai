@@ -1245,7 +1245,7 @@ export function MarketResearchShell() {
           extracting
             ? "Extracting phrase keywords…"
             : analyzeLoading
-              ? "Classifying search intent with Gemini 3.7 Flash…"
+              ? "Classifying search intent…"
               : extractedKeywords.length > 0
                 ? `${extractedKeywords.length} keywords extracted & classified`
                 : stage4Status === "locked"

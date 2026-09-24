@@ -121,7 +121,7 @@ function DemoEnrichPage() {
               Model
             </div>
             <button className="w-full flex items-center justify-between text-[11px] px-2 py-1.5 rounded-md border bg-muted/30">
-              Gemini 2.5 Flash
+              Standard
               <ChevronDown className="h-3 w-3" />
             </button>
           </div>

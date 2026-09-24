@@ -590,7 +590,7 @@ export function StageExtractPanel({
                         {row.isAiGenerated === false ? (
                           <Badge
                             variant="outline"
-                            title="Gemini couldn't verify this keyword after retries — a rule-based guess was used instead of a real AI verdict."
+                            title="This keyword could not be verified after retries — a rule-based guess was used instead of a real AI verdict."
                             className="shrink-0 text-[9px] font-normal border-amber-500/30 text-amber-600 dark:text-amber-400 bg-amber-500/5 px-1.5 py-0"
                           >
                             Estimated
@@ -717,7 +717,7 @@ export function StageExtractPanel({
         ) : (
           <>
             <p className="text-[11px] text-muted-foreground">
-              Analyze uses Gemini 3.7 Flash to evaluate search intent, PLP vs PDP viability, and classify keywords into Category, Informational, and Excluded.
+              Analyze evaluates search intent, PLP vs PDP viability, and classifies keywords into Category, Informational, and Excluded.
             </p>
             <Button
               size="sm"
@@ -737,7 +737,7 @@ export function StageExtractPanel({
                     : "Cleaning same-intent terms…"
                   : analyzeProgress && analyzeProgress.total > 0
                     ? `Classifying ${analyzeProgress.done.toLocaleString()} / ${analyzeProgress.total.toLocaleString()}…`
-                    : "Classifying with Gemini…"
+                    : "Classifying…"
                 : "Analyze with AI"}
             </Button>
           </>

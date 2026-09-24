@@ -116,12 +116,14 @@ export function collectToolSources(response: OpenAiResponse): SourceUrl[] {
 
 /**
  * Keep only model-selected URLs that exactly match tool image_url values.
- * Never accept source_website_url / HTML pages. Pad up to limit from tool pool.
+ * Never accept source_website_url / HTML pages. Pads up to limit from the tool
+ * pool unless `pad` is false.
  */
 export function pickImagesFromSelection(
   selected: unknown,
   toolImages: ImageUrl[],
-  limit: number
+  limit: number,
+  options: { pad?: boolean } = {}
 ): ImageUrl[] {
   if (limit <= 0) return [];
   const byUrl = new Map(
@@ -147,7 +149,7 @@ export function pickImagesFromSelection(
   }
 
   // Pad with remaining tool images until limit
-  if (out.length < limit) {
+  if (options.pad !== false && out.length < limit) {
     for (const img of toolImages) {
       const key = img.imageUrl.toLowerCase();
       if (seen.has(key)) continue;
@@ -160,8 +162,17 @@ export function pickImagesFromSelection(
   return out;
 }
 
+/** Page navigation inside a search run; OpenAI does not bill these as tool calls. */
+const UNBILLED_WEB_SEARCH_ACTIONS = new Set(["open_page", "find_in_page"]);
+
+/**
+ * Billable web-search tool calls in a response: `search` actions only. Items
+ * without an action are counted so older payload shapes are never under-billed.
+ */
 export function countWebSearchCalls(response: OpenAiResponse): number {
   return (response.output ?? []).filter(
-    (item: OpenAiResponseItem) => item.type === "web_search_call"
+    (item: OpenAiResponseItem) =>
+      item.type === "web_search_call" &&
+      !UNBILLED_WEB_SEARCH_ACTIONS.has(item.action?.type ?? "")
   ).length;
 }

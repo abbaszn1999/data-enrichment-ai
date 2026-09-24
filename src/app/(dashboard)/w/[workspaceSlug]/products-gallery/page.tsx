@@ -2897,7 +2897,7 @@ export default function ProductsGalleryPage() {
                         </InfoTip>
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        Powered by Nano Banana 2 or Nano Banana Pro.
+                        Powered by Standard or Premium image generation.
                       </p>
                     </div>
                     <div className="grid grid-cols-2 rounded-lg bg-muted p-1">

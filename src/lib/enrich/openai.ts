@@ -21,6 +21,29 @@ import {
 
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
+/**
+ * An attempt that OpenAI billed (the response carried `usage`) but whose
+ * result could not be used. Callers that retry add `costs` to the row total.
+ */
+export class EnrichBilledAttemptError extends Error {
+  readonly costs: AiCallCost[];
+
+  constructor(message: string, costs: AiCallCost[]) {
+    super(message);
+    this.name = "EnrichBilledAttemptError";
+    this.costs = costs;
+  }
+}
+
+export function billedCostsOf(error: unknown): AiCallCost[] {
+  return error instanceof EnrichBilledAttemptError ? error.costs : [];
+}
+
+export type EnrichResponseParser = (input: {
+  selection: Record<string, unknown>;
+  response: OpenAiResponse;
+}) => Record<string, unknown>;
+
 export function requireOpenAiApiKey(): string {
   const key = process.env.OPENAI_API_KEY?.trim();
   if (!key) {
@@ -82,9 +105,16 @@ export async function runEnrichOpenAiResponse(params: {
   categoriesRawRows?: Record<string, string>[];
   cmsType?: string;
   maxCategories?: number;
+  /** Sent as the Responses `instructions` field (stable prefix, cache friendly). */
+  instructions?: string;
+  /** Replaces the column-spec parser for agents with their own output contract. */
+  parse?: EnrichResponseParser;
+  /** web_search `filters`: only / never search these domains (≤100 each). */
+  webSearchFilters?: { allowedDomains?: string[]; blockedDomains?: string[] };
 }): Promise<{
   data: Record<string, unknown>;
-  cost: AiCallCost;
+  /** Every billed call for this result, including a failed first attempt. */
+  costs: AiCallCost[];
   searchCallCount: number;
   model: EnrichOpenAiModelId;
 }> {
@@ -110,11 +140,21 @@ export async function runEnrichOpenAiResponse(params: {
     webSearchTool.search_content_types = ["text"];
   }
 
+  const filters: Record<string, string[]> = {};
+  if (params.webSearchFilters?.allowedDomains?.length) {
+    filters.allowed_domains = params.webSearchFilters.allowedDomains;
+  }
+  if (params.webSearchFilters?.blockedDomains?.length) {
+    filters.blocked_domains = params.webSearchFilters.blockedDomains;
+  }
+  const hasFilters = Object.keys(filters).length > 0;
+
   const include: string[] = [];
   if (params.policy.includeResults) include.push("web_search_call.results");
   if (params.policy.includeSources) include.push("web_search_call.action.sources");
 
-  const postOnce = async (imageUrls: string[]) => {
+  const postOnce = async (imageUrls: string[], withFilters: boolean) => {
+    const tool = withFilters ? { ...webSearchTool, filters } : webSearchTool;
     const content: Array<Record<string, unknown>> = [
       ...inputImageParts(imageUrls),
       { type: "input_text", text: params.promptText },
@@ -129,6 +169,7 @@ export async function runEnrichOpenAiResponse(params: {
       needsImages: params.policy.needsImages,
       needsSources: params.policy.needsSources,
       attachedSourceImages: imageUrls.length,
+      domainFilters: withFilters ? filters : undefined,
     });
 
     const response = await fetch(OPENAI_RESPONSES_URL, {
@@ -139,8 +180,9 @@ export async function runEnrichOpenAiResponse(params: {
       },
       body: JSON.stringify({
         model,
+        ...(params.instructions ? { instructions: params.instructions } : {}),
         reasoning: { effort: reasoningEffort },
-        tools: [webSearchTool],
+        tools: [tool],
         tool_choice: params.policy.toolChoice,
         ...(include.length > 0 ? { include } : {}),
         input: [{ role: "user", content }],
@@ -164,36 +206,48 @@ export async function runEnrichOpenAiResponse(params: {
     } catch {
       throw new Error(`OpenAI enrich returned invalid JSON (${response.status})`);
     }
+
+    const searchCallCount = countWebSearchCalls(body);
+    const cost = calculateOpenAiWebSearchCost(model, body.usage, searchCallCount);
+    const fail = (message: string): never => {
+      if (body.usage) throw new EnrichBilledAttemptError(message, [cost]);
+      throw new Error(message);
+    };
+
     if (!response.ok) {
-      throw new Error(
-        body.error?.message || `OpenAI enrich failed (${response.status})`
-      );
+      fail(body.error?.message || `OpenAI enrich failed (${response.status})`);
     }
     if (body.status && body.status !== "completed") {
-      throw new Error(`OpenAI enrich ended with status ${body.status}`);
+      fail(`OpenAI enrich ended with status ${body.status}`);
     }
 
     const selection = parseJsonObject(responseOutputText(body));
     if (!selection) {
-      throw new Error("OpenAI enrich returned no parseable JSON output");
+      return fail("OpenAI enrich returned no parseable JSON output");
     }
 
-    const data = buildEnrichedData({
-      selection,
-      response: body,
-      enabledColumns: params.enabledColumns,
-      enrichmentColumns: params.enrichmentColumns,
-      kind: params.kind,
-      rowData: params.rowData,
-      language: params.language,
-      workspaceCategories: params.workspaceCategories,
-      categoriesRawRows: params.categoriesRawRows,
-      cmsType: params.cmsType,
-      maxCategories: params.maxCategories,
-    });
-
-    const searchCallCount = countWebSearchCalls(body);
-    const cost = calculateOpenAiWebSearchCost(model, body.usage, searchCallCount);
+    let data: Record<string, unknown>;
+    try {
+      data = params.parse
+        ? params.parse({ selection, response: body })
+        : buildEnrichedData({
+            selection,
+            response: body,
+            enabledColumns: params.enabledColumns,
+            enrichmentColumns: params.enrichmentColumns,
+            kind: params.kind,
+            rowData: params.rowData,
+            language: params.language,
+            workspaceCategories: params.workspaceCategories,
+            categoriesRawRows: params.categoriesRawRows,
+            cmsType: params.cmsType,
+            maxCategories: params.maxCategories,
+          });
+    } catch (error) {
+      return fail(
+        error instanceof Error ? error.message : "OpenAI enrich output could not be parsed"
+      );
+    }
 
     console.log(`[Enrich OpenAI] Finished`, {
       model,
@@ -205,21 +259,47 @@ export async function runEnrichOpenAiResponse(params: {
           : undefined,
     });
 
-    return { data, cost, searchCallCount, model };
+    return { data, costs: [cost], searchCallCount, model };
   };
 
-  try {
-    return await postOnce(params.imageUrls);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const attachedSourceImages = inputImageParts(params.imageUrls).length;
-    if (!attachedSourceImages || !isOpenAiInputImageDownloadError(message)) {
+  // Each recovery (dead source image, rejected domain filter) is tried once;
+  // billed costs from every attempt carry into the result or the final error.
+  let imageUrls = params.imageUrls;
+  let withFilters = hasFilters;
+  const priorCosts: AiCallCost[] = [];
+  for (;;) {
+    try {
+      const result = await postOnce(imageUrls, withFilters);
+      return { ...result, costs: [...priorCosts, ...result.costs] };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      priorCosts.push(...billedCostsOf(error));
+      if (inputImageParts(imageUrls).length > 0 && isOpenAiInputImageDownloadError(message)) {
+        console.warn(
+          `[Enrich OpenAI] Source image download failed; retrying without input_image`,
+          { message }
+        );
+        imageUrls = [];
+        continue;
+      }
+      if (withFilters && isOpenAiWebSearchFilterError(message)) {
+        // Domain rules are still enforced on the results by the caller.
+        console.warn(
+          `[Enrich OpenAI] web_search filters rejected; retrying without them`,
+          { message }
+        );
+        withFilters = false;
+        continue;
+      }
+      if (priorCosts.length > 0) {
+        throw new EnrichBilledAttemptError(message, priorCosts);
+      }
       throw error;
     }
-    console.warn(
-      `[Enrich OpenAI] Source image download failed; retrying without input_image`,
-      { message }
-    );
-    return postOnce([]);
   }
+}
+
+/** OpenAI refused the web_search `filters` block (e.g. unsupported with image search). */
+export function isOpenAiWebSearchFilterError(message: string): boolean {
+  return /allowed_domains|blocked_domains|\bfilters\b/i.test(message);
 }

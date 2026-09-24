@@ -32,8 +32,6 @@ export interface ToolDefinition {
   blurb: string;
   icon: LucideIcon;
   category: ToolCategory;
-  /** The AI model behind it, when there is one. Shown as a small mono badge. */
-  model?: string;
   billing: ToolBilling;
   /** True when the tool cannot run without a connected store. */
   needsIntegration?: boolean;
@@ -121,7 +119,6 @@ export const TOOLS: ToolDefinition[] = [
       "Chat with an agent that can read and rewrite products and categories straight in your store.",
     icon: Bot,
     category: "agents",
-    model: "gemini-3.6-flash · gpt-5.6-sol",
     billing: "wallet",
     needsIntegration: true,
     keywords: ["chat", "copilot", "assistant", "agent", "edit products"],
@@ -133,7 +130,6 @@ export const TOOLS: ToolDefinition[] = [
       "A seven-stage SEO agent: finds niches and keywords, then writes collections and articles into your store.",
     icon: Search,
     category: "agents",
-    model: "gemini-3.7-flash",
     billing: "wallet",
     needsIntegration: true,
     keywords: ["seo", "keywords", "collections", "articles", "content", "niche"],
@@ -145,7 +141,6 @@ export const TOOLS: ToolDefinition[] = [
       "Rebuilds your storefront header and navigation through chat, with a live preview and version history.",
     icon: LayoutTemplate,
     category: "agents",
-    model: "gemini-3.7-flash",
     billing: "free",
     needsIntegration: true,
     keywords: ["header", "navigation", "menu", "design", "preview"],
@@ -157,7 +152,6 @@ export const TOOLS: ToolDefinition[] = [
       "Set a rule once and new store products get classified into the right categories automatically, every 24 hours.",
     icon: RefreshCw,
     category: "agents",
-    model: "gemini-3.7-flash",
     billing: "wallet",
     needsIntegration: true,
     keywords: ["automation", "rules", "classify", "schedule", "background"],
@@ -171,7 +165,6 @@ export const TOOLS: ToolDefinition[] = [
       "Generates clean product photography for every row in your catalog, then exports the whole gallery.",
     icon: LayoutGrid,
     category: "visual",
-    model: "gemini-3-pro-image",
     billing: "credits",
     keywords: ["images", "photos", "photography", "generate", "gallery"],
   },
@@ -182,7 +175,6 @@ export const TOOLS: ToolDefinition[] = [
       "Writes rich product descriptions and pairs them with staged lifestyle imagery you can lay out yourself.",
     icon: Boxes,
     category: "visual",
-    model: "gpt-5.6-sol + gemini image",
     billing: "credits",
     keywords: ["descriptions", "lifestyle", "copy", "visuals", "render"],
   },
@@ -193,7 +185,6 @@ export const TOOLS: ToolDefinition[] = [
       "Drop in a folder of product images and have them matched to the right SKU or category.",
     icon: ImageIcon,
     category: "visual",
-    model: "gemini-3.6-flash",
     billing: "credits",
     keywords: ["classify", "sku", "match", "vision", "sort images"],
   },
@@ -206,7 +197,6 @@ export const TOOLS: ToolDefinition[] = [
       "Upload a messy spreadsheet and let a web-searching agent map the columns and fill the gaps.",
     icon: Upload,
     category: "data",
-    model: "gpt-5.6-terra · web search",
     billing: "credits",
     keywords: ["import", "excel", "csv", "spreadsheet", "enrich", "mapping"],
   },
@@ -321,7 +311,7 @@ export function visibleTools(opts: {
 export function matchesQuery(tool: ToolDefinition, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  const haystack = [tool.name, tool.blurb, tool.model ?? "", ...(tool.keywords ?? [])]
+  const haystack = [tool.name, tool.blurb, ...(tool.keywords ?? [])]
     .join(" ")
     .toLowerCase();
   return q.split(/\s+/).every((word) => haystack.includes(word));

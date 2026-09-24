@@ -1,11 +1,11 @@
 import type { EnrichmentModel } from "@/types";
 
-export type EnrichOpenAiModelId = "gpt-5.6-terra" | "gpt-5.6-sol";
+export type EnrichOpenAiModelId = "gpt-6-sol";
 
-/** Standard → Terra, Premium → Sol (official OpenAI model IDs). */
+/** Both tiers run GPT-6 Sol; they differ by reasoning effort and search context. */
 export const ENRICHMENT_OPENAI_MODELS = {
-  standard: "gpt-5.6-terra",
-  premium: "gpt-5.6-sol",
+  standard: "gpt-6-sol",
+  premium: "gpt-6-sol",
 } as const satisfies Record<EnrichmentModel, EnrichOpenAiModelId>;
 
 export type EnrichReasoningEffort = "medium" | "high";

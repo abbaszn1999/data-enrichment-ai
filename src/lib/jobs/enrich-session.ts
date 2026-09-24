@@ -202,6 +202,7 @@ async function runEnrichSessionInner(
           credits: outcome.credits,
           cost: outcome.cost,
           tokens: outcome.tokens,
+          billedAttempts: outcome.billedAttempts,
           settings,
         });
       }
