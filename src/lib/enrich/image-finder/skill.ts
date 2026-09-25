@@ -31,15 +31,25 @@ Outranks your own defaults. It can set the store's industry, say which fields to
 
 ## Method
 1. Search the web for this exact product using its strongest identifiers: the code/SKU/barcode alone, brand + model, and the manufacturer's or brand's own site.
-2. Open the pages that come up. Confirm each one is genuinely this product — same brand, same model — not a similar or neighbouring one.
-3. Once a page is confirmed, report the real images shown on it — or found through search — exactly as you saw them. Never write a link from memory or guess one; only report a link you actually saw in a search result or on a page you opened.
+2. Open the pages that come up. Confirm each one is genuinely this product — same brand, same model — not a similar or neighbouring one. An exact code, SKU or barcode match on the page confirms it even when the page's title is worded differently from the sheet.
+3. Once a page is confirmed, report the real images shown on it — or found through search — exactly as you saw them. Never write a link from memory or guess one; only report a link you actually saw in a search result or on a page you opened. See "Reading online stores" for how to see a store page's image links.
 4. If more images are still needed, open other confirmed pages or sources for this same product — different angles, colors, packaging — before giving up. A thin gallery on one site is not a reason to stop if another confirmed source has more.
 5. If you cannot confirm the exact product anywhere after real effort, say so in notes and return nothing. Never substitute a similar code's or a neighbouring product's photo just to fill the count.
 
+## Store catalog matches
+When the brief includes "Store catalog matches", the system read those product pages live from the store and each one's SKU or barcode exactly matches this row — even when its title is worded differently from the sheet. Treat them as confirmed pages you opened: report their image links first, with the product page as pageUrl, unless the custom instruction or the product data clearly rules them out. Search further only if more images are still needed.
+
+## Reading online stores
+Web search does not index every product page, and a store's normal product page often shows its photos without exposing their image links as text. Many online stores (Shopify stores) answer these URLs directly — use them on any likely store: an allowed website, one named in the custom instruction, or a store you already found carrying this brand.
+- Find the product by code or barcode: open https://<store>/search/suggest.json?q=<code>. It lists matching products with their link. If it can't be read, open the store's search page https://<store>/search?q=<code> — it shows the matching product titles. Try the barcode too when the code finds nothing.
+- See every image of a product: add .json to its product link, e.g. https://<store>/products/<handle>.json. It lists the SKU, barcode, vendor and every gallery image link — confirm the SKU or barcode there, then report those image links, with the product page as pageUrl.
+- When you have a product title but not its link, the handle is usually the title in lowercase with spaces and punctuation turned into hyphens ("Electric Ride-On Bulldozer" → electric-ride-on-bulldozer); a repeated title gets -1, -2 … added. Open that .json and use it only if its SKU or barcode matches this row — otherwise try the next handle.
+- If a store does not answer these, fall back to its normal pages.
+
 ## Acceptance
 - Same brand, same model as this row describes. Match a specific variant only when the custom instruction requires one — otherwise any correct photo of the product is acceptable.
-- A real product photo — not a logo, banner, icon, placeholder ("image coming soon"), collage, size chart, or unrelated scene.
-- Not a duplicate or near-duplicate of another image you are already returning.
+- A real product photo — not a logo, banner, icon, placeholder ("image coming soon"), collage mixing other products, or unrelated scene. A photo of the product from its own gallery counts even with dimension labels or text on it; only a standalone size table with no product shown is excluded.
+- Not the same photo as another image you are already returning (a resized or re-cropped copy). A separate gallery image of the same angle — for example with dimension labels added — is a different image.
 
 ## Website rules
 When the brief contains "Website rules", they are enforced by the system:

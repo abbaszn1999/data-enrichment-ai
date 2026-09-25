@@ -16,6 +16,7 @@ import { buildImageFinderBrief } from "./brief";
 import { imageFinderNotFoundKey } from "./not-found";
 import { imageFinderCandidatePoolSize } from "./pool-size";
 import { IMAGE_FINDER_SKILL } from "./skill";
+import { lookupStoreCatalog } from "./store-lookup";
 import { verifyImageUrls } from "./verify-images";
 
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
@@ -52,6 +53,11 @@ function imageFinderSchema(imageCount: number): Record<string, unknown> {
               description:
                 "A real image link you actually saw — from a search result, or read directly off a product page you opened and confirmed. Never a link you did not actually see, and never a page URL.",
             },
+            pageUrl: {
+              type: "string",
+              description:
+                "The page where you confirmed this product and saw this image link (the product page, or its .json version). Website rules are checked against this page, so images hosted on a store's CDN are kept.",
+            },
             confidence: {
               type: "string",
               enum: [...IMAGE_FINDER_CONFIDENCE_LEVELS],
@@ -64,7 +70,7 @@ function imageFinderSchema(imageCount: number): Record<string, unknown> {
                 "Short phrase: which identifiers or sources confirmed this image, e.g. \"SKU verified on source page\" or \"brand+model only\".",
             },
           },
-          required: ["url", "confidence", "matchedOn"],
+          required: ["url", "pageUrl", "confidence", "matchedOn"],
         },
         maxItems: imageCount,
       },
@@ -109,12 +115,19 @@ export async function findProductImages(
     allowedDomains: column?.allowedDomains,
     blockedDomains: column?.blockedDomains,
   });
+  const storeMatches = await lookupStoreCatalog({
+    rowData: params.productData,
+    allowedDomains: domainRules.allowedDomains,
+    blockedDomains: domainRules.blockedDomains,
+    customInstruction: column?.customInstruction,
+  });
   const brief = buildImageFinderBrief({
     rowData: params.productData,
     imageCount: policy.imageCount,
     customInstruction: column?.customInstruction,
     allowedDomains: domainRules.allowedDomains,
     blockedDomains: domainRules.blockedDomains,
+    storeMatches,
   });
 
   // Trust any real link the model reports — from a search result or read
@@ -136,7 +149,14 @@ export async function findProductImages(
       const key = url.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      candidates.push({ imageUrl: url, pageUrl: url, title: "Product image" });
+      const pageUrl = String(record.pageUrl ?? "")
+        .trim()
+        .replace(/(\/products\/[^/?#]+)\.json/i, "$1");
+      candidates.push({
+        imageUrl: url,
+        pageUrl: /^https:\/\//i.test(pageUrl) ? pageUrl : url,
+        title: "Product image",
+      });
       confidenceByUrl.set(key, {
         confidence: String(record.confidence ?? "").trim(),
         matchedOn: String(record.matchedOn ?? "").trim(),
