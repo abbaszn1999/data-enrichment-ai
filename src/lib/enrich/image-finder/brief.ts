@@ -7,11 +7,9 @@
  * variant/color field is just another line, not a special category — the
  * skill treats variant as optional unless the custom instruction says
  * otherwise. Order after the product data is fixed: reference image, number
- * of images, custom instruction, website rules, store catalog matches. Pure
- * (no runtime imports) so it is cheap to test.
+ * of images, custom instruction, website rules. Pure (no runtime imports) so
+ * it is cheap to test.
  */
-
-import type { StoreCatalogMatch } from "./store-lookup";
 
 export const IMAGE_FINDER_MIN_IMAGES = 1;
 export const IMAGE_FINDER_MAX_IMAGES = 10;
@@ -26,7 +24,6 @@ export interface ImageFinderBriefInput {
   /** Already-sanitized website rules (see lib/enrich/domains). */
   allowedDomains?: string[];
   blockedDomains?: string[];
-  storeMatches?: StoreCatalogMatch[];
 }
 
 export interface ImageFinderBrief {
@@ -111,28 +108,6 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     }
     if (blocked.length > 0) {
       sections.push(`- Never use images from: ${blocked.join(", ")}`);
-    }
-  }
-
-  const matches = input.storeMatches ?? [];
-  if (matches.length > 0) {
-    sections.push(
-      "",
-      "## Store catalog matches",
-      "Read live from the store just now. Each product's SKU or barcode exactly matches this row."
-    );
-    for (const match of matches) {
-      const codes = [
-        match.vendor && `Vendor: ${match.vendor}`,
-        match.skus.length > 0 && `SKU: ${match.skus.join(", ")}`,
-        match.barcodes.length > 0 && `Barcode: ${match.barcodes.join(", ")}`,
-      ].filter(Boolean);
-      sections.push(
-        `- ${match.title || "Untitled product"} — ${match.pageUrl}`,
-        ...(codes.length > 0 ? [`  ${codes.join(" · ")}`] : []),
-        "  Images:",
-        ...match.imageUrls.map((url) => `  - ${url}`)
-      );
     }
   }
 

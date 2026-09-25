@@ -254,20 +254,6 @@ describe("Image Finder agent", () => {
     expect((result.data.imageUrls as unknown[]).length).toBe(2);
   });
 
-  it("drops results outside the allowed websites even if the model picked them", async () => {
-    stubFetch(
-      openAiBody({
-        images: [{ url: "https://cdn.example.com/a.jpg", confidence: "high", matchedOn: "brand+model" }],
-        notes: "",
-      })
-    );
-    const result = await enrichRow({
-      ...params,
-      enrichmentColumns: [{ ...params.enrichmentColumns[0], allowedDomains: ["lego.com"] }],
-    });
-    expect(result.data).toEqual({ imageUrls: [], [notFoundKey]: "" });
-  });
-
   it("checks website rules against the page the image came from, so store CDN images are kept", async () => {
     stubFetch(
       openAiBody({
@@ -300,61 +286,18 @@ describe("Image Finder agent", () => {
     ]);
   });
 
-  it("looks the row's code up on allowed stores and hands exact matches to the model", async () => {
-    const fetchMock = vi.fn((input: string, init: { method?: string; body?: string }) => {
-      if (input === OPENAI_RESPONSES_URL) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify(
-              openAiBody({
-                images: [
-                  {
-                    url: "https://cdn.shopify.com/s/files/1/dozer-1.jpg",
-                    pageUrl: "https://toys4less.com/products/electric-ride-on-bulldozer",
-                    confidence: "high",
-                    matchedOn: "store catalog SKU match",
-                  },
-                ],
-                notes: "",
-              })
-            ),
-            { status: 200 }
-          )
-        );
-      }
-      if (input.startsWith("https://toys4less.com/search/suggest.json")) {
-        return Promise.resolve(
-          Response.json({ resources: { results: { products: [{ handle: "electric-ride-on-bulldozer" }] } } })
-        );
-      }
-      if (input === "https://toys4less.com/products/electric-ride-on-bulldozer.json") {
-        return Promise.resolve(
-          Response.json({
-            product: {
-              title: "Electric Ride-On Bulldozer",
-              vendor: "Paktat",
-              variants: [{ sku: "RCP1151426", barcode: "3000000071502" }],
-              images: [{ src: "https://cdn.shopify.com/s/files/1/dozer-1.jpg" }],
-            },
-          })
-        );
-      }
-      return verifyMock(input, init);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("drops results outside the allowed websites even if the model picked them", async () => {
+    stubFetch(
+      openAiBody({
+        images: [{ url: "https://cdn.example.com/a.jpg", confidence: "high", matchedOn: "brand+model" }],
+        notes: "",
+      })
+    );
     const result = await enrichRow({
       ...params,
-      productData: { Code: "RCP1151426", Description: "2.4G RC ENGINEERING VEHICLE (YELLOW)" },
-      enrichmentColumns: [{ ...params.enrichmentColumns[0], allowedDomains: ["toys4less.com"] }],
+      enrichmentColumns: [{ ...params.enrichmentColumns[0], allowedDomains: ["lego.com"] }],
     });
-
-    const openAiCall = fetchMock.mock.calls.find((c) => c[0] === OPENAI_RESPONSES_URL)!;
-    const prompt = JSON.parse(openAiCall[1].body as string).input[0].content.at(-1).text as string;
-    expect(prompt).toContain("## Store catalog matches");
-    expect(prompt).toContain("- Electric Ride-On Bulldozer — https://toys4less.com/products/electric-ride-on-bulldozer");
-    expect(prompt).toContain("  - https://cdn.shopify.com/s/files/1/dozer-1.jpg");
-    expect((result.data.imageUrls as unknown[]).length).toBe(1);
+    expect(result.data).toEqual({ imageUrls: [], [notFoundKey]: "" });
   });
 
   it("retries without filters when OpenAI rejects them, still enforcing the rules", async () => {

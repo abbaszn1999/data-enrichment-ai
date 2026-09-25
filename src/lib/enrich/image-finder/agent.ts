@@ -16,7 +16,6 @@ import { buildImageFinderBrief } from "./brief";
 import { imageFinderNotFoundKey } from "./not-found";
 import { imageFinderCandidatePoolSize } from "./pool-size";
 import { IMAGE_FINDER_SKILL } from "./skill";
-import { lookupStoreCatalog } from "./store-lookup";
 import { verifyImageUrls } from "./verify-images";
 
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
@@ -115,19 +114,12 @@ export async function findProductImages(
     allowedDomains: column?.allowedDomains,
     blockedDomains: column?.blockedDomains,
   });
-  const storeMatches = await lookupStoreCatalog({
-    rowData: params.productData,
-    allowedDomains: domainRules.allowedDomains,
-    blockedDomains: domainRules.blockedDomains,
-    customInstruction: column?.customInstruction,
-  });
   const brief = buildImageFinderBrief({
     rowData: params.productData,
     imageCount: policy.imageCount,
     customInstruction: column?.customInstruction,
     allowedDomains: domainRules.allowedDomains,
     blockedDomains: domainRules.blockedDomains,
-    storeMatches,
   });
 
   // Trust any real link the model reports — from a search result or read
