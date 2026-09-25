@@ -11,12 +11,12 @@ import {
 } from "../domains";
 import { runEnrichOpenAiResponse, type EnrichResponseParser } from "../openai";
 import { buildEnrichToolPolicy } from "../policy";
-import { collectToolImages, pickImagesFromSelection } from "../tool-results";
 import type { EnrichAgentParams, EnrichAgentResult } from "../types";
 import { buildImageFinderBrief } from "./brief";
 import { imageFinderNotFoundKey } from "./not-found";
 import { imageFinderCandidatePoolSize } from "./pool-size";
 import { IMAGE_FINDER_SKILL } from "./skill";
+import { verifyImageUrls } from "./verify-images";
 
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
@@ -50,7 +50,7 @@ function imageFinderSchema(imageCount: number): Record<string, unknown> {
             url: {
               type: "string",
               description:
-                "image_url copied exactly from a web_search image_result item. Never a page URL or an invented URL.",
+                "A real image link you actually saw — from a search result, or read directly off a product page you opened and confirmed. Never a link you did not actually see, and never a page URL.",
             },
             confidence: {
               type: "string",
@@ -117,32 +117,38 @@ export async function findProductImages(
     blockedDomains: domainRules.blockedDomains,
   });
 
-  // Keep only images the model approved that exactly match tool results and
-  // pass the website rules; no padding with unvetted candidates. Confidence
-  // is read separately and only ever annotates a caption — it never removes
-  // a candidate, so a low-confidence match is still returned, just labeled.
-  const parse: EnrichResponseParser = ({ selection, response }) => {
+  // Trust any real link the model reports — from a search result or read
+  // directly off a page it opened and confirmed — rather than requiring an
+  // exact match against a separate image-search field. The safety net is no
+  // longer "which tool did this come from" but "does it actually load as an
+  // image", checked for real below. Confidence only ever annotates a
+  // caption; it never removes a candidate.
+  const parse: EnrichResponseParser = async ({ selection }) => {
     const rawImages = Array.isArray(selection.images) ? selection.images : [];
     const confidenceByUrl = new Map<string, { confidence: string; matchedOn: string }>();
-    const candidateUrls: string[] = [];
+    const candidates: Array<{ imageUrl: string; pageUrl: string; title: string }> = [];
+    const seen = new Set<string>();
     for (const item of rawImages) {
       if (!item || typeof item !== "object") continue;
       const record = item as Record<string, unknown>;
       const url = String(record.url ?? "").trim();
-      if (!url) continue;
-      candidateUrls.push(url);
-      confidenceByUrl.set(url.toLowerCase(), {
+      if (!url || !/^https:\/\//i.test(url)) continue;
+      const key = url.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ imageUrl: url, pageUrl: url, title: "Product image" });
+      confidenceByUrl.set(key, {
         confidence: String(record.confidence ?? "").trim(),
         matchedOn: String(record.matchedOn ?? "").trim(),
       });
     }
 
-    const images = pickImagesFromSelection(
-      candidateUrls,
-      filterImagesByDomainRules(collectToolImages(response), domainRules),
-      brief.imageCount,
-      { pad: false }
-    ).map((image) => annotateConfidence(image, confidenceByUrl.get(image.imageUrl.toLowerCase())));
+    const withinRules = filterImagesByDomainRules(candidates, domainRules);
+    const verified = await verifyImageUrls(withinRules.map((c) => c.imageUrl));
+    const images = withinRules
+      .filter((c) => verified.has(c.imageUrl.toLowerCase()))
+      .slice(0, brief.imageCount)
+      .map((image) => annotateConfidence(image, confidenceByUrl.get(image.imageUrl.toLowerCase())));
 
     // Always write the reason key so a later successful run clears a stale
     // one from an earlier empty run — never leave the grid showing a
@@ -172,9 +178,9 @@ export async function findProductImages(
     // answer at brief.imageCount, so this only gives the model more real
     // candidates to be confident about, never more images than requested.
     imageSearchPoolSize: imageFinderCandidatePoolSize(brief.imageCount),
-    // Image identification is the highest-stakes, most search-heavy agent in
-    // the app — worth the extra depth and cost on Premium specifically.
-    reasoningEffortOverride: tier === "premium" ? "xhigh" : undefined,
+    // Back to the shared tier default (medium/high) — a live URL-loads check
+    // plus a simpler, more direct skill closed the accuracy gap that xhigh
+    // was compensating for, so the extra reasoning cost is no longer needed.
     unlimitedSearchContentBudget: true,
     shouldCancel: params.shouldCancel,
   });

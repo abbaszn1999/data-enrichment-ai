@@ -78,7 +78,7 @@ export function isEnrichCancelledError(error: unknown): boolean {
 export type EnrichResponseParser = (input: {
   selection: Record<string, unknown>;
   response: OpenAiResponse;
-}) => Record<string, unknown>;
+}) => Record<string, unknown> | Promise<Record<string, unknown>>;
 
 export function requireOpenAiApiKey(): string {
   const key = process.env.OPENAI_API_KEY?.trim();
@@ -327,7 +327,7 @@ export async function runEnrichOpenAiResponse(params: {
     let data: Record<string, unknown>;
     try {
       data = params.parse
-        ? params.parse({ selection, response: body })
+        ? await params.parse({ selection, response: body })
         : buildEnrichedData({
             selection,
             response: body,
