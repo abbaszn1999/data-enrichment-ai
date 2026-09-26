@@ -10,6 +10,7 @@ import {
   type EnrichRowOutcome,
 } from "./enrich-row";
 import { isImageFinderRun } from "@/lib/enrich/image-finder/agent";
+import { resolveEnrichmentModel } from "@/types";
 import { rowsNeedingRecheck, SheetDomainLearner } from "@/lib/enrich/image-finder/sheet-learning";
 import { runJobWithFailureGuard } from "./guard";
 import { notifyJobEvent } from "./notify";
@@ -125,8 +126,12 @@ async function runEnrichSessionInner(
   const gate = createCheckpointGate(ENRICH_CHECKPOINT);
 
   // Image Finder: websites that verified this sheet's products guide later
-  // rows and the one final re-check of Not-found rows.
+  // rows. The final re-check of Not-found rows is a second full billed
+  // attempt per row, so it only runs on the Premium tier — Standard trades
+  // that extra recall for a lower guaranteed cost (see agent.ts).
   const imageFinder = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns);
+  const imageFinderRecheckEnabled =
+    imageFinder && resolveEnrichmentModel(settings.enrichmentModel) === "premium";
   const learner = imageFinder
     ? SheetDomainLearner.fromRows(project.rows.filter((row) => row.status === "done"))
     : null;
@@ -294,7 +299,7 @@ async function runEnrichSessionInner(
   }
   await writeQueue.catch(() => undefined);
 
-  if (learner && !stopObserved && !pausedNoCredits && !providerUnavailable) {
+  if (imageFinderRecheckEnabled && learner && !stopObserved && !pausedNoCredits && !providerUnavailable) {
     await recheckNotFoundRows();
     await writeQueue.catch(() => undefined);
   }

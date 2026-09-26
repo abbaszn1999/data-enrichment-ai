@@ -8,12 +8,21 @@ describe("IMAGE_FINDER_SKILL", () => {
     }
   });
 
-  it("batches discovery: check_pages for sweeps, fetch_page for the few hits, all candidates in one call", () => {
+  it("mandates check_pages before fetch_page, with narrow exceptions, batched and never repeated", () => {
+    expect(IMAGE_FINDER_SKILL).toContain("## Working efficiently (MANDATORY");
+    expect(IMAGE_FINDER_SKILL).toContain("Never call fetch_page on a URL you have not already run through check_pages");
+    expect(IMAGE_FINDER_SKILL).toContain("its .json or .js structured-data view");
+    expect(IMAGE_FINDER_SKILL).toContain("request them all together in one call, not one per round, up to 15 at a time");
+    expect(IMAGE_FINDER_SKILL).toContain("Never repeat a web_search whose terms are a subset or superset of one you already ran");
+    expect(IMAGE_FINDER_SKILL).toContain("never a reason to skip them");
+  });
+
+  it("requires a real positive signal before fetch_page, not a blanket follow-up on every checked URL", () => {
     expect(IMAGE_FINDER_SKILL).toContain(
-      "Use check_pages for wide sweeps of search results and listing links, and fetch_page only for the 1 to 3 promising pages"
+      'fetch_page ONLY a URL whose check_pages line gave a real positive signal — rowIdentifiersSeen or nearCodesSeen is not empty, or its product/brand name is a close match'
     );
-    expect(IMAGE_FINDER_SKILL).toContain("Request all newly discovered candidates together in one check_pages call, not one per round");
-    expect(IMAGE_FINDER_SKILL).toContain("never a reason to skip the mandatory steps");
+    expect(IMAGE_FINDER_SKILL).toContain('NOT fetch_page the batch anyway "to be safe."');
+    expect(IMAGE_FINDER_SKILL).toContain("Most checked URLs should never get a fetch_page call.");
   });
 
   it("allows a near code only when the exact code exists nowhere, on two websites, and never for a real variant", () => {

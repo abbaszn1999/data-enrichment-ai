@@ -28,7 +28,16 @@ const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
 /** Research budget for one attempt; two attempts fit inside the row task timeout. */
 export const IMAGE_FINDER_ATTEMPT_BUDGET_MS = 540_000;
+/** Premium: the full exhaustive budget, unchanged from the sprint QA. */
 export const IMAGE_FINDER_MAX_ROUNDS = 30;
+/**
+ * Standard: same model, same reasoning effort, same evidence checks — only a
+ * smaller round budget. Most rows finish well under this; it mainly cuts off
+ * the expensive 15+ round tail on hard, obscure or unlisted items, which is
+ * where the automatic recheck pass (also skipped for Standard, see
+ * jobs/enrich-session.ts) is disabled too.
+ */
+export const IMAGE_FINDER_MAX_ROUNDS_STANDARD = 15;
 
 /** Image Finder mode sends exactly one column: the product image column. */
 export function isImageFinderRun(
@@ -190,7 +199,7 @@ export async function findProductImages(
     // result content would just be re-billed on every round.
     searchContextSizeOverride: "medium",
     functionTools: tools,
-    maxFunctionRounds: IMAGE_FINDER_MAX_ROUNDS,
+    maxFunctionRounds: tier === "premium" ? IMAGE_FINDER_MAX_ROUNDS : IMAGE_FINDER_MAX_ROUNDS_STANDARD,
     attemptBudgetMs: IMAGE_FINDER_ATTEMPT_BUDGET_MS,
     shouldCancel: params.shouldCancel,
   });

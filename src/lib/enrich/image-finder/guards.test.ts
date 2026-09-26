@@ -171,6 +171,59 @@ describe("guardImageFinderAnswer — near codes", () => {
     expect(result.rejections[0]).toContain("only one website");
   });
 
+  it("detects a near code even for a 5-character part number (below the strong bar)", () => {
+    // AN253 has 5 characters, under isStrong's 6-character bar, but is still
+    // a specific part number: the near-code tier must not silently skip it.
+    const shortRow = { Name: "IC | AN253" };
+    const ids = extractRowIdentifiers(shortRow);
+    expect(ids[0]!.strong).toBe(false);
+    const C = "https://littlediode.test/an253p";
+    const D = "https://nhecomponents.test/shop/an253p";
+    const { ledger, rowIdentifiers } = ledgerWith(
+      [
+        { url: C, text: "AN253P Panasonic Matsushita DIP-16", images: [] },
+        { url: D, text: "AN253P orderable version, SIP", images: [] },
+      ],
+      shortRow
+    );
+    const result = guardImageFinderAnswer({
+      answer: {
+        status: "found",
+        verification: { pageUrl: C, identifierSeen: "AN253P", brandSeen: "", matchBasis: "near_identifier" },
+        images: [],
+      },
+      ledger,
+      rowIdentifiers,
+    });
+    expect(result.found).toBe(true);
+    expect(result.matchBasis).toBe("near_identifier");
+    expect(result.matchNote).toBe("Near code: the page shows AN253P, the sheet has AN253.");
+  });
+
+  it("blocks a near code for a short part number when the exact code is confirmed elsewhere", () => {
+    const shortRow = { Name: "IC | AN253" };
+    const C = "https://littlediode.test/an253p";
+    const D = "https://other.test/an253-exact";
+    const { ledger, rowIdentifiers } = ledgerWith(
+      [
+        { url: C, text: "AN253P Panasonic", images: [] },
+        { url: D, text: "Part AN253 exact listing", images: [] },
+      ],
+      shortRow
+    );
+    const result = guardImageFinderAnswer({
+      answer: {
+        status: "found",
+        verification: { pageUrl: C, identifierSeen: "AN253P", brandSeen: "", matchBasis: "near_identifier" },
+        images: [],
+      },
+      ledger,
+      rowIdentifiers,
+    });
+    expect(result.found).toBe(false);
+    expect(result.rejections[0]).toContain("exact code appears");
+  });
+
   it("is refused when any opened page shows the exact code", () => {
     const { ledger, rowIdentifiers } = ledgerWith(
       [

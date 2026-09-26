@@ -10,6 +10,7 @@ import {
 } from "./evidence";
 import {
   distinctiveWords,
+  isSpecificPartNumber,
   normalizeCode,
   normalizeMatchText,
   wordsPresentRatio,
@@ -59,11 +60,6 @@ interface Tier {
 
 type TierResult = Tier | { rejection: string };
 
-/** Letters plus at least three digits, five or more characters: a part number, not a family name. */
-function isSpecificPartNumber(key: string): boolean {
-  return key.length >= 5 && /[A-Z]/.test(key) && (key.match(/\d/g)?.length ?? 0) >= 3;
-}
-
 function bestMatchTier(
   answer: ImageFinderAnswer,
   verified: PageEvidence,
@@ -103,9 +99,9 @@ function nearCodeTier(
   ledger: EvidenceLedger,
   rowIdentifiers: RowIdentifier[],
 ): TierResult {
-  const strongKeys = rowIdentifiers.filter((id) => id.strong).map((id) => id.key);
+  const exactCodeKeys = rowIdentifiers.filter((id) => id.strong || isSpecificPartNumber(id.key)).map((id) => id.key);
   const okPages = ledger.all().filter(isOkPage);
-  const exact = okPages.find((evidence) => strongKeys.some((key) => evidence.identifierKeys.has(key)));
+  const exact = okPages.find((evidence) => exactCodeKeys.some((key) => evidence.identifierKeys.has(key)));
   if (exact) {
     return { rejection: `The exact code appears on ${exact.finalUrl || exact.url}, so a near code cannot be used.` };
   }
@@ -195,11 +191,13 @@ export function guardImageFinderAnswer(input: {
     return notFound([`The verified page ${pageUrl} was not opened successfully during research.`]);
   }
 
-  const strongOnPage = rowIdentifiers.some((id) => id.strong && verified.identifierKeys.has(id.key));
+  const exactOnPage = rowIdentifiers.some(
+    (id) => (id.strong || isSpecificPartNumber(id.key)) && verified.identifierKeys.has(id.key)
+  );
   const tier: TierResult =
     rowIdentifiers.length === 0
       ? bestMatchTier(answer, verified, pageUrl, input.rowData ?? {})
-      : answer.verification?.matchBasis === "near_identifier" && !strongOnPage
+      : answer.verification?.matchBasis === "near_identifier" && !exactOnPage
         ? nearCodeTier(answer, verified, pageUrl, ledger, rowIdentifiers)
         : codeTier(answer, verified, pageUrl, rowIdentifiers);
   if ("rejection" in tier) return notFound([tier.rejection]);

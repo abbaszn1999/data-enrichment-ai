@@ -81,3 +81,70 @@ describe("runEnrichSession when the AI provider account is unavailable", () => {
     );
   });
 });
+
+describe("Image Finder recheck pass respects the tier", () => {
+  const notFoundKey = "imageUrls__notFoundReason";
+  const found = (rowId: string, host: string) => ({
+    ok: true as const,
+    rowId,
+    data: { imageUrls: [{ imageUrl: `https://cdn.test/${rowId}.jpg`, pageUrl: `https://${host}/p/${rowId}`, title: "x" }] },
+    originalPatches: {},
+    credits: 1,
+    cost: 0.1,
+    tokens: 10,
+    billedAttempts: 1,
+  });
+  const notFound = (rowId: string): EnrichRowOutcome => ({
+    ok: true,
+    rowId,
+    data: { imageUrls: [], [notFoundKey]: "not found on any site" },
+    originalPatches: {},
+    credits: 1,
+    cost: 0.1,
+    tokens: 10,
+    billedAttempts: 1,
+  });
+
+  function runWithTier(enrichmentModel: "standard" | "premium") {
+    vi.clearAllMocks();
+    project.current = { rows: [makeRow("r1", 1), makeRow("r2", 2), makeRow("r3", 3)], columns: ["Code"] };
+    repo.loadJobRun.mockResolvedValue({
+      id: "run-1",
+      kind: "catalog",
+      status: "queued",
+      workspace_id: "w",
+      session_id: "s",
+      target_ids: ["r1", "r2", "r3"],
+      settings: {
+        kind: "product",
+        enabledColumns: ["imageUrls"],
+        enrichmentColumns: [{ id: "imageUrls", label: "Image URLs", description: "", type: "imageUrls" }],
+        enrichmentModel,
+        sourceColumns: ["Code"],
+        ownerUserId: "o",
+        actorUserId: "a",
+      },
+    });
+    // r1 and r2 both verify on store.test — enough for the learner to treat it
+    // as a strong lead; r3 comes back Not found, the recheck candidate.
+    const processRow = vi.fn<CatalogProcessRow>(async (rowId) =>
+      rowId === "r3" ? notFound(rowId) : found(rowId, "store.test")
+    );
+    return runEnrichSession("run-1", { processRow }).then(() => processRow);
+  }
+
+  it("runs the second billed attempt on Premium", async () => {
+    const processRow = await runWithTier("premium");
+    const recheckCalls = processRow.mock.calls.filter(([, context]) => context.recheck === true);
+    expect(recheckCalls).toHaveLength(1);
+    expect(recheckCalls[0]![0]).toBe("r3");
+    expect(recheckCalls[0]![1].learnedDomains).toEqual(["store.test"]);
+  });
+
+  it("never spends the second billed attempt on Standard", async () => {
+    const processRow = await runWithTier("standard");
+    // Still processed once as the first pass, just never rechecked.
+    expect(processRow.mock.calls.filter(([id]) => id === "r3")).toHaveLength(1);
+    expect(processRow.mock.calls.some(([, context]) => context.recheck === true)).toBe(false);
+  });
+});

@@ -9,6 +9,7 @@ const { OPENAI_RESPONSES_URL } = await import("../openai");
 const { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } = await import("./not-found");
 const { IMAGE_FINDER_SKILL } = await import("./skill");
 const { resetFetchPageStateForTests } = await import("./tools/fetch-page");
+const { IMAGE_FINDER_MAX_ROUNDS, IMAGE_FINDER_MAX_ROUNDS_STANDARD } = await import("./agent");
 
 const notFoundKey = imageFinderNotFoundKey("imageUrls");
 const matchBasisKey = imageFinderMatchBasisKey("imageUrls");
@@ -291,5 +292,59 @@ describe("Image Finder agent v2", () => {
     const request = openAiRequests(fetchMock)[0];
     expect(request.instructions).toBeUndefined();
     expect(request.text.format.name).not.toBe("catalog_image_finder");
+  });
+
+  describe("Standard vs Premium round budget", () => {
+    /**
+     * A model that never stops calling tools on its own: it keeps issuing
+     * fetch_page until the loop forces `tool_choice: "none"`, at which point
+     * it must answer. Counting requests this way exercises the real
+     * round-cap logic in openai.ts rather than asserting the constant
+     * directly, so it fails if the tier selection in agent.ts breaks.
+     */
+    function infiniteRoundsStubFetch() {
+      let n = 0;
+      const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === OPENAI_RESPONSES_URL) {
+          const body = JSON.parse(String(init?.body)) as { tool_choice?: string };
+          n += 1;
+          if (body.tool_choice === "none") {
+            return new Response(
+              JSON.stringify(finalAnswer({ ...found([]), status: "not_found" })),
+              { status: 200 }
+            );
+          }
+          return new Response(JSON.stringify(fetchPageCall(PAGE, `resp_${n}`)), { status: 200 });
+        }
+        if (url === PAGE) {
+          return new Response(productHtml("RCP1151426"), { status: 200, headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404, headers: { "content-type": "text/html" } });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("gives Standard a smaller round budget than Premium, same model and effort", async () => {
+      const standardFetch = infiniteRoundsStubFetch();
+      await enrichRow({ ...params, settings: { ...params.settings, enrichmentModel: "standard" } });
+      const standardRequests = openAiRequests(standardFetch);
+      expect(standardRequests).toHaveLength(IMAGE_FINDER_MAX_ROUNDS_STANDARD + 1);
+      expect(standardRequests.at(-1).tool_choice).toBe("none");
+      expect(standardRequests[0].model).toBe("gpt-5.6-sol");
+      expect(standardRequests[0].reasoning).toEqual({ effort: "high" });
+
+      vi.unstubAllGlobals();
+      resetFetchPageStateForTests();
+
+      const premiumFetch = infiniteRoundsStubFetch();
+      await enrichRow({ ...params, settings: { ...params.settings, enrichmentModel: "premium" } });
+      const premiumRequests = openAiRequests(premiumFetch);
+      expect(premiumRequests).toHaveLength(IMAGE_FINDER_MAX_ROUNDS + 1);
+      expect(premiumRequests.at(-1).tool_choice).toBe("none");
+      expect(premiumRequests[0].model).toBe("gpt-5.6-sol");
+      expect(premiumRequests[0].reasoning).toEqual({ effort: "high" });
+    });
   });
 });

@@ -140,16 +140,30 @@ export interface NearCodeMatch {
 const NEAR_SUFFIX = /^[A-Z]{1,2}$/;
 
 /**
- * Page codes that differ from a strong row code only by 1–2 trailing letters,
- * in either direction (sheet AN5120 / page AN5120N, or the reverse) — the
- * pattern of package or ordering suffixes and of sheets that dropped a
- * letter. The shorter code must end in a digit, so this is always an appended
- * suffix, never a cut inside a code. All-digit codes (barcodes) and digit
- * changes never qualify. Whether the suffix is harmless is judged by the
- * model; code only records the pattern.
+ * Letters plus at least three digits, five or more characters: specific
+ * enough to be one part's own number rather than a family/series name (e.g.
+ * AN241, AN253 — but not ESP32, a whole product line). Used both to accept
+ * such a code as an exact match on its own (see guards.ts) and to consider
+ * it for a near-code (trailing-letter) variant below: many real part
+ * numbers are only 5 characters, under the 6-character "strong" bar.
+ */
+export function isSpecificPartNumber(key: string): boolean {
+  return key.length >= 5 && /[A-Z]/.test(key) && (key.match(/\d/g)?.length ?? 0) >= 3;
+}
+
+/**
+ * Page codes that differ from a specific row code only by 1–2 trailing
+ * letters, in either direction (sheet AN5120 / page AN5120N, or the
+ * reverse) — the pattern of package or ordering suffixes and of sheets that
+ * dropped a letter. The shorter code must end in a digit, so this is always
+ * an appended suffix, never a cut inside a code. All-digit codes (barcodes)
+ * and digit changes never qualify. Whether the suffix is harmless is judged
+ * by the model; code only records the pattern.
  */
 export function nearIdentifiersSeenIn(text: string, identifiers: RowIdentifier[]): NearCodeMatch[] {
-  const candidates = identifiers.filter((id) => id.strong && /[A-Z]/.test(id.key) && /\d/.test(id.key));
+  const candidates = identifiers.filter(
+    (id) => (id.strong || isSpecificPartNumber(id.key)) && /[A-Z]/.test(id.key) && /\d/.test(id.key)
+  );
   if (candidates.length === 0) return [];
   const keys = codeKeysInText(text);
   const out: NearCodeMatch[] = [];

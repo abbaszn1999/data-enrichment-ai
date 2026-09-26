@@ -4,13 +4,31 @@ import {
   distinctiveWords,
   extractRowIdentifiers,
   identifiersSeenIn,
+  isSpecificPartNumber,
   nearIdentifiersSeenIn,
   normalizeMatchText,
   wordsPresentRatio,
 } from "./identifiers";
 
+describe("isSpecificPartNumber", () => {
+  it("accepts a specific part number (letters plus 3+ digits, 5+ chars) but not a family/series name", () => {
+    expect(isSpecificPartNumber("AN253")).toBe(true);
+    expect(isSpecificPartNumber("AN241")).toBe(true);
+    expect(isSpecificPartNumber("ESP32")).toBe(false); // only 2 digits
+    expect(isSpecificPartNumber("AN25")).toBe(false); // too short
+  });
+});
+
 describe("nearIdentifiersSeenIn", () => {
   const ids = extractRowIdentifiers({ Part: "AN5120", Barcode: "4901234567894" });
+
+  it("finds a near code for a 5-character part number, below the strong bar", () => {
+    const shortIds = extractRowIdentifiers({ Part: "AN253" });
+    expect(shortIds[0]!.strong).toBe(false);
+    expect(nearIdentifiersSeenIn("Panasonic AN253P DIP-16", shortIds)).toEqual([
+      { rowKey: "AN253", rowValue: "AN253", pageCode: "AN253P" },
+    ]);
+  });
 
   it("finds a code with one or two extra trailing letters, in either direction", () => {
     expect(nearIdentifiersSeenIn("Panasonic AN5120N DIP-16", ids)).toEqual([

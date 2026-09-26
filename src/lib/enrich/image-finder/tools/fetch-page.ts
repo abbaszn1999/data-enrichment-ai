@@ -21,9 +21,12 @@ const DEFAULT_MAX_FETCHES_PER_SITE = 20;
 const PER_HOST_GAP_MS = 400;
 const CACHE_TTL_MS = 15 * 60_000;
 const CACHE_MAX = 400;
-const MAX_TEXT_OUT = 2_500;
-const MAX_LINKS_OUT = 45;
-const MAX_IMAGES_OUT = 30;
+// Kept tight: this output is baked into every later round's re-processed
+// context forever (there is no way to prune a page once fetched), so its
+// size multiplies by however many rounds remain in the attempt.
+const MAX_TEXT_OUT = 1_500;
+const MAX_LINKS_OUT = 25;
+const MAX_IMAGES_OUT = 20;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 
