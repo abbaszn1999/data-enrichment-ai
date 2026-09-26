@@ -127,7 +127,7 @@ describe("Image Finder agent v2", () => {
     const result = await enrichRow(params);
 
     const [first, second] = openAiRequests(fetchMock);
-    expect(first.model).toBe("gpt-5.6-sol");
+    expect(first.model).toBe("gpt-6-sol");
     expect(first.reasoning).toEqual({ effort: "high" });
     expect(first.instructions).toBe(IMAGE_FINDER_SKILL);
     expect(first.tools.map((t: { type: string; name?: string }) => t.name ?? t.type)).toEqual([
@@ -332,7 +332,7 @@ describe("Image Finder agent v2", () => {
       const standardRequests = openAiRequests(standardFetch);
       expect(standardRequests).toHaveLength(IMAGE_FINDER_MAX_ROUNDS_STANDARD + 1);
       expect(standardRequests.at(-1).tool_choice).toBe("none");
-      expect(standardRequests[0].model).toBe("gpt-5.6-sol");
+      expect(standardRequests[0].model).toBe("gpt-6-sol");
       expect(standardRequests[0].reasoning).toEqual({ effort: "high" });
 
       vi.unstubAllGlobals();
@@ -343,7 +343,7 @@ describe("Image Finder agent v2", () => {
       const premiumRequests = openAiRequests(premiumFetch);
       expect(premiumRequests).toHaveLength(IMAGE_FINDER_MAX_ROUNDS + 1);
       expect(premiumRequests.at(-1).tool_choice).toBe("none");
-      expect(premiumRequests[0].model).toBe("gpt-5.6-sol");
+      expect(premiumRequests[0].model).toBe("gpt-6-sol");
       expect(premiumRequests[0].reasoning).toEqual({ effort: "high" });
     });
   });

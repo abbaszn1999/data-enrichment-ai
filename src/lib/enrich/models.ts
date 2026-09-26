@@ -11,10 +11,13 @@ export const ENRICHMENT_OPENAI_MODELS = {
 export type EnrichReasoningEffort = "medium" | "high";
 
 /**
- * Image Finder runs the configuration proven in the 30-row research trial on
- * both tiers; its multi-step research is what the tier pays for.
+ * Image Finder runs this model on both tiers; the tier instead pays for
+ * round budget and the recheck pass (see image-finder/agent.ts). Switched
+ * from gpt-5.6-sol to the newer, cheaper gpt-6-sol (2.5x lower input, 3x
+ * lower output cost) — same evidence-gated guards on both, unverified at
+ * scale, so watch quality on real runs after this change.
  */
-export const IMAGE_FINDER_OPENAI_MODEL: EnrichOpenAiModelId = "gpt-5.6-sol";
+export const IMAGE_FINDER_OPENAI_MODEL: EnrichOpenAiModelId = "gpt-6-sol";
 export const IMAGE_FINDER_REASONING_EFFORT: EnrichReasoningEffort = "high";
 export type EnrichSearchContextSize = "medium" | "high";
 
