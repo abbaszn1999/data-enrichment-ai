@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildImageFinderBrief, clampImageCount } from "./brief";
+import { buildImageFinderBrief, IMAGE_FINDER_MAX_IMAGES } from "./brief";
 
 describe("buildImageFinderBrief", () => {
   it("lists every column flat, in sheet order, with no identity/other split", () => {
@@ -16,7 +16,6 @@ describe("buildImageFinderBrief", () => {
         Barcode: "0196975123456",
         "Image Src": "https://cdn.example.com/pegasus.jpg",
       },
-      imageCount: 4,
       customInstruction: "  White background, front view first  ",
     });
 
@@ -51,13 +50,15 @@ describe("buildImageFinderBrief", () => {
     expect([...fieldOrder].sort((a, b) => a - b)).toEqual(fieldOrder);
 
     expect(brief.text).toContain("1 reference image is attached");
-    expect(brief.text).toContain("Return up to 4 images of this exact product.");
+    expect(brief.text).toContain(
+      "Return every distinct image of this exact item that its verified sources show, up to 7."
+    );
     expect(brief.text).toContain(
       "## Custom instruction (store owner, highest priority)\nWhite background, front view first"
     );
     expect(brief.text).not.toContain("https://cdn.example.com/pegasus.jpg");
     expect(brief.referenceImageUrls).toEqual(["https://cdn.example.com/pegasus.jpg"]);
-    expect(brief.imageCount).toBe(4);
+    expect(brief.imageCount).toBe(IMAGE_FINDER_MAX_IMAGES);
   });
 
   it("omits the custom instruction section when it is empty", () => {
@@ -66,7 +67,7 @@ describe("buildImageFinderBrief", () => {
       customInstruction: "   ",
     });
     expect(brief.text).not.toContain("## Custom instruction");
-    expect(brief.text).toContain("Return up to 3 images");
+    expect(brief.text).toContain("up to 7");
     expect(brief.text).toContain("None attached.");
   });
 
@@ -97,6 +98,36 @@ describe("buildImageFinderBrief", () => {
     expect(brief.text).toContain("- Never use images from: pinterest.com");
   });
 
+  it("lists row identifiers, sheet-learned websites and the re-check hint after the website rules", () => {
+    const brief = buildImageFinderBrief({
+      rowData: { Code: "RCP1151426" },
+      rowIdentifiers: ["RCP1151426", "3000000071502"],
+      learnedDomains: ["store.test", "shop.test"],
+      recheck: true,
+    });
+    expect(brief.text).toContain("## Row identifiers\nCode-like values in this row");
+    expect(brief.text).toContain("RCP1151426, 3000000071502");
+    expect(brief.text).toContain("## Websites where other products of this sheet were verified\nstore.test, shop.test");
+    expect(brief.text).toContain("## Final re-check");
+  });
+
+  it("tells the agent to use best-match rules when the row has no code", () => {
+    const brief = buildImageFinderBrief({ rowData: { Description: "Unicorn plush toy" }, rowIdentifiers: [] });
+    expect(brief.text).toContain("## Row identifiers\nNone: this row has no SKU, barcode or model code");
+    expect(brief.text).toContain("matchBasis best_match");
+    const unspecified = buildImageFinderBrief({ rowData: { Description: "Unicorn plush toy" } });
+    expect(unspecified.text).not.toContain("## Row identifiers");
+  });
+
+  it("does not add sheet-learned websites when the owner set an allow list", () => {
+    const brief = buildImageFinderBrief({
+      rowData: { Code: "RCP1151426" },
+      allowedDomains: ["store.test"],
+      learnedDomains: ["other.test"],
+    });
+    expect(brief.text).not.toContain("other.test");
+  });
+
   it("caps reference images at four", () => {
     const rowData: Record<string, string> = {};
     for (let i = 0; i < 6; i += 1) rowData[`img${i}`] = `https://cdn.example.com/${i}.png`;
@@ -104,11 +135,8 @@ describe("buildImageFinderBrief", () => {
   });
 });
 
-describe("clampImageCount", () => {
-  it("clamps to 1..10 and defaults to 3", () => {
-    expect(clampImageCount(undefined)).toBe(3);
-    expect(clampImageCount(0)).toBe(1);
-    expect(clampImageCount(25)).toBe(10);
-    expect(clampImageCount(4.6)).toBe(5);
+describe("IMAGE_FINDER_MAX_IMAGES", () => {
+  it("is a fixed limit of 7 images per item", () => {
+    expect(IMAGE_FINDER_MAX_IMAGES).toBe(7);
   });
 });

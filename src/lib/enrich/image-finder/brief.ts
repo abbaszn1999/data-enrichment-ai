@@ -2,39 +2,40 @@
  * Structured per-row brief for the Image Finder agent. Every column is listed
  * as one flat "Product data" section, in the sheet's own column order — there
  * is no pre-sorted "identity" vs "other" split. Deciding which fields actually
- * identify the product (brand, model, SKU) is the agent's own job, using the
- * skill's method, not a fixed field-name lookup here. This also means a
- * variant/color field is just another line, not a special category — the
- * skill treats variant as optional unless the custom instruction says
- * otherwise. Order after the product data is fixed: reference image, number
- * of images, custom instruction, website rules. Pure (no runtime imports) so
- * it is cheap to test.
+ * identify the product (brand, model, SKU) and which attributes define its
+ * variant is the agent's own job, using the skill's method, not a fixed
+ * field-name lookup here. Order after the product data is fixed: reference
+ * image, number of images, custom instruction, website rules, row
+ * identifiers, sheet-learned websites, re-check hint. Pure (no runtime
+ * imports) so it is cheap to test.
  */
 
-export const IMAGE_FINDER_MIN_IMAGES = 1;
-export const IMAGE_FINDER_MAX_IMAGES = 10;
-export const IMAGE_FINDER_DEFAULT_IMAGES = 3;
+/**
+ * Image Finder has no user-chosen count: it gathers every distinct photo of
+ * the exact item its verified sources show, up to this many.
+ */
+export const IMAGE_FINDER_MAX_IMAGES = 7;
 const MAX_REFERENCE_IMAGES = 4;
 const FIELD_VALUE_CHARS = 400;
 
 export interface ImageFinderBriefInput {
   rowData: Record<string, string>;
-  imageCount?: number;
   customInstruction?: string;
   /** Already-sanitized website rules (see lib/enrich/domains). */
   allowedDomains?: string[];
   blockedDomains?: string[];
+  /** Code-like values from the row, as written (see tools/identifiers). */
+  rowIdentifiers?: string[];
+  /** Websites where other rows of this sheet were verified, most first. */
+  learnedDomains?: string[];
+  /** Final re-check of a row that ended Not found in the first pass. */
+  recheck?: boolean;
 }
 
 export interface ImageFinderBrief {
   text: string;
   referenceImageUrls: string[];
   imageCount: number;
-}
-
-export function clampImageCount(value: number | undefined): number {
-  const n = Number.isFinite(value) ? Math.round(value as number) : IMAGE_FINDER_DEFAULT_IMAGES;
-  return Math.min(IMAGE_FINDER_MAX_IMAGES, Math.max(IMAGE_FINDER_MIN_IMAGES, n));
 }
 
 function displayKey(key: string): string {
@@ -61,7 +62,7 @@ function isImageValue(value: string): boolean {
 }
 
 export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinderBrief {
-  const imageCount = clampImageCount(input.imageCount);
+  const imageCount = IMAGE_FINDER_MAX_IMAGES;
   const referenceImageUrls: string[] = [];
   const fieldLines: string[] = [];
 
@@ -93,7 +94,7 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     referenceLine,
     "",
     "## Number of images",
-    `Return up to ${imageCount} image${imageCount === 1 ? "" : "s"} of this exact product.`,
+    `Return every distinct image of this exact item that its verified sources show, up to ${imageCount}.`,
   ];
   if (customInstruction) {
     sections.push("", "## Custom instruction (store owner, highest priority)", customInstruction);
@@ -109,6 +110,38 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     if (blocked.length > 0) {
       sections.push(`- Never use images from: ${blocked.join(", ")}`);
     }
+  }
+
+  const identifiers = input.rowIdentifiers ?? [];
+  if (identifiers.length > 0) {
+    sections.push(
+      "",
+      "## Row identifiers",
+      `Code-like values in this row (check_pages and fetch_page report which of them appear on each page): ${identifiers.join(", ")}`
+    );
+  } else if (input.rowIdentifiers) {
+    sections.push(
+      "",
+      "## Row identifiers",
+      "None: this row has no SKU, barcode or model code. Use the best-match rules: one item whose brand and description clearly match this row, with its brand in brandSeen and matchBasis best_match."
+    );
+  }
+
+  const learned = allowed.length > 0 ? [] : (input.learnedDomains ?? []);
+  if (learned.length > 0) {
+    sections.push(
+      "",
+      "## Websites where other products of this sheet were verified",
+      learned.join(", "),
+      "Strong leads: run each one's own site search for this row's identifiers early."
+    );
+  }
+  if (input.recheck) {
+    sections.push(
+      "",
+      "## Final re-check",
+      "An earlier search for this row ended without a verified match. Before anything else, run the own site search of each website listed above for every row identifier, and open every plausible result (and its structured data) before concluding."
+    );
   }
 
   return { text: sections.join("\n"), referenceImageUrls, imageCount };

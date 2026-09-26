@@ -1,53 +1,97 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { calculateOpenAiWebSearchCost } from "@/lib/ai-pricing";
-import { enrichRow } from "../agent";
-import { EnrichBilledAttemptError, OPENAI_RESPONSES_URL } from "../openai";
-import { imageFinderNotFoundKey } from "./not-found";
-import { IMAGE_FINDER_SKILL } from "./skill";
+
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+}));
+
+const { enrichRow } = await import("../agent");
+const { OPENAI_RESPONSES_URL } = await import("../openai");
+const { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } = await import("./not-found");
+const { IMAGE_FINDER_SKILL } = await import("./skill");
+const { resetFetchPageStateForTests } = await import("./tools/fetch-page");
 
 const notFoundKey = imageFinderNotFoundKey("imageUrls");
+const matchBasisKey = imageFinderMatchBasisKey("imageUrls");
+const matchNoteKey = imageFinderMatchNoteKey("imageUrls");
+const usage = { input_tokens: 3_000, input_tokens_details: { cached_tokens: 1_000 }, output_tokens: 800 };
+const PAGE = "https://shop.test/products/electric-ride-on-bulldozer";
+const FRONT = "https://cdn.imagehost.test/files/dozer-front-20260108.jpg";
+const SIDE = "https://cdn.imagehost.test/files/dozer-side-20260108.jpg";
 
-const usage = {
-  input_tokens: 3_000,
-  input_tokens_details: { cached_tokens: 1_000 },
-  output_tokens: 800,
-  output_tokens_details: { reasoning_tokens: 600 },
-  total_tokens: 3_800,
-};
+function productHtml(sku: string | null) {
+  const ld = {
+    "@type": "Product",
+    name: "Electric Ride-On Bulldozer",
+    ...(sku ? { sku } : {}),
+    image: [FRONT, SIDE],
+  };
+  return `<html><head><title>Electric Ride-On Bulldozer</title>
+<script type="application/ld+json">${JSON.stringify(ld)}</script></head>
+<body><h1>Electric Ride-On Bulldozer</h1><form action="/search" method="get"><input type="search" name="q"></form></body></html>`;
+}
 
-function openAiBody(selection: unknown, status = "completed") {
+function fetchPageCall(url: string, id = "resp_1") {
   return {
-    status,
+    id,
+    status: "completed",
     usage,
     output: [
-      { type: "web_search_call", action: { type: "search", query: "Widget WX-1" } },
-      { type: "web_search_call", action: { type: "open_page" } },
-      {
-        type: "message",
-        content: [{ type: "output_text", text: JSON.stringify(selection) }],
-      },
+      { type: "web_search_call", action: { type: "search", query: "RCP1151426" } },
+      { type: "function_call", call_id: `call_${id}`, name: "fetch_page", arguments: JSON.stringify({ url }) },
     ],
   };
 }
 
-/** image/jpeg for every URL by default; per-URL overrides let a test simulate a dead or non-image link. */
-function imageVerificationMock(overrides: Record<string, { status?: number; contentType?: string }> = {}) {
-  return vi.fn((input: string, init: { method?: string }) => {
-    if (input === OPENAI_RESPONSES_URL) throw new Error("OpenAI call should be mocked separately");
-    const override = overrides[input];
-    const status = override?.status ?? 200;
-    const contentType = override && "contentType" in override ? override.contentType : "image/jpeg";
-    return Promise.resolve(
-      new Response(init.method === "HEAD" ? null : new Uint8Array([1, 2, 3]), {
-        status,
-        headers: contentType ? { "content-type": contentType } : {},
-      })
-    );
+function finalAnswer(answer: Record<string, unknown>) {
+  return {
+    id: "resp_final",
+    status: "completed",
+    usage,
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(answer) }] }],
+  };
+}
+
+function found(images: Array<{ url: string; pageUrl?: string }>, notes = "Verified SKU on the product page") {
+  return {
+    status: "found",
+    verification: { pageUrl: PAGE, identifierSeen: "RCP1151426", matchBasis: "identifier" },
+    images: images.map((image) => ({ url: image.url, pageUrl: image.pageUrl ?? PAGE })),
+    notes,
+  };
+}
+
+function stubFetch(openAiBodies: unknown[], pages: Record<string, string>) {
+  let openAiIndex = 0;
+  const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === OPENAI_RESPONSES_URL) {
+      const body = openAiBodies[Math.min(openAiIndex, openAiBodies.length - 1)];
+      openAiIndex += 1;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }
+    if (pages[url] !== undefined) {
+      return new Response(pages[url], { status: 200, headers: { "content-type": "text/html" } });
+    }
+    if (/\.(jpe?g|png|webp)(\?|$)/i.test(url)) {
+      return new Response(init?.method === "HEAD" ? null : new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      });
+    }
+    return new Response("not found", { status: 404, headers: { "content-type": "text/html" } });
   });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function openAiRequests(fetchMock: ReturnType<typeof stubFetch>) {
+  return fetchMock.mock.calls
+    .filter((call) => String(call[0]) === OPENAI_RESPONSES_URL)
+    .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
 }
 
 const params = {
-  productData: { Brand: "Acme", Title: "Widget WX-1" },
+  productData: { Code: "RCP1151426", Description: "2.4G RC ENGINEERING VEHICLE (YELLOW)", Brand: "PAKTAT" },
   enabledColumns: ["imageUrls"],
   enrichmentColumns: [
     {
@@ -56,323 +100,195 @@ const params = {
       description: "",
       type: "imageUrls" as const,
       enabled: true,
-      imageCount: 2,
-      customInstruction: "Front view first",
+      imageCount: 3,
+      customInstruction: "White background first",
     },
   ],
   settings: { enrichmentModel: "standard" as const, outputLanguage: "English" },
   kind: "product" as const,
 };
 
-describe("Image Finder agent", () => {
-  let verifyMock: ReturnType<typeof imageVerificationMock>;
-
+describe("Image Finder agent v2", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "test-key";
-    verifyMock = imageVerificationMock();
+    resetFetchPageStateForTests();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  /** Combines a one-shot OpenAI response with the shared image-verification mock. */
-  function stubFetch(openAiResponseBody: unknown) {
-    const fetchMock = vi.fn((input: string, init: { method?: string; body?: string }) => {
-      if (input === OPENAI_RESPONSES_URL) {
-        return Promise.resolve(new Response(JSON.stringify(openAiResponseBody), { status: 200 }));
-      }
-      return verifyMock(input, init);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
-  }
-
-  it("sends the skill, structured brief and gpt-6-sol, and bills only search actions", async () => {
+  it("runs the research loop with the trial model, tools and brief, and bills every round", async () => {
     const fetchMock = stubFetch(
-      openAiBody({
-        images: [
-          {
-            url: "https://cdn.example.com/b.jpg",
-            confidence: "high",
-            matchedOn: "SKU verified on source page",
-          },
-        ],
-        notes: "Confident match",
-      })
+      [fetchPageCall(PAGE), finalAnswer(found([{ url: FRONT }, { url: SIDE }]))],
+      { [PAGE]: productHtml("RCP1151426") }
     );
 
     const result = await enrichRow(params);
 
-    const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(request.model).toBe("gpt-6-sol");
-    expect(request.reasoning).toEqual({ effort: "medium" });
-    expect(request.instructions).toBe(IMAGE_FINDER_SKILL);
-    expect(request.tool_choice).toBe("required");
-    expect(request.tools[0]).toMatchObject({
-      type: "web_search",
-      search_context_size: "medium",
-      search_content_types: ["image", "text"],
-      return_token_budget: "unlimited",
-      // Over-fetches well beyond the requested 2, so the model has real
-      // candidates to choose from instead of being handed exactly the target.
-      image_settings: { max_results: 20, caption: true },
-    });
-    expect(request.text.format.name).toBe("catalog_image_finder");
-    expect(request.text.format.schema.properties.images.maxItems).toBe(2);
-    const prompt = request.input[0].content.at(-1).text as string;
-    expect(prompt).toContain("- Brand: Acme");
-    expect(prompt).toContain(
-      "## Custom instruction (store owner, highest priority)\nFront view first"
-    );
-    expect(request.tools[0].filters).toBeUndefined();
+    const [first, second] = openAiRequests(fetchMock);
+    expect(first.model).toBe("gpt-5.6-sol");
+    expect(first.reasoning).toEqual({ effort: "high" });
+    expect(first.instructions).toBe(IMAGE_FINDER_SKILL);
+    expect(first.tools.map((t: { type: string; name?: string }) => t.name ?? t.type)).toEqual([
+      "web_search",
+      "check_pages",
+      "fetch_page",
+      "view_images",
+    ]);
+    const schema = first.text.format.schema;
+    expect(schema.properties.verification.required).toContain("brandSeen");
+    expect(schema.properties.verification.properties.matchBasis.enum).toEqual([
+      "identifier",
+      "near_identifier",
+      "model_variant",
+      "best_match",
+      "none",
+    ]);
+    expect(first.tools[0].search_content_types).toEqual(["text"]);
+    const prompt = first.input[0].content.at(-1).text as string;
+    expect(prompt).toContain("## Row identifiers");
+    expect(prompt).toContain("RCP1151426");
+    expect(prompt).toContain("## Custom instruction (store owner, highest priority)\nWhite background first");
 
-    // The reported URL is verified live rather than matched against a
-    // separate image-search field — high confidence leaves the caption as is.
+    expect(second.previous_response_id).toBe("resp_1");
+    const toolOutput = JSON.parse(second.input[0].output);
+    expect(toolOutput.rowIdentifiersSeen).toContain("RCP1151426");
+    expect(toolOutput.searchForms[0].urlTemplate).toBe("https://shop.test/search?q={query}");
+
     expect(result.data).toEqual({
       imageUrls: [
-        expect.objectContaining({ imageUrl: "https://cdn.example.com/b.jpg", title: "Product image" }),
+        expect.objectContaining({ imageUrl: FRONT, pageUrl: PAGE, title: "Product image" }),
+        expect.objectContaining({ imageUrl: SIDE, pageUrl: PAGE }),
       ],
       [notFoundKey]: "",
+      [matchBasisKey]: "identifier",
+      [matchNoteKey]: "",
     });
-    expect(result.costs).toHaveLength(1);
-    const expected = calculateOpenAiWebSearchCost("gpt-6-sol", usage, 1);
-    expect(result.costs[0].searchCost).toBeCloseTo(0.01, 10);
-    expect(result.costs[0].totalCost).toBeCloseTo(expected.totalCost, 10);
+    expect(result.costs).toHaveLength(2);
   });
 
-  it("accepts a real link the model says it read off an opened page, not only image-search hits", async () => {
+  it("drops an image link that never appeared on a verified page", async () => {
     stubFetch(
-      openAiBody({
-        images: [
-          {
-            url: "https://toys4less.com/cdn/shop/files/tank.jpg",
-            confidence: "medium",
-            matchedOn: "read directly off the confirmed product page",
-          },
-        ],
-        notes: "Confirmed the SKU on the product page and read its photo directly.",
-      })
+      [
+        fetchPageCall(PAGE),
+        finalAnswer(found([{ url: FRONT }, { url: "https://cdn.imagehost.test/files/similar-item-99999999.jpg" }])),
+      ],
+      { [PAGE]: productHtml("RCP1151426") }
     );
     const result = await enrichRow(params);
     const images = result.data.imageUrls as Array<{ imageUrl: string }>;
-    expect(images).toHaveLength(1);
-    expect(images[0]!.imageUrl).toBe("https://toys4less.com/cdn/shop/files/tank.jpg");
+    expect(images.map((image) => image.imageUrl)).toEqual([FRONT]);
   });
 
-  it("drops a reported link that does not actually load as an image, even at high confidence", async () => {
-    verifyMock = imageVerificationMock({
-      "https://cdn.example.com/dead.jpg": { status: 404 },
-    });
-    stubFetch(
-      openAiBody({
-        images: [{ url: "https://cdn.example.com/dead.jpg", confidence: "high", matchedOn: "brand+model" }],
-        notes: "",
-      })
-    );
+  it("rejects a match on a page the agent never actually opened", async () => {
+    stubFetch([finalAnswer(found([{ url: FRONT }]))], {});
     const result = await enrichRow(params);
-    expect(result.data).toEqual({ imageUrls: [], [notFoundKey]: "" });
+    expect(result.data.imageUrls).toEqual([]);
+    expect(String(result.data[notFoundKey])).toContain("was not opened successfully");
   });
 
-  it("drops a link that loads but is not actually an image", async () => {
-    verifyMock = imageVerificationMock({
-      "https://example.com/page.html": { contentType: "text/html" },
-    });
-    stubFetch(
-      openAiBody({
-        images: [{ url: "https://example.com/page.html", confidence: "high", matchedOn: "brand+model" }],
-        notes: "",
-      })
-    );
+  it("rejects a page that does not show any of the row's identifiers", async () => {
+    stubFetch([fetchPageCall(PAGE), finalAnswer(found([{ url: FRONT }]))], { [PAGE]: productHtml(null) });
     const result = await enrichRow(params);
-    expect(result.data).toEqual({ imageUrls: [], [notFoundKey]: "" });
+    expect(result.data.imageUrls).toEqual([]);
+    expect(String(result.data[notFoundKey])).toContain("None of this row's identifiers appear");
   });
 
-  it("annotates but never drops a low- or medium-confidence match that does verify", async () => {
-    stubFetch(
-      openAiBody({
-        images: [
-          { url: "https://cdn.example.com/a.jpg", confidence: "medium", matchedOn: "brand+model only" },
-          { url: "https://cdn.example.com/b.jpg", confidence: "low", matchedOn: "title match only" },
-        ],
-        notes: "Two uncertain matches, both included.",
-      })
-    );
-    const result = await enrichRow(params);
-    const images = result.data.imageUrls as Array<{ imageUrl: string; title: string }>;
-    expect(images).toHaveLength(2);
-    expect(images[0]!.title).toBe("medium confidence — matched on brand+model only. Product image");
-    expect(images[1]!.title).toBe("low confidence — matched on title match only. Product image");
-  });
-
-  it("uses high effort and search context on Premium", async () => {
-    stubFetch(openAiBody({ images: [], notes: "" }));
-    await enrichRow({ ...params, settings: { enrichmentModel: "premium", outputLanguage: "English" } });
-    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(request.model).toBe("gpt-6-sol");
-    expect(request.reasoning).toEqual({ effort: "high" });
-    expect(request.tools[0].search_context_size).toBe("high");
-  });
-
-  it("reports the cost of a billed but unusable response", async () => {
-    stubFetch(openAiBody({}, "incomplete"));
-    const error = await enrichRow(params).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(EnrichBilledAttemptError);
-    expect((error as EnrichBilledAttemptError).costs).toHaveLength(1);
-  });
-
-  it("sends website rules as web_search filters and enforces them on results", async () => {
-    stubFetch(
-      openAiBody({
-        images: [
-          { url: "https://cdn.example.com/a.jpg", confidence: "high", matchedOn: "brand+model" },
-          { url: "https://cdn.example.com/b.jpg", confidence: "high", matchedOn: "brand+model" },
-        ],
-        notes: "",
-      })
+  it("keeps CDN-hosted images when the verified page is on an allowed website", async () => {
+    const fetchMock = stubFetch(
+      [fetchPageCall(PAGE), finalAnswer(found([{ url: FRONT }]))],
+      { [PAGE]: productHtml("RCP1151426") }
     );
     const result = await enrichRow({
       ...params,
-      enrichmentColumns: [
-        {
-          ...params.enrichmentColumns[0],
-          allowedDomains: ["https://www.Example.com/shop", "example.com"],
-          blockedDomains: ["pinterest.com", "not a site"],
-        },
+      enrichmentColumns: [{ ...params.enrichmentColumns[0], allowedDomains: ["shop.test"] }],
+    });
+    expect(openAiRequests(fetchMock)[0].tools[0].filters).toEqual({ allowed_domains: ["shop.test"] });
+    expect((result.data.imageUrls as unknown[]).length).toBe(1);
+  });
+
+  it("refuses to open pages outside the allowed websites", async () => {
+    const fetchMock = stubFetch(
+      [fetchPageCall("https://other.test/products/x"), finalAnswer({ ...found([]), status: "not_found" })],
+      {}
+    );
+    await enrichRow({
+      ...params,
+      enrichmentColumns: [{ ...params.enrichmentColumns[0], allowedDomains: ["shop.test"] }],
+    });
+    const toolOutput = JSON.parse(openAiRequests(fetchMock)[1].input[0].output);
+    expect(toolOutput.error).toContain("outside the store owner's allowed websites");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).startsWith("https://other.test"))).toBe(false);
+  });
+
+  it("records the agent's own reason when it finds nothing, and clears it on success", async () => {
+    stubFetch(
+      [
+        finalAnswer({
+          status: "not_found",
+          verification: { pageUrl: "", identifierSeen: "", matchBasis: "none" },
+          images: [],
+          notes: "Searched the code, the brand site and three retailers; no page shows RCP1151426.",
+        }),
       ],
+      {}
+    );
+    const miss = await enrichRow(params);
+    expect(miss.data).toEqual({
+      imageUrls: [],
+      [notFoundKey]: "Searched the code, the brand site and three retailers; no page shows RCP1151426.",
+      [matchBasisKey]: "",
+      [matchNoteKey]: "",
     });
 
-    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(request.tools[0].filters).toEqual({
-      allowed_domains: ["example.com"],
-      blocked_domains: ["pinterest.com"],
-    });
-    const prompt = request.input[0].content.at(-1).text as string;
-    expect(prompt).toContain("## Website rules (enforced)");
-    // Both results are on example.com, so both pass domain rules and verify.
-    expect((result.data.imageUrls as unknown[]).length).toBe(2);
+    resetFetchPageStateForTests();
+    stubFetch([fetchPageCall(PAGE), finalAnswer(found([{ url: FRONT }]))], { [PAGE]: productHtml("RCP1151426") });
+    const hit = await enrichRow(params);
+    expect(hit.data[notFoundKey]).toBe("");
   });
 
-  it("checks website rules against the page the image came from, so store CDN images are kept", async () => {
-    stubFetch(
-      openAiBody({
-        images: [
-          {
-            url: "https://cdn.shopify.com/s/files/1/tank.jpg",
-            pageUrl: "https://toys4less.com/products/electric-ride-on-toy-tank.json",
-            confidence: "high",
-            matchedOn: "SKU on product page",
-          },
-          {
-            url: "https://cdn.shopify.com/s/files/1/other.jpg",
-            pageUrl: "https://elsewhere.com/products/other",
-            confidence: "high",
-            matchedOn: "brand+model",
-          },
-        ],
-        notes: "",
-      })
+  it("passes sheet-learned websites and the re-check hint into the brief", async () => {
+    const fetchMock = stubFetch([finalAnswer({ ...found([]), status: "not_found" })], {});
+    await enrichRow({ ...params, learnedDomains: ["shop.test"], recheck: true });
+    const prompt = openAiRequests(fetchMock)[0].input[0].content.at(-1).text as string;
+    expect(prompt).toContain("## Websites where other products of this sheet were verified\nshop.test");
+    expect(prompt).toContain("## Final re-check");
+  });
+
+  it("labels a code-less row's verified item as a best match and writes the note on captions", async () => {
+    const brandedHtml = productHtml(null).replace('"name":"Electric Ride-On Bulldozer"', '"name":"Electric Ride-On Bulldozer","brand":{"name":"Paktat"}');
+    const fetchMock = stubFetch(
+      [
+        fetchPageCall(PAGE),
+        finalAnswer({
+          status: "found",
+          verification: { pageUrl: PAGE, identifierSeen: "", brandSeen: "Paktat", matchBasis: "best_match" },
+          images: [{ url: FRONT, pageUrl: PAGE }],
+          notes: "Brand and title match",
+        }),
+      ],
+      { [PAGE]: brandedHtml }
     );
     const result = await enrichRow({
       ...params,
-      enrichmentColumns: [{ ...params.enrichmentColumns[0], allowedDomains: ["toys4less.com"] }],
+      productData: { Description: "Electric ride-on bulldozer", Brand: "PAKTAT" },
     });
+    const prompt = openAiRequests(fetchMock)[0].input[0].content.at(-1).text as string;
+    expect(prompt).toContain("None: this row has no SKU, barcode or model code");
+    expect(result.data[matchBasisKey]).toBe("best_match");
+    expect(result.data[matchNoteKey]).toBe("Best match by title and brand (no code in the sheet).");
     expect(result.data.imageUrls).toEqual([
-      expect.objectContaining({
-        imageUrl: "https://cdn.shopify.com/s/files/1/tank.jpg",
-        pageUrl: "https://toys4less.com/products/electric-ride-on-toy-tank",
-      }),
+      expect.objectContaining({ imageUrl: FRONT, title: "Best match by title and brand (no code in the sheet). Product image" }),
     ]);
   });
 
-  it("drops results outside the allowed websites even if the model picked them", async () => {
-    stubFetch(
-      openAiBody({
-        images: [{ url: "https://cdn.example.com/a.jpg", confidence: "high", matchedOn: "brand+model" }],
-        notes: "",
-      })
-    );
-    const result = await enrichRow({
-      ...params,
-      enrichmentColumns: [{ ...params.enrichmentColumns[0], allowedDomains: ["lego.com"] }],
-    });
-    expect(result.data).toEqual({ imageUrls: [], [notFoundKey]: "" });
-  });
-
-  it("retries without filters when OpenAI rejects them, still enforcing the rules", async () => {
-    let openAiCallCount = 0;
-    const fetchMock = vi.fn((input: string, init: { method?: string; body?: string }) => {
-      if (input === OPENAI_RESPONSES_URL) {
-        openAiCallCount += 1;
-        if (openAiCallCount === 1) {
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({ error: { message: "Unsupported parameter: 'filters' with image search" } }),
-              { status: 400 }
-            )
-          );
-        }
-        return Promise.resolve(
-          new Response(
-            JSON.stringify(
-              openAiBody({
-                images: [{ url: "https://cdn.example.com/a.jpg", confidence: "high", matchedOn: "brand+model" }],
-                notes: "",
-              })
-            ),
-            { status: 200 }
-          )
-        );
-      }
-      return verifyMock(input, init);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await enrichRow({
-      ...params,
-      enrichmentColumns: [{ ...params.enrichmentColumns[0], blockedDomains: ["example.com"] }],
-    });
-    const openAiCalls = fetchMock.mock.calls.filter((c) => c[0] === OPENAI_RESPONSES_URL);
-    expect(openAiCalls).toHaveLength(2);
-    const retry = JSON.parse(openAiCalls[1]![1].body as string);
-    expect(retry.tools[0].filters).toBeUndefined();
-    expect(result.data).toEqual({ imageUrls: [], [notFoundKey]: "" });
-    // The rejected request carried no usage, so only the retry is billed.
-    expect(result.costs).toHaveLength(1);
-  });
-
-  it("records the model's own reason when it finds nothing", async () => {
-    stubFetch(
-      openAiBody({ images: [], notes: "SKU pointed to a different product; no confident match." })
-    );
-    const result = await enrichRow(params);
-    expect(result.data).toEqual({
-      imageUrls: [],
-      [notFoundKey]: "SKU pointed to a different product; no confident match.",
-    });
-  });
-
-  it("clears the not-found reason once a run finds real images", async () => {
-    stubFetch(
-      openAiBody({
-        images: [{ url: "https://cdn.example.com/a.jpg", confidence: "high", matchedOn: "brand+model" }],
-        notes: "Confident match",
-      })
-    );
-    const result = await enrichRow(params);
-    // A prior empty run may have left a stale reason on this row; a successful
-    // run must always overwrite it with an empty string, never leave it stale.
-    expect(result.data[notFoundKey]).toBe("");
-  });
-
   it("leaves mixed column runs on the generic enrichment prompt", async () => {
-    stubFetch(
-      openAiBody({ imageUrls: [], enhancedTitle: "Widget", notes: "" })
+    const fetchMock = stubFetch(
+      [finalAnswer({ imageUrls: [], enhancedTitle: "Widget", notes: "" })],
+      {}
     );
     await enrichRow({ ...params, enabledColumns: ["imageUrls", "enhancedTitle"] });
-    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const request = openAiRequests(fetchMock)[0];
     expect(request.instructions).toBeUndefined();
     expect(request.text.format.name).not.toBe("catalog_image_finder");
   });

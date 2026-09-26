@@ -27,5 +27,10 @@ export const ENRICH_ROW_TIMEOUT_SECONDS = 600;
  * each) plus uploads. 600s would kill a slow Full row on Render.
  */
 export const GALLERY_ROW_TIMEOUT_SECONDS = 1_500;
+/**
+ * Image Finder rows run a multi-step research loop: up to JOB_ROW_ATTEMPTS
+ * attempts of IMAGE_FINDER_ATTEMPT_BUDGET_MS (540s) each, plus image checks.
+ */
+export const IMAGE_FINDER_ROW_TIMEOUT_SECONDS = 1_500;
 export const SESSION_TIMEOUT_SECONDS = 86_400;
 export const JOB_TASK_PLAN = "flex" as const;

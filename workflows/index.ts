@@ -29,6 +29,7 @@ import { runMrCollectionsSession } from "../src/lib/jobs/mr-collections-session"
 import {
   ENRICH_ROW_TIMEOUT_SECONDS,
   GALLERY_ROW_TIMEOUT_SECONDS,
+  IMAGE_FINDER_ROW_TIMEOUT_SECONDS,
   SESSION_TIMEOUT_SECONDS,
   JOB_TASK_PLAN,
 } from "../src/lib/jobs/config";
@@ -49,6 +50,18 @@ export const enrichRow = task(
   {
     name: "enrichRow",
     timeoutSeconds: ENRICH_ROW_TIMEOUT_SECONDS,
+    plan: JOB_TASK_PLAN,
+    retry: rowRetry,
+  },
+  async (_ctx: TaskContext, input: CatalogRowTaskInput) => {
+    return executeCatalogRow(input);
+  }
+);
+
+export const imageFinderRow = task(
+  {
+    name: "imageFinderRow",
+    timeoutSeconds: IMAGE_FINDER_ROW_TIMEOUT_SECONDS,
     plan: JOB_TASK_PLAN,
     retry: rowRetry,
   },
@@ -90,7 +103,13 @@ export const enrichSession = task(
   },
   async (ctx: TaskContext, runId: string) => {
     await runEnrichSession(runId, {
-      processRow: (rowId) => ctx.run(enrichRow, { runId, rowId }),
+      processRow: (rowId, context) =>
+        ctx.run(context.imageFinder ? imageFinderRow : enrichRow, {
+          runId,
+          rowId,
+          learnedDomains: context.learnedDomains,
+          recheck: context.recheck,
+        }),
     });
     return { ok: true, runId };
   }

@@ -6,6 +6,7 @@ import {
   resolveEnrichSearchContextSize,
   type EnrichOpenAiModelId,
   type EnrichReasoningEffort,
+  type EnrichSearchContextSize,
 } from "./models";
 import type { EnrichToolPolicy } from "./policy";
 import type {
@@ -73,6 +74,101 @@ export class EnrichCancelledError extends Error {
 
 export function isEnrichCancelledError(error: unknown): boolean {
   return error instanceof EnrichCancelledError;
+}
+
+/**
+ * Our own AI provider account cannot serve requests (out of quota or credit
+ * balance). Nothing about the row is wrong, so it must not be retried,
+ * charged or marked as an error: the job stops and the row stays pending.
+ */
+export class EnrichProviderUnavailableError extends Error {
+  constructor(message = "AI service temporarily unavailable") {
+    super(message);
+    this.name = "EnrichProviderUnavailableError";
+  }
+}
+
+export function isEnrichProviderUnavailableError(error: unknown): error is EnrichProviderUnavailableError {
+  return error instanceof EnrichProviderUnavailableError;
+}
+
+const PROVIDER_UNAVAILABLE_CODES = new Set(["insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached"]);
+
+/** OpenAI's out-of-quota / out-of-credit errors (never a problem with the request itself). */
+export function isOpenAiProviderUnavailable(error: { code?: unknown; type?: unknown; message?: unknown } | undefined): boolean {
+  if (!error) return false;
+  if (PROVIDER_UNAVAILABLE_CODES.has(String(error.code ?? "")) || PROVIDER_UNAVAILABLE_CODES.has(String(error.type ?? ""))) {
+    return true;
+  }
+  return /exceeded your current quota|credit balance is too low|billing hard limit/i.test(String(error.message ?? ""));
+}
+
+/** What a function tool hands back to the model: plain text or text + images. */
+export type EnrichToolOutput =
+  | string
+  | Array<
+      | { type: "input_text"; text: string }
+      | { type: "input_image"; image_url: string; detail?: "low" | "high" | "auto" }
+    >;
+
+/**
+ * A server-side function the model may call mid-response, alongside
+ * web_search. Every extra round is a billed Responses call, so each round's
+ * cost is carried into the result.
+ */
+export interface EnrichFunctionTool {
+  name: string;
+  description: string;
+  /** Strict JSON schema for the call arguments. */
+  parameters: Record<string, unknown>;
+  run: (args: Record<string, unknown>) => Promise<EnrichToolOutput>;
+}
+
+/** Default cap on function-call rounds per attempt. */
+export const DEFAULT_MAX_FUNCTION_ROUNDS = 25;
+
+type FunctionCallItem = { type: "function_call"; call_id: string; name: string; arguments: string };
+
+function functionCallsOf(body: OpenAiResponse): FunctionCallItem[] {
+  return (body.output ?? []).filter(
+    (item): item is FunctionCallItem =>
+      item.type === "function_call" &&
+      typeof (item as Partial<FunctionCallItem>).call_id === "string" &&
+      typeof (item as Partial<FunctionCallItem>).name === "string"
+  );
+}
+
+/** No single tool call may hold a row longer than this (a hanging website must not freeze the loop). */
+export const TOOL_CALL_TIMEOUT_MS = 90_000;
+/**
+ * Time kept for the final answer. When less remains, pending tool calls are
+ * answered with "time is up" and the model must answer with what it has
+ * verified — instead of the attempt timing out and discarding all its work.
+ */
+export const ANSWER_RESERVE_MS = 75_000;
+
+async function runFunctionCall(
+  tools: EnrichFunctionTool[],
+  call: FunctionCallItem,
+  timeoutMs: number
+): Promise<EnrichToolOutput> {
+  const tool = tools.find((t) => t.name === call.name);
+  if (!tool) return JSON.stringify({ error: `Unknown tool ${call.name}` });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
+    const timedOut = new Promise<EnrichToolOutput>((resolve) => {
+      timer = setTimeout(
+        () => resolve(JSON.stringify({ error: "The tool timed out. Try another source." })),
+        Math.max(1, timeoutMs)
+      );
+    });
+    return await Promise.race([tool.run(args), timedOut]);
+  } catch (error) {
+    return JSON.stringify({ error: error instanceof Error ? error.message : "Tool failed" });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export type EnrichResponseParser = (input: {
@@ -173,6 +269,16 @@ export async function runEnrichOpenAiResponse(params: {
    * stop instead of only blocking rows that have not started yet.
    */
   shouldCancel?: () => Promise<boolean>;
+  /** Overrides the tier's model (agents with their own model choice). */
+  modelOverride?: EnrichOpenAiModelId;
+  /** Overrides the tier's web_search context size. */
+  searchContextSizeOverride?: EnrichSearchContextSize | "low";
+  /** Server-side functions the model may call; see EnrichFunctionTool. */
+  functionTools?: EnrichFunctionTool[];
+  /** Function-call rounds per attempt before the model must answer. */
+  maxFunctionRounds?: number;
+  /** Time budget shared by every round of one attempt. */
+  attemptBudgetMs?: number;
 }): Promise<{
   data: Record<string, unknown>;
   /** Every billed call for this result, including a failed first attempt. */
@@ -181,9 +287,9 @@ export async function runEnrichOpenAiResponse(params: {
   model: EnrichOpenAiModelId;
 }> {
   const apiKey = requireOpenAiApiKey();
-  const model = resolveEnrichOpenAiModel(params.tier);
+  const model = params.modelOverride ?? resolveEnrichOpenAiModel(params.tier);
   const reasoningEffort = params.reasoningEffortOverride ?? resolveEnrichReasoningEffort(params.tier);
-  const searchContextSize = resolveEnrichSearchContextSize(params.tier);
+  const searchContextSize = params.searchContextSizeOverride ?? resolveEnrichSearchContextSize(params.tier);
 
   const webSearchTool: Record<string, unknown> = {
     type: "web_search",
@@ -241,82 +347,147 @@ export async function runEnrichOpenAiResponse(params: {
       domainFilters: withFilters ? filters : undefined,
     });
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(new Error("timeout")),
-      ENRICH_CALL_TIMEOUT_MS
-    );
-    const pollId = params.shouldCancel
-      ? setInterval(() => {
-          void params.shouldCancel!().then((cancelled) => {
-            if (!cancelled) return;
-            cancelledByUser = true;
-            controller.abort(new Error("cancelled"));
-          });
-        }, CANCEL_POLL_MS)
-      : undefined;
-
-    let response: Response;
-    try {
-      response = await fetch(OPENAI_RESPONSES_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+    const functionTools = params.functionTools ?? [];
+    const maxRounds = params.maxFunctionRounds ?? DEFAULT_MAX_FUNCTION_ROUNDS;
+    const baseRequest = {
+      model,
+      ...(params.instructions ? { instructions: params.instructions } : {}),
+      reasoning: { effort: reasoningEffort },
+      tools: [
+        tool,
+        ...functionTools.map((t) => ({
+          type: "function",
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+          strict: true,
+        })),
+      ],
+      ...(include.length > 0 ? { include } : {}),
+      text: {
+        format: {
+          type: "json_schema",
+          name: params.schemaName,
+          strict: true,
+          schema: params.schema,
         },
-        body: JSON.stringify({
-          model,
-          ...(params.instructions ? { instructions: params.instructions } : {}),
-          reasoning: { effort: reasoningEffort },
-          tools: [tool],
-          tool_choice: params.policy.toolChoice,
-          ...(include.length > 0 ? { include } : {}),
-          input: [{ role: "user", content }],
-          text: {
-            format: {
-              type: "json_schema",
-              name: params.schemaName,
-              strict: true,
-              schema: params.schema,
-            },
-          },
-          store: true,
-        }),
-        signal: controller.signal,
-      });
-    } catch (fetchError) {
-      // The abort itself is what makes the fetch reject — catch it here (not
-      // after, since a rejected fetch never reaches the line below) and only
-      // convert it when the user actually caused it; a timeout abort keeps
-      // its original error so existing timeout handling is unaffected.
-      if (cancelledByUser) throw new EnrichCancelledError();
-      throw fetchError;
-    } finally {
-      clearTimeout(timeoutId);
-      if (pollId) clearInterval(pollId);
-    }
-    if (cancelledByUser) throw new EnrichCancelledError();
-
-    const rawText = await response.text();
-    let body: OpenAiResponse;
-    try {
-      body = JSON.parse(rawText) as OpenAiResponse;
-    } catch {
-      throw new Error(`OpenAI enrich returned invalid JSON (${response.status})`);
-    }
-
-    const searchCallCount = countWebSearchCalls(body);
-    const cost = calculateOpenAiWebSearchCost(model, body.usage, searchCallCount);
-    const fail = (message: string): never => {
-      if (body.usage) throw new EnrichBilledAttemptError(message, [cost]);
-      throw new Error(message);
+      },
+      store: true,
     };
 
-    if (!response.ok) {
-      fail(body.error?.message || `OpenAI enrich failed (${response.status})`);
-    }
-    if (body.status && body.status !== "completed") {
-      fail(`OpenAI enrich ended with status ${body.status}`);
+    // Every round of one attempt shares this deadline, so function-call
+    // rounds can never stretch an attempt past its budget.
+    const deadline = Date.now() + (params.attemptBudgetMs ?? ENRICH_CALL_TIMEOUT_MS);
+    const costs: AiCallCost[] = [];
+    let searchCallCount = 0;
+    const fail = (message: string): never => {
+      if (costs.length > 0) throw new EnrichBilledAttemptError(message, [...costs]);
+      throw new Error(message);
+    };
+    const cancelled = (): never => {
+      throw new EnrichCancelledError(undefined, [...costs]);
+    };
+
+    const send = async (request: Record<string, unknown>): Promise<OpenAiResponse> => {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) fail("timeout");
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(new Error("timeout")), remainingMs);
+      const pollId = params.shouldCancel
+        ? setInterval(() => {
+            void params.shouldCancel!().then((isCancelled) => {
+              if (!isCancelled) return;
+              cancelledByUser = true;
+              controller.abort(new Error("cancelled"));
+            });
+          }, CANCEL_POLL_MS)
+        : undefined;
+
+      let response: Response;
+      try {
+        response = await fetch(OPENAI_RESPONSES_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(request),
+          signal: controller.signal,
+        });
+      } catch (fetchError) {
+        // The abort itself is what makes the fetch reject — catch it here (not
+        // after, since a rejected fetch never reaches the line below) and only
+        // convert it when the user actually caused it; a timeout abort keeps
+        // its original error (plus any billed earlier rounds).
+        if (cancelledByUser) cancelled();
+        if (costs.length > 0) {
+          fail(fetchError instanceof Error ? fetchError.message : String(fetchError));
+        }
+        throw fetchError;
+      } finally {
+        clearTimeout(timeoutId);
+        if (pollId) clearInterval(pollId);
+      }
+      if (cancelledByUser) cancelled();
+
+      const rawText = await response.text();
+      let body: OpenAiResponse;
+      try {
+        body = JSON.parse(rawText) as OpenAiResponse;
+      } catch {
+        return fail(`OpenAI enrich returned invalid JSON (${response.status})`);
+      }
+
+      const roundSearchCalls = countWebSearchCalls(body);
+      searchCallCount += roundSearchCalls;
+      if (body.usage) {
+        costs.push(calculateOpenAiWebSearchCost(model, body.usage, roundSearchCalls));
+      }
+      if (!response.ok) {
+        if (isOpenAiProviderUnavailable(body.error)) {
+          console.error("[Enrich OpenAI] Provider account unavailable", { status: response.status, code: body.error?.code });
+          throw new EnrichProviderUnavailableError();
+        }
+        fail(body.error?.message || `OpenAI enrich failed (${response.status})`);
+      }
+      if (body.status && body.status !== "completed") {
+        fail(`OpenAI enrich ended with status ${body.status}`);
+      }
+      return body;
+    };
+
+    let body = await send({
+      ...baseRequest,
+      tool_choice: params.policy.toolChoice,
+      input: [{ role: "user", content }],
+    });
+    for (let round = 1; functionTools.length > 0; round += 1) {
+      const calls = functionCallsOf(body);
+      if (calls.length === 0) break;
+      if (!body.id) fail("OpenAI enrich returned a function call without a response id");
+      if (params.shouldCancel && (await params.shouldCancel())) {
+        cancelledByUser = true;
+        cancelled();
+      }
+      const toolBudgetMs = deadline - Date.now() - ANSWER_RESERVE_MS;
+      const outOfTime = toolBudgetMs < 5_000;
+      const outputs = await Promise.all(
+        calls.map(async (call) => ({
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: outOfTime
+            ? JSON.stringify({ error: "Research time is up. Answer now with what you have verified." })
+            : await runFunctionCall(functionTools, call, Math.min(TOOL_CALL_TIMEOUT_MS, toolBudgetMs)),
+        }))
+      );
+      if (cancelledByUser) cancelled();
+      const mustAnswer = round >= maxRounds || outOfTime || deadline - Date.now() < ANSWER_RESERVE_MS;
+      body = await send({
+        ...baseRequest,
+        previous_response_id: body.id,
+        tool_choice: mustAnswer ? "none" : "auto",
+        input: outputs,
+      });
     }
 
     const selection = parseJsonObject(responseOutputText(body));
@@ -350,14 +521,15 @@ export async function runEnrichOpenAiResponse(params: {
     console.log(`[Enrich OpenAI] Finished`, {
       model,
       searchCallCount,
-      totalCost: cost.totalCost,
+      rounds: costs.length,
+      totalCost: costs.reduce((sum, c) => sum + c.totalCost, 0),
       notes:
         typeof selection.notes === "string"
           ? selection.notes.slice(0, 200)
           : undefined,
     });
 
-    return { data, costs: [cost], searchCallCount, model };
+    return { data, costs, searchCallCount, model };
   };
 
   // Each recovery (dead source image, rejected domain filter) is tried once;
@@ -374,8 +546,12 @@ export async function runEnrichOpenAiResponse(params: {
       // cancelled attempt itself, but any earlier billed attempt's cost on
       // this same row still reaches the caller.
       if (isEnrichCancelledError(error)) {
-        throw new EnrichCancelledError((error as Error).message, priorCosts);
+        throw new EnrichCancelledError((error as Error).message, [
+          ...priorCosts,
+          ...billedCostsOf(error),
+        ]);
       }
+      if (isEnrichProviderUnavailableError(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
       priorCosts.push(...billedCostsOf(error));
       if (inputImageParts(imageUrls).length > 0 && isOpenAiInputImageDownloadError(message)) {

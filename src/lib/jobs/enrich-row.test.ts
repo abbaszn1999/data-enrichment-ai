@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { calculateOpenAiWebSearchCost, costToCredits } from "@/lib/ai-pricing";
-import { EnrichBilledAttemptError, EnrichCancelledError } from "@/lib/enrich/openai";
+import {
+  EnrichBilledAttemptError,
+  EnrichCancelledError,
+  EnrichProviderUnavailableError,
+} from "@/lib/enrich/openai";
 import type { ProjectRow } from "@/lib/storage-helpers";
 import type { CatalogJobSettings } from "./types";
 
@@ -18,7 +22,7 @@ vi.mock("./credits", () => ({
 vi.mock("./project-json", () => ({ loadProjectJsonAdmin: vi.fn() }));
 vi.mock("./repo", () => ({ loadJobRun: vi.fn() }));
 
-const { processCatalogRow } = await import("./enrich-row");
+const { catalogCreditIdempotencyKey, processCatalogRow, PROVIDER_UNAVAILABLE_JOB_ERROR } = await import("./enrich-row");
 
 const row = {
   id: "row-1",
@@ -118,6 +122,17 @@ describe("processCatalogRow billing", () => {
     expect(enrichRowMock).toHaveBeenCalledTimes(1);
   });
 
+  it("stops immediately when the AI provider account is unavailable — no retry, not charged, flagged for the job", async () => {
+    enrichRowMock.mockRejectedValueOnce(new EnrichProviderUnavailableError());
+    const outcome = await run();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.providerUnavailable).toBe(true);
+    expect(outcome.error).toBe(PROVIDER_UNAVAILABLE_JOB_ERROR);
+    expect("credits" in outcome).toBe(false);
+    expect(enrichRowMock).toHaveBeenCalledTimes(1);
+  });
+
   it("passes shouldCancel through to enrichRow", async () => {
     const shouldCancel = async () => false;
     enrichRowMock.mockResolvedValueOnce({ data: { imageUrls: [] }, costs: [billedCall] });
@@ -125,5 +140,26 @@ describe("processCatalogRow billing", () => {
     expect(enrichRowMock).toHaveBeenCalledWith(
       expect.objectContaining({ shouldCancel })
     );
+  });
+
+  it("passes the sheet-learned websites and the re-check flag through to the agent", async () => {
+    enrichRowMock.mockResolvedValueOnce({ data: { imageUrls: [] }, costs: [billedCall] });
+    await processCatalogRow({
+      sessionId: "s",
+      workspaceId: "w",
+      row,
+      settings,
+      context: { learnedDomains: ["store.test"], recheck: true },
+    });
+    expect(enrichRowMock).toHaveBeenCalledWith(
+      expect.objectContaining({ learnedDomains: ["store.test"], recheck: true })
+    );
+  });
+});
+
+describe("catalogCreditIdempotencyKey", () => {
+  it("gives the final re-check its own key so it is charged once, separately from the first pass", () => {
+    expect(catalogCreditIdempotencyKey("run", "row")).toBe("catalog_intelligence:run:row");
+    expect(catalogCreditIdempotencyKey("run", "row", true)).toBe("catalog_intelligence:run:row:recheck");
   });
 });

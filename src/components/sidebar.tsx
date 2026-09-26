@@ -77,6 +77,7 @@ import {
   type EnrichmentColumn,
 } from "@/types";
 import type { EnrichSettings } from "@/lib/enrich";
+import { IMAGE_FINDER_MAX_IMAGES } from "@/lib/enrich/image-finder/brief";
 import type { ProjectJson } from "@/lib/storage-helpers";
 import { getEnrichmentPresets, saveEnrichmentPreset } from "@/lib/supabase";
 import type { ProductRow } from "@/types";
@@ -281,11 +282,12 @@ export function Sidebar() {
     mode === "enrich"
       ? null
       : enrichmentColumns.find((col) => col.id === PRODUCT_MODE_COLUMN_IDS[mode]) ?? null;
-  const modeCount = !modeColumn
-    ? null
-    : mode === "categories"
+  // Image Finder has no count to pick: it always gathers every distinct photo
+  // of the exact item its sources show, up to IMAGE_FINDER_MAX_IMAGES.
+  const modeCount =
+    modeColumn && mode === "categories"
       ? { label: "Max categories", key: "maxCategories" as const, value: modeColumn.maxCategories ?? 3, max: 5 }
-      : { label: "Number of images", key: "imageCount" as const, value: modeColumn.imageCount ?? 3, max: 10 };
+      : null;
 
   const [storeCategoryCount, setStoreCategoryCount] = useState<number | null>(null);
   useEffect(() => {
@@ -422,7 +424,7 @@ export function Sidebar() {
           description: "Enrichment paused. Add credits and resume from this session.",
         });
       } else if (shouldToast && data.run?.status === "failed") {
-        toast.error("Enrichment failed");
+        toast.error("Enrichment failed", data.run.last_error ? { description: data.run.last_error } : undefined);
       } else if (
         wasStopping ||
         (shouldToast && data.run?.status === "cancelled")
@@ -1577,7 +1579,7 @@ export function Sidebar() {
           )}
 
           {/* Categories / Image Finder — one column each, run on its own */}
-          {modeColumn && modeCount && (
+          {modeColumn && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 {mode === "categories" ? (
@@ -1592,7 +1594,7 @@ export function Sidebar() {
               <p className="text-[10px] text-muted-foreground leading-relaxed">
                 {mode === "categories"
                   ? "Assigns each selected product to your store categories and writes them to the Categories column."
-                  : "Searches the web for images of the exact product and writes direct image links to the Image URLs column."}
+                  : `Finds the exact product on the web and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column.`}
               </p>
 
               {mode === "categories" && storeCategoryCount !== null && (
@@ -1609,6 +1611,7 @@ export function Sidebar() {
                 </div>
               )}
 
+              {modeCount && (
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-medium text-muted-foreground">
@@ -1637,6 +1640,7 @@ export function Sidebar() {
                   <span>{modeCount.max}</span>
                 </div>
               </div>
+              )}
 
               <div className="space-y-1.5">
                 <label className="text-[10px] font-medium text-muted-foreground">

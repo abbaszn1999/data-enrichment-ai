@@ -73,7 +73,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TableSelectHeader } from "@/components/table-select-header";
-import { imageFinderNotFoundKey } from "@/lib/enrich/image-finder/not-found";
+import {
+  imageFinderMatchBasisKey,
+  imageFinderMatchNoteKey,
+  imageFinderNotFoundKey,
+  imageMatchLabel,
+  isApproximateImageMatch,
+} from "@/lib/enrich/image-finder/not-found";
 import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {
@@ -634,15 +640,29 @@ function ImageUrlsCell({
   isEditable,
   rowId,
   enrichKey,
+  matchBasis,
+  matchNote,
 }: {
   images: EnrichImageItem[];
   isEditable: boolean;
   rowId: string;
   enrichKey: string;
+  /** Image Finder match type; anything weaker than an exact code gets a label. */
+  matchBasis?: string;
+  matchNote?: string;
 }) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
   const [previewIndex, setPreviewIndex] = useState(0);
+  const matchLabel = isApproximateImageMatch(matchBasis) ? imageMatchLabel(matchBasis) : "";
+  const matchBadge = matchLabel ? (
+    <span
+      className="inline-flex w-fit items-center rounded bg-amber-500/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400"
+      title={matchNote || matchLabel}
+    >
+      {matchLabel}
+    </span>
+  ) : null;
   const [adding, setAdding] = useState(false);
   const [newUrl, setNewUrl] = useState("");
   const [newTitle, setNewTitle] = useState("");
@@ -765,60 +785,63 @@ function ImageUrlsCell({
           {isEditable ? "Click to add" : "—"}
         </div>
       ) : (
-        <div className="flex items-center gap-1">
-          {list.slice(0, 3).map((img, i) => (
-            <div
-              key={`${img.imageUrl}:${i}`}
-              className="group/image relative h-10 w-10 shrink-0"
-            >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openDialog(i);
-                }}
-                className="block h-full w-full overflow-hidden rounded border border-border/40 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                aria-label={`Preview image ${i + 1}`}
-                title={img.title || "Product image"}
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1">
+            {list.slice(0, 3).map((img, i) => (
+              <div
+                key={`${img.imageUrl}:${i}`}
+                className="group/image relative h-10 w-10 shrink-0"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={img.imageUrl}
-                  data-original-url={img.imageUrl}
-                  alt={img.title || "Product"}
-                  className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
-                  onError={handleImgError}
-                />
-              </button>
-              {isEditable && (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    removeAt(i);
+                    openDialog(i);
                   }}
-                  className="absolute -right-1.5 -top-1.5 z-10 flex h-[18px] w-[18px] items-center justify-center rounded-full border bg-background text-destructive opacity-0 shadow-sm transition-opacity hover:bg-destructive hover:text-destructive-foreground focus:opacity-100 group-hover/image:opacity-100"
-                  aria-label={`Remove image ${i + 1}`}
-                  title="Remove image"
+                  className="block h-full w-full overflow-hidden rounded border border-border/40 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  aria-label={`Preview image ${i + 1}`}
+                  title={img.title || "Product image"}
                 >
-                  <X className="h-2.5 w-2.5" />
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={img.imageUrl}
+                    data-original-url={img.imageUrl}
+                    alt={img.title || "Product"}
+                    className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
+                    onError={handleImgError}
+                  />
                 </button>
-              )}
-            </div>
-          ))}
-          {list.length > 3 && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                openDialog(0);
-              }}
-              className="flex h-10 items-center gap-1 rounded border bg-muted/30 px-2 text-[10px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
-            >
-              <Maximize2 className="h-3 w-3" />
-              +{list.length - 3}
-            </button>
-          )}
+                {isEditable && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeAt(i);
+                    }}
+                    className="absolute -right-1.5 -top-1.5 z-10 flex h-[18px] w-[18px] items-center justify-center rounded-full border bg-background text-destructive opacity-0 shadow-sm transition-opacity hover:bg-destructive hover:text-destructive-foreground focus:opacity-100 group-hover/image:opacity-100"
+                    aria-label={`Remove image ${i + 1}`}
+                    title="Remove image"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+            {list.length > 3 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openDialog(0);
+                }}
+                className="flex h-10 items-center gap-1 rounded border bg-muted/30 px-2 text-[10px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
+              >
+                <Maximize2 className="h-3 w-3" />
+                +{list.length - 3}
+              </button>
+            )}
+          </div>
+          {matchBadge}
         </div>
       )}
 
@@ -840,6 +863,12 @@ function ImageUrlsCell({
               {list.length} image{list.length === 1 ? "" : "s"}
               {list.length > 0 ? ` · ${safeIndex + 1} of ${list.length}` : ""}
             </p>
+            {matchBadge && (
+              <p className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
+                {matchBadge}
+                {matchNote}
+              </p>
+            )}
           </DialogHeader>
 
           <div className="grid min-h-[480px] md:grid-cols-[minmax(0,1fr)_148px]">
@@ -1223,6 +1252,8 @@ function EditableEnrichedCell({
   isEditable,
   maxChars,
   notFoundReason,
+  matchBasis,
+  matchNote,
 }: {
   value: unknown;
   rowId: string;
@@ -1233,6 +1264,8 @@ function EditableEnrichedCell({
   maxChars?: number;
   /** Set when an agent (e.g. Image Finder) ran and explicitly found nothing. */
   notFoundReason?: string;
+  matchBasis?: string;
+  matchNote?: string;
 }) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
@@ -1296,7 +1329,16 @@ function EditableEnrichedCell({
     // Image URLs - show as thumbnails with links
     if (value[0] && typeof value[0] === "object" && "imageUrl" in value[0]) {
       const images = value as { imageUrl: string; pageUrl: string; title: string }[];
-      return <ImageUrlsCell images={images} isEditable={isEditable} rowId={rowId} enrichKey={enrichKey} />;
+      return (
+        <ImageUrlsCell
+          images={images}
+          isEditable={isEditable}
+          rowId={rowId}
+          enrichKey={enrichKey}
+          matchBasis={matchBasis}
+          matchNote={matchNote}
+        />
+      );
     }
 
     // Source URLs - show as links with dialog for all sources
@@ -1984,6 +2026,10 @@ export function DataTable() {
           const canEditEnriched = !isViewer && row.original.status !== "processing";
           const notFoundReason =
             row.original.enrichedData[imageFinderNotFoundKey(enrichCol.id)];
+          const matchBasis =
+            row.original.enrichedData[imageFinderMatchBasisKey(enrichCol.id)];
+          const matchNote =
+            row.original.enrichedData[imageFinderMatchNoteKey(enrichCol.id)];
           return (
             <EditableEnrichedCell
               value={row.original.enrichedData[enrichCol.id]}
@@ -1995,6 +2041,8 @@ export function DataTable() {
               notFoundReason={
                 typeof notFoundReason === "string" ? notFoundReason : undefined
               }
+              matchBasis={typeof matchBasis === "string" ? matchBasis : undefined}
+              matchNote={typeof matchNote === "string" ? matchNote : undefined}
             />
           );
         },

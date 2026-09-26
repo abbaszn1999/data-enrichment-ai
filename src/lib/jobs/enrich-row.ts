@@ -1,10 +1,16 @@
 import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
 import {
   enrichRow,
+  isImageFinderRun,
   resolveEnrichOpenAiModel,
   type EnrichSettings,
 } from "@/lib/enrich";
-import { billedCostsOf, isEnrichCancelledError } from "@/lib/enrich/openai";
+import { IMAGE_FINDER_OPENAI_MODEL } from "@/lib/enrich/models";
+import {
+  billedCostsOf,
+  isEnrichCancelledError,
+  isEnrichProviderUnavailableError,
+} from "@/lib/enrich/openai";
 import {
   resolveEnrichmentModel,
   type CategoryItem,
@@ -41,10 +47,22 @@ export type EnrichRowOutcome =
       noCredits?: boolean;
       /** Stopped by the user mid-call, not a real failure — don't mark the row done. */
       cancelled?: boolean;
+      /** Our AI provider account is out of quota — stop the job, leave the row pending, charge nothing. */
+      providerUnavailable?: boolean;
     };
 
-export function catalogCreditIdempotencyKey(runId: string, rowId: string): string {
-  return `catalog_intelligence:${runId}:${rowId}`;
+export const PROVIDER_UNAVAILABLE_JOB_ERROR =
+  "AI service temporarily unavailable. Remaining rows were not charged; run them again later.";
+
+/** The Image Finder's final re-check is a second billed pass, so it gets its own key. */
+export function catalogCreditIdempotencyKey(runId: string, rowId: string, recheck = false): string {
+  return `catalog_intelligence:${runId}:${rowId}${recheck ? ":recheck" : ""}`;
+}
+
+/** Extra context the Image Finder uses; ignored by other catalog modes. */
+export interface CatalogRowContext {
+  learnedDomains?: string[];
+  recheck?: boolean;
 }
 
 /** Rows the user targeted, minus ones this same run already finished. `done` from an earlier run is not skipped. */
@@ -102,6 +120,7 @@ export async function processCatalogRow(params: {
   row: ProjectRow;
   settings: CatalogJobSettings;
   shouldCancel?: () => Promise<boolean>;
+  context?: CatalogRowContext;
 }): Promise<EnrichRowOutcome> {
   const { row, settings } = params;
   const enrichSettings: EnrichSettings = {
@@ -143,6 +162,8 @@ export async function processCatalogRow(params: {
         workspaceCategories: settings.workspaceCategories as CategoryItem[] | undefined,
         categoriesRawRows: settings.categoriesRawRows,
         shouldCancel: params.shouldCancel,
+        learnedDomains: params.context?.learnedDomains,
+        recheck: params.context?.recheck,
       });
       const billed = [...failedAttemptCosts, ...enriched.costs];
       const costs = sumCosts(billed);
@@ -161,6 +182,9 @@ export async function processCatalogRow(params: {
       // succeeds) not charged, even if an attempt along the way was billed.
       if (isEnrichCancelledError(error)) {
         return { ok: false, rowId: row.id, error: "Cancelled by user", cancelled: true };
+      }
+      if (isEnrichProviderUnavailableError(error)) {
+        return { ok: false, rowId: row.id, error: PROVIDER_UNAVAILABLE_JOB_ERROR, providerUnavailable: true };
       }
       failedAttemptCosts.push(...billedCostsOf(error));
       lastError = error instanceof Error ? error.message : "Enrichment failed";
@@ -183,6 +207,7 @@ export async function chargeCatalogRow(params: {
   tokens: number;
   billedAttempts?: number;
   settings: CatalogJobSettings;
+  recheck?: boolean;
 }): Promise<{ ok: true; remaining?: number } | { ok: false; noCredits: boolean; error: string }> {
   if (params.credits <= 0) return { ok: true };
   const result = await deductCreditsIdempotent({
@@ -193,12 +218,15 @@ export async function chargeCatalogRow(params: {
     operation: "catalog_intelligence",
     entityType: params.settings.kind === "plp" ? "catalog_plp_row" : "catalog_row",
     entityId: params.rowId,
-    idempotencyKey: catalogCreditIdempotencyKey(params.runId, params.rowId),
+    idempotencyKey: catalogCreditIdempotencyKey(params.runId, params.rowId, params.recheck),
     details: {
       sessionId: params.sessionId,
       rowIndex: params.rowIndex,
       enrichmentModel: params.settings.enrichmentModel,
-      model: resolveEnrichOpenAiModel(params.settings.enrichmentModel),
+      model: isImageFinderRun(params.settings.kind ?? "product", params.settings.enabledColumns)
+        ? IMAGE_FINDER_OPENAI_MODEL
+        : resolveEnrichOpenAiModel(params.settings.enrichmentModel),
+      ...(params.recheck ? { recheck: true } : {}),
       billedAttempts: params.billedAttempts ?? 1,
       totalCost: params.cost,
       totalTokens: params.tokens,
@@ -217,7 +245,7 @@ export async function chargeCatalogRow(params: {
 export type CatalogRowTaskInput = {
   runId: string;
   rowId: string;
-};
+} & CatalogRowContext;
 
 export async function executeCatalogRow(
   input: CatalogRowTaskInput
@@ -245,5 +273,6 @@ export async function executeCatalogRow(
     // Each row runs as its own Render task, so it needs its own poll rather
     // than sharing the session worker's in-memory check.
     shouldCancel: () => isJobCancelRequested(admin, run.id),
+    context: { learnedDomains: input.learnedDomains, recheck: input.recheck },
   });
 }

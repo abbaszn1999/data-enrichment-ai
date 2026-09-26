@@ -18,6 +18,7 @@ export type CatalogPollRun = {
   completed_count?: number;
   failed_count?: number;
   target_ids?: string[] | null;
+  last_error?: string | null;
   settings?: {
     processedRowIds?: string[] | null;
     enabledColumns?: string[] | null;

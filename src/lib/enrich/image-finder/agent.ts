@@ -9,16 +9,26 @@ import {
   hasDomainRules,
   sanitizeDomainRules,
 } from "../domains";
+import { IMAGE_FINDER_OPENAI_MODEL, IMAGE_FINDER_REASONING_EFFORT } from "../models";
 import { runEnrichOpenAiResponse, type EnrichResponseParser } from "../openai";
 import { buildEnrichToolPolicy } from "../policy";
 import type { EnrichAgentParams, EnrichAgentResult } from "../types";
 import { buildImageFinderBrief } from "./brief";
-import { imageFinderNotFoundKey } from "./not-found";
-import { imageFinderCandidatePoolSize } from "./pool-size";
+import { EvidenceLedger } from "./evidence";
+import { guardImageFinderAnswer, type ImageFinderAnswer } from "./guards";
+import { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } from "./not-found";
 import { IMAGE_FINDER_SKILL } from "./skill";
+import { createCheckPagesTool } from "./tools/check-pages";
+import { createFetchPageTool, createPageSession } from "./tools/fetch-page";
+import { extractRowIdentifiers } from "./tools/identifiers";
+import { createViewImagesTool } from "./tools/view-images";
 import { verifyImageUrls } from "./verify-images";
 
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
+
+/** Research budget for one attempt; two attempts fit inside the row task timeout. */
+export const IMAGE_FINDER_ATTEMPT_BUDGET_MS = 540_000;
+export const IMAGE_FINDER_MAX_ROUNDS = 30;
 
 /** Image Finder mode sends exactly one column: the product image column. */
 export function isImageFinderRun(
@@ -32,143 +42,131 @@ export function isImageFinderRun(
   );
 }
 
-const IMAGE_FINDER_CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
-
 function imageFinderSchema(imageCount: number): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
     properties: {
+      status: { type: "string", enum: ["found", "not_found"] },
+      verification: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          pageUrl: {
+            type: "string",
+            description: "The page you opened (fetch_page or check_pages) where the exact item was verified. Empty when not found.",
+          },
+          identifierSeen: {
+            type: "string",
+            description:
+              "One identifier (the strongest) exactly as it appears on that page; for a near code, the page's code. Empty when not found or when the row has no code.",
+          },
+          brandSeen: {
+            type: "string",
+            description: "The brand exactly as the page shows it. Required for a best match; empty when unknown.",
+          },
+          matchBasis: {
+            type: "string",
+            enum: ["identifier", "near_identifier", "model_variant", "best_match", "none"],
+          },
+        },
+        required: ["pageUrl", "identifierSeen", "brandSeen", "matchBasis"],
+      },
       images: {
         type: "array",
-        description:
-          "Best first, up to the requested number. Include lower-confidence matches marked accordingly rather than omitting them — confidence is informational only, never a reason to leave an image out.",
+        description: "Every distinct image of the exact verified item its sources show, best first, up to 7.",
         items: {
           type: "object",
           additionalProperties: false,
           properties: {
-            url: {
-              type: "string",
-              description:
-                "A real image link you actually saw — from a search result, or read directly off a product page you opened and confirmed. Never a link you did not actually see, and never a page URL.",
-            },
-            pageUrl: {
-              type: "string",
-              description:
-                "The page where you confirmed this product and saw this image link (the product page, or its .json version). Website rules are checked against this page, so images hosted on a store's CDN are kept.",
-            },
-            confidence: {
-              type: "string",
-              enum: [...IMAGE_FINDER_CONFIDENCE_LEVELS],
-              description:
-                "high: identifier verified on the source page, or two+ sources agree. medium: brand/model matched but not independently verified. low: best available match, meaningful uncertainty remains.",
-            },
-            matchedOn: {
-              type: "string",
-              description:
-                "Short phrase: which identifiers or sources confirmed this image, e.g. \"SKU verified on source page\" or \"brand+model only\".",
-            },
+            url: { type: "string", description: "Image link exactly as it appeared on a page you opened." },
+            pageUrl: { type: "string", description: "The opened page of the same exact item where this image link appeared." },
           },
-          required: ["url", "pageUrl", "confidence", "matchedOn"],
+          required: ["url", "pageUrl"],
         },
         maxItems: imageCount,
       },
       notes: {
         type: "string",
         description:
-          "One or two short sentences: which identifiers were trusted or set aside and why, which sources were confirmed, and why any candidates were rejected or the list is shorter than requested.",
+          "What confirmed the match and any differences from the sheet; or, when not found, the approaches, websites and terms tried and the candidates rejected.",
       },
     },
-    required: ["images", "notes"],
+    required: ["status", "verification", "images", "notes"],
   };
 }
 
-/** Prefixes a non-high-confidence image's caption; never changes which images are kept. */
-function annotateConfidence(
-  image: ImageUrl,
-  meta: { confidence: string; matchedOn: string } | undefined
-): ImageUrl {
-  const confidence = meta?.confidence.toLowerCase();
-  if (!confidence || confidence === "high") return image;
-  const label = confidence === "medium" || confidence === "low" ? confidence : "unverified";
-  const matchedOn = meta?.matchedOn ? ` — matched on ${meta.matchedOn}` : "";
-  return { ...image, title: `${label} confidence${matchedOn}. ${image.title}`.slice(0, 300) };
+function displayPageUrl(pageUrl: string): string {
+  return pageUrl.replace(/(\/products\/[^/?#]+)\.(json|js)(?=$|[?#])/i, "$1");
 }
 
 /**
- * Dedicated Image Finder agent for Catalog Intelligence. Shares the Responses
- * transport and cost calculation with the enrichment agent, so its usage is
+ * Dedicated Image Finder agent for Catalog Intelligence: a multi-step
+ * research loop (web_search + fetch_page + view_images) whose answer is only
+ * accepted where our own tools' evidence backs it up. Shares the Responses
+ * transport and cost calculation with the enrichment agent, so every round is
  * billed exactly like any other Catalog Intelligence row.
  */
 export async function findProductImages(
   params: EnrichAgentParams
 ): Promise<EnrichAgentResult> {
   const tier = resolveEnrichmentModel(params.settings?.enrichmentModel);
-  const policy = buildEnrichToolPolicy(
-    [IMAGE_COLUMN_ID],
-    params.enrichmentColumns,
-    "product"
-  );
+  const basePolicy = buildEnrichToolPolicy([IMAGE_COLUMN_ID], params.enrichmentColumns, "product");
+  // Images come from pages our fetch tool opened, so web search only needs text results.
+  const policy = { ...basePolicy, searchContentTypes: ["text" as const], includeResults: false };
   const column = params.enrichmentColumns?.find((c) => c.id === IMAGE_COLUMN_ID);
   const domainRules = sanitizeDomainRules({
     allowedDomains: column?.allowedDomains,
     blockedDomains: column?.blockedDomains,
   });
+  const rowIdentifiers = extractRowIdentifiers(params.productData);
   const brief = buildImageFinderBrief({
     rowData: params.productData,
-    imageCount: policy.imageCount,
     customInstruction: column?.customInstruction,
     allowedDomains: domainRules.allowedDomains,
     blockedDomains: domainRules.blockedDomains,
+    rowIdentifiers: rowIdentifiers.map((identifier) => identifier.value),
+    learnedDomains: params.learnedDomains,
+    recheck: params.recheck,
   });
 
-  // Trust any real link the model reports — from a search result or read
-  // directly off a page it opened and confirmed — rather than requiring an
-  // exact match against a separate image-search field. The safety net is no
-  // longer "which tool did this come from" but "does it actually load as an
-  // image", checked for real below. Confidence only ever annotates a
-  // caption; it never removes a candidate.
+  const ledger = new EvidenceLedger();
+  const pages = createPageSession({ rowIdentifiers, ledger, domainRules });
+  const tools = [createCheckPagesTool(pages), createFetchPageTool(pages), createViewImagesTool()];
+
   const parse: EnrichResponseParser = async ({ selection }) => {
-    const rawImages = Array.isArray(selection.images) ? selection.images : [];
-    const confidenceByUrl = new Map<string, { confidence: string; matchedOn: string }>();
-    const candidates: Array<{ imageUrl: string; pageUrl: string; title: string }> = [];
-    const seen = new Set<string>();
-    for (const item of rawImages) {
-      if (!item || typeof item !== "object") continue;
-      const record = item as Record<string, unknown>;
-      const url = String(record.url ?? "").trim();
-      if (!url || !/^https:\/\//i.test(url)) continue;
-      const key = url.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const pageUrl = String(record.pageUrl ?? "")
-        .trim()
-        .replace(/(\/products\/[^/?#]+)\.json/i, "$1");
-      candidates.push({
-        imageUrl: url,
-        pageUrl: /^https:\/\//i.test(pageUrl) ? pageUrl : url,
-        title: "Product image",
-      });
-      confidenceByUrl.set(key, {
-        confidence: String(record.confidence ?? "").trim(),
-        matchedOn: String(record.matchedOn ?? "").trim(),
-      });
+    const answer = selection as unknown as ImageFinderAnswer;
+    const notes = typeof answer.notes === "string" ? answer.notes.trim() : "";
+    const guarded = guardImageFinderAnswer({ answer, ledger, rowIdentifiers, rowData: params.productData });
+    if (guarded.rejections.length > 0) {
+      console.warn("[Image Finder] Rejected by evidence checks", { rejections: guarded.rejections });
     }
 
+    const candidates = guarded.images.map((image) => ({
+      imageUrl: image.imageUrl,
+      pageUrl: displayPageUrl(image.pageUrl),
+      title: guarded.matchNote ? `${guarded.matchNote} Product image` : "Product image",
+    }));
     const withinRules = filterImagesByDomainRules(candidates, domainRules);
-    const verified = await verifyImageUrls(withinRules.map((c) => c.imageUrl));
-    const images = withinRules
-      .filter((c) => verified.has(c.imageUrl.toLowerCase()))
-      .slice(0, brief.imageCount)
-      .map((image) => annotateConfidence(image, confidenceByUrl.get(image.imageUrl.toLowerCase())));
+    const loadable = await verifyImageUrls(withinRules.map((c) => c.imageUrl));
+    const images: ImageUrl[] = withinRules
+      .filter((c) => loadable.has(c.imageUrl.toLowerCase()))
+      .slice(0, brief.imageCount);
 
-    // Always write the reason key so a later successful run clears a stale
-    // one from an earlier empty run — never leave the grid showing a
-    // "Not found" reason that no longer reflects the current result.
-    const notes = typeof selection.notes === "string" ? selection.notes.trim() : "";
+    let reason = "";
+    if (images.length === 0) {
+      reason = guarded.found
+        ? `Verified the item on ${displayPageUrl(guarded.verifiedPageUrl ?? "")} but none of its images could be confirmed.`
+        : guarded.rejections[0] ?? notes ?? "";
+      if (notes && reason !== notes) reason = `${reason} ${notes}`.trim();
+    }
+    // Always write the sibling keys so a later run clears stale values from an earlier one.
+    const matched = images.length > 0;
     return {
       [IMAGE_COLUMN_ID]: images,
-      [imageFinderNotFoundKey(IMAGE_COLUMN_ID)]: images.length === 0 ? notes : "",
+      [imageFinderNotFoundKey(IMAGE_COLUMN_ID)]: reason,
+      [imageFinderMatchBasisKey(IMAGE_COLUMN_ID)]: matched ? guarded.matchBasis ?? "" : "",
+      [imageFinderMatchNoteKey(IMAGE_COLUMN_ID)]: matched ? guarded.matchNote : "",
     };
   };
 
@@ -186,14 +184,14 @@ export async function findProductImages(
     instructions: IMAGE_FINDER_SKILL,
     parse,
     webSearchFilters: hasDomainRules(domainRules) ? domainRules : undefined,
-    // Cast a wide net per search call; the schema above still caps the final
-    // answer at brief.imageCount, so this only gives the model more real
-    // candidates to be confident about, never more images than requested.
-    imageSearchPoolSize: imageFinderCandidatePoolSize(brief.imageCount),
-    // Back to the shared tier default (medium/high) — a live URL-loads check
-    // plus a simpler, more direct skill closed the accuracy gap that xhigh
-    // was compensating for, so the extra reasoning cost is no longer needed.
-    unlimitedSearchContentBudget: true,
+    modelOverride: IMAGE_FINDER_OPENAI_MODEL,
+    reasoningEffortOverride: IMAGE_FINDER_REASONING_EFFORT,
+    // Search only discovers pages; fetch_page reads them, so large search
+    // result content would just be re-billed on every round.
+    searchContextSizeOverride: "medium",
+    functionTools: tools,
+    maxFunctionRounds: IMAGE_FINDER_MAX_ROUNDS,
+    attemptBudgetMs: IMAGE_FINDER_ATTEMPT_BUDGET_MS,
     shouldCancel: params.shouldCancel,
   });
 

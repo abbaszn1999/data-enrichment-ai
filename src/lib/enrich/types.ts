@@ -51,6 +51,10 @@ export interface EnrichAgentParams {
   categoriesRawRows?: Record<string, string>[];
   /** Polled during the OpenAI call; returning true aborts it immediately (Stop). */
   shouldCancel?: () => Promise<boolean>;
+  /** Image Finder: websites where other rows of this sheet were verified. */
+  learnedDomains?: string[];
+  /** Image Finder: final re-check of a row that ended Not found. */
+  recheck?: boolean;
 }
 
 export type OpenAiImageResult = {
@@ -94,7 +98,7 @@ export type OpenAiResponse = {
   status?: string;
   output?: OpenAiResponseItem[];
   usage?: unknown;
-  error?: { message?: string };
+  error?: { message?: string; code?: string | null; type?: string };
 };
 
 export type ParsedEnrichImages = ImageUrl[];

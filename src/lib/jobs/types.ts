@@ -65,6 +65,8 @@ export interface CatalogJobSettings extends JobRunSettings {
   ownerUserId: string;
   actorUserId: string;
   processedRowIds?: string[];
+  /** Image Finder rows that already had their one final re-check in this run. */
+  recheckedRowIds?: string[];
 }
 
 export interface JobRunRecord {
