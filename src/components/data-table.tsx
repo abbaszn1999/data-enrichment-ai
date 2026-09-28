@@ -194,6 +194,8 @@ function ColumnFilterHeaderIcon({
   filters,
   onApply,
   className,
+  sortDirection,
+  onSort,
 }: {
   rows: ProductRow[];
   layoutKey: string;
@@ -201,6 +203,8 @@ function ColumnFilterHeaderIcon({
   filters: ColumnFilters;
   onApply: (values: Set<string>) => void;
   className?: string;
+  sortDirection?: "asc" | "desc" | false;
+  onSort?: (direction: "asc" | "desc") => void;
 }) {
   const isImageColumn =
     layoutKey.startsWith("enrich:") &&
@@ -213,7 +217,16 @@ function ColumnFilterHeaderIcon({
     return columnFilterValues(rows, (r) => columnFilterRawValue(r, layoutKey, enrichmentColumns));
   }, [rows, layoutKey, enrichmentColumns, isImageColumn]);
 
-  return <ColumnFilterButton options={options} active={filters[layoutKey]} onApply={onApply} className={className} />;
+  return (
+    <ColumnFilterButton
+      options={options}
+      active={filters[layoutKey]}
+      onApply={onApply}
+      className={className}
+      sortDirection={sortDirection}
+      onSort={onSort}
+    />
+  );
 }
 
 // --- Status Icon ---
@@ -2622,6 +2635,8 @@ export function DataTable({ readOnly = false }: { readOnly?: boolean } = {}) {
                         onApply={(values) =>
                           setColumnFilters((prev) => setColumnFilter(prev, layoutKey, values))
                         }
+                        sortDirection={header.column.getIsSorted()}
+                        onSort={(direction) => header.column.toggleSorting(direction === "desc")}
                       />
                     )}
                     {/* Column resize handle */}

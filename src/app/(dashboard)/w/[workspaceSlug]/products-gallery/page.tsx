@@ -401,6 +401,8 @@ export default function ProductsGalleryPage() {
   const [columnLayout, setColumnLayout] = useState<ColumnLayout>(EMPTY_COLUMN_LAYOUT);
   const [showColumnLayoutPanel, setShowColumnLayoutPanel] = useState(false);
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const dragColKeyRef = useRef<string | null>(null);
   const [dragOverColKey, setDragOverColKey] = useState<string | null>(null);
 
@@ -1532,15 +1534,24 @@ export default function ProductsGalleryPage() {
       ? applyColumnFilters(statusFiltered, columnFilters, galleryColumnFilterValue)
       : statusFiltered;
     const search = worksheetSearch.trim().toLowerCase();
-    if (!search) return columnFiltered;
-    return columnFiltered.filter((row) =>
-      Object.values(row.originalData).some((value) =>
-        String(value ?? "")
-          .toLowerCase()
-          .includes(search)
-      )
+    const searched = !search
+      ? columnFiltered
+      : columnFiltered.filter((row) =>
+          Object.values(row.originalData).some((value) =>
+            String(value ?? "")
+              .toLowerCase()
+              .includes(search)
+          )
+        );
+    if (!sortColumn) return searched;
+    const sorted = [...searched].sort((a, b) =>
+      galleryColumnFilterValue(a, sortColumn).localeCompare(galleryColumnFilterValue(b, sortColumn), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      })
     );
-  }, [rows, selectedRowIds, worksheetFilter, worksheetSearch, columnFilters]);
+    return sortDirection === "asc" ? sorted : sorted.reverse();
+  }, [rows, selectedRowIds, worksheetFilter, worksheetSearch, columnFilters, sortColumn, sortDirection]);
 
   const worksheetPageCount = Math.max(
     1,
@@ -1566,7 +1577,7 @@ export default function ProductsGalleryPage() {
 
   useEffect(() => {
     setWorksheetPageIndex(0);
-  }, [projectId, worksheetSearch, worksheetFilter, worksheetPageSize, columnFilters]);
+  }, [projectId, worksheetSearch, worksheetFilter, worksheetPageSize, columnFilters, sortColumn, sortDirection]);
 
   useEffect(() => {
     if (worksheetPageIndex !== safeWorksheetPageIndex) {
@@ -3702,6 +3713,11 @@ export default function ProductsGalleryPage() {
                               }
                               active={columnFilters[column]}
                               onApply={(values) => setColumnFilters((prev) => setColumnFilter(prev, column, values))}
+                              sortDirection={sortColumn === column ? sortDirection : false}
+                              onSort={(direction) => {
+                                setSortColumn(column);
+                                setSortDirection(direction);
+                              }}
                             />
                           </span>
                           <ColumnResizeHandle

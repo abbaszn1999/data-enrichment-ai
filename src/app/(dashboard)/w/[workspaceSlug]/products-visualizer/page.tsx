@@ -326,6 +326,8 @@ export default function ProductsVisualizerPage() {
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [showColumnLayoutPanel, setShowColumnLayoutPanel] = useState(false);
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const dragColKeyRef = useRef<string | null>(null);
   const [dragOverColKey, setDragOverColKey] = useState<string | null>(null);
   const [worksheetPageIndex, setWorksheetPageIndex] = useState(0);
@@ -1275,9 +1277,18 @@ export default function ProductsVisualizerPage() {
   }, [displayColumns, rows.length, projectId, worksheetPageIndex, worksheetPageSize]);
 
   const visibleRows = useMemo(() => {
-    if (!hasActiveFilters(columnFilters)) return rows;
-    return applyColumnFilters(rows, columnFilters, visualizerColumnFilterValue);
-  }, [rows, columnFilters]);
+    const filtered = hasActiveFilters(columnFilters)
+      ? applyColumnFilters(rows, columnFilters, visualizerColumnFilterValue)
+      : rows;
+    if (!sortColumn) return filtered;
+    const sorted = [...filtered].sort((a, b) =>
+      visualizerColumnFilterValue(a, sortColumn).localeCompare(visualizerColumnFilterValue(b, sortColumn), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      })
+    );
+    return sortDirection === "asc" ? sorted : sorted.reverse();
+  }, [rows, columnFilters, sortColumn, sortDirection]);
 
   const worksheetPageCount = Math.max(
     1,
@@ -1299,7 +1310,7 @@ export default function ProductsVisualizerPage() {
 
   useEffect(() => {
     setWorksheetPageIndex(0);
-  }, [projectId, worksheetPageSize, columnFilters]);
+  }, [projectId, worksheetPageSize, columnFilters, sortColumn, sortDirection]);
 
   useEffect(() => {
     if (worksheetPageIndex !== safeWorksheetPageIndex) {
@@ -2326,6 +2337,11 @@ export default function ProductsVisualizerPage() {
                               }
                               active={columnFilters[column]}
                               onApply={(values) => setColumnFilters((prev) => setColumnFilter(prev, column, values))}
+                              sortDirection={sortColumn === column ? sortDirection : false}
+                              onSort={(direction) => {
+                                setSortColumn(column);
+                                setSortDirection(direction);
+                              }}
                             />
                           </span>
                           <ColumnResizeHandle

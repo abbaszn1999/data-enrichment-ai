@@ -6,7 +6,7 @@
  * Shared by Catalog Intelligence, Product Gallery and the Visualizer.
  */
 import { useMemo, useState } from "react";
-import { Filter, Search, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Filter, Search, X } from "lucide-react";
 import type { FilterValueOption } from "@/lib/sheet/column-filters";
 
 export function ColumnFilterButton({
@@ -14,12 +14,18 @@ export function ColumnFilterButton({
   active,
   onApply,
   className,
+  sortDirection,
+  onSort,
 }: {
   options: FilterValueOption[];
   /** Currently-applied values for this column; empty/undefined = no filter. */
   active: Set<string> | undefined;
   onApply: (values: Set<string>) => void;
   className?: string;
+  /** Current sort applied to this column, if the sheet is sorted by it. */
+  sortDirection?: "asc" | "desc" | false;
+  /** Omit to hide the Sort A→Z / Z→A rows (e.g. a sheet with no sorting). */
+  onSort?: (direction: "asc" | "desc") => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -68,9 +74,39 @@ export function ColumnFilterButton({
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
-            className="absolute left-0 top-full z-50 mt-1 w-56 rounded-lg border bg-popover p-2 text-left shadow-lg"
+            className="absolute left-0 top-full z-50 mt-1 w-60 rounded-lg border bg-popover p-2 text-left shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
+            {onSort && (
+              <div className="mb-1.5 space-y-0.5 border-b pb-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSort("asc");
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-muted/50 ${
+                    sortDirection === "asc" ? "font-semibold text-primary" : ""
+                  }`}
+                >
+                  <ArrowUp className="h-3 w-3" />
+                  Sort A to Z
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSort("desc");
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-muted/50 ${
+                    sortDirection === "desc" ? "font-semibold text-primary" : ""
+                  }`}
+                >
+                  <ArrowDown className="h-3 w-3" />
+                  Sort Z to A
+                </button>
+              </div>
+            )}
             <div className="relative mb-1.5">
               <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/50" />
               <input
@@ -143,7 +179,7 @@ export function ColumnFilterButton({
                     setOpen(false);
                   }}
                 >
-                  Apply
+                  OK
                 </button>
               </div>
             </div>

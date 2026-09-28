@@ -114,6 +114,8 @@ export function ShareVisualizerView({ payload }: { payload: VisualizerSharePaylo
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [textDialog, setTextDialog] = useState<{ title: string; value: string } | null>(null);
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
   const naturalColumns = useMemo(() => {
     const productImage =
@@ -133,9 +135,18 @@ export function ShareVisualizerView({ payload }: { payload: VisualizerSharePaylo
   );
 
   const visibleRows = useMemo(() => {
-    if (!hasActiveFilters(columnFilters)) return payload.rows;
-    return applyColumnFilters(payload.rows, columnFilters, visualizerColumnFilterValue);
-  }, [payload.rows, columnFilters]);
+    const filtered = hasActiveFilters(columnFilters)
+      ? applyColumnFilters(payload.rows, columnFilters, visualizerColumnFilterValue)
+      : payload.rows;
+    if (!sortColumn) return filtered;
+    const sorted = [...filtered].sort((a, b) =>
+      visualizerColumnFilterValue(a, sortColumn).localeCompare(visualizerColumnFilterValue(b, sortColumn), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      })
+    );
+    return sortDirection === "asc" ? sorted : sorted.reverse();
+  }, [payload.rows, columnFilters, sortColumn, sortDirection]);
 
   const pageRows = useMemo(
     () => visibleRows.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
@@ -167,6 +178,11 @@ export function ShareVisualizerView({ payload }: { payload: VisualizerSharePaylo
                       }
                       active={columnFilters[column]}
                       onApply={(values) => setColumnFilters((prev) => setColumnFilter(prev, column, values))}
+                      sortDirection={sortColumn === column ? sortDirection : false}
+                      onSort={(direction) => {
+                        setSortColumn(column);
+                        setSortDirection(direction);
+                      }}
                     />
                   </span>
                 </th>
