@@ -5,6 +5,8 @@ import { dispatchJob } from "@/lib/jobs/dispatch";
 import { notifyIfMissing } from "@/lib/jobs/notify";
 import { claimStaleJobRuns, mapJobRun } from "@/lib/jobs/repo";
 import { isTerminalJobStatus } from "@/lib/jobs/types";
+import { CATALOG_WORKER_STALE_MS } from "@/lib/jobs/config";
+import { recoverStaleCatalogRun } from "@/lib/jobs/catalog-recovery";
 import { expireStaleHeldExtracts as expireStaleMrHeldExtracts } from "@/lib/market-research/extract-advance";
 import { expireStaleHeldExtracts as expireStaleFaHeldExtracts } from "@/lib/free-assessment/extract-advance";
 import { expireElapsedTrials } from "@/lib/trial-server";
@@ -13,21 +15,57 @@ import { cronSecretFromEnv, cronSecretMatches } from "@/lib/auth/cron-secret";
 
 export const maxDuration = 60;
 
-function authorized(request: NextRequest): boolean {
+/**
+ * Accepts the app env secret when set; otherwise verifies the bearer against
+ * the Vault secret pg_cron sends (verify_jobs_cron_secret, service_role only),
+ * so a missing env var can no longer silently switch off job recovery.
+ */
+async function authorized(request: NextRequest): Promise<boolean> {
   const secret = cronSecretFromEnv();
-  if (!secret) return false;
-  return cronSecretMatches(request, secret);
+  if (secret) return cronSecretMatches(request, secret);
+  const presented =
+    request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "";
+  if (!presented) return false;
+  const { data, error } = await createAdminClient().rpc("verify_jobs_cron_secret", {
+    p_secret: presented,
+  });
+  if (error) {
+    console.error("[jobs/sweep] secret verification failed", error.message);
+    return false;
+  }
+  return data === true;
 }
 
 export async function POST(request: NextRequest) {
-  if (!authorized(request)) {
-    if (!cronSecretFromEnv()) {
-      return NextResponse.json({ error: "Scheduler not configured" }, { status: 503 });
-    }
+  if (!(await authorized(request))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const admin = createAdminClient();
+
+  // Catalog orchestrators ping every 30s, so they can be recovered well
+  // before the generic 10-minute threshold — including runs stuck queued
+  // and runs where Stop was pressed after the worker had already died.
+  let catalogRecovered = 0;
+  const { data: catalogActive } = await admin
+    .from("job_runs")
+    .select("*")
+    .eq("kind", "catalog")
+    .in("status", ["queued", "running"])
+    .lte("heartbeat_at", new Date(Date.now() - CATALOG_WORKER_STALE_MS).toISOString())
+    .limit(JOB_SWEEP_LIMIT);
+  for (const row of catalogActive ?? []) {
+    try {
+      await recoverStaleCatalogRun(admin, mapJobRun(row as Record<string, unknown>));
+      catalogRecovered += 1;
+    } catch (error) {
+      console.error(
+        "[jobs/sweep] catalog recovery failed",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
   const stale = await claimStaleJobRuns(
     admin,
     JOB_HEARTBEAT_STALE_MINUTES,
@@ -87,6 +125,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    catalogRecovered,
     dispatched: dispatched.length,
     ids: dispatched,
     notified,

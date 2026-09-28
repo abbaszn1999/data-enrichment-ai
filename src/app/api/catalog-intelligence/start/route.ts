@@ -7,6 +7,8 @@ import {
 } from "@/lib/workspace-context";
 import { dispatchJob } from "@/lib/jobs/dispatch";
 import { insertJobRun, loadActiveJobForSession } from "@/lib/jobs/repo";
+import { recoverStaleCatalogRun } from "@/lib/jobs/catalog-recovery";
+import { isTerminalJobStatus } from "@/lib/jobs/types";
 import { loadProjectJsonAdmin } from "@/lib/jobs/project-json";
 import { collapseToPrimaryRowIds, resolveProductGroupColumn } from "@/lib/catalog/product-groups";
 import type { CatalogJobSettings } from "@/lib/jobs/types";
@@ -79,12 +81,15 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createAdminClient();
-  const existing = await loadActiveJobForSession(admin, {
+  const active = await loadActiveJobForSession(admin, {
     kind: "catalog",
     sessionId,
     workspaceId,
   });
-  if (existing) {
+  // A run left behind by a dead orchestrator is resumed (or, if it was being
+  // stopped, finished) rather than blocking this session forever.
+  const existing = active ? await recoverStaleCatalogRun(admin, active) : null;
+  if (existing && !isTerminalJobStatus(existing.status)) {
     return NextResponse.json(
       { error: "An enrichment run is already in progress", runId: existing.id },
       { status: 409, headers }

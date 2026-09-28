@@ -26,6 +26,7 @@ function mapRun(row: Record<string, unknown>): JobRunRecord {
     heartbeat_at: (row.heartbeat_at as string | null) ?? null,
     cancel_requested: Boolean(row.cancel_requested),
     task_run_id: (row.task_run_id as string | null) ?? null,
+    worker_token: (row.worker_token as string | null) ?? null,
     last_error: (row.last_error as string | null) ?? null,
     settings: asJobSettings(row.settings as Json),
     created_at: String(row.created_at),
@@ -114,7 +115,8 @@ export async function listActiveJobsForUser(
 export async function markJobRunning(
   admin: Admin,
   id: string,
-  taskRunId?: string | null
+  taskRunId?: string | null,
+  workerToken?: string
 ): Promise<void> {
   const patch: Record<string, unknown> = {
     status: "running",
@@ -122,14 +124,20 @@ export async function markJobRunning(
     updated_at: new Date().toISOString(),
   };
   if (taskRunId) patch.task_run_id = taskRunId;
+  if (workerToken) patch.worker_token = workerToken;
   const { error } = await admin.from("job_runs").update(patch).eq("id", id);
   if (error) throw new Error(error.message);
 }
 
+/**
+ * With `workerToken`, the write only lands while that worker still owns the
+ * run — a superseded worker's heartbeat/progress becomes a no-op.
+ */
 export async function touchJobHeartbeat(
   admin: Admin,
   id: string,
-  counts?: { completed?: number; failed?: number; settings?: JobRunSettings }
+  counts?: { completed?: number; failed?: number; settings?: JobRunSettings },
+  workerToken?: string
 ): Promise<JobRunRecord | null> {
   const patch: Record<string, unknown> = {
     heartbeat_at: new Date().toISOString(),
@@ -138,12 +146,9 @@ export async function touchJobHeartbeat(
   if (typeof counts?.completed === "number") patch.completed_count = counts.completed;
   if (typeof counts?.failed === "number") patch.failed_count = counts.failed;
   if (counts?.settings) patch.settings = counts.settings;
-  const { data, error } = await admin
-    .from("job_runs")
-    .update(patch)
-    .eq("id", id)
-    .select("*")
-    .maybeSingle();
+  let query = admin.from("job_runs").update(patch).eq("id", id);
+  if (workerToken) query = query.eq("worker_token", workerToken);
+  const { data, error } = await query.select("*").maybeSingle();
   if (error) throw new Error(error.message);
   return data ? mapRun(data as Record<string, unknown>) : null;
 }
@@ -156,9 +161,15 @@ export async function finishJobRun(
     completedCount: number;
     failedCount: number;
     lastError?: string | null;
+  },
+  guard?: {
+    /** Only the worker that owns the run may finish it. */
+    workerToken?: string;
+    /** Never overwrite a status that is already terminal (e.g. a forced Stop). */
+    onlyIfActive?: boolean;
   }
 ): Promise<JobRunRecord | null> {
-  const { data, error } = await admin
+  let query = admin
     .from("job_runs")
     .update({
       status: params.status,
@@ -168,7 +179,59 @@ export async function finishJobRun(
       heartbeat_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
+    .eq("id", id);
+  if (guard?.workerToken) query = query.eq("worker_token", guard.workerToken);
+  if (guard?.onlyIfActive) query = query.in("status", ["queued", "running"]);
+  const { data, error } = await query.select("*").maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapRun(data as Record<string, unknown>) : null;
+}
+
+export type JobControl = {
+  /** The user pressed Stop, or the run already ended (e.g. a forced finish). */
+  stop: boolean;
+  /** Another orchestrator took over this run; leave it alone entirely. */
+  superseded: boolean;
+};
+
+/** What a running worker must check before claiming each new row. */
+export async function readJobControl(
+  admin: Admin,
+  id: string,
+  workerToken?: string
+): Promise<JobControl> {
+  const { data, error } = await admin
+    .from("job_runs")
+    .select("cancel_requested, status, worker_token")
     .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return { stop: true, superseded: true };
+  const superseded =
+    !!workerToken && !!data.worker_token && data.worker_token !== workerToken;
+  const terminal = !["queued", "running"].includes(String(data.status));
+  return { stop: Boolean(data.cancel_requested) || terminal, superseded };
+}
+
+/**
+ * Atomically take over one stale run (heartbeat older than `staleBefore`) so
+ * only a single caller re-dispatches it, however many pollers race here.
+ */
+export async function claimStaleJobRun(
+  admin: Admin,
+  id: string,
+  staleBefore: string
+): Promise<JobRunRecord | null> {
+  const { data, error } = await admin
+    .from("job_runs")
+    .update({
+      heartbeat_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .in("status", ["queued", "running"])
+    .eq("cancel_requested", false)
+    .lte("heartbeat_at", staleBefore)
     .select("*")
     .maybeSingle();
   if (error) throw new Error(error.message);

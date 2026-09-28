@@ -23,16 +23,8 @@ import {
 
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
-/**
- * Ceiling on a single OpenAI call. Raised from the previous 180s because Stop
- * now aborts an in-flight call directly (see `shouldCancel` below) instead of
- * only blocking new rows — a longer ceiling no longer means a longer stuck
- * wait after the user clicks Stop.
- */
+/** Ceiling on a single OpenAI call. */
 export const ENRICH_CALL_TIMEOUT_MS = 240_000;
-
-/** How often an in-flight call re-checks `shouldCancel` while waiting on OpenAI. */
-const CANCEL_POLL_MS = 5_000;
 
 /**
  * An attempt that OpenAI billed (the response carried `usage`) but whose
@@ -56,12 +48,9 @@ export function billedCostsOf(error: unknown): AiCallCost[] {
 }
 
 /**
- * The user clicked Stop while this call was in flight. The cancelled request
- * itself is never billed (OpenAI never returned a response for it), but
- * earlier rounds or attempts on the same row may have been — `costs` carries
- * them forward so the row is charged for what OpenAI actually billed. Callers
- * must not retry this: retrying after a user-requested stop would defeat the
- * point of Stop.
+ * Stop was requested after an attempt failed, so no further attempt starts.
+ * `costs` carries what OpenAI already billed for the row so it is still
+ * charged. Callers must not retry this.
  */
 export class EnrichCancelledError extends Error {
   readonly costs: AiCallCost[];
@@ -268,10 +257,11 @@ export async function runEnrichOpenAiResponse(params: {
    */
   unlimitedSearchContentBudget?: boolean;
   /**
-   * Polled every few seconds while the call is in flight. Returning true
-   * aborts the in-flight OpenAI request immediately (not billed) instead of
-   * waiting for it to finish naturally — this is what makes Stop actually
-   * stop instead of only blocking rows that have not started yet.
+   * Checked between rounds, never mid-request: an in-flight OpenAI call is
+   * billed whether or not we wait for it, so aborting it would pay for a
+   * result and throw it away. Once this returns true the row wraps up — the
+   * next round forces a final answer from what is already verified — and no
+   * further attempts or retries start.
    */
   shouldCancel?: () => Promise<boolean>;
   /** Overrides the tier's model (agents with their own model choice). */
@@ -329,9 +319,15 @@ export async function runEnrichOpenAiResponse(params: {
   if (params.policy.includeResults) include.push("web_search_call.results");
   if (params.policy.includeSources) include.push("web_search_call.action.sources");
 
-  // Shared by every attempt this call makes (fallback retries below reuse it),
-  // so one user Stop click cancels all of them, not just the first.
-  let cancelledByUser = false;
+  const stopRequested = async (): Promise<boolean> => {
+    if (!params.shouldCancel) return false;
+    try {
+      return await params.shouldCancel();
+    } catch {
+      // A failed control read must not end a paid-for call early.
+      return false;
+    }
+  };
 
   const postOnce = async (imageUrls: string[], withFilters: boolean) => {
     const tool = withFilters ? { ...webSearchTool, filters } : webSearchTool;
@@ -389,24 +385,12 @@ export async function runEnrichOpenAiResponse(params: {
       if (costs.length > 0) throw new EnrichBilledAttemptError(message, [...costs]);
       throw new Error(message);
     };
-    const cancelled = (): never => {
-      throw new EnrichCancelledError(undefined, [...costs]);
-    };
 
     const send = async (request: Record<string, unknown>): Promise<OpenAiResponse> => {
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) fail("timeout");
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(new Error("timeout")), remainingMs);
-      const pollId = params.shouldCancel
-        ? setInterval(() => {
-            void params.shouldCancel!().then((isCancelled) => {
-              if (!isCancelled) return;
-              cancelledByUser = true;
-              controller.abort(new Error("cancelled"));
-            });
-          }, CANCEL_POLL_MS)
-        : undefined;
 
       let response: Response;
       try {
@@ -420,20 +404,13 @@ export async function runEnrichOpenAiResponse(params: {
           signal: controller.signal,
         });
       } catch (fetchError) {
-        // The abort itself is what makes the fetch reject — catch it here (not
-        // after, since a rejected fetch never reaches the line below) and only
-        // convert it when the user actually caused it; a timeout abort keeps
-        // its original error (plus any billed earlier rounds).
-        if (cancelledByUser) cancelled();
         if (costs.length > 0) {
           fail(fetchError instanceof Error ? fetchError.message : String(fetchError));
         }
         throw fetchError;
       } finally {
         clearTimeout(timeoutId);
-        if (pollId) clearInterval(pollId);
       }
-      if (cancelledByUser) cancelled();
 
       const rawText = await response.text();
       let body: OpenAiResponse;
@@ -470,23 +447,24 @@ export async function runEnrichOpenAiResponse(params: {
       const calls = functionCallsOf(body);
       if (calls.length === 0) break;
       if (!body.id) fail("OpenAI enrich returned a function call without a response id");
-      if (params.shouldCancel && (await params.shouldCancel())) {
-        cancelledByUser = true;
-        cancelled();
-      }
+      // Stop: finish this row with what is already verified instead of
+      // discarding the rounds OpenAI has billed so far.
+      const stopping = await stopRequested();
       const toolBudgetMs = deadline - Date.now() - ANSWER_RESERVE_MS;
       const outOfTime = toolBudgetMs < 5_000;
       const outputs = await Promise.all(
         calls.map(async (call) => ({
           type: "function_call_output",
           call_id: call.call_id,
-          output: outOfTime
-            ? JSON.stringify({ error: "Research time is up. Answer now with what you have verified." })
-            : await runFunctionCall(functionTools, call, Math.min(TOOL_CALL_TIMEOUT_MS, toolBudgetMs)),
+          output: stopping
+            ? JSON.stringify({ error: "The run was stopped. Answer now with what you have verified." })
+            : outOfTime
+              ? JSON.stringify({ error: "Research time is up. Answer now with what you have verified." })
+              : await runFunctionCall(functionTools, call, Math.min(TOOL_CALL_TIMEOUT_MS, toolBudgetMs)),
         }))
       );
-      if (cancelledByUser) cancelled();
-      const mustAnswer = round >= maxRounds || outOfTime || deadline - Date.now() < ANSWER_RESERVE_MS;
+      const mustAnswer =
+        stopping || round >= maxRounds || outOfTime || deadline - Date.now() < ANSWER_RESERVE_MS;
       body = await send({
         ...baseRequest,
         previous_response_id: body.id,
@@ -560,6 +538,11 @@ export async function runEnrichOpenAiResponse(params: {
       }
       const message = error instanceof Error ? error.message : String(error);
       priorCosts.push(...billedCostsOf(error));
+      // After Stop, no fallback attempt starts; the row stays pending and is
+      // charged only for what was already billed.
+      if (await stopRequested()) {
+        throw new EnrichCancelledError(undefined, [...priorCosts]);
+      }
       if (inputImageParts(imageUrls).length > 0 && isOpenAiInputImageDownloadError(message)) {
         console.warn(
           `[Enrich OpenAI] Source image download failed; retrying without input_image`,

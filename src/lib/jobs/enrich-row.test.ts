@@ -164,6 +164,21 @@ describe("processCatalogRow billing", () => {
     expect(outcome.billed?.cost).toBeCloseTo(billedCall.totalCost * 2, 10);
   });
 
+  it("after Stop, never starts a second attempt: the row stays pending and is charged for the first", async () => {
+    enrichRowMock.mockRejectedValueOnce(new EnrichBilledAttemptError("incomplete", [billedCall]));
+    const outcome = await processCatalogRow({
+      sessionId: "s",
+      workspaceId: "w",
+      row,
+      settings,
+      shouldCancel: async () => true,
+    });
+    if (outcome.ok) throw new Error("expected a cancelled outcome");
+    expect(outcome.cancelled).toBe(true);
+    expect(outcome.billed?.billedAttempts).toBe(1);
+    expect(enrichRowMock).toHaveBeenCalledTimes(1);
+  });
+
   it("passes shouldCancel through to enrichRow", async () => {
     const shouldCancel = async () => false;
     enrichRowMock.mockResolvedValueOnce({ data: { imageUrls: [] }, costs: [billedCall] });

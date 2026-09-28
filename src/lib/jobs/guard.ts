@@ -29,7 +29,11 @@ export async function withHeartbeat<T>(
 
 export async function runJobWithFailureGuard(
   runId: string,
-  fn: () => Promise<void>
+  fn: () => Promise<void>,
+  options?: {
+    /** When set, a crash only fails the run if this worker still owns it. */
+    workerToken?: string;
+  }
 ): Promise<void> {
   const startedHeap = process.memoryUsage().heapUsed;
   try {
@@ -42,12 +46,19 @@ export async function runJobWithFailureGuard(
       const admin = createAdminClient();
       const run = await loadJobRun(admin, runId);
       if (!run || isTerminalJobStatus(run.status)) return;
-      const failed = await finishJobRun(admin, run.id, {
-        status: "failed",
-        completedCount: run.completed_count,
-        failedCount: Math.max(run.failed_count, 1),
-        lastError: message,
-      });
+      const failed = await finishJobRun(
+        admin,
+        run.id,
+        {
+          status: "failed",
+          completedCount: run.completed_count,
+          failedCount: Math.max(run.failed_count, 1),
+          lastError: message,
+        },
+        options?.workerToken
+          ? { workerToken: options.workerToken, onlyIfActive: true }
+          : undefined
+      );
       if (failed) await notifyJobEvent(failed, "failed", admin);
     } catch (notifyError) {
       console.error("[jobs] failed to record crash", notifyError);

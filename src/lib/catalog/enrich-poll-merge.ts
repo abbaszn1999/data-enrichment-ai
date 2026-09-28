@@ -19,6 +19,8 @@ export type CatalogPollRun = {
   failed_count?: number;
   target_ids?: string[] | null;
   last_error?: string | null;
+  /** Stop was pressed; in-flight rows are finishing before the run ends. */
+  cancel_requested?: boolean;
   settings?: {
     processedRowIds?: string[] | null;
     enabledColumns?: string[] | null;
@@ -38,6 +40,32 @@ export function catalogEnrichingContextFromRun(run: CatalogPollRun | null | unde
     return { tab: "existing", existingColumns, newColumns: [] };
   }
   return { tab: "new", existingColumns: [], newColumns: enabled };
+}
+
+/**
+ * How many of this run's rows are actually finished, from persisted row
+ * statuses: rows the run recorded as processed (it records each one right
+ * after that row's result is saved) that are now done or failed. Rows that
+ * were already done before this run started — e.g. a Premium retry of
+ * Not-found rows — only count once this run has processed them again.
+ */
+export function catalogRunFinishedCounts(
+  rows: Array<{ id: string; status: string }>,
+  run: CatalogPollRun | null | undefined
+): { done: number; failed: number } {
+  const processed = run?.settings?.processedRowIds;
+  if (!run || !Array.isArray(processed)) {
+    return { done: run?.completed_count ?? 0, failed: run?.failed_count ?? 0 };
+  }
+  const statusById = new Map(rows.map((row) => [row.id, row.status]));
+  let done = 0;
+  let failed = 0;
+  for (const id of new Set(processed.map(String))) {
+    const status = statusById.get(id);
+    if (status === "done") done += 1;
+    else if (status === "error") failed += 1;
+  }
+  return { done, failed };
 }
 
 export function isCatalogEnrichRunActive(

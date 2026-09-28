@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { getWorkspaceContext } from "@/lib/workspace-context";
 import { loadActiveJobForSession, loadJobRun } from "@/lib/jobs/repo";
 import { loadProjectJsonAdmin } from "@/lib/jobs/project-json";
+import { recoverStaleCatalogRun } from "@/lib/jobs/catalog-recovery";
 
 export async function GET(request: NextRequest) {
   const workspaceId = request.nextUrl.searchParams.get("workspaceId")?.trim();
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createAdminClient();
-  const run = runId
+  const loaded = runId
     ? await loadJobRun(admin, runId)
     : sessionId
       ? await loadActiveJobForSession(admin, {
@@ -38,8 +39,20 @@ export async function GET(request: NextRequest) {
         })
       : null;
 
-  if (run && run.workspace_id !== workspaceId) {
+  if (loaded && loaded.workspace_id !== workspaceId) {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
+  }
+
+  // A run whose orchestrator died (deploy, restart, crash) is resumed — or,
+  // if Stop was pressed, finished — right here, so the page never shows a
+  // frozen run. The background sweep does the same when nobody is watching.
+  let run = loaded;
+  if (run && run.kind === "catalog") {
+    try {
+      run = await recoverStaleCatalogRun(admin, run);
+    } catch (error) {
+      console.error("[catalog-intelligence/status] stale-run recovery failed", error);
+    }
   }
 
   const project =

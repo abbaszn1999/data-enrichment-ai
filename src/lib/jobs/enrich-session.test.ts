@@ -3,22 +3,24 @@ import type { ProjectRow } from "@/lib/storage-helpers";
 import type { EnrichRowOutcome } from "./enrich-row";
 import type { CatalogProcessRow } from "./enrich-session";
 
+const control = vi.hoisted(() => ({ stop: false, superseded: false }));
 const repo = vi.hoisted(() => ({
   loadJobRun: vi.fn(),
   markJobRunning: vi.fn(),
   finishJobRun: vi.fn(async (_admin: unknown, id: string, patch: Record<string, unknown>) => ({ id, ...patch })),
-  isJobCancelRequested: vi.fn(async () => false),
+  readJobControl: vi.fn(async () => ({ stop: control.stop, superseded: control.superseded })),
   touchJobHeartbeat: vi.fn(),
 }));
 const project = vi.hoisted(() => ({ current: null as null | { rows: ProjectRow[]; columns: string[] } }));
 const chargeCatalogRow = vi.hoisted(() => vi.fn(async () => ({ ok: true as const })));
+const saveProjectJsonAdmin = vi.hoisted(() => vi.fn());
 
 vi.mock("./repo", () => repo);
 vi.mock("./guard", () => ({ runJobWithFailureGuard: (_id: string, fn: () => Promise<void>) => fn() }));
 vi.mock("./notify", () => ({ notifyJobEvent: vi.fn() }));
 vi.mock("./project-json", () => ({
   loadProjectJsonAdmin: vi.fn(async () => project.current),
-  saveProjectJsonAdmin: vi.fn(),
+  saveProjectJsonAdmin,
 }));
 vi.mock("./enrich-row", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./enrich-row")>()),
@@ -35,6 +37,11 @@ const { PROVIDER_UNAVAILABLE_JOB_ERROR } = await import("./enrich-row");
 
 const makeRow = (id: string, rowIndex: number): ProjectRow =>
   ({ id, rowIndex, originalData: { Code: `CODE${rowIndex}` }, enrichedData: {}, status: "pending" }) as unknown as ProjectRow;
+
+beforeEach(() => {
+  control.stop = false;
+  control.superseded = false;
+});
 
 describe("runEnrichSession when the AI provider account is unavailable", () => {
   beforeEach(() => {
@@ -77,7 +84,8 @@ describe("runEnrichSession when the AI provider account is unavailable", () => {
     expect(repo.finishJobRun).toHaveBeenCalledWith(
       expect.anything(),
       "run-1",
-      expect.objectContaining({ status: "failed", lastError: PROVIDER_UNAVAILABLE_JOB_ERROR, completedCount: 1, failedCount: 0 })
+      expect.objectContaining({ status: "failed", lastError: PROVIDER_UNAVAILABLE_JOB_ERROR, completedCount: 1, failedCount: 0 }),
+      expect.objectContaining({ onlyIfActive: true })
     );
   });
 });
@@ -147,7 +155,127 @@ describe("runEnrichSession charges exactly what OpenAI billed, whatever the outc
     expect(repo.finishJobRun).toHaveBeenCalledWith(
       expect.anything(),
       "run-1",
-      expect.objectContaining({ status: "paused_no_credits" })
+      expect.objectContaining({ status: "paused_no_credits" }),
+      expect.objectContaining({ onlyIfActive: true })
+    );
+  });
+});
+
+describe("runEnrichSession lifecycle guarantees", () => {
+  const settings = {
+    kind: "product",
+    enabledColumns: ["imageUrls"],
+    enrichmentColumns: [{ id: "imageUrls", label: "Image URLs", description: "", type: "imageUrls" }],
+    enrichmentModel: "standard",
+    sourceColumns: ["Code"],
+    ownerUserId: "o",
+    actorUserId: "a",
+  };
+  const ok = (rowId: string): EnrichRowOutcome => ({
+    ok: true,
+    rowId,
+    data: { imageUrls: [] },
+    originalPatches: {},
+    credits: 1,
+    cost: 0.1,
+    tokens: 10,
+    billedAttempts: 1,
+  });
+  const setup = (count: number, extraSettings: Record<string, unknown> = {}) => {
+    vi.clearAllMocks();
+    const rows = Array.from({ length: count }, (_, i) => makeRow(`r${i + 1}`, i + 1));
+    project.current = { rows, columns: ["Code"] };
+    repo.loadJobRun.mockResolvedValue({
+      id: "run-1",
+      kind: "catalog",
+      status: "running",
+      workspace_id: "w",
+      session_id: "s",
+      target_ids: rows.map((row) => row.id),
+      settings: { ...settings, ...extraSettings },
+    });
+    return rows;
+  };
+
+  it("Stop starts no new row, lets in-flight rows finish, saves and charges them, then ends the run cancelled", async () => {
+    const rows = setup(10);
+    // Stop lands while the first rows are already with the AI.
+    const processRow = vi.fn<CatalogProcessRow>(async (rowId) => {
+      control.stop = true;
+      return ok(rowId);
+    });
+    await runEnrichSession("run-1", { processRow });
+
+    const started = processRow.mock.calls.map(([id]) => id);
+    expect(started.length).toBeGreaterThan(0);
+    expect(started.length).toBeLessThan(rows.length);
+    for (const id of started) {
+      expect(rows.find((row) => row.id === id)?.status).toBe("done");
+    }
+    expect(rows.filter((row) => row.status === "pending")).toHaveLength(rows.length - started.length);
+    expect(chargeCatalogRow).toHaveBeenCalledTimes(started.length);
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.objectContaining({ status: "cancelled", completedCount: started.length }),
+      expect.objectContaining({ onlyIfActive: true })
+    );
+  });
+
+  it("a worker that lost the run to a resumed one writes nothing and never finishes it", async () => {
+    setup(3);
+    control.superseded = true;
+    const processRow = vi.fn<CatalogProcessRow>(async (rowId) => ok(rowId));
+    await runEnrichSession("run-1", { processRow });
+    expect(processRow).not.toHaveBeenCalled();
+    expect(repo.finishJobRun).not.toHaveBeenCalled();
+    expect(saveProjectJsonAdmin).not.toHaveBeenCalled();
+  });
+
+  it("one row that throws becomes a failed row instead of killing the run", async () => {
+    const rows = setup(3);
+    const processRow = vi.fn<CatalogProcessRow>(async (rowId) => {
+      if (rowId === "r2") throw new Error("row task exhausted its retries");
+      return ok(rowId);
+    });
+    await runEnrichSession("run-1", { processRow });
+    expect(rows.map((row) => row.status)).toEqual(["done", "error", "done"]);
+    expect(rows[1]!.errorMessage).toBe("row task exhausted its retries");
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.objectContaining({ status: "completed", completedCount: 2, failedCount: 1 }),
+      expect.anything()
+    );
+  });
+
+  it("a resumed run skips rows it already finished, so OpenAI never bills them twice", async () => {
+    const rows = setup(3, { processedRowIds: ["r1"] });
+    rows[0]!.status = "done";
+    const processRow = vi.fn<CatalogProcessRow>(async (rowId) => ok(rowId));
+    await runEnrichSession("run-1", { processRow });
+    expect(processRow.mock.calls.map(([id]) => id).sort()).toEqual(["r2", "r3"]);
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.objectContaining({ status: "completed", completedCount: 3 }),
+      expect.anything()
+    );
+  });
+
+  it("claims the run under a worker token and fences every progress write with it", async () => {
+    setup(1);
+    await runEnrichSession("run-1", { processRow: vi.fn<CatalogProcessRow>(async (rowId) => ok(rowId)) });
+    const token = repo.markJobRunning.mock.calls[0]![3];
+    expect(typeof token).toBe("string");
+    for (const call of repo.touchJobHeartbeat.mock.calls) {
+      expect(call[3]).toBe(token);
+    }
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.anything(),
+      { workerToken: token, onlyIfActive: true }
     );
   });
 });

@@ -27,17 +27,6 @@ function completedBody() {
   };
 }
 
-/** A fetch mock whose pending promise rejects like real fetch does when its signal aborts. */
-function abortAwareFetchMock() {
-  return vi.fn((_url: string, init: { signal?: AbortSignal }) => {
-    return new Promise((_resolve, reject) => {
-      init.signal?.addEventListener("abort", () => {
-        reject(new DOMException("The operation was aborted.", "AbortError"));
-      });
-    });
-  });
-}
-
 const baseParams = {
   tier: "standard" as const,
   promptText: "Enrich this row",
@@ -48,64 +37,60 @@ const baseParams = {
   enabledColumns: ["enhancedTitle"],
 };
 
-describe("runEnrichOpenAiResponse cancellation (Stop)", () => {
+describe("runEnrichOpenAiResponse and Stop", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "test-key";
-    vi.useFakeTimers();
   });
   afterEach(() => {
-    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
-  it("aborts the in-flight call as soon as shouldCancel returns true, without waiting for the timeout", async () => {
-    const fetchMock = abortAwareFetchMock();
+  it("never aborts an in-flight call on Stop: the result OpenAI bills for is kept", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(completedBody()), { status: 200 })
+    );
     vi.stubGlobal("fetch", fetchMock);
     const shouldCancel = vi.fn().mockResolvedValue(true);
 
-    const promise = runEnrichOpenAiResponse({ ...baseParams, shouldCancel });
-    const assertion = expect(promise).rejects.toBeInstanceOf(EnrichCancelledError);
-
-    // One poll tick is enough to cancel — nowhere near the full timeout.
-    await vi.advanceTimersByTimeAsync(5_000);
-    await assertion;
-    expect(shouldCancel).toHaveBeenCalled();
+    const result = await runEnrichOpenAiResponse({ ...baseParams, shouldCancel });
+    expect(result.data).toEqual({ enhancedTitle: "Widget" });
+    expect(result.costs).toHaveLength(1);
+    expect(fetchMock.mock.calls[0]![1].signal.aborted).toBe(false);
   });
 
-  it("never retries after a cancellation, even for a normally-retryable failure", async () => {
-    const fetchMock = abortAwareFetchMock();
+  it("starts no fallback attempt after Stop, and carries what the failed attempt billed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ usage, error: { message: "Error while downloading file https://cdn.example.com/dead.jpg" } }),
+        { status: 400 }
+      )
+    );
     vi.stubGlobal("fetch", fetchMock);
     const shouldCancel = vi.fn().mockResolvedValue(true);
 
-    const promise = runEnrichOpenAiResponse({
+    const error = await runEnrichOpenAiResponse({
       ...baseParams,
       imageUrls: ["https://cdn.example.com/dead.jpg"],
       shouldCancel,
-    });
-    const assertion = expect(promise).rejects.toBeInstanceOf(EnrichCancelledError);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await assertion;
+    }).catch((e: unknown) => e);
 
-    // Only the one aborted call — no fallback-without-image retry attempted.
+    expect(error).toBeInstanceOf(EnrichCancelledError);
+    expect(billedCostsOf(error)).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("is not billed when cancelled with no prior attempt", async () => {
-    const fetchMock = abortAwareFetchMock();
+  it("a failed Stop check never ends a call early", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(completedBody()), { status: 200 })
+    );
     vi.stubGlobal("fetch", fetchMock);
-    const shouldCancel = vi.fn().mockResolvedValue(true);
+    const shouldCancel = vi.fn().mockRejectedValue(new Error("db down"));
 
-    const promise = runEnrichOpenAiResponse({ ...baseParams, shouldCancel });
-    // Attach the handler synchronously, before advancing timers — otherwise
-    // the promise can reject mid-advance with no handler yet attached, which
-    // Node reports as an unhandled rejection even though nothing is wrong.
-    const errorPromise = promise.catch((e: unknown) => e);
-    await vi.advanceTimersByTimeAsync(5_000);
-    const error = await errorPromise;
-    expect(billedCostsOf(error)).toEqual([]);
+    const result = await runEnrichOpenAiResponse({ ...baseParams, shouldCancel });
+    expect(result.data).toEqual({ enhancedTitle: "Widget" });
   });
 
-  it("does not poll or abort when no shouldCancel is provided", async () => {
+  it("works without shouldCancel", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(completedBody()), { status: 200 })
     );
@@ -232,17 +217,23 @@ describe("function-tool research loop", () => {
     expect((error as EnrichBilledAttemptError).costs).toHaveLength(2);
   });
 
-  it("stops between rounds when Stop is clicked, carrying the billed rounds", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(callBody("resp_1")), { status: 200 }));
+  it("on Stop between rounds, runs no more research and makes the model answer with what it has", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(callBody("resp_1")), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(completedBody()), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const shouldCancel = vi.fn().mockResolvedValue(true);
     const run = vi.fn(async () => "never");
-    const error = await runEnrichOpenAiResponse({ ...baseParams, functionTools: [tool(run)], shouldCancel }).catch(
-      (e: unknown) => e
-    );
-    expect(error).toBeInstanceOf(EnrichCancelledError);
-    expect(billedCostsOf(error)).toHaveLength(1);
+
+    const result = await runEnrichOpenAiResponse({ ...baseParams, functionTools: [tool(run)], shouldCancel });
+
     expect(run).not.toHaveBeenCalled();
+    const second = bodyOf(fetchMock, 1);
+    expect(second.tool_choice).toBe("none");
+    expect(JSON.parse(second.input[0].output).error).toContain("stopped");
+    expect(result.data).toEqual({ enhancedTitle: "Widget" });
+    expect(result.costs).toHaveLength(2);
   });
 
   it("makes the model answer with what it has when the time budget is nearly used, instead of timing out", async () => {
@@ -327,7 +318,7 @@ describe("provider account unavailable (out of quota)", () => {
 });
 
 describe("ENRICH_CALL_TIMEOUT_MS", () => {
-  it("is meaningfully longer than the old fixed 180s, now that Stop can abort mid-call", () => {
+  it("stays above the old fixed 180s", () => {
     expect(ENRICH_CALL_TIMEOUT_MS).toBeGreaterThan(180_000);
   });
 });

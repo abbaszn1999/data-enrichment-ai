@@ -15,6 +15,17 @@ export const JOB_BATCH_SIZE = 8;
 export const JOB_ROW_ATTEMPTS = 2;
 export const JOB_HEARTBEAT_STALE_MINUTES = 10;
 export const JOB_SWEEP_LIMIT = 5;
+/**
+ * A catalog orchestrator pings its heartbeat on this interval for as long as
+ * its process is alive, independent of how long any one row takes.
+ */
+export const CATALOG_HEARTBEAT_INTERVAL_MS = 30_000;
+/**
+ * No heartbeat for this long (five missed pings) means the orchestrator's
+ * process is gone — a deploy, restart or crash — not just a slow row. The run
+ * is then resumed, or finished if Stop was already pressed.
+ */
+export const CATALOG_WORKER_STALE_MS = 150_000;
 
 /** Cold-state blob flush cadence (Root Cause B / P0-3). */
 export const ENRICH_CHECKPOINT_ROWS = 50;

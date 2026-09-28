@@ -3,7 +3,16 @@ import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { getWorkspaceContext } from "@/lib/workspace-context";
 import { loadActiveJobForSession, loadJobRun, requestJobCancel } from "@/lib/jobs/repo";
+import { forceFinishCatalogRun, isCatalogWorkerStale } from "@/lib/jobs/catalog-recovery";
 
+/**
+ * Stop: no new row starts from this moment. Rows already sent to the AI finish
+ * (a research loop wraps up at its next round), their results are saved and
+ * charged, and the orchestrator then ends the run as cancelled — the status
+ * poll shows that live. If the orchestrator is already gone (deploy, restart,
+ * crash), nobody is left to do that, so the run is finished here immediately
+ * from what is actually saved.
+ */
 export async function POST(request: NextRequest) {
   let body: { workspaceId?: string; sessionId?: string; runId?: string };
   try {
@@ -50,6 +59,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
   }
 
-  const cancelled = await requestJobCancel(admin, runId, workspaceId);
-  return NextResponse.json({ ok: true, run: cancelled ?? existing });
+  const requested = (await requestJobCancel(admin, runId, workspaceId)) ?? existing;
+  const run = isCatalogWorkerStale(requested)
+    ? await forceFinishCatalogRun(admin, requested)
+    : requested;
+  return NextResponse.json({ ok: true, run });
 }

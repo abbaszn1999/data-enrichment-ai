@@ -223,6 +223,17 @@ export async function processCatalogRow(params: {
       failedAttemptCosts.push(...billedCostsOf(error));
       lastError = error instanceof Error ? error.message : "Enrichment failed";
       if (attempt < JOB_ROW_ATTEMPTS) {
+        // Stop never starts a fresh attempt: the row stays pending for a
+        // later run and is charged only for what OpenAI already billed.
+        if (params.shouldCancel && (await params.shouldCancel().catch(() => false))) {
+          return {
+            ok: false,
+            rowId: row.id,
+            error: "Cancelled by user",
+            cancelled: true,
+            billed: billedUsage(failedAttemptCosts),
+          };
+        }
         await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
       }
     }

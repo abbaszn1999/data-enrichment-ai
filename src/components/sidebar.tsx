@@ -85,6 +85,7 @@ import { visibleCatalogRows } from "@/lib/catalog/product-groups";
 import {
   catalogEnrichingContextFromRun,
   catalogPollShouldApplySnapshot,
+  catalogRunFinishedCounts,
   overlayCatalogRowsForActiveRun,
   type CatalogPollRun,
 } from "@/lib/catalog/enrich-poll-merge";
@@ -176,6 +177,8 @@ export function Sidebar() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const enrichRunIdRef = useRef<string | null>(null);
   const enrichPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Bumped whenever a poll loop starts or the page unmounts; stale loops stop themselves. */
+  const enrichPollLoopRef = useRef(0);
   const enrichPollSawActiveRef = useRef(false);
   const enrichEpochRef = useRef(0);
 
@@ -341,23 +344,28 @@ export function Sidebar() {
       project?: ProjectJson | null;
     }) => {
       if (payload.project) {
-        const productRows = overlayCatalogRowsForActiveRun(
-          projectJsonToProductRows(payload.project),
-          payload.run
-        );
+        // Finished = rows this run has processed and saved (done or failed),
+        // read from the saved rows themselves — the same count the server
+        // uses to close a run, so the bar can never run ahead of the sheet.
+        const rawRows = projectJsonToProductRows(payload.project);
+        const productRows = overlayCatalogRowsForActiveRun(rawRows, payload.run);
+        const finished = catalogRunFinishedCounts(rawRows, payload.run);
         const total = payload.run?.target_ids?.length || productRows.length;
         applyProjectRows(productRows, {
-          completed:
-            payload.run?.completed_count ??
-            productRows.filter((r) => r.status === "done").length,
+          completed: finished.done + finished.failed,
           total,
-          errors:
-            payload.run?.failed_count ??
-            productRows.filter((r) => r.status === "error").length,
+          errors: finished.failed,
         });
+      } else if (payload.run) {
+        // No fresh row snapshot this poll — fall back to the run's own
+        // counters rather than leaving the bar stuck on a stale render.
+        setEnrichProgress(
+          (payload.run.completed_count ?? 0) + (payload.run.failed_count ?? 0),
+          payload.run.target_ids?.length ?? 0
+        );
       }
     },
-    [applyProjectRows]
+    [applyProjectRows, setEnrichProgress]
   );
 
   const pollEnrichRun = useCallback(async () => {
@@ -390,7 +398,10 @@ export function Sidebar() {
       throw error;
     }
     if (epoch !== enrichEpochRef.current) return false;
-    if (!res.ok) return false;
+    // Only a definitive answer ends polling; a 5xx (e.g. mid-deploy) or 429
+    // is retried by the poll loop instead of freezing the progress bar.
+    if (res.status === 401 || res.status === 403 || res.status === 404) return false;
+    if (!res.ok) throw new Error(`Status poll failed (${res.status})`);
     const data = (await res.json()) as {
       run?: CatalogPollRun | null;
       project?: ProjectJson | null;
@@ -437,16 +448,19 @@ export function Sidebar() {
     const run = data.run;
     if (!run) return false;
     setIsEnriching(true);
+    // Keeps "Stopping…" accurate after a reload or from another tab.
+    if (run.cancel_requested && !useSheetStore.getState().isStoppingEnrich) {
+      setStoppingEnrich(true);
+    }
     const enrichingContext = catalogEnrichingContextFromRun(run);
     setEnrichingContext(
       enrichingContext.tab,
       enrichingContext.existingColumns,
       enrichingContext.newColumns
     );
-    setEnrichProgress(
-      (run.completed_count ?? 0) + (run.failed_count ?? 0),
-      run.target_ids?.length ?? 0
-    );
+    // Progress itself is already set by applyStatusPayload above, computed
+    // from actual row statuses rather than the run's own counters — do not
+    // overwrite it here.
     invalidateCredits();
     return true;
   }, [
@@ -456,9 +470,59 @@ export function Sidebar() {
     applyStatusPayload,
     setIsEnriching,
     setEnrichingContext,
-    setEnrichProgress,
+    setStoppingEnrich,
     invalidateCredits,
   ]);
+
+  /**
+   * The one poll loop. It never dies on an error: network drops, 5xx during a
+   * deploy, a laptop waking from sleep — it backs off and keeps asking until
+   * the server gives a definitive answer. Restarting it (a new run, Stop, the
+   * tab becoming visible again) supersedes any loop already running.
+   */
+  const startEnrichPolling = useCallback(() => {
+    if (enrichPollRef.current) {
+      clearTimeout(enrichPollRef.current);
+      enrichPollRef.current = null;
+    }
+    const loop = ++enrichPollLoopRef.current;
+    let failures = 0;
+    const tick = async () => {
+      if (loop !== enrichPollLoopRef.current) return;
+      let keep = true;
+      try {
+        keep = await pollEnrichRun();
+        failures = 0;
+      } catch (error) {
+        failures += 1;
+        console.error("Enrichment poll failed; retrying", error);
+      }
+      if (loop !== enrichPollLoopRef.current) return;
+      if (!keep) {
+        enrichPollRef.current = null;
+        return;
+      }
+      const delay = failures === 0 ? 2500 : Math.min(2500 * 2 ** failures, 20_000);
+      enrichPollRef.current = setTimeout(tick, delay);
+    };
+    void tick();
+  }, [pollEnrichRun]);
+
+  // Browsers throttle timers in background tabs; the moment the user comes
+  // back (or the network does), refresh at once instead of waiting it out.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") startEnrichPolling();
+    };
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("online", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [startEnrichPolling]);
 
   const handleStopEnrich = useCallback(async () => {
     if (useSheetStore.getState().isStoppingEnrich) return;
@@ -482,32 +546,19 @@ export function Sidebar() {
         throw new Error(`Stop failed (${response.status})`);
       }
       toast.message(
-        "Stop requested. Rows already sent to the AI will finish and be saved."
+        "Stopping: no new rows will start. Rows already sent to the AI finish, are saved and charged, then the run ends."
       );
     } catch {
       setStoppingEnrich(false);
       toast.error("Could not request stop");
       return;
     }
-    if (!enrichPollRef.current) {
-      const tick = async () => {
-        try {
-          const keep = await pollEnrichRun();
-          if (keep) {
-            enrichPollRef.current = setTimeout(tick, 2500);
-          }
-        } catch (error) {
-          console.error("Enrichment poll failed:", error);
-          enrichPollRef.current = setTimeout(tick, 4000);
-        }
-      };
-      void tick();
-    }
+    startEnrichPolling();
   }, [
     workspace?.id,
     sheetWorkspaceId,
     projectId,
-    pollEnrichRun,
+    startEnrichPolling,
     setStoppingEnrich,
   ]);
 
@@ -648,19 +699,7 @@ export function Sidebar() {
       }
 
       enrichPollSawActiveRef.current = true;
-
-      const tick = async () => {
-        try {
-          const keep = await pollEnrichRun();
-          if (keep) {
-            enrichPollRef.current = setTimeout(tick, 2500);
-          }
-        } catch (error) {
-          console.error("Enrichment poll failed:", error);
-          enrichPollRef.current = setTimeout(tick, 4000);
-        }
-      };
-      void tick();
+      startEnrichPolling();
     } catch (error) {
       console.error("Enrichment failed:", error);
       const errMsg = error instanceof Error ? error.message : "Unknown error occurred";
@@ -684,7 +723,7 @@ export function Sidebar() {
     workspace,
     sheetWorkspaceId,
     projectId,
-    pollEnrichRun,
+    startEnrichPolling,
     setIsEnriching,
     setPaused,
     setEnrichProgress,
@@ -693,34 +732,20 @@ export function Sidebar() {
     beginEnrichEpoch,
   ]);
 
+  // Opening (or returning to) the session picks up a run that kept going on
+  // the server while the page was closed.
   useEffect(() => {
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (!workspaceId || !projectId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const keep = await pollEnrichRun();
-        if (cancelled || !keep) return;
-        const tick = async () => {
-          if (cancelled) return;
-          const still = await pollEnrichRun();
-          if (still && !cancelled) {
-            enrichPollRef.current = setTimeout(tick, 2500);
-          }
-        };
-        enrichPollRef.current = setTimeout(tick, 2500);
-      } catch {
-        // No active run.
-      }
-    })();
+    startEnrichPolling();
     return () => {
-      cancelled = true;
+      enrichPollLoopRef.current += 1;
       if (enrichPollRef.current) {
         clearTimeout(enrichPollRef.current);
         enrichPollRef.current = null;
       }
     };
-  }, [workspace?.id, sheetWorkspaceId, projectId, pollEnrichRun]);
+  }, [workspace?.id, sheetWorkspaceId, projectId, startEnrichPolling]);
 
   const doneCount = rows.filter((r) => r.status === "done").length;
   const failedCount = rows.filter((r) => r.status === "error").length;

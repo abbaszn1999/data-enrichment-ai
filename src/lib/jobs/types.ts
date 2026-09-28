@@ -82,6 +82,8 @@ export interface JobRunRecord {
   heartbeat_at: string | null;
   cancel_requested: boolean;
   task_run_id: string | null;
+  /** Set by the orchestrator that currently owns the run; see job_worker_fencing.sql. */
+  worker_token: string | null;
   last_error: string | null;
   settings: JobRunSettings;
   created_at: string;

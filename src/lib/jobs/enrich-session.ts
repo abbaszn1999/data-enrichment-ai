@@ -1,6 +1,7 @@
+import { randomUUID } from "crypto";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { createCheckpointGate, ENRICH_CHECKPOINT } from "./checkpoint";
-import { JOB_BATCH_SIZE } from "./config";
+import { CATALOG_HEARTBEAT_INTERVAL_MS, JOB_BATCH_SIZE } from "./config";
 import {
   catalogPendingRowIds,
   chargeCatalogRow,
@@ -16,10 +17,11 @@ import { runJobWithFailureGuard } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
   finishJobRun,
-  isJobCancelRequested,
   loadJobRun,
   markJobRunning,
+  readJobControl,
   touchJobHeartbeat,
+  type JobControl,
 } from "./repo";
 import {
   loadProjectJsonAdmin,
@@ -50,6 +52,30 @@ function splitEnriched(data: Record<string, unknown>): {
   return { enriched, originalPatches };
 }
 
+/**
+ * Retries a write that records a finished row or its charge. These only ever
+ * run after OpenAI has billed the row, so a transient database blip must not
+ * turn into paid-for work that was never saved or never charged.
+ */
+async function withRetry<T>(label: string, fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        console.warn(`[jobs/catalog] ${label} failed; retrying`, {
+          attempt,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      }
+    }
+  }
+  throw lastError;
+}
+
 export type CatalogProcessRow = (
   rowId: string,
   context: CatalogRowContext & { imageFinder: boolean }
@@ -59,11 +85,19 @@ export async function runEnrichSession(
   runId: string,
   options?: { processRow?: CatalogProcessRow }
 ): Promise<void> {
-  await runJobWithFailureGuard(runId, () => runEnrichSessionInner(runId, options));
+  // Every orchestrator start (first dispatch, Render retry, or a resume after
+  // a dead heartbeat) owns the run under a fresh token; see readJobControl.
+  const workerToken = randomUUID();
+  await runJobWithFailureGuard(
+    runId,
+    () => runEnrichSessionInner(runId, workerToken, options),
+    { workerToken }
+  );
 }
 
 async function runEnrichSessionInner(
   runId: string,
+  workerToken: string,
   options?: { processRow?: CatalogProcessRow }
 ): Promise<void> {
   const admin = createAdminClient();
@@ -76,18 +110,46 @@ async function runEnrichSessionInner(
     console.error("[jobs/catalog] wrong kind", run.kind);
     return;
   }
-  if (run.status === "cancelled") return;
+  if (run.status !== "queued" && run.status !== "running") return;
 
-  await markJobRunning(admin, run.id);
+  await markJobRunning(admin, run.id, null, workerToken);
+
+  // Keeps the heartbeat fresh however long a single row takes, so a stale
+  // heartbeat reliably means this process is gone (see catalog-recovery.ts).
+  const pinger = setInterval(() => {
+    void touchJobHeartbeat(admin, run.id, undefined, workerToken).catch((error) =>
+      console.error("[jobs/catalog] heartbeat ping failed", run.id, error)
+    );
+  }, CATALOG_HEARTBEAT_INTERVAL_MS);
+  (pinger as { unref?: () => void }).unref?.();
+
+  try {
+    await runCatalogWork(admin, run, workerToken, options);
+  } finally {
+    clearInterval(pinger);
+  }
+}
+
+async function runCatalogWork(
+  admin: ReturnType<typeof createAdminClient>,
+  run: NonNullable<Awaited<ReturnType<typeof loadJobRun>>>,
+  workerToken: string,
+  options?: { processRow?: CatalogProcessRow }
+): Promise<void> {
   const settings = run.settings as CatalogJobSettings;
   const project = await loadProjectJsonAdmin(run.workspace_id, run.session_id, admin);
   if (!project) {
-    const failed = await finishJobRun(admin, run.id, {
-      status: "failed",
-      completedCount: 0,
-      failedCount: run.target_ids.length,
-      lastError: "Project data not found",
-    });
+    const failed = await finishJobRun(
+      admin,
+      run.id,
+      {
+        status: "failed",
+        completedCount: 0,
+        failedCount: run.target_ids.length,
+        lastError: "Project data not found",
+      },
+      { workerToken, onlyIfActive: true }
+    );
     if (failed) await notifyJobEvent(failed, "failed", admin);
     return;
   }
@@ -99,6 +161,9 @@ async function runEnrichSessionInner(
     kind: settings.kind,
   });
   const byId = new Map(project.rows.map((row) => [row.id, row]));
+  // Rows this run already finished. Recorded right after each row is saved
+  // (see commit), so a resume never processes — or has OpenAI bill — a
+  // finished row a second time.
   const processed = new Set(
     (Array.isArray(settings.processedRowIds) ? settings.processedRowIds : []).map(String)
   );
@@ -108,8 +173,6 @@ async function runEnrichSessionInner(
     [...processed]
   );
 
-  // Durable progress is the last checkpointed blob + processedRowIds, not
-  // whatever heartbeat counts happened to land before a crash.
   let completed = 0;
   let failed = 0;
   for (const rowId of processed) {
@@ -120,10 +183,29 @@ async function runEnrichSessionInner(
   }
   let pausedNoCredits = false;
   let stopObserved = false;
+  // Another orchestrator now owns this run: leave it completely alone.
+  let superseded = false;
+  // An unrecoverable write failure; the run ends as failed after in-flight rows drain.
+  let fatalError: string | null = null;
   // Our AI provider account is out of quota: every remaining row would fail the
   // same way, so stop and leave them pending rather than marking them errors.
   let providerUnavailable = false;
   const gate = createCheckpointGate(ENRICH_CHECKPOINT);
+  const rowStore = catalogRowStoreEnabled();
+
+  const readControl = async (): Promise<JobControl> => {
+    try {
+      const control = await readJobControl(admin, run.id, workerToken);
+      if (control.superseded) superseded = true;
+      if (control.stop) stopObserved = true;
+      return control;
+    } catch (error) {
+      // A failed read is not a Stop: keep working and check again next row.
+      console.warn("[jobs/catalog] control read failed", run.id, error);
+      return { stop: false, superseded: false };
+    }
+  };
+  const shouldHalt = () => stopObserved || superseded || pausedNoCredits || providerUnavailable || fatalError !== null;
 
   // Image Finder: websites that verified this sheet's products guide later
   // rows. The final re-check of Not-found rows is a second full billed
@@ -137,42 +219,67 @@ async function runEnrichSessionInner(
     : null;
   const domainsTriedByRow = new Map<string, string[]>();
 
-  const runRow = (rowId: string, context: CatalogRowContext): Promise<EnrichRowOutcome> => {
-    if (options?.processRow) return options.processRow(rowId, { ...context, imageFinder });
-    const row = byId.get(rowId);
-    if (!row) return Promise.resolve({ ok: false as const, rowId, error: "Row not found" });
-    return processCatalogRow({
-      sessionId: run.session_id,
-      workspaceId: run.workspace_id,
-      row,
-      settings,
-      shouldCancel: () => isJobCancelRequested(admin, run.id),
-      context,
-    });
+  /**
+   * One row, isolated: a row that throws (a Render row task that exhausted its
+   * retries, a network error) becomes a failed row instead of taking the whole
+   * run — and every other in-flight row — down with it.
+   */
+  const runRow = async (rowId: string, context: CatalogRowContext): Promise<EnrichRowOutcome> => {
+    try {
+      if (options?.processRow) return await options.processRow(rowId, { ...context, imageFinder });
+      const row = byId.get(rowId);
+      if (!row) return { ok: false as const, rowId, error: "Row not found" };
+      return await processCatalogRow({
+        sessionId: run.session_id,
+        workspaceId: run.workspace_id,
+        row,
+        settings,
+        // Stop lets the in-flight row finish with a result; it only prevents
+        // new attempts and new research rounds.
+        shouldCancel: async () => {
+          const control = await readControl();
+          return control.stop || control.superseded;
+        },
+        context,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Row processing failed";
+      console.error("[jobs/catalog] row crashed", { runId: run.id, rowId, message });
+      return { ok: false as const, rowId, error: message };
+    }
   };
 
   /**
    * Charges exactly what OpenAI billed for this row: the full cost of a
    * result, or — for a row that failed or was stopped — the calls already
    * billed before it ended. Returns null when there is nothing to charge.
+   * Idempotent per run and row, so a retry never double-charges.
    */
   const chargeRow = async (outcome: EnrichRowOutcome, recheck: boolean) => {
     const usage = outcome.ok ? outcome : outcome.billed;
     if (!usage) return null;
-    return chargeCatalogRow({
-      runId: run.id,
-      sessionId: run.session_id,
-      workspaceId: run.workspace_id,
-      rowId: outcome.rowId,
-      rowIndex: byId.get(outcome.rowId)?.rowIndex ?? 0,
-      credits: usage.credits,
-      cost: usage.cost,
-      tokens: usage.tokens,
-      billedAttempts: usage.billedAttempts,
-      settings,
-      recheck,
-      ...(outcome.ok ? {} : { unfinished: true }),
-    });
+    try {
+      return await withRetry("charge", () =>
+        chargeCatalogRow({
+          runId: run.id,
+          sessionId: run.session_id,
+          workspaceId: run.workspace_id,
+          rowId: outcome.rowId,
+          rowIndex: byId.get(outcome.rowId)?.rowIndex ?? 0,
+          credits: usage.credits,
+          cost: usage.cost,
+          tokens: usage.tokens,
+          billedAttempts: usage.billedAttempts,
+          settings,
+          recheck,
+          ...(outcome.ok ? {} : { unfinished: true }),
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Credit deduction failed";
+      console.error("[jobs/catalog] charge failed after retries", { runId: run.id, rowId: outcome.rowId, message });
+      return { ok: false as const, noCredits: false, error: `Could not record the charge: ${message}` };
+    }
   };
 
   const persistCold = async () => {
@@ -188,17 +295,18 @@ async function runEnrichSessionInner(
       })
       .eq("id", run.session_id)
       .eq("workspace_id", run.workspace_id);
-    await touchJobHeartbeat(admin, run.id, { completed, failed, settings });
+    await touchJobHeartbeat(admin, run.id, { completed, failed, settings }, workerToken);
     gate.markFlushed();
   };
 
-  // Serialize mutations. Hot state is the session row + heartbeat; the full
-  // project.json blob flushes on the checkpoint budget and on terminal states.
+  // Serialize mutations. Hot state (row data + this run's processed list and
+  // counts) is written for every finished row; the full project.json blob
+  // flushes on the checkpoint budget and on terminal states.
   let writeQueue: Promise<void> = Promise.resolve();
   const commit = (mutate: () => string[]): Promise<void> => {
     const operation = writeQueue.then(async () => {
       const patchedRowIds = mutate();
-      if (patchedRowIds.length > 0 && catalogRowStoreEnabled()) {
+      if (patchedRowIds.length > 0 && rowStore) {
         const patches = patchedRowIds
           .map((id) => byId.get(id))
           .filter((row): row is NonNullable<typeof row> => Boolean(row))
@@ -211,25 +319,44 @@ async function runEnrichSessionInner(
             matchType: row.matchType,
           }));
         if (patches.length > 0) {
-          await patchCatalogSessionRows(admin, run.session_id, patches);
+          await withRetry("row save", () => patchCatalogSessionRows(admin, run.session_id, patches));
         }
       }
       gate.noteCompletedRow();
-      await touchJobHeartbeat(admin, run.id, { completed, failed });
+      if (rowStore) {
+        // Row data is already durable in catalog_session_rows, so this run's
+        // processed list can be recorded with it — that is what the progress
+        // bar counts and what a resume skips.
+        settings.processedRowIds = [...processed];
+        await withRetry("progress save", () =>
+          touchJobHeartbeat(admin, run.id, { completed, failed, settings }, workerToken)
+        );
+      } else {
+        await withRetry("progress save", () =>
+          touchJobHeartbeat(admin, run.id, { completed, failed }, workerToken)
+        );
+      }
       if (gate.shouldFlush()) await persistCold();
     });
     writeQueue = operation.catch(() => undefined);
     return operation;
   };
 
+  const commitOrFail = async (mutate: () => string[]) => {
+    try {
+      await commit(mutate);
+    } catch (error) {
+      fatalError = `Could not save results: ${error instanceof Error ? error.message : String(error)}`;
+      console.error("[jobs/catalog] commit failed after retries", { runId: run.id, fatalError });
+    }
+  };
+
   let nextIndex = 0;
   const worker = async () => {
     while (true) {
-      if (stopObserved || providerUnavailable) return;
-      if (await isJobCancelRequested(admin, run.id)) {
-        stopObserved = true;
-        return;
-      }
+      if (shouldHalt()) return;
+      await readControl();
+      if (shouldHalt()) return;
       const index = nextIndex;
       nextIndex += 1;
       if (index >= pending.length) return;
@@ -238,10 +365,12 @@ async function runEnrichSessionInner(
       const learnedDomains = learner?.top() ?? [];
       domainsTriedByRow.set(rowId, learnedDomains);
       const outcome = await runRow(rowId, learnedDomains.length > 0 ? { learnedDomains } : {});
-
+      // A worker that lost the run still charges what OpenAI billed for its
+      // row (idempotent per run and row), but writes nothing else.
       const charged = await chargeRow(outcome, false);
+      if (superseded) return;
 
-      await commit(() => {
+      await commitOrFail(() => {
         const row = byId.get(outcome.rowId);
         if (!row) {
           processed.add(outcome.rowId);
@@ -305,8 +434,6 @@ async function runEnrichSessionInner(
         return [outcome.rowId, ...siblings];
       });
       if (learner && outcome.ok && (!charged || charged.ok)) learner.addRow(outcome.data);
-
-      if (pausedNoCredits) return;
     }
   };
 
@@ -316,7 +443,7 @@ async function runEnrichSessionInner(
   }
   await writeQueue.catch(() => undefined);
 
-  if (imageFinderRecheckEnabled && learner && !stopObserved && !pausedNoCredits && !providerUnavailable) {
+  if (imageFinderRecheckEnabled && learner && !shouldHalt()) {
     await recheckNotFoundRows();
     await writeQueue.catch(() => undefined);
   }
@@ -326,7 +453,7 @@ async function runEnrichSessionInner(
     const learnedDomains = learner!.top();
     const candidates = rowsNeedingRecheck({
       rows: project!.rows,
-      targetIds: collapseToPrimaryRowIds(run!.target_ids, project!.rows, groupColumn),
+      targetIds: collapseToPrimaryRowIds(run.target_ids, project!.rows, groupColumn),
       rechecked,
       learnedDomains,
       domainsTriedByRow,
@@ -336,11 +463,9 @@ async function runEnrichSessionInner(
 
     let next = 0;
     const recheckWorker = async () => {
-      while (!stopObserved && !pausedNoCredits && !providerUnavailable) {
-        if (await isJobCancelRequested(admin, run!.id)) {
-          stopObserved = true;
-          return;
-        }
+      while (!shouldHalt()) {
+        await readControl();
+        if (shouldHalt()) return;
         const index = next;
         next += 1;
         if (index >= candidates.length) return;
@@ -350,6 +475,7 @@ async function runEnrichSessionInner(
 
         const outcome = await runRow(rowId, { learnedDomains, recheck: true });
         const charged = await chargeRow(outcome, true);
+        if (superseded) return;
         if (charged && !charged.ok && charged.noCredits) pausedNoCredits = true;
         if (!outcome.ok) {
           // A failed re-check keeps the first pass's Not-found result.
@@ -358,7 +484,7 @@ async function runEnrichSessionInner(
           continue;
         }
         if (charged && !charged.ok) continue;
-        await commit(() => {
+        await commitOrFail(() => {
           const row = byId.get(rowId);
           if (!row) return [];
           const split = splitEnriched(outcome.data);
@@ -372,12 +498,34 @@ async function runEnrichSessionInner(
       Array.from({ length: Math.min(JOB_BATCH_SIZE, candidates.length) }, () => recheckWorker())
     );
   }
+
+  // Superseded: the new owner resumes from what this worker already saved;
+  // writing the blob or a final status here would clobber its work.
+  if (superseded) {
+    console.warn("[jobs/catalog] run taken over by another orchestrator; exiting", run.id);
+    return;
+  }
+
   // Always flush drained in-flight rows before finishing — Stop must not
   // discard AI replies that were already charged.
-  await persistCold();
+  await withRetry("final save", persistCold);
+
+  const finish = (params: Parameters<typeof finishJobRun>[2]) =>
+    finishJobRun(admin, run.id, params, { workerToken, onlyIfActive: true });
+
+  if (fatalError) {
+    const crashed = await finish({
+      status: "failed",
+      completedCount: completed,
+      failedCount: failed,
+      lastError: fatalError,
+    });
+    if (crashed) await notifyJobEvent(crashed, "failed", admin);
+    return;
+  }
 
   if (pausedNoCredits) {
-    const paused = await finishJobRun(admin, run.id, {
+    const paused = await finish({
       status: "paused_no_credits",
       completedCount: completed,
       failedCount: failed,
@@ -387,17 +535,21 @@ async function runEnrichSessionInner(
     return;
   }
 
-  if (providerUnavailable) {
-    await admin
+  const enrichedCount = project.rows.filter((row) => row.status === "done").length;
+  const markSessionCompleted = () =>
+    admin
       .from("catalog_sessions")
       .update({
-        enriched_count: project.rows.filter((row) => row.status === "done").length,
+        enriched_count: enrichedCount,
         status: "completed",
         updated_at: new Date().toISOString(),
       })
       .eq("id", run.session_id)
       .eq("workspace_id", run.workspace_id);
-    const stopped = await finishJobRun(admin, run.id, {
+
+  if (providerUnavailable) {
+    await markSessionCompleted();
+    const stopped = await finish({
       status: "failed",
       completedCount: completed,
       failedCount: failed,
@@ -407,18 +559,9 @@ async function runEnrichSessionInner(
     return;
   }
 
-  if (await isJobCancelRequested(admin, run.id)) {
-    const enrichedCount = project.rows.filter((row) => row.status === "done").length;
-    await admin
-      .from("catalog_sessions")
-      .update({
-        enriched_count: enrichedCount,
-        status: "completed",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", run.session_id)
-      .eq("workspace_id", run.workspace_id);
-    await finishJobRun(admin, run.id, {
+  if (stopObserved || (await readControl()).stop) {
+    await markSessionCompleted();
+    await finish({
       status: "cancelled",
       completedCount: completed,
       failedCount: failed,
@@ -426,18 +569,8 @@ async function runEnrichSessionInner(
     return;
   }
 
-  const enrichedCount = project.rows.filter((row) => row.status === "done").length;
-  await admin
-    .from("catalog_sessions")
-    .update({
-      enriched_count: enrichedCount,
-      status: "completed",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", run.session_id)
-    .eq("workspace_id", run.workspace_id);
-
-  const finished = await finishJobRun(admin, run.id, {
+  await markSessionCompleted();
+  const finished = await finish({
     status: failed > 0 && completed === 0 ? "failed" : "completed",
     completedCount: completed,
     failedCount: failed,
