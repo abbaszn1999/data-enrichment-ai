@@ -151,6 +151,30 @@ async function runEnrichSessionInner(
     });
   };
 
+  /**
+   * Charges exactly what OpenAI billed for this row: the full cost of a
+   * result, or — for a row that failed or was stopped — the calls already
+   * billed before it ended. Returns null when there is nothing to charge.
+   */
+  const chargeRow = async (outcome: EnrichRowOutcome, recheck: boolean) => {
+    const usage = outcome.ok ? outcome : outcome.billed;
+    if (!usage) return null;
+    return chargeCatalogRow({
+      runId: run.id,
+      sessionId: run.session_id,
+      workspaceId: run.workspace_id,
+      rowId: outcome.rowId,
+      rowIndex: byId.get(outcome.rowId)?.rowIndex ?? 0,
+      credits: usage.credits,
+      cost: usage.cost,
+      tokens: usage.tokens,
+      billedAttempts: usage.billedAttempts,
+      settings,
+      recheck,
+      ...(outcome.ok ? {} : { unfinished: true }),
+    });
+  };
+
   const persistCold = async () => {
     settings.processedRowIds = [...processed];
     const enrichedCount = project.rows.filter((row) => row.status === "done").length;
@@ -215,21 +239,7 @@ async function runEnrichSessionInner(
       domainsTriedByRow.set(rowId, learnedDomains);
       const outcome = await runRow(rowId, learnedDomains.length > 0 ? { learnedDomains } : {});
 
-      let charged: Awaited<ReturnType<typeof chargeCatalogRow>> | null = null;
-      if (outcome.ok) {
-        charged = await chargeCatalogRow({
-          runId: run.id,
-          sessionId: run.session_id,
-          workspaceId: run.workspace_id,
-          rowId: outcome.rowId,
-          rowIndex: byId.get(outcome.rowId)?.rowIndex ?? 0,
-          credits: outcome.credits,
-          cost: outcome.cost,
-          tokens: outcome.tokens,
-          billedAttempts: outcome.billedAttempts,
-          settings,
-        });
-      }
+      const charged = await chargeRow(outcome, false);
 
       await commit(() => {
         const row = byId.get(outcome.rowId);
@@ -238,6 +248,11 @@ async function runEnrichSessionInner(
           return [outcome.rowId];
         }
         if (!outcome.ok) {
+          // AI work already billed was charged above; the customer is out of credits.
+          if (charged && !charged.ok && charged.noCredits) {
+            pausedNoCredits = true;
+            stopObserved = true;
+          }
           if (outcome.cancelled) {
             // Stop was clicked mid-row: leave it pending (not processed, not
             // failed) so a future run picks it up, exactly like the
@@ -250,7 +265,9 @@ async function runEnrichSessionInner(
             return [];
           }
           row.status = "error";
-          row.errorMessage = outcome.error;
+          row.errorMessage = outcome.billed && charged?.ok
+            ? `${outcome.error} (${outcome.billed.credits} credits charged for the AI work already done)`
+            : outcome.error;
           failed += 1;
           processed.add(outcome.rowId);
           return [outcome.rowId];
@@ -332,29 +349,15 @@ async function runEnrichSessionInner(
         settings.recheckedRowIds = [...rechecked];
 
         const outcome = await runRow(rowId, { learnedDomains, recheck: true });
+        const charged = await chargeRow(outcome, true);
+        if (charged && !charged.ok && charged.noCredits) pausedNoCredits = true;
         if (!outcome.ok) {
           // A failed re-check keeps the first pass's Not-found result.
           if (outcome.cancelled) stopObserved = true;
           if (outcome.providerUnavailable) providerUnavailable = true;
           continue;
         }
-        const charged = await chargeCatalogRow({
-          runId: run!.id,
-          sessionId: run!.session_id,
-          workspaceId: run!.workspace_id,
-          rowId,
-          rowIndex: byId.get(rowId)?.rowIndex ?? 0,
-          credits: outcome.credits,
-          cost: outcome.cost,
-          tokens: outcome.tokens,
-          billedAttempts: outcome.billedAttempts,
-          settings,
-          recheck: true,
-        });
-        if (!charged.ok) {
-          if (charged.noCredits) pausedNoCredits = true;
-          continue;
-        }
+        if (charged && !charged.ok) continue;
         await commit(() => {
           const row = byId.get(rowId);
           if (!row) return [];

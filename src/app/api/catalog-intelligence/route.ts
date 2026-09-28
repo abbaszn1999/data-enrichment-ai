@@ -10,6 +10,7 @@ import {
 } from "@/lib/workspace-context";
 import { sumCosts } from "@/lib/ai-pricing";
 import { enrichRow, type EnrichSettings } from "@/lib/enrich";
+import { billedCostsOf } from "@/lib/enrich/openai";
 import { deductCreditsIdempotent } from "@/lib/jobs/credits";
 import { patchProjectRowsAdmin } from "@/lib/jobs/project-json";
 import {
@@ -131,32 +132,75 @@ export async function POST(request: NextRequest) {
       `[API enrich] ${kind} row ${row.rowIndex} | tier: ${enrichSettings.enrichmentModel} | cols: ${enabledColumns.join(",")}`
     );
 
-    const enriched = await enrichRow({
-      productData: row.originalData,
-      enabledColumns,
-      enrichmentColumns: enrichmentColumns?.map((c) => ({
-        id: c.id,
-        label: c.label,
-        description: c.description,
-        type: (c.type || "text") as EnrichmentColumnType,
-        enabled: c.enabled !== false,
-        imageCount: c.imageCount,
-        sourceCount: c.sourceCount,
-        maxCategories: c.maxCategories,
-        itemCount: c.itemCount,
-        maxChars: c.maxChars,
-        customInstruction: c.customInstruction,
-        allowedDomains: c.allowedDomains,
-        blockedDomains: c.blockedDomains,
-        writingTone: c.writingTone as WritingTone | undefined,
-        contentLength: c.contentLength as ContentLength | undefined,
-      })),
-      settings: enrichSettings,
-      kind,
-      cmsType,
-      workspaceCategories,
-      categoriesRawRows,
-    });
+    // Charges exactly what OpenAI billed; `unfinished` marks a call that failed after being billed.
+    const chargeCredits = async (summary: ReturnType<typeof sumCosts>, unfinished: boolean) => {
+      if (!workspaceId || !ctx?.subscription || summary.totalCredits <= 0) return null;
+      const ownerUserId = ctx.subscription.user_id ?? ctx.ownerId ?? user.id;
+      const deductResult = await deductCreditsIdempotent({
+        ownerUserId,
+        workspaceId,
+        actorUserId: user.id,
+        amount: summary.totalCredits,
+        operation: "catalog_intelligence",
+        entityType: kind === "plp" ? "catalog_plp_row" : "catalog_row",
+        entityId: row.id,
+        idempotencyKey: sessionId
+          ? `catalog_intelligence:${sessionId}:${row.id}`
+          : `catalog_intelligence:${workspaceId}:${row.id}`,
+        details: {
+          rowIndex: row.rowIndex,
+          enrichmentModel: enrichSettings.enrichmentModel,
+          totalCost: summary.totalCost,
+          totalTokens: summary.totalTokens,
+          ...(unfinished ? { unfinished: true } : {}),
+        },
+      });
+      if (deductResult.success) {
+        const remaining = Number(deductResult.remaining);
+        if (Number.isFinite(remaining)) updateCachedCredits(workspaceId, remaining);
+      }
+      return deductResult;
+    };
+
+    let enriched: Awaited<ReturnType<typeof enrichRow>>;
+    try {
+      enriched = await enrichRow({
+        productData: row.originalData,
+        enabledColumns,
+        enrichmentColumns: enrichmentColumns?.map((c) => ({
+          id: c.id,
+          label: c.label,
+          description: c.description,
+          type: (c.type || "text") as EnrichmentColumnType,
+          enabled: c.enabled !== false,
+          imageCount: c.imageCount,
+          sourceCount: c.sourceCount,
+          maxCategories: c.maxCategories,
+          itemCount: c.itemCount,
+          maxChars: c.maxChars,
+          customInstruction: c.customInstruction,
+          allowedDomains: c.allowedDomains,
+          blockedDomains: c.blockedDomains,
+          writingTone: c.writingTone as WritingTone | undefined,
+          contentLength: c.contentLength as ContentLength | undefined,
+        })),
+        settings: enrichSettings,
+        kind,
+        cmsType,
+        workspaceCategories,
+        categoriesRawRows,
+      });
+    } catch (error) {
+      const billed = billedCostsOf(error);
+      if (billed.length > 0) {
+        try {
+          await chargeCredits(sumCosts(billed), true);
+        } catch (chargeError) {
+          console.error(`[API enrich] Credit exception: ${(chargeError as Error).message}`);
+        }
+      }
+      throw error;
+    }
 
     const rowCostSummary = sumCosts(enriched.costs);
 
@@ -185,53 +229,26 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (
-      workspaceId &&
-      ctx?.subscription &&
-      rowCostSummary.totalCredits > 0
-    ) {
-      try {
-        const ownerUserId =
-          ctx.subscription.user_id ?? ctx.ownerId ?? user.id;
-        const deductResult = await deductCreditsIdempotent({
-          ownerUserId,
-          workspaceId,
-          actorUserId: user.id,
-          amount: rowCostSummary.totalCredits,
-          operation: "catalog_intelligence",
-          entityType: kind === "plp" ? "catalog_plp_row" : "catalog_row",
-          entityId: row.id,
-          idempotencyKey: sessionId
-            ? `catalog_intelligence:${sessionId}:${row.id}`
-            : `catalog_intelligence:${workspaceId}:${row.id}`,
-          details: {
-            rowIndex: row.rowIndex,
-            enrichmentModel: enrichSettings.enrichmentModel,
-            totalCost: rowCostSummary.totalCost,
-            totalTokens: rowCostSummary.totalTokens,
-          },
-        });
-        if (!deductResult.success) {
-          console.warn(
-            `[API enrich] Credit rejected: ${deductResult.error || "unknown"}`
-          );
-          return NextResponse.json(
-            { error: deductResult.error || "NO_CREDITS" },
-            { status: 402, headers }
-          );
-        }
-        const remaining = Number(deductResult.remaining);
-        if (Number.isFinite(remaining)) {
-          updateCachedCredits(workspaceId, remaining);
-        }
+    try {
+      const deductResult = await chargeCredits(rowCostSummary, false);
+      if (deductResult && !deductResult.success) {
+        console.warn(
+          `[API enrich] Credit rejected: ${deductResult.error || "unknown"}`
+        );
+        return NextResponse.json(
+          { error: deductResult.error || "NO_CREDITS" },
+          { status: 402, headers }
+        );
+      }
+      if (deductResult) {
         console.log(
           `[API enrich] Deducted ${rowCostSummary.totalCredits} credits. Remaining: ${deductResult.remaining}`
         );
-      } catch (err) {
-        console.error(
-          `[API enrich] Credit exception: ${(err as Error).message}`
-        );
       }
+    } catch (err) {
+      console.error(
+        `[API enrich] Credit exception: ${(err as Error).message}`
+      );
     }
 
     return NextResponse.json(

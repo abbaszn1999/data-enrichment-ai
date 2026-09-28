@@ -51,16 +51,17 @@ export class EnrichBilledAttemptError extends Error {
 export function billedCostsOf(error: unknown): AiCallCost[] {
   if (error instanceof EnrichBilledAttemptError) return error.costs;
   if (error instanceof EnrichCancelledError) return error.costs;
+  if (error instanceof EnrichProviderUnavailableError) return error.costs;
   return [];
 }
 
 /**
- * The user clicked Stop while this call was in flight. The cancelled attempt
- * itself is never billed (OpenAI never returned a response for it), but an
- * earlier attempt on the same row may have been billed before the cancel —
- * `costs` carries that forward so the row is still charged for what OpenAI
- * actually billed. Callers must not retry this: retrying after a
- * user-requested stop would defeat the point of Stop.
+ * The user clicked Stop while this call was in flight. The cancelled request
+ * itself is never billed (OpenAI never returned a response for it), but
+ * earlier rounds or attempts on the same row may have been — `costs` carries
+ * them forward so the row is charged for what OpenAI actually billed. Callers
+ * must not retry this: retrying after a user-requested stop would defeat the
+ * point of Stop.
  */
 export class EnrichCancelledError extends Error {
   readonly costs: AiCallCost[];
@@ -78,13 +79,17 @@ export function isEnrichCancelledError(error: unknown): boolean {
 
 /**
  * Our own AI provider account cannot serve requests (out of quota or credit
- * balance). Nothing about the row is wrong, so it must not be retried,
- * charged or marked as an error: the job stops and the row stays pending.
+ * balance). Nothing about the row is wrong, so it must not be retried or
+ * marked as an error: the job stops and the row stays pending. `costs` holds
+ * rounds OpenAI already billed before the account ran out, which are charged.
  */
 export class EnrichProviderUnavailableError extends Error {
-  constructor(message = "AI service temporarily unavailable") {
+  readonly costs: AiCallCost[];
+
+  constructor(message = "AI service temporarily unavailable", costs: AiCallCost[] = []) {
     super(message);
     this.name = "EnrichProviderUnavailableError";
+    this.costs = costs;
   }
 }
 
@@ -446,7 +451,7 @@ export async function runEnrichOpenAiResponse(params: {
       if (!response.ok) {
         if (isOpenAiProviderUnavailable(body.error)) {
           console.error("[Enrich OpenAI] Provider account unavailable", { status: response.status, code: body.error?.code });
-          throw new EnrichProviderUnavailableError();
+          throw new EnrichProviderUnavailableError(undefined, [...costs]);
         }
         fail(body.error?.message || `OpenAI enrich failed (${response.status})`);
       }
@@ -542,16 +547,17 @@ export async function runEnrichOpenAiResponse(params: {
       const result = await postOnce(imageUrls, withFilters);
       return { ...result, costs: [...priorCosts, ...result.costs] };
     } catch (error) {
-      // A user Stop click always wins — never retried, never billed for the
-      // cancelled attempt itself, but any earlier billed attempt's cost on
-      // this same row still reaches the caller.
+      // A user Stop click always wins — never retried; any cost OpenAI already
+      // billed on this row still reaches the caller.
       if (isEnrichCancelledError(error)) {
         throw new EnrichCancelledError((error as Error).message, [
           ...priorCosts,
           ...billedCostsOf(error),
         ]);
       }
-      if (isEnrichProviderUnavailableError(error)) throw error;
+      if (isEnrichProviderUnavailableError(error)) {
+        throw new EnrichProviderUnavailableError(error.message, [...priorCosts, ...billedCostsOf(error)]);
+      }
       const message = error instanceof Error ? error.message : String(error);
       priorCosts.push(...billedCostsOf(error));
       if (inputImageParts(imageUrls).length > 0 && isOpenAiInputImageDownloadError(message)) {

@@ -97,19 +97,30 @@ describe("processCatalogRow billing", () => {
     expect(outcome.cost).toBeCloseTo(billedCall.totalCost, 10);
   });
 
-  it("keeps a row that fails every attempt free", async () => {
+  it("charges a row that fails every attempt for every attempt OpenAI billed", async () => {
     enrichRowMock.mockRejectedValue(
       new EnrichBilledAttemptError("OpenAI enrich returned no parseable JSON output", [billedCall])
     );
     const outcome = await run();
     expect(outcome.ok).toBe(false);
-    expect("credits" in outcome).toBe(false);
+    if (outcome.ok) return;
     // JOB_ROW_ATTEMPTS is 2, not 3 — a single call can now run up to
     // ENRICH_CALL_TIMEOUT_MS, so fewer full attempts fit the row's time budget.
     expect(enrichRowMock).toHaveBeenCalledTimes(2);
+    expect(outcome.billed?.billedAttempts).toBe(2);
+    expect(outcome.billed?.cost).toBeCloseTo(billedCall.totalCost * 2, 10);
+    expect(outcome.billed?.credits).toBe(costToCredits(billedCall.totalCost * 2));
   });
 
-  it("stops immediately on cancellation — no retry, not charged, even if an earlier attempt was billed", async () => {
+  it("charges nothing for failures OpenAI never billed", async () => {
+    enrichRowMock.mockRejectedValue(new Error("fetch failed"));
+    const outcome = await run();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.billed).toBeUndefined();
+  });
+
+  it("stops immediately on cancellation — no retry, charged only for what was already billed", async () => {
     enrichRowMock.mockRejectedValueOnce(
       new EnrichCancelledError("Cancelled by user", [billedCall])
     );
@@ -117,20 +128,40 @@ describe("processCatalogRow billing", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.cancelled).toBe(true);
-    expect("credits" in outcome).toBe(false);
+    expect(outcome.billed?.cost).toBeCloseTo(billedCall.totalCost, 10);
+    expect(outcome.billed?.billedAttempts).toBe(1);
     // Never retried after a cancel, even though JOB_ROW_ATTEMPTS allows more.
     expect(enrichRowMock).toHaveBeenCalledTimes(1);
   });
 
-  it("stops immediately when the AI provider account is unavailable — no retry, not charged, flagged for the job", async () => {
+  it("includes a billed failed attempt before a cancellation", async () => {
+    enrichRowMock
+      .mockRejectedValueOnce(new EnrichBilledAttemptError("incomplete", [billedCall]))
+      .mockRejectedValueOnce(new EnrichCancelledError("Cancelled by user", [billedCall]));
+    const outcome = await run();
+    if (outcome.ok) throw new Error("expected a cancelled outcome");
+    expect(outcome.billed?.billedAttempts).toBe(2);
+    expect(outcome.billed?.cost).toBeCloseTo(billedCall.totalCost * 2, 10);
+  });
+
+  it("stops immediately when the AI provider account is unavailable — no retry, flagged for the job", async () => {
     enrichRowMock.mockRejectedValueOnce(new EnrichProviderUnavailableError());
     const outcome = await run();
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.providerUnavailable).toBe(true);
     expect(outcome.error).toBe(PROVIDER_UNAVAILABLE_JOB_ERROR);
-    expect("credits" in outcome).toBe(false);
+    expect(outcome.billed).toBeUndefined();
     expect(enrichRowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges rounds OpenAI billed before the provider account ran out", async () => {
+    enrichRowMock.mockRejectedValueOnce(new EnrichProviderUnavailableError(undefined, [billedCall, billedCall]));
+    const outcome = await run();
+    if (outcome.ok) throw new Error("expected a provider-unavailable outcome");
+    expect(outcome.providerUnavailable).toBe(true);
+    expect(outcome.billed?.billedAttempts).toBe(2);
+    expect(outcome.billed?.cost).toBeCloseTo(billedCall.totalCost * 2, 10);
   });
 
   it("passes shouldCancel through to enrichRow", async () => {

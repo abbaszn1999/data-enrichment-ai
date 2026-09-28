@@ -47,12 +47,34 @@ export type EnrichRowOutcome =
       noCredits?: boolean;
       /** Stopped by the user mid-call, not a real failure — don't mark the row done. */
       cancelled?: boolean;
-      /** Our AI provider account is out of quota — stop the job, leave the row pending, charge nothing. */
+      /** Our AI provider account is out of quota — stop the job and leave the row pending. */
       providerUnavailable?: boolean;
+      /** What OpenAI already billed for this row before it failed or stopped; charged like any row. */
+      billed?: BilledUsage;
     };
 
+export interface BilledUsage {
+  credits: number;
+  cost: number;
+  tokens: number;
+  billedAttempts: number;
+}
+
+/** Usage OpenAI billed, or undefined when nothing was billed. */
+function billedUsage(costs: AiCallCost[]): BilledUsage | undefined {
+  if (costs.length === 0) return undefined;
+  const summed = sumCosts(costs);
+  if (summed.totalCost <= 0) return undefined;
+  return {
+    credits: summed.totalCredits,
+    cost: summed.totalCost,
+    tokens: summed.totalTokens,
+    billedAttempts: costs.length,
+  };
+}
+
 export const PROVIDER_UNAVAILABLE_JOB_ERROR =
-  "AI service temporarily unavailable. Remaining rows were not charged; run them again later.";
+  "AI service temporarily unavailable. Unfinished rows were charged only for AI work already done; run them again later.";
 
 /** The Image Finder's final re-check is a second billed pass, so it gets its own key. */
 export function catalogCreditIdempotencyKey(runId: string, rowId: string, recheck = false): string {
@@ -131,8 +153,9 @@ export async function processCatalogRow(params: {
   const productData = buildRowSourceData(row, settings.sourceColumns, enrichmentColumnIds);
 
   let lastError = "Enrichment failed";
-  // OpenAI bills attempts whose output we could not use; a row that finally
-  // succeeds is charged for all of them. Rows that never succeed stay free.
+  // Every call OpenAI bills is charged to the row, whatever the outcome: a
+  // success includes earlier failed attempts, and a failed or stopped row is
+  // charged for what was billed before it ended.
   const failedAttemptCosts: AiCallCost[] = [];
   for (let attempt = 1; attempt <= JOB_ROW_ATTEMPTS; attempt += 1) {
     try {
@@ -178,13 +201,24 @@ export async function processCatalogRow(params: {
         billedAttempts: billed.length,
       };
     } catch (error) {
-      // Stop wins immediately — no retry, and (like any row that never
-      // succeeds) not charged, even if an attempt along the way was billed.
+      // Stop and an out-of-quota account end the row at once — no retry.
       if (isEnrichCancelledError(error)) {
-        return { ok: false, rowId: row.id, error: "Cancelled by user", cancelled: true };
+        return {
+          ok: false,
+          rowId: row.id,
+          error: "Cancelled by user",
+          cancelled: true,
+          billed: billedUsage([...failedAttemptCosts, ...billedCostsOf(error)]),
+        };
       }
       if (isEnrichProviderUnavailableError(error)) {
-        return { ok: false, rowId: row.id, error: PROVIDER_UNAVAILABLE_JOB_ERROR, providerUnavailable: true };
+        return {
+          ok: false,
+          rowId: row.id,
+          error: PROVIDER_UNAVAILABLE_JOB_ERROR,
+          providerUnavailable: true,
+          billed: billedUsage([...failedAttemptCosts, ...billedCostsOf(error)]),
+        };
       }
       failedAttemptCosts.push(...billedCostsOf(error));
       lastError = error instanceof Error ? error.message : "Enrichment failed";
@@ -193,7 +227,7 @@ export async function processCatalogRow(params: {
       }
     }
   }
-  return { ok: false, rowId: row.id, error: lastError };
+  return { ok: false, rowId: row.id, error: lastError, billed: billedUsage(failedAttemptCosts) };
 }
 
 export async function chargeCatalogRow(params: {
@@ -208,6 +242,8 @@ export async function chargeCatalogRow(params: {
   billedAttempts?: number;
   settings: CatalogJobSettings;
   recheck?: boolean;
+  /** The row failed or was stopped; this charges only the AI calls already billed. */
+  unfinished?: boolean;
 }): Promise<{ ok: true; remaining?: number } | { ok: false; noCredits: boolean; error: string }> {
   if (params.credits <= 0) return { ok: true };
   const result = await deductCreditsIdempotent({
@@ -227,6 +263,7 @@ export async function chargeCatalogRow(params: {
         ? IMAGE_FINDER_OPENAI_MODEL
         : resolveEnrichOpenAiModel(params.settings.enrichmentModel),
       ...(params.recheck ? { recheck: true } : {}),
+      ...(params.unfinished ? { unfinished: true } : {}),
       billedAttempts: params.billedAttempts ?? 1,
       totalCost: params.cost,
       totalTokens: params.tokens,

@@ -82,6 +82,76 @@ describe("runEnrichSession when the AI provider account is unavailable", () => {
   });
 });
 
+describe("runEnrichSession charges exactly what OpenAI billed, whatever the outcome", () => {
+  const billed = { credits: 1.25, cost: 0.125, tokens: 900, billedAttempts: 2 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    project.current = { rows: [makeRow("r1", 1)], columns: ["Code"] };
+    repo.loadJobRun.mockResolvedValue({
+      id: "run-1",
+      kind: "catalog",
+      status: "queued",
+      workspace_id: "w",
+      session_id: "s",
+      target_ids: ["r1"],
+      settings: {
+        kind: "product",
+        enabledColumns: ["imageUrls"],
+        enrichmentColumns: [{ id: "imageUrls", label: "Image URLs", description: "", type: "imageUrls" }],
+        enrichmentModel: "standard",
+        sourceColumns: ["Code"],
+        ownerUserId: "o",
+        actorUserId: "a",
+      },
+    });
+  });
+
+  const run = (outcome: EnrichRowOutcome) =>
+    runEnrichSession("run-1", { processRow: vi.fn<CatalogProcessRow>(async () => outcome) });
+
+  it("charges a failed row for the attempts OpenAI billed and says so on the row", async () => {
+    await run({ ok: false, rowId: "r1", error: "OpenAI enrich returned no parseable JSON output", billed });
+    expect(chargeCatalogRow).toHaveBeenCalledTimes(1);
+    expect(chargeCatalogRow).toHaveBeenCalledWith(
+      expect.objectContaining({ rowId: "r1", credits: 1.25, cost: 0.125, tokens: 900, billedAttempts: 2, unfinished: true, recheck: false })
+    );
+    const row = project.current!.rows[0]!;
+    expect(row.status).toBe("error");
+    expect(row.errorMessage).toBe(
+      "OpenAI enrich returned no parseable JSON output (1.25 credits charged for the AI work already done)"
+    );
+  });
+
+  it("charges a stopped row for what was billed and leaves it pending", async () => {
+    await run({ ok: false, rowId: "r1", error: "Cancelled by user", cancelled: true, billed });
+    expect(chargeCatalogRow).toHaveBeenCalledWith(expect.objectContaining({ credits: 1.25, unfinished: true }));
+    expect(project.current!.rows[0]!.status).toBe("pending");
+  });
+
+  it("charges rounds billed before the provider account ran out, and leaves the row pending", async () => {
+    await run({ ok: false, rowId: "r1", error: PROVIDER_UNAVAILABLE_JOB_ERROR, providerUnavailable: true, billed });
+    expect(chargeCatalogRow).toHaveBeenCalledWith(expect.objectContaining({ credits: 1.25, unfinished: true }));
+    expect(project.current!.rows[0]!.status).toBe("pending");
+  });
+
+  it("charges nothing when OpenAI billed nothing", async () => {
+    await run({ ok: false, rowId: "r1", error: "fetch failed" });
+    expect(chargeCatalogRow).not.toHaveBeenCalled();
+    expect(project.current!.rows[0]!.errorMessage).toBe("fetch failed");
+  });
+
+  it("pauses the job when the customer has no credits left to pay for a failed row's billed work", async () => {
+    chargeCatalogRow.mockResolvedValueOnce({ ok: false, noCredits: true, error: "Insufficient credits" } as never);
+    await run({ ok: false, rowId: "r1", error: "OpenAI enrich returned no parseable JSON output", billed });
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.objectContaining({ status: "paused_no_credits" })
+    );
+  });
+});
+
 describe("Image Finder recheck pass respects the tier", () => {
   const notFoundKey = "imageUrls__notFoundReason";
   const found = (rowId: string, host: string) => ({

@@ -169,6 +169,21 @@ describe("function-tool research loop", () => {
     expect(result.costs).toHaveLength(2);
   });
 
+  it("carries rounds already billed when the provider account runs out mid-row", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(callBody("resp_1")), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "You exceeded your current quota", code: "insufficient_quota" } }), {
+          status: 429,
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const error = await runEnrichOpenAiResponse({ ...baseParams, functionTools: [tool()] }).catch((e: unknown) => e);
+    expect(isEnrichProviderUnavailableError(error)).toBe(true);
+    expect(billedCostsOf(error)).toHaveLength(1);
+  });
+
   it("passes image tool outputs through as input_image content", async () => {
     const images = [
       { type: "input_text" as const, text: "Image 1" },
