@@ -3,6 +3,9 @@ import {
   parseScrapingSettings,
 } from "@/lib/gallery/settings-schema";
 import { parseImageUrls } from "@/lib/gallery/image-urls";
+import { EMPTY_COLUMN_LAYOUT, type ColumnLayout } from "@/lib/sheet/column-layout";
+
+export type { ColumnLayout };
 
 export type GallerySessionStatus =
   | "draft"
@@ -219,6 +222,8 @@ export interface GalleryProjectSettings {
   originalImageColumn: string | null;
   originalImageSelectionExplicit: boolean;
   selectedColumns: string[];
+  /** Sheet column order + hidden set, source and result columns mixed. */
+  columnLayout: ColumnLayout;
   scraping: GalleryScrapingSettings;
   ai: GalleryAiSettings;
 }
@@ -230,6 +235,8 @@ export interface GalleryWorksheetJson {
   /** True only after the user explicitly saves the image-column choice. */
   originalImageSelectionExplicit?: boolean;
   selectedColumns: string[];
+  /** Sheet column order + hidden set, source and result columns mixed. */
+  columnLayout?: ColumnLayout;
   settings: {
     provider: GalleryProvider;
     scraping: GalleryScrapingSettings;
@@ -327,6 +334,7 @@ export function getGalleryProjectSettingsFromWorksheet(
     originalImageSelectionExplicit:
       worksheet.originalImageSelectionExplicit ?? false,
     selectedColumns: [...worksheet.selectedColumns],
+    columnLayout: worksheet.columnLayout ?? EMPTY_COLUMN_LAYOUT,
     scraping: parseScrapingSettings({
       ...DEFAULT_SCRAPING_SETTINGS,
       ...worksheet.settings.scraping,
@@ -355,6 +363,7 @@ export function applyGalleryProjectSettings(
     originalImageColumn: settings.originalImageColumn,
     originalImageSelectionExplicit: settings.originalImageSelectionExplicit,
     selectedColumns: [...settings.selectedColumns],
+    columnLayout: settings.columnLayout ?? EMPTY_COLUMN_LAYOUT,
     settings: {
       provider: settings.provider,
       scraping: settings.scraping,

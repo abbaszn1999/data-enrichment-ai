@@ -48,6 +48,7 @@ export async function updateSession(request: NextRequest) {
     "/reset-password",
     "/auth/callback",
     "/invite",
+    "/share",
     "/widget.js",
   ];
   const isPublicRoute =

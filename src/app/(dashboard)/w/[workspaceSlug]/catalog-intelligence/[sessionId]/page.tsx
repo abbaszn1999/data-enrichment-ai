@@ -122,6 +122,7 @@ export default function EnrichPage() {
           kind,
           project.matchingSkipped ?? false,
           groupColumn,
+          project.columnLayout,
         );
 
         setLoading(false);

@@ -86,6 +86,8 @@ export interface ProjectJson {
   enrichmentSettings: any;
   /** Column visibility map */
   columnVisibility: Record<string, boolean>;
+  /** Full sheet layout across source + AI columns; see lib/sheet/column-layout.ts. */
+  columnLayout?: import("@/types").ColumnLayout;
   /**
    * The user chose "Skip matching" in step 2, so every row is new by decision.
    * Later steps must not re-derive matchType, which would undo that choice.

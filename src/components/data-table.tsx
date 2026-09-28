@@ -49,7 +49,6 @@ import {
   ArrowDown,
   Plus,
   EyeOff,
-  Filter,
   Columns3,
   RotateCcw,
   GripVertical,
@@ -93,15 +92,129 @@ import {
 } from "@/components/sheet/sheet-sizing";
 import { CellText, CellTextDialog } from "@/components/sheet/cell-text-dialog";
 import { RowResizeHandle } from "@/components/sheet/resize-handles";
+import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
+import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
+import { ShareSheetButton } from "@/components/share/share-sheet-button";
+import { applyColumnLayout, fullColumnOrder } from "@/lib/sheet/column-layout";
+import {
+  applyColumnFilters,
+  bucketFilterValues,
+  columnFilterValues,
+  hasActiveFilters,
+  setColumnFilter,
+  type ColumnFilters,
+} from "@/lib/sheet/column-filters";
 
 /** Leading checkbox + row-number columns: the only place the row resize grip lives. */
 const ROW_HEADER_COLUMNS = new Set(["select", "rowNum"]);
-import type { ProductRow } from "@/types";
+import type { ProductRow, EnrichmentColumn } from "@/types";
 import { FileSpreadsheet, Package, Cloud, CloudOff } from "lucide-react";
 import {
   buildProductGroupIndex,
   visibleCatalogRows,
 } from "@/lib/catalog/product-groups";
+
+/** Same matching rule the table's global search uses; shared so "Select all" can
+ * select exactly the rows currently shown, without duplicating the table's own
+ * filtered-row computation. */
+function rowMatchesGlobalSearch(original: ProductRow, filterValue: string): boolean {
+  if (!filterValue) return true;
+  const search = filterValue.toLowerCase();
+  for (const val of Object.values(original.originalData)) {
+    if (val && !val.startsWith("data:image/") && val.toLowerCase().includes(search)) return true;
+  }
+  for (const val of Object.values(original.enrichedData)) {
+    if (typeof val === "string" && val.toLowerCase().includes(search)) return true;
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        if (typeof item === "string" && item.toLowerCase().includes(search)) return true;
+        if (typeof item === "object" && item && "title" in item && (item as { title?: string }).title?.toLowerCase().includes(search)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Which filter bucket an Image Finder cell falls into. Reuses the same
+ * matchBasis rules the cell badge uses, so filter labels never drift from
+ * what's actually shown on the cell. */
+function imageColumnFilterBucket(row: ProductRow, enrichColId: string): string {
+  const val = row.enrichedData[enrichColId];
+  const hasImages = Array.isArray(val) && val.length > 0;
+  if (!hasImages) {
+    return row.enrichedData[imageFinderNotFoundKey(enrichColId)] ? "not_found" : "not_processed";
+  }
+  const matchBasis = row.enrichedData[imageFinderMatchBasisKey(enrichColId)];
+  return isApproximateImageMatch(matchBasis) ? String(matchBasis) : "exact";
+}
+
+function imageColumnFilterLabel(bucketValue: string): string {
+  switch (bucketValue) {
+    case "not_found":
+      return "Not found";
+    case "not_processed":
+      return "Not processed";
+    case "exact":
+      return "Exact match";
+    default:
+      return imageMatchLabel(bucketValue) || bucketValue;
+  }
+}
+
+const IMAGE_FILTER_BUCKETS: Array<{ value: string; label: string }> = [
+  "exact",
+  "standard",
+  "near_identifier",
+  "best_match",
+  "model_variant",
+  "not_found",
+  "not_processed",
+].map((value) => ({ value, label: imageColumnFilterLabel(value) }));
+
+/** Layout key -> plain string value for filtering. Source columns read their cell text;
+ * AI image columns use fixed buckets; other AI columns fall back to their display value. */
+function columnFilterRawValue(row: ProductRow, layoutKey: string, enrichmentColumns: EnrichmentColumn[]): string {
+  if (layoutKey.startsWith("orig:")) {
+    return row.originalData[layoutKey.slice(5)] || "";
+  }
+  const enrichId = layoutKey.slice("enrich:".length);
+  const col = enrichmentColumns.find((c) => c.id === enrichId);
+  if (col?.type === "imageUrls") return imageColumnFilterBucket(row, enrichId);
+  const val = row.enrichedData[enrichId];
+  if (typeof val === "string") return val;
+  if (Array.isArray(val)) return val.length > 0 ? `${val.length} item${val.length === 1 ? "" : "s"}` : "";
+  return "";
+}
+
+/** Small component (not a plain render fn) so it can memoize its own filter options. */
+function ColumnFilterHeaderIcon({
+  rows,
+  layoutKey,
+  enrichmentColumns,
+  filters,
+  onApply,
+  className,
+}: {
+  rows: ProductRow[];
+  layoutKey: string;
+  enrichmentColumns: EnrichmentColumn[];
+  filters: ColumnFilters;
+  onApply: (values: Set<string>) => void;
+  className?: string;
+}) {
+  const isImageColumn =
+    layoutKey.startsWith("enrich:") &&
+    enrichmentColumns.find((c) => c.id === layoutKey.slice("enrich:".length))?.type === "imageUrls";
+  const options = useMemo(() => {
+    if (isImageColumn) {
+      const enrichId = layoutKey.slice("enrich:".length);
+      return bucketFilterValues(rows, IMAGE_FILTER_BUCKETS, (r) => imageColumnFilterBucket(r, enrichId));
+    }
+    return columnFilterValues(rows, (r) => columnFilterRawValue(r, layoutKey, enrichmentColumns));
+  }, [rows, layoutKey, enrichmentColumns, isImageColumn]);
+
+  return <ColumnFilterButton options={options} active={filters[layoutKey]} onApply={onApply} className={className} />;
+}
 
 // --- Status Icon ---
 function StatusCell({ status, errorMessage }: { status: ProductRow["status"]; errorMessage?: string }) {
@@ -1574,51 +1687,14 @@ type ContextMenuState =
   | null;
 
 // --- Column Visibility Popover ---
-function ColumnVisibilityPanel({
-  originalColumns,
-  columnVisibility,
-  toggleColumnVisibility,
-}: {
-  originalColumns: string[];
-  columnVisibility: Record<string, boolean>;
-  toggleColumnVisibility: (colName: string) => void;
-}) {
-  return (
-    <div className="space-y-1 max-h-[300px] overflow-y-auto custom-scrollbar">
-      <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 pb-1">
-        Toggle Columns
-      </div>
-      {originalColumns.map((col) => {
-        const visible = columnVisibility[col] !== false;
-        const displayName = col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col");
-        return (
-          <label
-            key={col}
-            className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-xs transition-colors ${
-              visible ? "text-foreground hover:bg-muted/50" : "text-muted-foreground/50 hover:bg-muted/30"
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={visible}
-              onChange={() => toggleColumnVisibility(col)}
-              className="h-3 w-3 rounded accent-primary"
-            />
-            <span className="truncate">{displayName}</span>
-          </label>
-        );
-      })}
-    </div>
-  );
-}
-
 // --- Main DataTable ---
-export function DataTable() {
+export function DataTable({ readOnly = false }: { readOnly?: boolean } = {}) {
   const {
     rows,
     originalColumns,
     enrichmentColumns,
     columnVisibility,
+    columnLayout,
     selectedRowIds,
     isEnriching,
     toggleRowSelection,
@@ -1631,8 +1707,8 @@ export function DataTable() {
     addRow,
     deleteColumn,
     renameColumn,
-    reorderColumns,
-    toggleColumnVisibility,
+    moveColumnLayout,
+    toggleColumnLayoutHidden,
     setRowStatus,
     undo,
     redo,
@@ -1647,10 +1723,11 @@ export function DataTable() {
     sessionKind,
     productGroupColumn,
     projectId,
+    workspaceId,
   } = useSheetStore();
 
   const { role } = useWorkspaceStore();
-  const isViewer = role === "viewer";
+  const isViewer = readOnly || role === "viewer";
 
   const isPlp = sessionKind === "plp";
 
@@ -1660,6 +1737,7 @@ export function DataTable() {
 
   const [globalFilter, setGlobalFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
   const [previewRowId, setPreviewRowId] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
@@ -1752,6 +1830,22 @@ export function DataTable() {
     return sheetFilteredRows.filter((r) => r.status === statusFilter);
   }, [sheetFilteredRows, statusFilter]);
 
+  // Per-column Excel-style filters, applied after the sheet/status filters and before search.
+  const columnFilteredRows = useMemo(() => {
+    if (!hasActiveFilters(columnFilters)) return statusFilteredRows;
+    return applyColumnFilters(statusFilteredRows, columnFilters, (row, layoutKey) =>
+      columnFilterRawValue(row, layoutKey, enrichmentColumns)
+    );
+  }, [statusFilteredRows, columnFilters, enrichmentColumns]);
+
+  // Rows visible right now (status + column filters + search) — used so "Select
+  // all" picks exactly what is shown instead of the whole sheet when narrowed.
+  const narrowedVisibleRows = useMemo(() => {
+    if (!globalFilter) return columnFilteredRows;
+    return columnFilteredRows.filter((r) => rowMatchesGlobalSearch(r, globalFilter));
+  }, [columnFilteredRows, globalFilter]);
+  const hasNarrowingFilter = hasActiveFilters(columnFilters) || !!globalFilter;
+
   // Status counts (based on sheet-filtered rows)
   const statusCounts = useMemo(() => {
     const counts = { all: sheetFilteredRows.length, pending: 0, processing: 0, done: 0, error: 0 };
@@ -1806,33 +1900,63 @@ export function DataTable() {
 
   const previewRow = previewRowId ? rows.find((r) => r.id === previewRowId) : null;
 
-  // Global filter function
+  // Global filter function — delegates to the shared matcher so "Select all"
+  // (computed separately, above) always agrees with what the table shows.
   const globalFilterFn = useCallback(
-    (row: any, _columnId: string, filterValue: string) => {
-      if (!filterValue) return true;
-      const search = filterValue.toLowerCase();
-      const original = row.original as ProductRow;
-      for (const val of Object.values(original.originalData)) {
-        if (val && !val.startsWith("data:image/") && val.toLowerCase().includes(search)) return true;
-      }
-      for (const val of Object.values(original.enrichedData)) {
-        if (typeof val === "string" && val.toLowerCase().includes(search)) return true;
-        if (Array.isArray(val)) {
-          for (const item of val) {
-            if (typeof item === "string" && item.toLowerCase().includes(search)) return true;
-            if (typeof item === "object" && item && "title" in item && (item as any).title?.toLowerCase().includes(search)) return true;
-          }
-        }
-      }
-      return false;
-    },
+    (row: any, _columnId: string, filterValue: string) => rowMatchesGlobalSearch(row.original as ProductRow, filterValue),
     []
   );
 
-  // Visible original columns (filtered by visibility)
-  const visibleOriginalColumns = useMemo(
-    () => originalColumns.filter((col) => columnVisibility[col] !== false),
+  // Enriched (AI) columns - show if enabled OR has data in any row.
+  const enabledEnrichment = useMemo(
+    () =>
+      enrichmentColumns.filter(
+        (col) => col.enabled || rows.some((r) => {
+          const val = r.enrichedData?.[col.id];
+          return val !== undefined && val !== null && val !== "";
+        })
+      ),
+    [enrichmentColumns, rows]
+  );
+
+  // Legacy per-source-column visibility, folded into the new unified layout's
+  // hidden set until the user's first layout action — so columns hidden via
+  // the old mechanism stay hidden without needing a data migration.
+  const legacyHiddenKeys = useMemo(
+    () => originalColumns.filter((c) => columnVisibility[c] === false).map((c) => `orig:${c}`),
     [originalColumns, columnVisibility]
+  );
+  const effectiveColumnLayout = useMemo(() => {
+    const layoutInitialized = columnLayout.order.length > 0 || columnLayout.hidden.length > 0;
+    return layoutInitialized ? columnLayout : { order: columnLayout.order, hidden: legacyHiddenKeys };
+  }, [columnLayout, legacyHiddenKeys]);
+
+  // All columns, source + AI mixed together in one draggable/hideable order.
+  const allColumnKeys = useMemo(
+    () => [...originalColumns.map((c) => `orig:${c}`), ...enabledEnrichment.map((c) => `enrich:${c.id}`)],
+    [originalColumns, enabledEnrichment]
+  );
+  const orderedVisibleColumnKeys = useMemo(
+    () => applyColumnLayout(allColumnKeys, effectiveColumnLayout),
+    [allColumnKeys, effectiveColumnLayout]
+  );
+  // Full order (including hidden) for the Columns panel.
+  const fullColumnKeys = useMemo(
+    () => fullColumnOrder(allColumnKeys, effectiveColumnLayout),
+    [allColumnKeys, effectiveColumnLayout]
+  );
+  const columnLayoutItems = useMemo<ColumnLayoutItem[]>(
+    () =>
+      fullColumnKeys.map((key) => {
+        if (key.startsWith("orig:")) {
+          const colName = key.slice("orig:".length);
+          return { key, label: colName.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col") };
+        }
+        const enrichId = key.slice("enrich:".length);
+        const enrichCol = enabledEnrichment.find((c) => c.id === enrichId);
+        return { key, label: enrichCol?.label ?? enrichId, isAi: true };
+      }),
+    [fullColumnKeys, enabledEnrichment]
   );
 
   const columns = useMemo<ColumnDef<ProductRow>[]>(() => {
@@ -1846,10 +1970,12 @@ export function DataTable() {
           allSelected={pageAllSelected}
           someSelected={pageSomeSelected}
           pageCount={pageRowIds.length}
-          totalCount={sheetFilteredRows.length}
+          totalCount={hasNarrowingFilter ? narrowedVisibleRows.length : sheetFilteredRows.length}
           onTogglePage={togglePageSelection}
           onSelectPage={() => selectRowsByIds(pageRowIds)}
-          onSelectAll={selectAllRows}
+          onSelectAll={() =>
+            hasNarrowingFilter ? selectRowsByIds(narrowedVisibleRows.map((r) => r.id)) : selectAllRows()
+          }
           onClear={deselectAllRows}
         />
       ),
@@ -1859,7 +1985,7 @@ export function DataTable() {
             type="checkbox"
             checked={selectedRowIds.has(row.original.id)}
             onChange={() => toggleRowSelection(row.original.id)}
-            disabled={row.original.status === "processing"}
+            disabled={row.original.status === "processing" || isViewer}
             className="h-3.5 w-3.5 rounded border-muted-foreground/40 accent-primary cursor-pointer disabled:opacity-40"
           />
           <StatusCell
@@ -1894,14 +2020,15 @@ export function DataTable() {
     });
 
     // Original columns - editable, sortable, resizable
-    for (const colName of visibleOriginalColumns) {
+    const buildSourceColumnDef = (colName: string): ColumnDef<ProductRow> => {
       const displayName = colName
         .replace("__EMPTY_", "Col ")
         .replace("__EMPTY", "Col");
 
-      cols.push({
+      return {
         id: `orig_${colName}`,
         accessorFn: (row) => row.originalData[colName] || "",
+        meta: { layoutKey: `orig:${colName}` },
         header: ({ column }) => (
           <div className="flex items-center gap-1 w-full group/header">
             <div
@@ -1974,18 +2101,12 @@ export function DataTable() {
         maxSize: 800,
         enableSorting: true,
         enableResizing: true,
-      });
-    }
+      };
+    };
 
-    // Enriched columns - show if enabled OR has data in any row
-    const enabledEnrichment = enrichmentColumns.filter(
-      (col) => col.enabled || rows.some((r) => {
-        const val = r.enrichedData?.[col.id];
-        return val !== undefined && val !== null && val !== "";
-      })
-    );
-    for (const enrichCol of enabledEnrichment) {
-      cols.push({
+    // Enriched (AI) columns - editable, sortable, resizable, draggable just like source columns.
+    const buildEnrichColumnDef = (enrichCol: EnrichmentColumn): ColumnDef<ProductRow> => {
+      return {
         id: `enrich_${enrichCol.id}`,
         accessorFn: (row) => {
           const val = row.enrichedData[enrichCol.id];
@@ -1993,6 +2114,7 @@ export function DataTable() {
           if (Array.isArray(val)) return val.length.toString();
           return "";
         },
+        meta: { layoutKey: `enrich:${enrichCol.id}` },
         header: ({ column }) => (
           <div
             className="flex items-center gap-1.5 cursor-pointer select-none group/header"
@@ -2055,19 +2177,31 @@ export function DataTable() {
         maxSize: 800,
         enableSorting: true,
         enableResizing: true,
-      });
+      };
+    };
+
+    for (const key of orderedVisibleColumnKeys) {
+      if (key.startsWith("orig:")) {
+        cols.push(buildSourceColumnDef(key.slice("orig:".length)));
+      } else {
+        const enrichCol = enabledEnrichment.find((c) => c.id === key.slice("enrich:".length));
+        if (enrichCol) cols.push(buildEnrichColumnDef(enrichCol));
+      }
     }
 
     return cols;
   }, [
-    visibleOriginalColumns,
-    enrichmentColumns,
+    orderedVisibleColumnKeys,
+    enabledEnrichment,
     rows,
     isEnriching,
+    isViewer,
     selectedRowIds,
     pageRowIds,
     pageAllSelected,
     pageSomeSelected,
+    hasNarrowingFilter,
+    narrowedVisibleRows,
     togglePageSelection,
     toggleRowSelection,
     selectAllRows,
@@ -2084,7 +2218,7 @@ export function DataTable() {
   ]);
 
   const table = useReactTable({
-    data: statusFilteredRows,
+    data: columnFilteredRows,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -2107,7 +2241,7 @@ export function DataTable() {
   // Reset to first page when filters change
   useEffect(() => {
     setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, [globalFilter, statusFilter]);
+  }, [globalFilter, statusFilter, columnFilters]);
 
   // Virtual scrolling with dynamic row heights (within current page)
   const { rows: tableRows } = table.getRowModel();
@@ -2294,6 +2428,10 @@ export function DataTable() {
               {productGroupColumn ? "products" : "rows"}
             </span>
 
+            {!isViewer && workspaceId && projectId && (
+              <ShareSheetButton workspaceId={workspaceId} resourceType="catalog" resourceId={projectId} />
+            )}
+
             {/* Selection info */}
             {anySelected && (
               <>
@@ -2359,14 +2497,17 @@ export function DataTable() {
             </Button>
             )}
 
-            {/* Column visibility toggle */}
+            {/* Column layout: order + visibility, source and AI columns mixed. Hidden in
+                read-only/viewer contexts — reordering isn't an "edit" data-wise, but it's
+                still a mutation-capable control that a pure view mode shouldn't expose. */}
+            {!isViewer && (
             <div className="relative">
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-6 px-2 text-[10px] gap-1 text-muted-foreground hover:text-primary"
                 onClick={() => setShowColumnVisibility(!showColumnVisibility)}
-                title="Toggle column visibility"
+                title="Reorder or show/hide columns"
               >
                 <Columns3 className="h-3 w-3" />
                 Columns
@@ -2374,16 +2515,18 @@ export function DataTable() {
               {showColumnVisibility && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowColumnVisibility(false)} />
-                  <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border bg-popover shadow-lg p-2">
-                    <ColumnVisibilityPanel
-                      originalColumns={originalColumns}
-                      columnVisibility={columnVisibility}
-                      toggleColumnVisibility={toggleColumnVisibility}
+                  <div className="absolute right-0 top-full mt-1 z-50 w-60 rounded-lg border bg-popover shadow-lg p-2">
+                    <ColumnLayoutPanel
+                      items={columnLayoutItems}
+                      hidden={new Set(effectiveColumnLayout.hidden)}
+                      onToggleHidden={toggleColumnLayoutHidden}
+                      onMove={moveColumnLayout}
                     />
                   </div>
                 </>
               )}
             </div>
+            )}
 
             {/* Search */}
             <div className="relative">
@@ -2419,7 +2562,8 @@ export function DataTable() {
               {table.getHeaderGroups().map((headerGroup) => (
                 <div key={headerGroup.id} className="flex">
                   {headerGroup.headers.map((header) => {
-                const isOrigCol = header.column.id.startsWith("orig_");
+                const layoutKey = (header.column.columnDef.meta as { layoutKey?: string } | undefined)?.layoutKey;
+                const isDraggableCol = !!layoutKey && !isViewer;
                 const isDragOver = dragOverColId === header.column.id;
                 return (
                   <div
@@ -2427,7 +2571,7 @@ export function DataTable() {
                     className={`h-9 px-3 flex flex-shrink-0 items-center border-r last:border-r-0 relative transition-colors group/dragcol ${
                       header.column.id === "select" ? "overflow-visible z-20" : "overflow-hidden"
                     } ${
-                      isDragOver && isOrigCol
+                      isDragOver && isDraggableCol
                         ? "border-l-2 border-l-primary border-border/40 bg-primary/5"
                         : "border-border/40"
                     }`}
@@ -2435,29 +2579,23 @@ export function DataTable() {
                       width: columnVar.get(header.column.id),
                       minWidth: columnVar.get(header.column.id),
                     }}
-                    draggable={isOrigCol && !isEnriching}
-                    onDragStart={isOrigCol ? (e) => {
-                      dragColIdRef.current = header.column.id;
+                    draggable={isDraggableCol && !isEnriching}
+                    onDragStart={isDraggableCol ? (e) => {
+                      dragColIdRef.current = layoutKey!;
                       e.dataTransfer.effectAllowed = "move";
                     } : undefined}
-                    onDragOver={isOrigCol ? (e) => {
+                    onDragOver={isDraggableCol ? (e) => {
                       e.preventDefault();
-                      if (dragColIdRef.current && dragColIdRef.current !== header.column.id) {
+                      if (dragColIdRef.current && dragColIdRef.current !== layoutKey) {
                         setDragOverColId(header.column.id);
                       }
                     } : undefined}
-                    onDragLeave={isOrigCol ? () => setDragOverColId(null) : undefined}
-                    onDrop={isOrigCol ? (e) => {
+                    onDragLeave={isDraggableCol ? () => setDragOverColId(null) : undefined}
+                    onDrop={isDraggableCol ? (e) => {
                       e.preventDefault();
                       setDragOverColId(null);
-                      if (!dragColIdRef.current || dragColIdRef.current === header.column.id) return;
-                      const fromColName = dragColIdRef.current.replace("orig_", "");
-                      const toColName = header.column.id.replace("orig_", "");
-                      const fromIndex = originalColumns.indexOf(fromColName);
-                      const toIndex = originalColumns.indexOf(toColName);
-                      if (fromIndex !== -1 && toIndex !== -1) {
-                        reorderColumns(fromIndex, toIndex);
-                      }
+                      if (!dragColIdRef.current || dragColIdRef.current === layoutKey) return;
+                      moveColumnLayout(dragColIdRef.current, layoutKey!);
                       dragColIdRef.current = null;
                     } : undefined}
                     onDragEnd={() => {
@@ -2465,7 +2603,7 @@ export function DataTable() {
                       setDragOverColId(null);
                     }}
                   >
-                    {isOrigCol && (
+                    {isDraggableCol && (
                       <GripVertical className="h-3 w-3 text-muted-foreground/20 group-hover/dragcol:text-muted-foreground/60 cursor-grab shrink-0 mr-1 transition-colors" />
                     )}
                     {header.isPlaceholder
@@ -2474,6 +2612,18 @@ export function DataTable() {
                           header.column.columnDef.header,
                           header.getContext()
                         )}
+                    {layoutKey && (
+                      <ColumnFilterHeaderIcon
+                        className="ml-1"
+                        rows={statusFilteredRows}
+                        layoutKey={layoutKey}
+                        enrichmentColumns={enrichmentColumns}
+                        filters={columnFilters}
+                        onApply={(values) =>
+                          setColumnFilters((prev) => setColumnFilter(prev, layoutKey, values))
+                        }
+                      />
+                    )}
                     {/* Column resize handle */}
                     {header.column.getCanResize() && (
                       <div
@@ -2700,7 +2850,7 @@ export function DataTable() {
                 ))}
               </select>
             </div>
-            <span className="opacity-60">{visibleOriginalColumns.length}/{originalColumns.length} cols</span>
+            <span className="opacity-60">{orderedVisibleColumnKeys.length}/{allColumnKeys.length} cols</span>
           </div>
         </div>
       </div>
@@ -2793,7 +2943,7 @@ export function DataTable() {
                 <div className="border-t my-1" />
                 <button
                   className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted transition-colors text-xs"
-                  onClick={() => { toggleColumnVisibility(contextMenu.colName); setContextMenu(null); }}
+                  onClick={() => { toggleColumnLayoutHidden(`orig:${contextMenu.colName}`); setContextMenu(null); }}
                 >
                   <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
                   Hide Column

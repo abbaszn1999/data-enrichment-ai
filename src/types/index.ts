@@ -567,6 +567,12 @@ export const DEFAULT_CMS_CATEGORY_CONFIG: CmsCategoryConfig = {
   notes: "Use ' > ' for parent/child hierarchy and comma for multiple categories. Example: 'Electronics > Phones, Sale'.",
 };
 
+/** Mirrors lib/sheet/column-layout.ts's ColumnLayout (kept local to avoid a cross-import). */
+export interface ColumnLayout {
+  order: string[];
+  hidden: string[];
+}
+
 export interface SheetState {
   workspaceId: string | null;
   projectId: string | null;
@@ -586,6 +592,13 @@ export interface SheetState {
   enrichmentColumns: EnrichmentColumn[];
   enrichmentSettings: EnrichmentSettings;
   columnVisibility: Record<string, boolean>;
+  /**
+   * Full sheet layout across source AND AI columns, keyed `orig:<name>` /
+   * `enrich:<id>`. Missing/new keys append in their natural position; see
+   * lib/sheet/column-layout.ts. Hiding an AI column here never disables it
+   * for enrichment — that stays in `enrichmentColumns[].enabled`.
+   */
+  columnLayout: ColumnLayout;
   selectedRowIds: Set<string>;
   isEnriching: boolean;
   isPaused: boolean;

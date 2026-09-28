@@ -3,8 +3,9 @@ import {
   DEFAULT_VISUALIZER_LAYOUT_ID,
   type VisualizerLayoutId,
 } from "@/lib/visualizer/layouts";
+import { EMPTY_COLUMN_LAYOUT, type ColumnLayout } from "@/lib/sheet/column-layout";
 
-export type { VisualizerLayoutId };
+export type { VisualizerLayoutId, ColumnLayout };
 
 export type VisualizerSessionStatus =
   | "draft"
@@ -79,6 +80,8 @@ export interface VisualizerProjectSettings {
   selectedColumns: string[];
   productImageColumn: string | null;
   columnsSelectionExplicit: boolean;
+  /** Sheet column order + hidden set, source and result columns mixed. */
+  columnLayout: ColumnLayout;
   description: VisualizerDescriptionSettings;
   images: VisualizerImagesSettings;
   brand: VisualizerBrandSettings;
@@ -194,6 +197,7 @@ export const DEFAULT_VISUALIZER_SETTINGS: VisualizerProjectSettings = {
   selectedColumns: [],
   productImageColumn: null,
   columnsSelectionExplicit: false,
+  columnLayout: EMPTY_COLUMN_LAYOUT,
   description: { ...DEFAULT_VISUALIZER_DESCRIPTION },
   images: {
     ...DEFAULT_VISUALIZER_IMAGES,

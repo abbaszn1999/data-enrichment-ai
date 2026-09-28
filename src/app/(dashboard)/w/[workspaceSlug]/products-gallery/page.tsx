@@ -20,11 +20,13 @@ import {
   Clock3,
   Cloud,
   CloudCheck,
+  Columns3,
   Download,
   ExternalLink,
   FileSpreadsheet,
   FolderOpen,
   GalleryHorizontalEnd,
+  GripVertical,
   Info,
   Image as ImageIcon,
   Loader2,
@@ -60,6 +62,18 @@ import {
 import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
 import { TableSelectHeader } from "@/components/table-select-header";
 import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
+import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
+import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
+import { ShareSheetButton } from "@/components/share/share-sheet-button";
+import { applyColumnLayout, fullColumnOrder, moveColumn, toggleColumnHidden, EMPTY_COLUMN_LAYOUT, type ColumnLayout } from "@/lib/sheet/column-layout";
+import {
+  applyColumnFilters,
+  bucketFilterValues,
+  columnFilterValues,
+  hasActiveFilters,
+  setColumnFilter,
+  type ColumnFilters,
+} from "@/lib/sheet/column-filters";
 import {
   Dialog,
   DialogContent,
@@ -101,6 +115,7 @@ import { shouldApplySubmittedResponse } from "@/lib/gallery/settings-schema";
 import {
   DEFAULT_AI_SETTINGS,
   DEFAULT_SCRAPING_SETTINGS,
+  getRowMainImagePaths,
   resolveGalleryRunPhase,
   resolveSelectionRunPhase,
 } from "@/lib/gallery/types";
@@ -167,6 +182,17 @@ const SESSION_STATUS_LABEL: Record<GallerySessionStatus, string> = {
 // collide with user-provided worksheet columns.
 const RESULT_MAIN = "\u0000gallery:main";
 const RESULT_GALLERY = "\u0000gallery:images";
+
+/** Plain string value used for search and the Excel-style column filter. */
+function galleryColumnFilterValue(row: GalleryRow, column: string): string {
+  if (column === RESULT_MAIN) return getRowMainImagePaths(row).length > 0 ? "has_images" : "no_images";
+  if (column === RESULT_GALLERY) return row.galleryImagePaths.length > 0 ? "has_images" : "no_images";
+  return row.originalData[column] || "";
+}
+const GALLERY_IMAGE_FILTER_BUCKETS: Array<{ value: string; label: string }> = [
+  { value: "has_images", label: "Has images" },
+  { value: "no_images", label: "No images yet" },
+];
 
 function normalizeHexColor(value: string): string | null {
   const trimmed = value.trim();
@@ -372,6 +398,11 @@ export default function ProductsGalleryPage() {
   const [brandGuide, setBrandGuide] = useState<ImageUploadPreview | null>(null);
   const [brandColors, setBrandColors] = useState(["#111827", "#2563EB", "#F59E0B"]);
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(new Set());
+  const [columnLayout, setColumnLayout] = useState<ColumnLayout>(EMPTY_COLUMN_LAYOUT);
+  const [showColumnLayoutPanel, setShowColumnLayoutPanel] = useState(false);
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const dragColKeyRef = useRef<string | null>(null);
+  const [dragOverColKey, setDragOverColKey] = useState<string | null>(null);
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [worksheetSearch, setWorksheetSearch] = useState("");
@@ -499,6 +530,7 @@ export default function ProductsGalleryPage() {
         initialSelected.filter((column) => column !== imageColumn)
       )
     );
+    setColumnLayout(ws.columnLayout ?? EMPTY_COLUMN_LAYOUT);
     setActiveTab(ws.settings.provider === "ai" ? "ai" : "scraping");
 
     const g = ws.settings.scraping ?? DEFAULT_SCRAPING_SETTINGS;
@@ -659,6 +691,7 @@ export default function ProductsGalleryPage() {
         (column) =>
           !(originalImageColumn !== "none" && column === originalImageColumn)
       ),
+      columnLayout,
       scraping,
       ai,
     };
@@ -685,6 +718,7 @@ export default function ProductsGalleryPage() {
     originalImageColumn,
     originalImageSelectionExplicit,
     selectedColumns,
+    columnLayout,
     worksheet?.settings.ai.brandGuidePath,
     worksheet?.settings.ai.logoPath,
     worksheet?.settings.ai.sceneReferencePath,
@@ -1290,7 +1324,15 @@ export default function ProductsGalleryPage() {
     workspace?.id,
   ]);
 
-  const displayColumns = useMemo(() => {
+  const columnLabel = (column: string) => {
+    if (column === RESULT_MAIN) return "Main Image";
+    if (column === RESULT_GALLERY) return "Gallery Images";
+    return column;
+  };
+
+  // Every column that can appear in the sheet, in the app's natural order —
+  // the candidate set the saved column layout reorders/hides.
+  const naturalDisplayColumns = useMemo(() => {
     const selectedImageColumn =
       hasOriginalImageColumn && worksheetColumns.includes(originalImageColumn)
         ? originalImageColumn
@@ -1309,6 +1351,25 @@ export default function ProductsGalleryPage() {
     productColumns,
     worksheetColumns,
   ]);
+
+  const displayColumns = useMemo(
+    () => applyColumnLayout(naturalDisplayColumns, columnLayout),
+    [naturalDisplayColumns, columnLayout]
+  );
+  // Full order (including hidden) for the Columns panel.
+  const fullDisplayColumns = useMemo(
+    () => fullColumnOrder(naturalDisplayColumns, columnLayout),
+    [naturalDisplayColumns, columnLayout]
+  );
+  const columnLayoutItems = useMemo<ColumnLayoutItem[]>(
+    () =>
+      fullDisplayColumns.map((column) => ({
+        key: column,
+        label: columnLabel(column),
+        isAi: column === RESULT_MAIN || column === RESULT_GALLERY,
+      })),
+    [fullDisplayColumns]
+  );
 
   // Sheet sizing: widths live in CSS variables on the <table> and row heights
   // on each <tr>, so drags write straight to the DOM and commit on release.
@@ -1459,23 +1520,27 @@ export default function ProductsGalleryPage() {
   }, [projectPage, safeProjectPage]);
 
   const visibleRows = useMemo(() => {
-    return rows.filter((row) => {
-      const search = worksheetSearch.trim().toLowerCase();
-      const matchesSearch =
-        !search ||
-        Object.values(row.originalData).some((value) =>
-          String(value ?? "")
-            .toLowerCase()
-            .includes(search)
-        );
+    const statusFiltered = rows.filter((row) => {
       const matchesFilter =
         worksheetFilter === "all" ||
         (worksheetFilter === "selected" && selectedRowIds.has(row.id)) ||
         (worksheetFilter === "ready" && row.status === "ready") ||
         (worksheetFilter === "not-started" && row.status === "not_started");
-      return matchesSearch && matchesFilter;
+      return matchesFilter;
     });
-  }, [rows, selectedRowIds, worksheetFilter, worksheetSearch]);
+    const columnFiltered = hasActiveFilters(columnFilters)
+      ? applyColumnFilters(statusFiltered, columnFilters, galleryColumnFilterValue)
+      : statusFiltered;
+    const search = worksheetSearch.trim().toLowerCase();
+    if (!search) return columnFiltered;
+    return columnFiltered.filter((row) =>
+      Object.values(row.originalData).some((value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .includes(search)
+      )
+    );
+  }, [rows, selectedRowIds, worksheetFilter, worksheetSearch, columnFilters]);
 
   const worksheetPageCount = Math.max(
     1,
@@ -1501,7 +1566,7 @@ export default function ProductsGalleryPage() {
 
   useEffect(() => {
     setWorksheetPageIndex(0);
-  }, [projectId, worksheetSearch, worksheetFilter, worksheetPageSize]);
+  }, [projectId, worksheetSearch, worksheetFilter, worksheetPageSize, columnFilters]);
 
   useEffect(() => {
     if (worksheetPageIndex !== safeWorksheetPageIndex) {
@@ -2464,12 +2529,6 @@ export default function ProductsGalleryPage() {
     } finally {
       setDeletingRows(false);
     }
-  };
-
-  const columnLabel = (column: string) => {
-    if (column === RESULT_MAIN) return "Main Image";
-    if (column === RESULT_GALLERY) return "Gallery Images";
-    return column;
   };
 
   const sampleForColumn = (columnId: string): string => {
@@ -3466,6 +3525,38 @@ export default function ProductsGalleryPage() {
                     <option value="not-started">Not started</option>
                     <option value="ready">Ready</option>
                   </select>
+                  <div className="relative">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5 text-xs"
+                      onClick={() => setShowColumnLayoutPanel(!showColumnLayoutPanel)}
+                    >
+                      <Columns3 className="h-3.5 w-3.5" />
+                      Columns
+                    </Button>
+                    {showColumnLayoutPanel && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowColumnLayoutPanel(false)} />
+                        <div className="absolute left-0 top-full z-50 mt-1 w-60 rounded-lg border bg-popover p-2 shadow-lg">
+                          <ColumnLayoutPanel
+                            items={columnLayoutItems}
+                            hidden={new Set(columnLayout.hidden)}
+                            onToggleHidden={(key) =>
+                              setColumnLayout((current) =>
+                                toggleColumnHidden(current, naturalDisplayColumns, key)
+                              )
+                            }
+                            onMove={(fromKey, toKey) =>
+                              setColumnLayout((current) =>
+                                moveColumn(current, naturalDisplayColumns, fromKey, toKey)
+                              )
+                            }
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   <div className="flex items-center gap-3">
@@ -3474,6 +3565,9 @@ export default function ProductsGalleryPage() {
                         ? `${selectedRowIds.size} of ${rows.length} products selected`
                         : `${rows.length} products`}
                     </span>
+                    {canEdit && workspace?.id && projectId && (
+                      <ShareSheetButton workspaceId={workspace.id} resourceType="gallery" resourceId={projectId} />
+                    )}
                     {canEdit && selectedRowIds.size > 0 && (
                       <Button
                         type="button"
@@ -3570,14 +3664,46 @@ export default function ProductsGalleryPage() {
                       {displayColumns.map((column) => (
                         <th
                           key={column}
-                          className={`relative truncate whitespace-nowrap bg-muted px-3 py-3 ${
+                          className={`group/dragcol relative truncate whitespace-nowrap bg-muted px-3 py-3 ${
                             column === RESULT_MAIN || column === RESULT_GALLERY
                               ? "text-foreground"
                               : ""
+                          } ${
+                            dragOverColKey === column ? "bg-primary/10 outline outline-1 outline-primary/40" : ""
                           }`}
                           title={columnLabel(column)}
+                          draggable={canEdit}
+                          onDragStart={canEdit ? () => { dragColKeyRef.current = column; } : undefined}
+                          onDragOver={canEdit ? (e) => {
+                            e.preventDefault();
+                            if (dragColKeyRef.current && dragColKeyRef.current !== column) setDragOverColKey(column);
+                          } : undefined}
+                          onDragLeave={canEdit ? () => setDragOverColKey(null) : undefined}
+                          onDrop={canEdit ? (e) => {
+                            e.preventDefault();
+                            setDragOverColKey(null);
+                            if (dragColKeyRef.current && dragColKeyRef.current !== column) {
+                              setColumnLayout((current) => moveColumn(current, naturalDisplayColumns, dragColKeyRef.current!, column));
+                            }
+                            dragColKeyRef.current = null;
+                          } : undefined}
+                          onDragEnd={() => { dragColKeyRef.current = null; setDragOverColKey(null); }}
                         >
-                          {columnLabel(column)}
+                          <span className="inline-flex items-center gap-1">
+                            {canEdit && (
+                              <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-muted-foreground/30 group-hover/dragcol:text-muted-foreground/70" />
+                            )}
+                            <span className="truncate">{columnLabel(column)}</span>
+                            <ColumnFilterButton
+                              options={
+                                column === RESULT_MAIN || column === RESULT_GALLERY
+                                  ? bucketFilterValues(rows, GALLERY_IMAGE_FILTER_BUCKETS, (r) => galleryColumnFilterValue(r, column))
+                                  : columnFilterValues(rows, (r) => galleryColumnFilterValue(r, column))
+                              }
+                              active={columnFilters[column]}
+                              onApply={(values) => setColumnFilters((prev) => setColumnFilter(prev, column, values))}
+                            />
+                          </span>
                           <ColumnResizeHandle
                             onPointerDown={(e) => startColumnResize(e, column)}
                             onReset={() =>

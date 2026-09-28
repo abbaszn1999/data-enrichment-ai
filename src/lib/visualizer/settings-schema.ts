@@ -74,10 +74,16 @@ const LegacyMappingSchema = z
   .passthrough()
   .optional();
 
+const ColumnLayoutSchema = z.object({
+  order: z.array(z.string()).max(2_000).default([]),
+  hidden: z.array(z.string()).max(2_000).default([]),
+});
+
 export const VisualizerProjectSettingsSchema = z.object({
   selectedColumns: z.array(z.string()).max(500).default([]),
   productImageColumn: z.string().nullable().default(null),
   columnsSelectionExplicit: z.boolean().default(false),
+  columnLayout: ColumnLayoutSchema.default({ order: [], hidden: [] }),
   description: VisualizerDescriptionSettingsSchema.default({
     tier: "standard",
     thinkingLevel: "medium",
@@ -209,6 +215,7 @@ export function parseVisualizerProjectSettings(input: unknown) {
     selectedColumns: [...parsed.selectedColumns],
     productImageColumn: parsed.productImageColumn,
     columnsSelectionExplicit: parsed.columnsSelectionExplicit,
+    columnLayout: parsed.columnLayout,
     description: {
       ...parsed.description,
       thinkingLevel: "medium" as const,

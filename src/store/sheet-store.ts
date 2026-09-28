@@ -8,10 +8,12 @@ import type {
   SheetState,
   EnrichmentSettings,
   SessionKind,
+  ColumnLayout,
 } from "@/types";
 import { DEFAULT_ENRICHMENT_COLUMNS, DEFAULT_ENRICHMENT_SETTINGS, resolveEnrichmentModel } from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
 import { expandToGroupMemberIds, visibleCatalogRows } from "@/lib/catalog/product-groups";
+import { moveColumn, toggleColumnHidden } from "@/lib/sheet/column-layout";
 
 function normalizeEnrichmentSettings(
   settings: EnrichmentSettings | Partial<EnrichmentSettings> | null | undefined
@@ -24,6 +26,14 @@ function normalizeEnrichmentSettings(
     ...merged,
     enrichmentModel: resolveEnrichmentModel(merged.enrichmentModel),
   };
+}
+
+/** Every column key in the sheet's natural order: source columns, then AI columns. */
+function allColumnLayoutKeys(state: Pick<SheetState, "originalColumns" | "enrichmentColumns">): string[] {
+  return [
+    ...state.originalColumns.map((name) => `orig:${name}`),
+    ...state.enrichmentColumns.map((col) => `enrich:${col.id}`),
+  ];
 }
 
 function sheetRowsForState(state: Pick<SheetState, "rows" | "activeSheet" | "productGroupColumn">) {
@@ -95,7 +105,9 @@ interface SheetActions {
   // Persistence
   restoreSession: () => Promise<boolean>;
   // Supabase project
-  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean, productGroupColumn?: string | null) => void;
+  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean, productGroupColumn?: string | null, columnLayout?: ColumnLayout) => void;
+  moveColumnLayout: (fromKey: string, toKey: string) => void;
+  toggleColumnLayoutHidden: (key: string) => void;
   applyProjectRows: (rows: ProductRow[], progress?: { completed: number; total: number; errors: number }) => void;
   /** Replace the whole AI configuration, e.g. when applying a saved setting. */
   applyEnrichmentPreset: (settings: { sourceColumns?: string[]; enrichmentColumns?: EnrichmentColumn[]; enrichmentSettings?: EnrichmentSettings }) => void;
@@ -128,6 +140,7 @@ const initialState: SheetState = {
   enrichmentColumns: DEFAULT_ENRICHMENT_COLUMNS,
   enrichmentSettings: DEFAULT_ENRICHMENT_SETTINGS,
   columnVisibility: {},
+  columnLayout: { order: [], hidden: [] },
   selectedRowIds: new Set<string>(),
   isEnriching: false,
   isPaused: false,
@@ -665,6 +678,16 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       },
     })),
 
+  moveColumnLayout: (fromKey, toKey) =>
+    set((state) => ({
+      columnLayout: moveColumn(state.columnLayout, allColumnLayoutKeys(state), fromKey, toKey),
+    })),
+
+  toggleColumnLayoutHidden: (key) =>
+    set((state) => ({
+      columnLayout: toggleColumnHidden(state.columnLayout, allColumnLayoutKeys(state), key),
+    })),
+
   // Settings
   updateSettings: (settings) =>
     set((state) => ({
@@ -706,7 +729,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   },
 
   // Supabase project
-  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped, productGroupColumn) => {
+  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped, productGroupColumn, columnLayout) => {
     const groupColumn = productGroupColumn ?? null;
     set({
       workspaceId,
@@ -721,6 +744,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       enrichmentColumns,
       enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
       columnVisibility,
+      columnLayout: columnLayout ?? { order: [], hidden: [] },
       selectedRowIds: new Set<string>(),
       isEnriching: false,
       isPaused: false,
@@ -851,6 +875,7 @@ function configHash(state: SheetState): string {
     ec: state.enrichmentColumns,
     es: state.enrichmentSettings,
     cv: state.columnVisibility,
+    cl: state.columnLayout,
     cols: state.originalColumns,
     pg: state.productGroupColumn,
   });
@@ -899,6 +924,7 @@ async function persistProject() {
       enrichmentColumns: s.enrichmentColumns,
       enrichmentSettings: s.enrichmentSettings,
       columnVisibility: s.columnVisibility,
+      columnLayout: s.columnLayout,
     };
 
     await saveProjectJson(s.workspaceId, s.projectId, projectJson);

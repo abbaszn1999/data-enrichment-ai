@@ -11,12 +11,14 @@ import {
   ChevronRight,
   Clock3,
   Cloud,
+  Columns3,
   Copy,
   Download,
   Eye,
   EyeOff,
   FileSpreadsheet,
   FolderOpen,
+  GripVertical,
   ImageIcon,
   Loader2,
   Maximize2,
@@ -56,6 +58,18 @@ import {
 import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
 import { TableSelectHeader } from "@/components/table-select-header";
 import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
+import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
+import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
+import { ShareSheetButton } from "@/components/share/share-sheet-button";
+import { applyColumnLayout, fullColumnOrder, moveColumn, toggleColumnHidden } from "@/lib/sheet/column-layout";
+import {
+  applyColumnFilters,
+  bucketFilterValues,
+  columnFilterValues,
+  hasActiveFilters,
+  setColumnFilter,
+  type ColumnFilters,
+} from "@/lib/sheet/column-filters";
 import {
   createVisualizerSession,
   deleteVisualizerSession,
@@ -129,6 +143,26 @@ const STATUS_LABEL: Record<VisualizerSessionStatus, string> = {
 const RESULT_DESCRIPTION = "\u0000visualizer:description";
 const RESULT_IMAGES = "\u0000visualizer:images";
 const SELECT_COLUMN = "\u0000visualizer:select";
+
+/** Plain string value used for search and the Excel-style column filter. */
+function visualizerColumnFilterValue(row: VisualizerRow, column: string): string {
+  if (column === RESULT_DESCRIPTION) {
+    return row.generatedDescription?.trim() ? "has_description" : "no_description";
+  }
+  if (column === RESULT_IMAGES) {
+    const hasImage = (row.imagePlaceholders ?? []).some((p) => !!p.storagePath);
+    return hasImage ? "has_images" : "no_images";
+  }
+  return row.originalData[column] || "";
+}
+const VISUALIZER_DESCRIPTION_FILTER_BUCKETS: Array<{ value: string; label: string }> = [
+  { value: "has_description", label: "Has description" },
+  { value: "no_description", label: "Not generated" },
+];
+const VISUALIZER_IMAGES_FILTER_BUCKETS: Array<{ value: string; label: string }> = [
+  { value: "has_images", label: "Has images" },
+  { value: "no_images", label: "No images yet" },
+];
 
 /** Default sheet sizes; users resize by dragging row/column edges. */
 const VISUALIZER_ROW_HEIGHT = 80;
@@ -290,6 +324,10 @@ export default function ProductsVisualizerPage() {
   const [generating, setGenerating] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+  const [showColumnLayoutPanel, setShowColumnLayoutPanel] = useState(false);
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const dragColKeyRef = useRef<string | null>(null);
+  const [dragOverColKey, setDragOverColKey] = useState<string | null>(null);
   const [worksheetPageIndex, setWorksheetPageIndex] = useState(0);
   const [worksheetPageSize, setWorksheetPageSize] = useState(25);
   const [reviewRowId, setReviewRowId] = useState<string | null>(null);
@@ -1101,7 +1139,15 @@ export default function ProductsVisualizerPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [imageDialogRowId, imagePreviewKey, rows, signedUrls]);
 
-  const displayColumns = useMemo(() => {
+  const columnLabel = (column: string) => {
+    if (column === RESULT_DESCRIPTION) return "AI Description";
+    if (column === RESULT_IMAGES) return "Generated Images";
+    return column;
+  };
+
+  // Every column that can appear in the sheet, in the app's natural order —
+  // the candidate set the saved column layout reorders/hides.
+  const naturalDisplayColumns = useMemo(() => {
     if (!worksheet) return [RESULT_DESCRIPTION, RESULT_IMAGES];
     const productImage =
       settings.productImageColumn &&
@@ -1115,6 +1161,25 @@ export default function ProductsVisualizerPage() {
       ...worksheet.columns.filter((column) => column !== productImage),
     ];
   }, [settings.productImageColumn, worksheet]);
+
+  const displayColumns = useMemo(
+    () => applyColumnLayout(naturalDisplayColumns, settings.columnLayout),
+    [naturalDisplayColumns, settings.columnLayout]
+  );
+  // Full order (including hidden) for the Columns panel.
+  const fullDisplayColumns = useMemo(
+    () => fullColumnOrder(naturalDisplayColumns, settings.columnLayout),
+    [naturalDisplayColumns, settings.columnLayout]
+  );
+  const columnLayoutItems = useMemo<ColumnLayoutItem[]>(
+    () =>
+      fullDisplayColumns.map((column) => ({
+        key: column,
+        label: columnLabel(column),
+        isAi: column === RESULT_DESCRIPTION || column === RESULT_IMAGES,
+      })),
+    [fullDisplayColumns]
+  );
 
   // Sheet sizing: widths live in CSS variables on the <table> and row heights
   // on each <tr>, so drags write straight to the DOM and commit on release.
@@ -1209,9 +1274,14 @@ export default function ProductsVisualizerPage() {
     return () => observer.disconnect();
   }, [displayColumns, rows.length, projectId, worksheetPageIndex, worksheetPageSize]);
 
+  const visibleRows = useMemo(() => {
+    if (!hasActiveFilters(columnFilters)) return rows;
+    return applyColumnFilters(rows, columnFilters, visualizerColumnFilterValue);
+  }, [rows, columnFilters]);
+
   const worksheetPageCount = Math.max(
     1,
-    Math.ceil(rows.length / worksheetPageSize) || 1
+    Math.ceil(visibleRows.length / worksheetPageSize) || 1
   );
   const safeWorksheetPageIndex = Math.min(
     worksheetPageIndex,
@@ -1219,8 +1289,8 @@ export default function ProductsVisualizerPage() {
   );
   const pageRows = useMemo(() => {
     const start = safeWorksheetPageIndex * worksheetPageSize;
-    return rows.slice(start, start + worksheetPageSize);
-  }, [rows, safeWorksheetPageIndex, worksheetPageSize]);
+    return visibleRows.slice(start, start + worksheetPageSize);
+  }, [visibleRows, safeWorksheetPageIndex, worksheetPageSize]);
   const pageRowIds = useMemo(() => pageRows.map((row) => row.id), [pageRows]);
   const pageAllSelected =
     pageRowIds.length > 0 && pageRowIds.every((id) => selectedRowIds.has(id));
@@ -1229,7 +1299,7 @@ export default function ProductsVisualizerPage() {
 
   useEffect(() => {
     setWorksheetPageIndex(0);
-  }, [projectId, worksheetPageSize]);
+  }, [projectId, worksheetPageSize, columnFilters]);
 
   useEffect(() => {
     if (worksheetPageIndex !== safeWorksheetPageIndex) {
@@ -1273,7 +1343,7 @@ export default function ProductsVisualizerPage() {
 
   const selectAllRows = () => {
     if (!canEdit) return;
-    setSelectedRowIds(new Set(rows.map((row) => row.id)));
+    setSelectedRowIds(new Set(visibleRows.map((row) => row.id)));
   };
 
   const clearRowSelection = () => {
@@ -1332,12 +1402,6 @@ export default function ProductsVisualizerPage() {
     1,
     Number(settings.description.imageCount) || 4
   );
-
-  const columnLabel = (column: string) => {
-    if (column === RESULT_DESCRIPTION) return "AI Description";
-    if (column === RESULT_IMAGES) return "Generated Images";
-    return column;
-  };
 
   const prepareRunSession = async () => {
     if (!workspace || !session || !worksheet) return null;
@@ -2078,13 +2142,52 @@ export default function ProductsVisualizerPage() {
 
           <main className="flex min-h-0 flex-col overflow-hidden bg-muted/[0.08] p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h2 className="text-xs font-semibold">Worksheet</h2>
-                <p className="text-[11px] text-muted-foreground">
-                  {canEdit
-                    ? "Select products, then press Generate. Description runs first, then images on the same row. Open the eye to review AI output."
-                    : "View product descriptions and images. Open the eye to review AI output."}
-                </p>
+              <div className="flex items-center gap-2">
+                <div>
+                  <h2 className="text-xs font-semibold">Worksheet</h2>
+                  <p className="text-[11px] text-muted-foreground">
+                    {canEdit
+                      ? "Select products, then press Generate. Description runs first, then images on the same row. Open the eye to review AI output."
+                      : "View product descriptions and images. Open the eye to review AI output."}
+                  </p>
+                </div>
+                <div className="relative">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 text-[11px]"
+                    onClick={() => setShowColumnLayoutPanel(!showColumnLayoutPanel)}
+                  >
+                    <Columns3 className="h-3.5 w-3.5" />
+                    Columns
+                  </Button>
+                  {showColumnLayoutPanel && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setShowColumnLayoutPanel(false)} />
+                      <div className="absolute left-0 top-full z-50 mt-1 w-60 rounded-lg border bg-popover p-2 shadow-lg">
+                        <ColumnLayoutPanel
+                          items={columnLayoutItems}
+                          hidden={new Set(settings.columnLayout.hidden)}
+                          onToggleHidden={(key) => {
+                            setSettings((current) => ({
+                              ...current,
+                              columnLayout: toggleColumnHidden(current.columnLayout, naturalDisplayColumns, key),
+                            }));
+                            setSaveStatus("dirty");
+                          }}
+                          onMove={(fromKey, toKey) => {
+                            setSettings((current) => ({
+                              ...current,
+                              columnLayout: moveColumn(current.columnLayout, naturalDisplayColumns, fromKey, toKey),
+                            }));
+                            setSaveStatus("dirty");
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                 {canEdit && selectedRowIds.size > 0 ? (
@@ -2093,6 +2196,9 @@ export default function ProductsVisualizerPage() {
                   </span>
                 ) : (
                   <span>{rows.length} products</span>
+                )}
+                {canEdit && workspace?.id && projectId && (
+                  <ShareSheetButton workspaceId={workspace.id} resourceType="visualizer" resourceId={projectId} />
                 )}
                 {generationRun ? (
                   <span className="font-medium text-amber-700">
@@ -2163,7 +2269,7 @@ export default function ProductsVisualizerPage() {
                             allSelected={pageAllSelected}
                             someSelected={pageSomeSelected}
                             pageCount={pageRowIds.length}
-                            totalCount={rows.length}
+                            totalCount={visibleRows.length}
                             onTogglePage={togglePageSelection}
                             onSelectPage={selectCurrentPage}
                             onSelectAll={selectAllRows}
@@ -2176,14 +2282,52 @@ export default function ProductsVisualizerPage() {
                       {displayColumns.map((column) => (
                         <th
                           key={column}
-                          className={`relative truncate whitespace-nowrap bg-muted px-3 py-3 ${
+                          className={`group/dragcol relative truncate whitespace-nowrap bg-muted px-3 py-3 ${
                             column === RESULT_DESCRIPTION || column === RESULT_IMAGES
                               ? "text-foreground"
                               : ""
+                          } ${
+                            dragOverColKey === column ? "bg-primary/10 outline outline-1 outline-primary/40" : ""
                           }`}
                           title={columnLabel(column)}
+                          draggable={canEdit}
+                          onDragStart={canEdit ? () => { dragColKeyRef.current = column; } : undefined}
+                          onDragOver={canEdit ? (e) => {
+                            e.preventDefault();
+                            if (dragColKeyRef.current && dragColKeyRef.current !== column) setDragOverColKey(column);
+                          } : undefined}
+                          onDragLeave={canEdit ? () => setDragOverColKey(null) : undefined}
+                          onDrop={canEdit ? (e) => {
+                            e.preventDefault();
+                            setDragOverColKey(null);
+                            if (dragColKeyRef.current && dragColKeyRef.current !== column) {
+                              setSettings((current) => ({
+                                ...current,
+                                columnLayout: moveColumn(current.columnLayout, naturalDisplayColumns, dragColKeyRef.current!, column),
+                              }));
+                              setSaveStatus("dirty");
+                            }
+                            dragColKeyRef.current = null;
+                          } : undefined}
+                          onDragEnd={() => { dragColKeyRef.current = null; setDragOverColKey(null); }}
                         >
-                          {columnLabel(column)}
+                          <span className="inline-flex items-center gap-1">
+                            {canEdit && (
+                              <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-muted-foreground/30 group-hover/dragcol:text-muted-foreground/70" />
+                            )}
+                            <span className="truncate">{columnLabel(column)}</span>
+                            <ColumnFilterButton
+                              options={
+                                column === RESULT_DESCRIPTION
+                                  ? bucketFilterValues(rows, VISUALIZER_DESCRIPTION_FILTER_BUCKETS, (r) => visualizerColumnFilterValue(r, column))
+                                  : column === RESULT_IMAGES
+                                    ? bucketFilterValues(rows, VISUALIZER_IMAGES_FILTER_BUCKETS, (r) => visualizerColumnFilterValue(r, column))
+                                    : columnFilterValues(rows, (r) => visualizerColumnFilterValue(r, column))
+                              }
+                              active={columnFilters[column]}
+                              onApply={(values) => setColumnFilters((prev) => setColumnFilter(prev, column, values))}
+                            />
+                          </span>
                           <ColumnResizeHandle
                             onPointerDown={(e) => startColumnResize(e, column)}
                             onReset={() => resetColumnWidth(column)}
@@ -2193,13 +2337,15 @@ export default function ProductsVisualizerPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.length === 0 ? (
+                    {visibleRows.length === 0 ? (
                       <tr>
                         <td
                           colSpan={sheetColumns.length}
                           className="px-3 py-8 text-center text-muted-foreground"
                         >
-                          No rows in this worksheet.
+                          {rows.length === 0
+                            ? "No rows in this worksheet."
+                            : "No products match the current filters."}
                         </td>
                       </tr>
                     ) : (

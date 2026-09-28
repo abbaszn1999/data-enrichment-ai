@@ -92,11 +92,17 @@ export function parseAiSettings(input: unknown) {
   };
 }
 
+const ColumnLayoutSchema = z.object({
+  order: z.array(z.string()).max(2_000).default([]),
+  hidden: z.array(z.string()).max(2_000).default([]),
+});
+
 export const GalleryProjectSettingsSchema = z.object({
   provider: z.enum(["scraping", "ai"]).default("scraping"),
   originalImageColumn: z.string().nullable().default(null),
   originalImageSelectionExplicit: z.boolean().default(false),
   selectedColumns: z.array(z.string()).max(500).default([]),
+  columnLayout: ColumnLayoutSchema.default({ order: [], hidden: [] }),
   scraping: GalleryScrapingSettingsSchema,
   ai: GalleryAiSettingsSchema,
 });
