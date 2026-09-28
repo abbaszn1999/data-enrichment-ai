@@ -30,6 +30,8 @@ export interface ImageFinderBriefInput {
   learnedDomains?: string[];
   /** Final re-check of a row that ended Not found in the first pass. */
   recheck?: boolean;
+  /** Standard's one-shot call has no page tools and no match-basis field; Premium omits this. */
+  variant?: "standard";
 }
 
 export interface ImageFinderBrief {
@@ -112,18 +114,23 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     }
   }
 
+  const standard = input.variant === "standard";
   const identifiers = input.rowIdentifiers ?? [];
   if (identifiers.length > 0) {
     sections.push(
       "",
       "## Row identifiers",
-      `Code-like values in this row (check_pages and fetch_page report which of them appear on each page): ${identifiers.join(", ")}`
+      standard
+        ? `Code-like values in this row (the matched page must display one of them exactly): ${identifiers.join(", ")}`
+        : `Code-like values in this row (check_pages and fetch_page report which of them appear on each page): ${identifiers.join(", ")}`
     );
   } else if (input.rowIdentifiers) {
     sections.push(
       "",
       "## Row identifiers",
-      "None: this row has no SKU, barcode or model code. Use the best-match rules: one item whose brand and description clearly match this row, with its brand in brandSeen and matchBasis best_match."
+      standard
+        ? "None: this row has no SKU, barcode or model code. Identify one item whose brand and description clearly match this row."
+        : "None: this row has no SKU, barcode or model code. Use the best-match rules: one item whose brand and description clearly match this row, with its brand in brandSeen and matchBasis best_match."
     );
   }
 

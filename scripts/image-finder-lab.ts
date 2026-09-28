@@ -9,7 +9,7 @@
  * Usage:
  *   node --env-file=.env --import tsx scripts/image-finder-lab.ts \
  *     [--session=<id>] [--rows=30] [--only=2,16] [--concurrency=6] \
- *     [--allow=toys4less.com] [--instruction="..."] [--images=3] [--out=<dir>]
+ *     [--allow=toys4less.com] [--instruction="..."] [--images=3] [--tier=standard] [--out=<dir>]
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
@@ -256,7 +256,7 @@ async function main() {
         blockedDomains: [],
       },
     ],
-    enrichmentModel: "premium",
+    enrichmentModel: args.tier === "standard" ? "standard" : "premium",
     sourceColumns: project.columns,
     ownerUserId: "lab",
     actorUserId: "lab",
@@ -277,7 +277,8 @@ async function main() {
   });
 
   const learnedDomains = learner.top();
-  const recheckIds = rowsNeedingRecheck({
+  // Production only re-checks on Premium (jobs/enrich-session.ts).
+  const recheckIds = settings.enrichmentModel === "standard" ? [] : rowsNeedingRecheck({
     rows: rows.map((row) => {
       const run = results.get(row.id);
       return { id: row.id, status: run?.outcome.ok ? "done" : "error", enrichedData: run?.outcome.ok ? run.outcome.data : {} };

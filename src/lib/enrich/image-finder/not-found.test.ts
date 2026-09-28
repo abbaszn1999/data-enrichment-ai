@@ -30,8 +30,9 @@ describe("match type keys and labels", () => {
     expect(imageMatchLabel("near_identifier")).toBe("Near code");
     expect(imageMatchLabel("best_match")).toBe("Best match");
     expect(imageMatchLabel("model_variant")).toBe("Model match");
+    expect(imageMatchLabel("standard")).toBe("Quick match");
     expect(imageMatchLabel("identifier")).toBe("");
-    for (const basis of ["near_identifier", "best_match", "model_variant"]) {
+    for (const basis of ["near_identifier", "best_match", "model_variant", "standard"]) {
       expect(isApproximateImageMatch(basis)).toBe(true);
     }
   });

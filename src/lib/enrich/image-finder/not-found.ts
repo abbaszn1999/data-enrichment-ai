@@ -11,7 +11,10 @@ export function imageFinderNotFoundKey(columnId: string): string {
   return `${columnId}__notFoundReason`;
 }
 
-/** Sibling key holding how the images were matched: identifier, near_identifier, model_variant or best_match. */
+/**
+ * Sibling key holding how the images were matched: identifier, near_identifier,
+ * model_variant or best_match (Premium), or standard (Standard's single call).
+ */
 export function imageFinderMatchBasisKey(columnId: string): string {
   return `${columnId}__matchBasis`;
 }
@@ -23,7 +26,12 @@ export function imageFinderMatchNoteKey(columnId: string): string {
 
 /** Match types that are not an exact code match, so the sheet labels them. */
 export function isApproximateImageMatch(matchBasis: unknown): boolean {
-  return matchBasis === "near_identifier" || matchBasis === "best_match" || matchBasis === "model_variant";
+  return (
+    matchBasis === "near_identifier" ||
+    matchBasis === "best_match" ||
+    matchBasis === "model_variant" ||
+    matchBasis === "standard"
+  );
 }
 
 export function imageMatchLabel(matchBasis: unknown): string {
@@ -34,6 +42,8 @@ export function imageMatchLabel(matchBasis: unknown): string {
       return "Best match";
     case "model_variant":
       return "Model match";
+    case "standard":
+      return "Quick match";
     default:
       return "";
   }

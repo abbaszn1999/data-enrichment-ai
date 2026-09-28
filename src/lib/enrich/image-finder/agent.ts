@@ -18,6 +18,7 @@ import { EvidenceLedger } from "./evidence";
 import { guardImageFinderAnswer, type ImageFinderAnswer } from "./guards";
 import { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } from "./not-found";
 import { IMAGE_FINDER_SKILL } from "./skill";
+import { findProductImagesStandard } from "./standard-agent";
 import { createCheckPagesTool } from "./tools/check-pages";
 import { createFetchPageTool, createPageSession } from "./tools/fetch-page";
 import { extractRowIdentifiers } from "./tools/identifiers";
@@ -28,16 +29,8 @@ const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
 /** Research budget for one attempt; two attempts fit inside the row task timeout. */
 export const IMAGE_FINDER_ATTEMPT_BUDGET_MS = 540_000;
-/** Premium: the full exhaustive budget, unchanged from the sprint QA. */
+/** Premium research loop round cap. Standard is a single call (see standard-agent.ts). */
 export const IMAGE_FINDER_MAX_ROUNDS = 30;
-/**
- * Standard: same model, same reasoning effort, same evidence checks — only a
- * smaller round budget. Most rows finish well under this; it mainly cuts off
- * the expensive 15+ round tail on hard, obscure or unlisted items, which is
- * where the automatic recheck pass (also skipped for Standard, see
- * jobs/enrich-session.ts) is disabled too.
- */
-export const IMAGE_FINDER_MAX_ROUNDS_STANDARD = 15;
 
 /** Image Finder mode sends exactly one column: the product image column. */
 export function isImageFinderRun(
@@ -110,16 +103,18 @@ function displayPageUrl(pageUrl: string): string {
 }
 
 /**
- * Dedicated Image Finder agent for Catalog Intelligence: a multi-step
- * research loop (web_search + fetch_page + view_images) whose answer is only
- * accepted where our own tools' evidence backs it up. Shares the Responses
- * transport and cost calculation with the enrichment agent, so every round is
- * billed exactly like any other Catalog Intelligence row.
+ * Dedicated Image Finder agent for Catalog Intelligence. Premium runs a
+ * multi-step research loop (web_search + check_pages + fetch_page +
+ * view_images) whose answer is only accepted where our own tools' evidence
+ * backs it up; Standard is a single fast call (standard-agent.ts). Both share
+ * the Responses transport and cost calculation with the enrichment agent, so
+ * every call is billed exactly like any other Catalog Intelligence row.
  */
 export async function findProductImages(
   params: EnrichAgentParams
 ): Promise<EnrichAgentResult> {
   const tier = resolveEnrichmentModel(params.settings?.enrichmentModel);
+  if (tier === "standard") return findProductImagesStandard(params);
   const basePolicy = buildEnrichToolPolicy([IMAGE_COLUMN_ID], params.enrichmentColumns, "product");
   // Images come from pages our fetch tool opened, so web search only needs text results.
   const policy = { ...basePolicy, searchContentTypes: ["text" as const], includeResults: false };
@@ -199,7 +194,7 @@ export async function findProductImages(
     // result content would just be re-billed on every round.
     searchContextSizeOverride: "medium",
     functionTools: tools,
-    maxFunctionRounds: tier === "premium" ? IMAGE_FINDER_MAX_ROUNDS : IMAGE_FINDER_MAX_ROUNDS_STANDARD,
+    maxFunctionRounds: IMAGE_FINDER_MAX_ROUNDS,
     attemptBudgetMs: IMAGE_FINDER_ATTEMPT_BUDGET_MS,
     shouldCancel: params.shouldCancel,
   });

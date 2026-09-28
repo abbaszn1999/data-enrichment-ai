@@ -119,6 +119,17 @@ describe("buildImageFinderBrief", () => {
     expect(unspecified.text).not.toContain("## Row identifiers");
   });
 
+  it("words the identifier section for Standard without the Premium tools or match fields", () => {
+    const withCode = buildImageFinderBrief({ rowData: { Code: "RCP1151426" }, rowIdentifiers: ["RCP1151426"], variant: "standard" });
+    expect(withCode.text).toContain("## Row identifiers\nCode-like values in this row (the matched page must display one of them exactly): RCP1151426");
+    const noCode = buildImageFinderBrief({ rowData: { Description: "Unicorn plush toy" }, rowIdentifiers: [], variant: "standard" });
+    expect(noCode.text).toContain("Identify one item whose brand and description clearly match this row.");
+    for (const text of [withCode.text, noCode.text]) {
+      expect(text).not.toContain("check_pages");
+      expect(text).not.toContain("matchBasis");
+    }
+  });
+
   it("does not add sheet-learned websites when the owner set an allow list", () => {
     const brief = buildImageFinderBrief({
       rowData: { Code: "RCP1151426" },

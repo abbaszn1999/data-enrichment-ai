@@ -9,7 +9,7 @@ const { OPENAI_RESPONSES_URL } = await import("../openai");
 const { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } = await import("./not-found");
 const { IMAGE_FINDER_SKILL } = await import("./skill");
 const { resetFetchPageStateForTests } = await import("./tools/fetch-page");
-const { IMAGE_FINDER_MAX_ROUNDS, IMAGE_FINDER_MAX_ROUNDS_STANDARD } = await import("./agent");
+const { IMAGE_FINDER_MAX_ROUNDS } = await import("./agent");
 
 const notFoundKey = imageFinderNotFoundKey("imageUrls");
 const matchBasisKey = imageFinderMatchBasisKey("imageUrls");
@@ -105,11 +105,12 @@ const params = {
       customInstruction: "White background first",
     },
   ],
-  settings: { enrichmentModel: "standard" as const, outputLanguage: "English" },
+  // The research-loop tests below are the Premium path; Standard is covered in standard-agent.test.ts.
+  settings: { enrichmentModel: "premium" as const, outputLanguage: "English" },
   kind: "product" as const,
 };
 
-describe("Image Finder agent v2", () => {
+describe("Image Finder agent v2 (Premium)", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "test-key";
     resetFetchPageStateForTests();
@@ -294,13 +295,13 @@ describe("Image Finder agent v2", () => {
     expect(request.text.format.name).not.toBe("catalog_image_finder");
   });
 
-  describe("Standard vs Premium round budget", () => {
+  describe("Premium round budget", () => {
     /**
      * A model that never stops calling tools on its own: it keeps issuing
      * fetch_page until the loop forces `tool_choice: "none"`, at which point
      * it must answer. Counting requests this way exercises the real
      * round-cap logic in openai.ts rather than asserting the constant
-     * directly, so it fails if the tier selection in agent.ts breaks.
+     * directly.
      */
     function infiniteRoundsStubFetch() {
       let n = 0;
@@ -326,20 +327,9 @@ describe("Image Finder agent v2", () => {
       return fetchMock;
     }
 
-    it("gives Standard a smaller round budget than Premium, same model and effort", async () => {
-      const standardFetch = infiniteRoundsStubFetch();
-      await enrichRow({ ...params, settings: { ...params.settings, enrichmentModel: "standard" } });
-      const standardRequests = openAiRequests(standardFetch);
-      expect(standardRequests).toHaveLength(IMAGE_FINDER_MAX_ROUNDS_STANDARD + 1);
-      expect(standardRequests.at(-1).tool_choice).toBe("none");
-      expect(standardRequests[0].model).toBe("gpt-6-sol");
-      expect(standardRequests[0].reasoning).toEqual({ effort: "high" });
-
-      vi.unstubAllGlobals();
-      resetFetchPageStateForTests();
-
+    it("forces an answer at the Premium round cap", async () => {
       const premiumFetch = infiniteRoundsStubFetch();
-      await enrichRow({ ...params, settings: { ...params.settings, enrichmentModel: "premium" } });
+      await enrichRow(params);
       const premiumRequests = openAiRequests(premiumFetch);
       expect(premiumRequests).toHaveLength(IMAGE_FINDER_MAX_ROUNDS + 1);
       expect(premiumRequests.at(-1).tool_choice).toBe("none");

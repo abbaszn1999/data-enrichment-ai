@@ -162,6 +162,19 @@ export function pickImagesFromSelection(
   return out;
 }
 
+/** URLs the hosted web_search tool actually opened (`open_page` / `find_in_page`) in this response. */
+export function collectOpenedPages(response: OpenAiResponse): string[] {
+  const pages: string[] = [];
+  for (const output of response.output ?? []) {
+    if (output.type !== "web_search_call") continue;
+    const action = output.action;
+    if ((action?.type === "open_page" || action?.type === "find_in_page") && action.url) {
+      pages.push(action.url);
+    }
+  }
+  return pages;
+}
+
 /** Page navigation inside a search run; OpenAI does not bill these as tool calls. */
 const UNBILLED_WEB_SEARCH_ACTIONS = new Set(["open_page", "find_in_page"]);
 

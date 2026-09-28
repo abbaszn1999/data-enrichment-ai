@@ -1,7 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { ImageUrl } from "@/types";
-import { countWebSearchCalls, pickImagesFromSelection } from "./tool-results";
+import { collectOpenedPages, countWebSearchCalls, pickImagesFromSelection } from "./tool-results";
 import type { OpenAiResponse } from "./types";
+
+describe("collectOpenedPages", () => {
+  it("lists the pages web_search opened or searched within, and nothing else", () => {
+    const response: OpenAiResponse = {
+      output: [
+        { type: "web_search_call", action: { type: "search", query: "a" } },
+        { type: "web_search_call", action: { type: "open_page", url: "https://shop.test/p/1" } },
+        { type: "web_search_call", action: { type: "find_in_page", url: "https://shop.test/p/2" } },
+        { type: "web_search_call", action: { type: "open_page" } },
+        { type: "message" },
+      ],
+    };
+    expect(collectOpenedPages(response)).toEqual(["https://shop.test/p/1", "https://shop.test/p/2"]);
+  });
+});
 
 describe("countWebSearchCalls", () => {
   it("bills search actions only, not page navigation", () => {

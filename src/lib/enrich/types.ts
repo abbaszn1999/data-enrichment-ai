@@ -77,6 +77,8 @@ export type OpenAiResponseItem = {
   results?: OpenAiImageResult[];
   action?: {
     type?: string;
+    /** The page an `open_page` / `find_in_page` action read. */
+    url?: string;
     query?: string;
     queries?: string[];
     results?: OpenAiImageResult[];
