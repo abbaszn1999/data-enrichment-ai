@@ -44,6 +44,8 @@ export function imageMatchLabel(matchBasis: unknown): string {
       return "Model match";
     case "standard":
       return "Quick match";
+    case "exact":
+      return "Exact match";
     default:
       return "";
   }

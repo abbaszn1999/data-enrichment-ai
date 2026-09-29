@@ -36,4 +36,9 @@ describe("match type keys and labels", () => {
       expect(isApproximateImageMatch(basis)).toBe(true);
     }
   });
+
+  it("labels Exact Match's basis and never treats it as approximate", () => {
+    expect(imageMatchLabel("exact")).toBe("Exact match");
+    expect(isApproximateImageMatch("exact")).toBe(false);
+  });
 });

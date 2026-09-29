@@ -61,6 +61,7 @@ import { FunctionsPanel } from "@/components/functions-panel";
 import {
   LANGUAGE_OPTIONS,
   MODEL_OPTIONS,
+  IMAGE_FINDER_EXACT_MODEL_OPTION,
   TONE_OPTIONS,
   getDefaultEnrichmentColumns,
   resolveEnrichmentModel,
@@ -1897,7 +1898,7 @@ export function Sidebar() {
                     Enrichment Model
                   </label>
                   <div className="space-y-1">
-                    {MODEL_OPTIONS.map((opt) => {
+                    {(mode === "images" ? [...MODEL_OPTIONS, IMAGE_FINDER_EXACT_MODEL_OPTION] : MODEL_OPTIONS).map((opt) => {
                       const isSelected = enrichmentSettings.enrichmentModel === opt.value;
                       return (
                         <div

@@ -25,6 +25,16 @@ export const SERPER_COST_PER_QUERY = 0.001; // $0.001 per search query
 // Volume plans drop toward ~$0.009–$0.015; we keep Starter so preflight never underquotes.
 export const SERPAPI_COST_PER_SEARCH = 0.025;
 
+// ─── SearchApi.io Pricing (Google AI Mode — Image Finder "Exact Match") ─
+// Source: https://www.searchapi.io/pricing (subscription, billed per successful
+// search; failed requests are free). Developer plan $4 / 1,000 searches is the
+// lowest-volume, highest per-search rate — used here so preflight never
+// underquotes. Volume plans drop toward $1–$3 per 1,000.
+// Unconfirmed: whether one google_ai_mode call always consumes exactly one
+// search credit — verify in the SearchApi dashboard before relying on this
+// for margin-sensitive decisions.
+export const SEARCHAPI_COST_PER_SEARCH = 0.004;
+
 /** OpenAI GPT-5.6 / GPT-6 long-context threshold (input tokens). */
 export const OPENAI_LONG_CONTEXT_INPUT_TOKENS = 272_000;
 
@@ -228,6 +238,8 @@ export interface AiCallCost {
   searchCost: number;
   serperCost: number;
   serpApiCost: number;
+  /** SearchApi.io (Google AI Mode) cost — Image Finder "Exact Match" link lookups. */
+  searchApiCost: number;
   totalCost: number;
 }
 
@@ -367,6 +379,7 @@ export function calculateGroundedCallCost(
     searchCost,
     serperCost: 0,
     serpApiCost: 0,
+    searchApiCost: 0,
     totalCost,
   };
 }
@@ -500,6 +513,7 @@ export function createSerperCost(queryCount: number = 1): AiCallCost {
     searchCost: 0,
     serperCost: cost,
     serpApiCost: 0,
+    searchApiCost: 0,
     totalCost: cost,
   };
 }
@@ -527,6 +541,36 @@ export function createSerpApiCost(searchCount: number = 1): AiCallCost {
     searchCost: 0,
     serperCost: 0,
     serpApiCost: cost,
+    searchApiCost: 0,
+    totalCost: cost,
+  };
+}
+
+/**
+ * Create an AiCallCost entry for a SearchApi.io Google AI Mode search — Image
+ * Finder "Exact Match" mode's Agent 1 (finds exact-match product links).
+ */
+export function createSearchApiCost(searchCount: number = 1): AiCallCost {
+  const cost = Math.max(0, searchCount) * SEARCHAPI_COST_PER_SEARCH;
+  return {
+    model: "searchapi-google-ai-mode",
+    usage: {
+      promptTokens: 0,
+      candidatesTokens: 0,
+      thoughtsTokens: 0,
+      cachedTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+    },
+    usedGoogleSearch: false,
+    inputCost: 0,
+    cachedInputCost: 0,
+    cacheWriteCost: 0,
+    outputCost: 0,
+    searchCost: 0,
+    serperCost: 0,
+    serpApiCost: 0,
+    searchApiCost: cost,
     totalCost: cost,
   };
 }
@@ -562,6 +606,7 @@ export function sumCosts(costs: AiCallCost[]): {
     searchCost: number;
     serperCost: number;
     serpApiCost: number;
+    searchApiCost: number;
   };
 } {
   let totalTokens = 0;
@@ -572,6 +617,7 @@ export function sumCosts(costs: AiCallCost[]): {
   let searchCost = 0;
   let serperCost = 0;
   let serpApiCost = 0;
+  let searchApiCost = 0;
 
   for (const c of costs) {
     totalTokens += c.usage.totalTokens;
@@ -582,6 +628,7 @@ export function sumCosts(costs: AiCallCost[]): {
     searchCost += c.searchCost;
     serperCost += c.serperCost;
     serpApiCost += c.serpApiCost ?? 0;
+    searchApiCost += c.searchApiCost ?? 0;
   }
 
   const totalCost =
@@ -591,7 +638,8 @@ export function sumCosts(costs: AiCallCost[]): {
     outputCost +
     searchCost +
     serperCost +
-    serpApiCost;
+    serpApiCost +
+    searchApiCost;
 
   return {
     totalTokens,
@@ -605,6 +653,7 @@ export function sumCosts(costs: AiCallCost[]): {
       searchCost,
       serperCost,
       serpApiCost,
+      searchApiCost,
     },
   };
 }

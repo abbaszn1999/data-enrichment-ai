@@ -2,11 +2,15 @@ import type { EnrichmentModel } from "@/types";
 
 export type EnrichOpenAiModelId = "gpt-6-sol" | "gpt-5.6-sol";
 
-/** Both tiers run GPT-6 Sol; they differ by reasoning effort and search context. */
+/**
+ * Both tiers run GPT-6 Sol; they differ by reasoning effort and search context.
+ * "exact" (Image Finder only) never reaches this map — it always uses
+ * IMAGE_FINDER_OPENAI_MODEL directly, the same as Standard/Premium Image Finder.
+ */
 export const ENRICHMENT_OPENAI_MODELS = {
   standard: "gpt-6-sol",
   premium: "gpt-6-sol",
-} as const satisfies Record<EnrichmentModel, EnrichOpenAiModelId>;
+} as const satisfies Record<Exclude<EnrichmentModel, "exact">, EnrichOpenAiModelId>;
 
 export type EnrichReasoningEffort = "medium" | "high";
 

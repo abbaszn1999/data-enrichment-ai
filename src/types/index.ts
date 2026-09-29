@@ -308,16 +308,23 @@ export interface EnrichmentEvent {
 
 export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turkish" | "German" | "Chinese" | "Japanese" | "custom";
 
-/** UI tier: Standard is balanced; Premium reasons and searches deeper. */
-export type EnrichmentModel = "standard" | "premium";
+/**
+ * UI tier: Standard is balanced; Premium reasons and searches deeper.
+ * "exact" is Image-Finder-only: Google AI Mode finds exact-match product
+ * links, then GPT-6 Sol pulls images from them (see image-finder/exact/).
+ * Catalog AI enrichment (enrich/agent.ts) never sees "exact" — only Image
+ * Finder's isImageFinderRun path dispatches on it.
+ */
+export type EnrichmentModel = "standard" | "premium" | "exact";
 
 /**
  * Map legacy Gemini / OpenAI ids saved in presets to current tiers.
- * Pro / Sol → premium; Fast / Terra / unknown → standard.
+ * Pro / Sol → premium; Fast / Terra / unknown → standard; exact passes through.
  */
 export function resolveEnrichmentModel(
   model: string | null | undefined
 ): EnrichmentModel {
+  if (model === "exact") return "exact";
   if (
     model === "premium" ||
     model === "gemini-3.1-pro-preview" ||
@@ -383,6 +390,14 @@ export const MODEL_OPTIONS: { value: EnrichmentModel; label: string; description
   { value: "standard", label: "Standard", description: "Balanced quality and cost", icon: "⚡" },
   { value: "premium", label: "Premium", description: "Highest quality, deeper search", icon: "✨" },
 ];
+
+/** Image-Finder-only tier, appended after MODEL_OPTIONS so other callers (Catalog AI enrichment) never see it. */
+export const IMAGE_FINDER_EXACT_MODEL_OPTION: { value: EnrichmentModel; label: string; description: string; icon: string } = {
+  value: "exact",
+  label: "Exact Match",
+  description: "Exact-match product links, then images pulled from them",
+  icon: "🎯",
+};
 
 export const TONE_OPTIONS: { value: WritingTone; label: string; description: string }[] = [
   { value: "professional", label: "Professional", description: "Formal and business-like" },

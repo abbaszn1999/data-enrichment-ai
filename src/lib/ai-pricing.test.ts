@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   MODEL_PRICING,
+  SEARCHAPI_COST_PER_SEARCH,
   calculateOpenAiWebSearchCost,
   costToCredits,
+  createSearchApiCost,
   sumCosts,
 } from "./ai-pricing";
 import { ENRICHMENT_OPENAI_MODELS } from "./enrich/models";
@@ -87,5 +89,24 @@ describe("costToCredits", () => {
     expect(summed.totalCost).toBeCloseTo(0.044, 10);
     expect(summed.totalCredits).toBe(0.44);
     expect(summed.totalTokens).toBe(4_000);
+  });
+
+  it("includes SearchApi cost (Image Finder Exact Match Agent 1) in the total", () => {
+    const openAiCall = calculateOpenAiWebSearchCost(
+      "gpt-6-sol",
+      { input_tokens: 1_000, output_tokens: 1_000 },
+      0
+    );
+    const searchApiCall = createSearchApiCost(1);
+    expect(searchApiCall.searchApiCost).toBeCloseTo(SEARCHAPI_COST_PER_SEARCH, 10);
+    expect(searchApiCall.totalCost).toBeCloseTo(SEARCHAPI_COST_PER_SEARCH, 10);
+
+    const summed = sumCosts([openAiCall, searchApiCall]);
+    expect(summed.breakdown.searchApiCost).toBeCloseTo(SEARCHAPI_COST_PER_SEARCH, 10);
+    expect(summed.totalCost).toBeCloseTo(0.012 + SEARCHAPI_COST_PER_SEARCH, 10); // 1,000×$2/M + 1,000×$10/M
+  });
+
+  it("never bills for a failed SearchApi search", () => {
+    expect(createSearchApiCost(0).totalCost).toBe(0);
   });
 });

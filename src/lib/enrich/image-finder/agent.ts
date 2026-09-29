@@ -17,6 +17,7 @@ import { buildImageFinderBrief } from "./brief";
 import { EvidenceLedger } from "./evidence";
 import { guardImageFinderAnswer, type ImageFinderAnswer } from "./guards";
 import { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } from "./not-found";
+import { findProductImagesExact } from "./exact/agent";
 import { IMAGE_FINDER_SKILL } from "./skill";
 import { findProductImagesStandard } from "./standard-agent";
 import { createCheckPagesTool } from "./tools/check-pages";
@@ -106,15 +107,20 @@ function displayPageUrl(pageUrl: string): string {
  * Dedicated Image Finder agent for Catalog Intelligence. Premium runs a
  * multi-step research loop (web_search + check_pages + fetch_page +
  * view_images) whose answer is only accepted where our own tools' evidence
- * backs it up; Standard is a single fast call (standard-agent.ts). Both share
- * the Responses transport and cost calculation with the enrichment agent, so
- * every call is billed exactly like any other Catalog Intelligence row.
+ * backs it up; Standard is a single fast call (standard-agent.ts); Exact
+ * Match (exact/agent.ts) finds exact-match product links with Google AI
+ * Mode first, then uses GPT-6 Sol only to pull images from links already
+ * judged exact — Not found, no OpenAI call, when no such link exists. All
+ * three share the Responses transport and cost calculation with the
+ * enrichment agent, so every call is billed exactly like any other Catalog
+ * Intelligence row.
  */
 export async function findProductImages(
   params: EnrichAgentParams
 ): Promise<EnrichAgentResult> {
   const tier = resolveEnrichmentModel(params.settings?.enrichmentModel);
   if (tier === "standard") return findProductImagesStandard(params);
+  if (tier === "exact") return findProductImagesExact(params);
   const basePolicy = buildEnrichToolPolicy([IMAGE_COLUMN_ID], params.enrichmentColumns, "product");
   // Images come from pages our fetch tool opened, so web search only needs text results.
   const policy = { ...basePolicy, searchContentTypes: ["text" as const], includeResults: false };
