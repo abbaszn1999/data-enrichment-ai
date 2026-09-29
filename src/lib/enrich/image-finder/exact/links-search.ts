@@ -6,11 +6,12 @@
  * reported in `costs`, whatever the outcome.
  *
  * A failed call on attempt 1 (bad key, network, non-200) throws as-is —
- * nothing was billed. A failure on attempt 2 throws with attempt 1's cost
- * attached, because that call was already billed.
+ * nothing was billed. A failure on attempt 2 does not throw: attempt 1
+ * already answered, so the row stays Not found (with attempt 1's cost and
+ * the failure in the note).
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
-import { EnrichBilledAttemptError, EnrichCancelledError } from "../../openai";
+import { EnrichCancelledError } from "../../openai";
 import { checkExactLinksDetailed, describeRejected, type CheckedExactLink } from "./links-checks";
 import {
   buildExactLinksQuery,
@@ -76,12 +77,20 @@ export async function searchExactLinks(input: SearchExactLinksInput): Promise<Se
     throw new EnrichCancelledError("Cancelled before the second Google AI Mode search.", costs);
   }
 
+  // The first search answered ("nothing usable"), so a failure of the second
+  // one must not turn the row into an error: it stays Not found, with the
+  // failure in the note. A failed call is not billed, so no cost is added.
   let second: AttemptOutcome;
   try {
     second = await runAttempt(input, 2);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new EnrichBilledAttemptError(`Second Google AI Mode search failed: ${message}`, costs);
+    return {
+      links: [],
+      costs,
+      attempts: 2,
+      notFoundReason: `Google AI Mode found no exact-match product page for this item (search 1: ${first.summary}; search 2 failed: ${message.slice(0, 200)}).`,
+    };
   }
   costs.push(createSearchApiCost(1));
   if (second.links.length > 0) {

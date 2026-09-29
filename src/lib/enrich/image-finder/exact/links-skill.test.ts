@@ -70,6 +70,17 @@ describe("buildExactLinksQuery", () => {
     expect(step4).not.toMatch(/\bbuy\b/i);
   });
 
+  it("avoids phrases that made Google AI Mode hang or answer with web results (live-tested)", () => {
+    for (const attempt of [1, 2] as const) {
+      const query = buildExactLinksQuery({ rowData: { Code: "ZX-9" }, rowIdentifiers: ["ZX-9"], attempt });
+      const task = query.slice(0, query.indexOf("PRODUCT"));
+      // "Search thoroughly …" made the call time out; "found nothing" was searched as a web query.
+      expect(query).not.toMatch(/search thoroughly/i);
+      expect(task).not.toMatch(/found nothing|returns nothing|no usable/i);
+      expect(query).not.toMatch(/returns nothing/i);
+    }
+  });
+
   it("does not demand verbatim page text as evidence", () => {
     const query = buildExactLinksQuery({ rowData: { Brand: "Adidas" }, rowIdentifiers: [] });
     expect(query).not.toContain("verbatim");
@@ -80,8 +91,8 @@ describe("buildExactLinksQuery", () => {
     const first = buildExactLinksQuery({ rowData: { Code: "ZX-9" }, rowIdentifiers: ["ZX-9"] });
     const second = buildExactLinksQuery({ rowData: { Code: "ZX-9" }, rowIdentifiers: ["ZX-9"], attempt: 2 });
     expect(second).not.toBe(first);
-    expect(second).toContain("A first search for this exact item, identified by: ZX-9");
-    expect(second).toContain("DIFFERENT angles");
+    expect(second).toContain("Find product pages for this exact item, identified by: ZX-9");
+    expect(second).toContain("Use search angles beyond the obvious ones.");
     expect(second).toContain("STEP 4 — SEARCH (new angles only");
     expect(second).toContain("manufacturer's or brand's own website");
     for (const header of ["STEP 1", "STEP 2", "STEP 3", "STEP 5", "STEP 6"]) {

@@ -81,18 +81,19 @@ function taskLines(identifiers: string[], attempt: ExactLinksAttempt): string[] 
   const item = named
     ? `this exact item, identified by: ${named} (full row below)`
     : "the exact item described below";
+  // Wording is deliberate: live tests against Google AI Mode showed that
+  // "Search thoroughly before concluding there are none" made it hang past
+  // 90s, and that describing a failed first search ("found nothing usable")
+  // made it search that sentence as a web query and answer with a list of
+  // web results instead of JSON. Keep the task line short and plain.
   if (attempt === 2) {
     return [
       "TASK",
-      `A first search for ${item} found nothing usable. Find product pages for it using DIFFERENT angles — do not repeat the obvious queries.`,
-      "Return links only. Search thoroughly before concluding there are none.",
+      `Find product pages for ${item}. Use search angles beyond the obvious ones.`,
+      "Return links only.",
     ];
   }
-  return [
-    "TASK",
-    `Find product pages for ${item}.`,
-    "Return links only. Search thoroughly before concluding there are none.",
-  ];
+  return ["TASK", `Find product pages for ${item}.`, "Return links only."];
 }
 
 function searchStepLines(attempt: ExactLinksAttempt): string[] {
@@ -103,7 +104,6 @@ function searchStepLines(attempt: ExactLinksAttempt): string[] {
       "2. Every identifier on the row (code, model, part number, barcode), each in other common formats: with and without separators, obvious prefix or suffix forms.",
       "3. Other marketplaces, distributors and regional or local-language shops.",
       "4. The product described in other words or another language, with its brand and the attributes that tell it apart from its variants.",
-      "Do not stop at the first search that returns nothing.",
     ];
   }
   return [
@@ -114,7 +114,7 @@ function searchStepLines(attempt: ExactLinksAttempt): string[] {
     "3. That identifier + the brand, if the row has one.",
     "4. No identifier: brand + full product name + the attributes that tell it apart from its variants.",
     "5. Alternate wording or local-language names, if the row's market suggests it.",
-    "Look across all shops, marketplaces and the manufacturer's own site. Do not stop at the first search that returns nothing.",
+    "Look across all shops, marketplaces and the manufacturer's own site.",
   ];
 }
 

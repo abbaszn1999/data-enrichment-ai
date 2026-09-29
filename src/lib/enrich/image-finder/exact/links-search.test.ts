@@ -33,8 +33,8 @@ describe("searchExactLinks", () => {
     const result = await searchExactLinks(input);
 
     expect(callGoogleAiMode).toHaveBeenCalledTimes(2);
-    expect(callGoogleAiMode.mock.calls[0][0]).not.toContain("DIFFERENT angles");
-    expect(callGoogleAiMode.mock.calls[1][0]).toContain("DIFFERENT angles");
+    expect(callGoogleAiMode.mock.calls[0][0]).not.toContain("angles beyond the obvious");
+    expect(callGoogleAiMode.mock.calls[1][0]).toContain("angles beyond the obvious");
     expect(result.attempts).toBe(2);
     expect(result.links.map((l) => l.url)).toEqual(["https://shop.test/p/2"]);
     expect(result.costs).toHaveLength(2);
@@ -74,13 +74,14 @@ describe("searchExactLinks", () => {
     expect(callGoogleAiMode).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the first call's cost when the second call fails", async () => {
+  it("stays Not found (not an error) when the second call fails, keeping the first call's cost", async () => {
     callGoogleAiMode.mockResolvedValueOnce(none()).mockRejectedValueOnce(new Error("network down"));
-    await expect(searchExactLinks(input)).rejects.toMatchObject({
-      name: "EnrichBilledAttemptError",
-      message: expect.stringContaining("network down"),
-      costs: [expect.objectContaining({ searchApiCost: expect.any(Number) })],
-    });
+    const result = await searchExactLinks(input);
+
+    expect(result.links).toEqual([]);
+    expect(result.costs).toHaveLength(1);
+    expect(result.notFoundReason).toContain("search 1: returned no links");
+    expect(result.notFoundReason).toContain("search 2 failed: network down");
   });
 
   it("does not run the second search when the job was cancelled", async () => {
