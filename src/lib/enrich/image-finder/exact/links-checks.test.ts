@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkExactLinks } from "./links-checks";
+import { checkExactLinks, checkExactLinksDetailed, describeRejected } from "./links-checks";
 
 describe("checkExactLinks", () => {
   it("keeps a normal full product URL", () => {
@@ -96,5 +96,33 @@ describe("checkExactLinks", () => {
 
   it("returns an empty array for no candidates", () => {
     expect(checkExactLinks([], [])).toEqual([]);
+  });
+});
+
+describe("checkExactLinksDetailed", () => {
+  it("counts why each candidate was dropped", () => {
+    const { links, rejected } = checkExactLinksDetailed(
+      [
+        { url: "https://shop.test/p/1", evidence: "AN7312" },
+        { url: "https://shop.test/p/1", evidence: "AN7312" },
+        { url: "https://footshop.test" },
+        { url: "shop.test/no-scheme" },
+        { url: "https://www.alldatasheet.com/part/an7312" },
+        { url: "https://shop.test/p/2", evidence: "AN7312N " },
+      ],
+      ["AN7312"]
+    );
+    expect(links.map((l) => l.url)).toEqual(["https://shop.test/p/1"]);
+    expect(rejected).toEqual({
+      duplicate: 1,
+      not_full_url: 2,
+      non_product_site: 1,
+      variant_in_evidence: 1,
+    });
+  });
+
+  it("describeRejected words the counts and is empty when nothing was rejected", () => {
+    expect(describeRejected({})).toBe("");
+    expect(describeRejected({ not_full_url: 2, duplicate: 1 })).toBe("2 not a full product URL, 1 duplicate");
   });
 });

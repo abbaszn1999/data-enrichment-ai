@@ -1,5 +1,4 @@
 import { PRODUCT_MODE_COLUMN_IDS, type ImageUrl } from "@/types";
-import { createSearchApiCost } from "@/lib/ai-pricing";
 import { filterImagesByDomainRules, hasDomainRules, sanitizeDomainRules } from "../../domains";
 import { IMAGE_FINDER_OPENAI_MODEL, IMAGE_FINDER_REASONING_EFFORT } from "../../models";
 import {
@@ -17,9 +16,9 @@ import { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundK
 import { extractRowIdentifiers } from "../tools/identifiers";
 import { verifyImageUrls } from "../verify-images";
 import { buildExactImagesPrompt, IMAGE_FINDER_EXACT_IMAGES_SKILL } from "./images-skill";
-import { checkExactLinks, type CheckedExactLink } from "./links-checks";
-import { buildExactLinksQuery, EXACT_LINKS_MAX, parseExactLinksResult } from "./links-skill";
-import { callGoogleAiMode } from "./searchapi";
+import type { CheckedExactLink } from "./links-checks";
+import { EXACT_LINKS_MAX } from "./links-skill";
+import { searchExactLinks } from "./links-search";
 
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
@@ -99,8 +98,10 @@ function pageKey(raw: string): string {
  * exact-match product-page links; if any survive the code checks
  * (links-checks.ts), Agent 2 (GPT-6 Sol, hosted web_search) opens them,
  * searches for more exact pages of the same item, and returns up to 7
- * images. No links survive → Not found, Agent 2 never runs, so the
- * SearchApi call is the only cost for that row.
+ * images. If the first search yields no usable link, Agent 1 automatically
+ * searches once more with different angles (links-search.ts). Still no
+ * links → Not found with a note saying what each search returned, and
+ * Agent 2 never runs, so the SearchApi calls are the only cost for that row.
  */
 export async function findProductImagesExact(
   params: EnrichAgentParams
@@ -114,34 +115,25 @@ export async function findProductImagesExact(
   const rowIdentifiers = extractRowIdentifiers(params.productData);
   const identifierValues = rowIdentifiers.map((identifier) => identifier.value);
 
-  const query = buildExactLinksQuery({
+  const linksSearch = await searchExactLinks({
     rowData: params.productData,
     rowIdentifiers: identifierValues,
     customInstruction,
+    shouldCancel: params.shouldCancel,
   });
-
-  const { text: linksText } = await callGoogleAiMode(query);
-  const searchApiCost = createSearchApiCost(1);
-  const linksResult = parseExactLinksResult(linksText);
-  const checkedLinks: CheckedExactLink[] = checkExactLinks(
-    linksResult.matches,
-    identifierValues,
-    IMAGE_FINDER_EXACT_MAX_LINKS
-  );
+  const checkedLinks: CheckedExactLink[] = linksSearch.links;
 
   if (checkedLinks.length === 0) {
     return {
       data: {
         [IMAGE_COLUMN_ID]: [],
-        [imageFinderNotFoundKey(IMAGE_COLUMN_ID)]:
-          "Google AI Mode found no exact-match product page for this item.",
+        [imageFinderNotFoundKey(IMAGE_COLUMN_ID)]: linksSearch.notFoundReason,
         [imageFinderMatchBasisKey(IMAGE_COLUMN_ID)]: "",
         [imageFinderMatchNoteKey(IMAGE_COLUMN_ID)]: "",
       },
-      costs: [searchApiCost],
+      costs: linksSearch.costs,
     };
   }
-
   const basePolicy = buildEnrichToolPolicy([IMAGE_COLUMN_ID], params.enrichmentColumns, "product");
   // Images come from pages Agent 2 opened itself, so web search only needs text results.
   const policy = { ...basePolicy, toolChoice: "required" as const, searchContentTypes: ["text" as const], includeResults: false };
@@ -230,12 +222,12 @@ export async function findProductImagesExact(
       attemptBudgetMs: IMAGE_FINDER_EXACT_BUDGET_MS,
       shouldCancel: params.shouldCancel,
     });
-    return { data: result.data, costs: [searchApiCost, ...result.costs] };
+    return { data: result.data, costs: [...linksSearch.costs, ...result.costs] };
   } catch (error) {
     // SearchApi already billed this row (Agent 1 ran) even when Agent 2's
     // OpenAI call fails outright, so its cost must ride along on every
     // error path — including a plain Error with zero OpenAI cost billed.
-    const extraCosts = [searchApiCost, ...billedCostsOf(error)];
+    const extraCosts = [...linksSearch.costs, ...billedCostsOf(error)];
     const message = error instanceof Error ? error.message : String(error);
     if (error instanceof EnrichCancelledError) throw new EnrichCancelledError(message, extraCosts);
     if (error instanceof EnrichProviderUnavailableError) throw new EnrichProviderUnavailableError(message, extraCosts);

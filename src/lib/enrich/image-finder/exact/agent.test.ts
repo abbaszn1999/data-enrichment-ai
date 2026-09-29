@@ -113,16 +113,18 @@ describe("Image Finder Exact Match", () => {
     const fetchMock = stubFetch({ searchApi: noExactMatch });
     const result = await enrichRow(params);
 
-    expect(searchApiRequestUrls(fetchMock)).toHaveLength(1);
+    // Attempt 1 finds nothing, so the automatic second search runs too.
+    expect(searchApiRequestUrls(fetchMock)).toHaveLength(2);
     expect(openAiRequests(fetchMock)).toHaveLength(0);
     expect(result.data).toEqual({
       imageUrls: [],
-      [notFoundKey]: "Google AI Mode found no exact-match product page for this item.",
+      [notFoundKey]:
+        "Google AI Mode found no exact-match product page for this item (search 1: returned no links; search 2: returned no links).",
       [matchBasisKey]: "",
       [matchNoteKey]: "",
     });
-    expect(result.costs).toHaveLength(1);
-    expect(result.costs[0].searchApiCost).toBeGreaterThan(0);
+    expect(result.costs).toHaveLength(2);
+    expect(result.costs.every((cost) => cost.searchApiCost > 0)).toBe(true);
   });
 
   it("does not call GPT-6 Sol when every candidate link fails the checks (bare domain)", async () => {
@@ -131,7 +133,40 @@ describe("Image Finder Exact Match", () => {
 
     expect(openAiRequests(fetchMock)).toHaveLength(0);
     expect(result.data.imageUrls).toEqual([]);
-    expect(result.costs).toHaveLength(1);
+    expect(result.data[notFoundKey]).toContain("all rejected: 1 not a full product URL");
+    expect(result.costs).toHaveLength(2);
+  });
+
+  it("runs the automatic second search when the first finds nothing, then hands its link to Agent 2", async () => {
+    let call = 0;
+    const fetchMock = stubFetch({
+      searchApi: () =>
+        ++call === 1
+          ? noExactMatch()
+          : matchesFound([{ url: KNOWN_LINK, evidence: "SKU: HRF-570WH", matchedOn: "brand+description" }]),
+      openAi: oneShotResponse({ status: "found", images: [image(FRONT)], notes: "" }),
+    });
+    const result = await enrichRow(params);
+
+    expect(searchApiRequestUrls(fetchMock)).toHaveLength(2);
+    const prompt = openAiRequests(fetchMock)[0].input[0].content.at(-1).text as string;
+    expect(prompt).toContain("Matched by: description only");
+    expect(imageUrlsOf(result.data)).toEqual([FRONT]);
+    // Two SearchApi calls + Agent 2's OpenAI call.
+    expect(result.costs).toHaveLength(3);
+    expect(result.costs.filter((cost) => cost.searchApiCost > 0)).toHaveLength(2);
+  });
+
+  it("tells Agent 2 how each link was matched (code vs description only)", async () => {
+    const fetchMock = stubFetch({
+      searchApi: () => matchesFound([{ url: KNOWN_LINK, evidence: "SKU: HRF-570WH", matchedOn: "code" }]),
+      openAi: oneShotResponse({ status: "found", images: [image(FRONT)], notes: "" }),
+    });
+    await enrichRow(params);
+
+    expect(searchApiRequestUrls(fetchMock)).toHaveLength(1);
+    const prompt = openAiRequests(fetchMock)[0].input[0].content.at(-1).text as string;
+    expect(prompt).toContain("Matched by: code");
   });
 
   it("passes Agent 1's checked link to Agent 2 as a known exact-match page, with the Exact skill and model", async () => {

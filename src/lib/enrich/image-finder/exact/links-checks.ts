@@ -85,21 +85,55 @@ export function checkExactLinks(
   identifiers: string[],
   maxLinks = EXACT_LINKS_MAX
 ): CheckedExactLink[] {
-  const out: CheckedExactLink[] = [];
+  return checkExactLinksDetailed(candidates, identifiers, maxLinks).links;
+}
+
+/** Why a candidate link was dropped. */
+export type RejectedLinkReason = "not_full_url" | "non_product_site" | "variant_in_evidence" | "duplicate";
+
+export interface CheckedExactLinks {
+  links: CheckedExactLink[];
+  /** Number of candidates dropped, by reason (cap overflow is not counted). */
+  rejected: Partial<Record<RejectedLinkReason, number>>;
+}
+
+/** Same checks as checkExactLinks, but also counts why candidates were dropped so a Not found can explain itself. */
+export function checkExactLinksDetailed(
+  candidates: ExactLinkCandidate[],
+  identifiers: string[],
+  maxLinks = EXACT_LINKS_MAX
+): CheckedExactLinks {
+  const links: CheckedExactLink[] = [];
+  const rejected: Partial<Record<RejectedLinkReason, number>> = {};
   const seen = new Set<string>();
+  const reject = (reason: RejectedLinkReason) => {
+    rejected[reason] = (rejected[reason] ?? 0) + 1;
+  };
 
   for (const candidate of candidates) {
-    if (out.length >= maxLinks) break;
+    if (links.length >= maxLinks) break;
     const { ok, host } = fullProductUrl(candidate.url ?? "");
-    if (!ok || !host) continue;
-    if (isNonProductHost(host)) continue;
-    if (evidenceShowsVariant(candidate.evidence ?? "", identifiers)) continue;
+    if (!ok || !host) {
+      reject("not_full_url");
+      continue;
+    }
+    if (isNonProductHost(host)) {
+      reject("non_product_site");
+      continue;
+    }
+    if (evidenceShowsVariant(candidate.evidence ?? "", identifiers)) {
+      reject("variant_in_evidence");
+      continue;
+    }
 
     const key = candidate.url.trim().toLowerCase();
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      reject("duplicate");
+      continue;
+    }
     seen.add(key);
 
-    out.push({
+    links.push({
       url: candidate.url.trim(),
       site: candidate.site?.trim() || host,
       matchedOn: candidate.matchedOn ?? "",
@@ -108,5 +142,20 @@ export function checkExactLinks(
     });
   }
 
-  return out;
+  return { links, rejected };
+}
+
+const REJECT_LABELS: Record<RejectedLinkReason, string> = {
+  not_full_url: "not a full product URL",
+  non_product_site: "not a product-page site",
+  variant_in_evidence: "evidence showed a different variant",
+  duplicate: "duplicate",
+};
+
+/** "2 not a full product URL, 1 duplicate" — empty string when nothing was rejected. */
+export function describeRejected(rejected: Partial<Record<RejectedLinkReason, number>>): string {
+  return (Object.keys(REJECT_LABELS) as RejectedLinkReason[])
+    .filter((reason) => (rejected[reason] ?? 0) > 0)
+    .map((reason) => `${rejected[reason]} ${REJECT_LABELS[reason]}`)
+    .join(", ");
 }

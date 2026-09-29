@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildExactLinksQuery, parseExactLinksResult } from "./links-skill";
+import { buildExactLinksQuery, parseExactLinksAnswer, parseExactLinksResult } from "./links-skill";
 
 describe("buildExactLinksQuery", () => {
   it("includes only the fields the row actually has, in sheet order", () => {
@@ -36,12 +36,59 @@ describe("buildExactLinksQuery", () => {
       "STEP 1 — READ THE ROW AS A WHOLE",
       "STEP 2 — DECIDE THE IDENTITY PATH",
       "STEP 3 — STORE OWNER INSTRUCTION",
-      "STEP 4 — SEARCH BROADLY, VERIFY NARROWLY",
-      "STEP 5 — CONFIRM EACH CANDIDATE",
+      "STEP 4 — SEARCH (build your own queries from what this row contains)",
+      "STEP 5 — CONFIRM EACH LINK",
       "STEP 6 — RETURN LINKS ONLY, BEST FIRST, UP TO 10",
     ].map((h) => query.indexOf(h));
     expect(headers.every((i) => i >= 0)).toBe(true);
     expect([...headers].sort((a, b) => a - b)).toEqual(headers);
+  });
+
+  it("opens with the search task naming the row's identifiers, before any step", () => {
+    const query = buildExactLinksQuery({
+      rowData: { Brand: "Haier", Code: "HRF-570WH" },
+      rowIdentifiers: ["HRF-570WH"],
+    });
+    expect(query.startsWith("TASK\nFind product pages for this exact item, identified by: HRF-570WH")).toBe(true);
+    expect(query.indexOf("TASK")).toBeLessThan(query.indexOf("STEP 1"));
+  });
+
+  it("describes the item by its row when there is no identifier", () => {
+    const query = buildExactLinksQuery({ rowData: { Brand: "Adidas" }, rowIdentifiers: [] });
+    expect(query).toContain("Find product pages for the exact item described below.");
+  });
+
+  it("builds Step 4 searches from the row, with no catalog-specific query hard-coded", () => {
+    const query = buildExactLinksQuery({
+      rowData: { Code: "ZX-9" },
+      rowIdentifiers: ["ZX-9"],
+    });
+    const step4 = query.slice(query.indexOf("STEP 4"), query.indexOf("STEP 5"));
+    expect(step4).toContain("build your own queries from what this row contains");
+    expect(step4).toContain("The strongest identifier alone, in quotes.");
+    expect(step4).not.toContain("ZX-9");
+    expect(step4).not.toMatch(/\bbuy\b/i);
+  });
+
+  it("does not demand verbatim page text as evidence", () => {
+    const query = buildExactLinksQuery({ rowData: { Brand: "Adidas" }, rowIdentifiers: [] });
+    expect(query).not.toContain("verbatim");
+    expect(query).not.toContain("returning no link is the correct answer");
+  });
+
+  it("attempt 2 asks for different angles and keeps the same steps and output format", () => {
+    const first = buildExactLinksQuery({ rowData: { Code: "ZX-9" }, rowIdentifiers: ["ZX-9"] });
+    const second = buildExactLinksQuery({ rowData: { Code: "ZX-9" }, rowIdentifiers: ["ZX-9"], attempt: 2 });
+    expect(second).not.toBe(first);
+    expect(second).toContain("A first search for this exact item, identified by: ZX-9");
+    expect(second).toContain("DIFFERENT angles");
+    expect(second).toContain("STEP 4 — SEARCH (new angles only");
+    expect(second).toContain("manufacturer's or brand's own website");
+    for (const header of ["STEP 1", "STEP 2", "STEP 3", "STEP 5", "STEP 6"]) {
+      expect(second).toContain(header);
+    }
+    expect(second).toContain('"result":"MATCHES_FOUND"');
+    expect(second).toContain("Maximum 10 matches");
   });
 
   it("asks for up to 10 links, never 3", () => {
@@ -137,5 +184,15 @@ describe("parseExactLinksResult", () => {
 
   it("treats empty text as NO_EXACT_MATCH", () => {
     expect(parseExactLinksResult("")).toEqual({ result: "NO_EXACT_MATCH", matches: [] });
+  });
+
+  it("parseExactLinksAnswer tells an unreadable answer from an empty one", () => {
+    expect(parseExactLinksAnswer("no json here").readable).toBe(false);
+    expect(parseExactLinksAnswer("").readable).toBe(false);
+    expect(parseExactLinksAnswer('{"result":"NO_EXACT_MATCH","matches":[]}')).toEqual({
+      result: "NO_EXACT_MATCH",
+      matches: [],
+      readable: true,
+    });
   });
 });

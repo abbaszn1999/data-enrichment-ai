@@ -8,10 +8,15 @@
  * changing this prompt can never affect them. Pure (no runtime imports
  * beyond json-extract) so it is cheap to test.
  *
- * The prompt follows six steps, in this order: read the row as a whole,
- * decide the identity path (code vs no code), apply the store owner's
- * instruction, search broadly and verify narrowly, confirm each candidate
- * against the exact-match rules, return links only.
+ * The prompt opens with the search task (the item and its strongest
+ * identifier), then six steps: read the row as a whole, decide the identity
+ * path (code vs no code), apply the store owner's instruction, search
+ * (queries built from what the row contains — nothing catalog-specific is
+ * hard-coded), confirm each candidate, return links only.
+ *
+ * Two attempts exist: attempt 1 is the normal prompt; attempt 2 runs only
+ * when attempt 1 produced no usable link, and asks for DIFFERENT search
+ * angles instead of repeating the obvious ones.
  */
 import { extractJsonObject } from "./json-extract";
 
@@ -21,8 +26,11 @@ export const EXACT_LINKS_MAX = 10;
 const MAX_FIELD_CHARS = 300;
 const MAX_FIELDS = 20;
 const MAX_INSTRUCTION_CHARS = 1_500;
+const MAX_TASK_IDENTIFIERS = 3;
 /** SearchApi's documented `q` limit is 8,193 characters; stay under it. */
 const MAX_QUERY_CHARS = 8_000;
+
+export type ExactLinksAttempt = 1 | 2;
 
 function toPlainText(value: string): string {
   return value
@@ -64,14 +72,62 @@ export interface BuildExactLinksQueryInput {
   /** Code-like values already extracted from the row (see tools/identifiers.ts). */
   rowIdentifiers: string[];
   customInstruction?: string;
+  /** 1 = normal search; 2 = second try with different angles. Defaults to 1. */
+  attempt?: ExactLinksAttempt;
 }
 
-function composeQuery(fieldLines: string[], identifiers: string[], instruction: string): string {
+function taskLines(identifiers: string[], attempt: ExactLinksAttempt): string[] {
+  const named = identifiers.slice(0, MAX_TASK_IDENTIFIERS).join(", ");
+  const item = named
+    ? `this exact item, identified by: ${named} (full row below)`
+    : "the exact item described below";
+  if (attempt === 2) {
+    return [
+      "TASK",
+      `A first search for ${item} found nothing usable. Find product pages for it using DIFFERENT angles — do not repeat the obvious queries.`,
+      "Return links only. Search thoroughly before concluding there are none.",
+    ];
+  }
+  return [
+    "TASK",
+    `Find product pages for ${item}.`,
+    "Return links only. Search thoroughly before concluding there are none.",
+  ];
+}
+
+function searchStepLines(attempt: ExactLinksAttempt): string[] {
+  if (attempt === 2) {
+    return [
+      "STEP 4 — SEARCH (new angles only; build your own queries from what this row contains)",
+      "1. The manufacturer's or brand's own website and its product catalogue.",
+      "2. Every identifier on the row (code, model, part number, barcode), each in other common formats: with and without separators, obvious prefix or suffix forms.",
+      "3. Other marketplaces, distributors and regional or local-language shops.",
+      "4. The product described in other words or another language, with its brand and the attributes that tell it apart from its variants.",
+      "Do not stop at the first search that returns nothing.",
+    ];
+  }
+  return [
+    "STEP 4 — SEARCH (build your own queries from what this row contains)",
+    "Start from the strongest identifier the row has, then widen only if needed:",
+    "1. The strongest identifier alone, in quotes.",
+    "2. The same identifier written the other common ways (with and without separators, obvious prefix or suffix forms).",
+    "3. That identifier + the brand, if the row has one.",
+    "4. No identifier: brand + full product name + the attributes that tell it apart from its variants.",
+    "5. Alternate wording or local-language names, if the row's market suggests it.",
+    "Look across all shops, marketplaces and the manufacturer's own site. Do not stop at the first search that returns nothing.",
+  ];
+}
+
+function composeQuery(
+  fieldLines: string[],
+  identifiers: string[],
+  instruction: string,
+  attempt: ExactLinksAttempt
+): string {
   const lines: string[] = [
-    "ROLE",
-    "You are a senior product-data analyst. Your job: find web links to product pages that are EXACTLY the one catalog item below — nothing else. Precision matters more than recall: returning no link is the correct answer when no exact page exists.",
+    ...taskLines(identifiers, attempt),
     "",
-    "CATALOG ITEM (every field the row has; missing fields are unknown)",
+    "PRODUCT (every field the row has; missing fields are unknown)",
     ...(fieldLines.length > 0 ? fieldLines : ["- No usable product data was provided."]),
   ];
   if (identifiers.length > 0) {
@@ -81,34 +137,32 @@ function composeQuery(fieldLines: string[], identifiers: string[], instruction: 
   lines.push(
     "",
     "STEP 1 — READ THE ROW AS A WHOLE",
-    "Use every field above. Never rely on a column's name; judge each value by what it contains. A field that lists related, similar or \"bought with\" products describes OTHER products — never use it to identify this one.",
+    "Use every field. Judge each value by what it contains, not by its column name. Ignore fields that list related, similar or \"bought with\" products — they describe OTHER products.",
     "",
     "STEP 2 — DECIDE THE IDENTITY PATH",
-    "- The row has a code (SKU, barcode, manufacturer part number or model number): the code is the ONLY proof of identity. Title, price, package wording and every other field are context, never proof.",
-    "- The row has no code: identify the item by brand + full description + every distinguishing attribute (colour, size, capacity, pack count, material, edition). Pick ONE candidate that clearly fits. If two different products fit about equally well, that is no match — never guess between them.",
+    "- The row has a code (SKU, barcode, part number, model number): the code is the ONLY proof of identity. Title, price and every other field are context, never proof.",
+    "- The row has no code: identify by brand + full description + every distinguishing attribute (colour, size, capacity, pack count, material, edition). Pick ONE clear candidate. If two different products fit about equally well, that is no match — never guess between them.",
     "",
     "STEP 3 — STORE OWNER INSTRUCTION",
     instruction || "None given.",
     "It narrows or redirects the search (preferred or excluded sites, brands, regions) and overrides the defaults in these steps where they conflict, but it can never justify accepting a different product than the one Step 2 identified.",
     "",
-    "STEP 4 — SEARCH BROADLY, VERIFY NARROWLY",
-    "Search several angles before concluding: the code alone in quotes; code + brand; the barcode if present; brand + full name + key attributes; regional and local-language variants. Consider all shops and marketplaces, not only Amazon. A search snippet is never proof: open every candidate and confirm it on the page itself before including it.",
+    ...searchStepLines(attempt),
     "",
-    "STEP 5 — CONFIRM EACH CANDIDATE",
-    "A page qualifies only if ALL of these hold:",
-    "1. One product: a product detail page dedicated to ONE product (retailer, marketplace listing, distributor, or brand/manufacturer page).",
-    "2. Identity, per Step 2: with a code, the page text, URL or structured data shows the code character-for-character (ignore only case, spacing, hyphens and slashes); with no code, the brand, full name and every distinguishing attribute match with no equally good rival.",
-    "3. Variant: attributes that make a different product must match: model, colour/colourway, capacity or size of the product itself, pack count, edition, generation, flavour, voltage/region. A different suffix, prefix or digit in the code is a different item. Clothing or shoe sizes offered on the page are fine.",
-    "4. Brand: must not contradict the catalog brand. The page need not show the brand when the code already proves identity.",
-    "5. Live: the page loads now and shows the product — never a suspended, parked, expired or out-of-catalogue page.",
-    "Differences in title wording, language, price, currency, stock status, condition or seller are NOT reasons to reject a page; report them instead.",
-    "Never return: search-result pages, category or collection pages, multi-product lists, price-comparison search pages, blogs, reviews, forums, PDFs, datasheet-aggregator pages, social posts, or any URL you have not opened. Never guess or construct a URL. Every url must be a complete address starting with https:// that points to the single product page, never a bare domain.",
+    "STEP 5 — CONFIRM EACH LINK",
+    "- One product: a detail page dedicated to ONE product (retailer, marketplace listing, distributor, or brand page). Never a search page, category or collection page, multi-product list, blog, review, forum, PDF, datasheet-aggregator page or social post.",
+    "- Identity, per Step 2: with a code, the code appears in the page text, title, URL or product data (ignore only case, spaces, hyphens and slashes); with no code, the brand, full name and every distinguishing attribute match with no equally good rival.",
+    "- Variant: attributes that make a different product must match — model, colour/colourway, capacity or size of the product itself, pack count, edition, generation, flavour, voltage/region. A different suffix, prefix or digit in the code is a different item. Clothing or shoe sizes offered on the page are fine.",
+    "- Brand: must not contradict the row. The page need not show the brand when the code already proves identity.",
+    "- Live: the page loads now and shows the product — not suspended, parked or out of the catalogue.",
+    "- Differences in title wording, language, price, currency, stock status, condition or seller are fine: report them, do not reject for them.",
+    "- Every url is the complete https:// address of the product page — never a bare domain, never guessed or constructed.",
     "",
     `STEP 6 — RETURN LINKS ONLY, BEST FIRST, UP TO ${EXACT_LINKS_MAX}`,
     `Return up to ${EXACT_LINKS_MAX} full https:// product-page URLs, best first. No images, no commentary, no follow-up questions. Never pad the list with near matches: fewer links, or none, is correct when fewer exact matches exist.`,
     "",
     "OUTPUT FORMAT (valid JSON only, no markdown fences, no commentary before or after)",
-    '{"result":"MATCHES_FOUND" or "NO_EXACT_MATCH","matches":[{"url":"https://...","site":"","matchedOn":"code|barcode|brand+description","evidence":"verbatim page text containing the code (or, with no code, the title and brand)","differences":"or none"}]}',
+    '{"result":"MATCHES_FOUND" or "NO_EXACT_MATCH","matches":[{"url":"https://...","site":"","matchedOn":"code|barcode|brand+description","evidence":"text from the result or page that shows the code (or, with no code, the title and brand)","differences":"or none"}]}',
     `Maximum ${EXACT_LINKS_MAX} matches. If none: matches is an empty array.`
   );
 
@@ -123,13 +177,14 @@ function composeQuery(fieldLines: string[], identifiers: string[], instruction: 
  */
 export function buildExactLinksQuery(input: BuildExactLinksQueryInput): string {
   const identifiers = input.rowIdentifiers;
+  const attempt = input.attempt ?? 1;
   const instruction = (input.customInstruction ?? "").trim().slice(0, MAX_INSTRUCTION_CHARS);
   let fields = productDataLines(input.rowData);
 
-  let query = composeQuery(fields, identifiers, instruction);
+  let query = composeQuery(fields, identifiers, instruction, attempt);
   while (query.length > MAX_QUERY_CHARS && fields.length > 1) {
     fields = fields.slice(0, -1);
-    query = composeQuery(fields, identifiers, instruction);
+    query = composeQuery(fields, identifiers, instruction, attempt);
   }
   return query;
 }
@@ -147,6 +202,11 @@ export interface ExactLinksResult {
   matches: ExactLinkCandidate[];
 }
 
+export interface ExactLinksParse extends ExactLinksResult {
+  /** False when no JSON object could be found in the text (empty or prose-only answer). */
+  readable: boolean;
+}
+
 function stringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -155,10 +215,10 @@ function stringField(record: Record<string, unknown>, ...keys: string[]): string
   return undefined;
 }
 
-/** Tolerant of the casing the model actually used (camelCase asked for; snake_case sometimes returned). */
-export function parseExactLinksResult(text: string): ExactLinksResult {
+/** Like parseExactLinksResult, but also says whether the answer was readable at all (so "unreadable" can be told apart from "none found"). */
+export function parseExactLinksAnswer(text: string): ExactLinksParse {
   const parsed = extractJsonObject(text);
-  if (!parsed) return { result: "NO_EXACT_MATCH", matches: [] };
+  if (!parsed) return { result: "NO_EXACT_MATCH", matches: [], readable: false };
 
   const rawMatches = Array.isArray(parsed.matches) ? parsed.matches : [];
   const matches: ExactLinkCandidate[] = [];
@@ -179,5 +239,12 @@ export function parseExactLinksResult(text: string): ExactLinksResult {
   return {
     result: parsed.result === "MATCHES_FOUND" ? "MATCHES_FOUND" : "NO_EXACT_MATCH",
     matches,
+    readable: true,
   };
+}
+
+/** Tolerant of the casing the model actually used (camelCase asked for; snake_case sometimes returned). */
+export function parseExactLinksResult(text: string): ExactLinksResult {
+  const { result, matches } = parseExactLinksAnswer(text);
+  return { result, matches };
 }

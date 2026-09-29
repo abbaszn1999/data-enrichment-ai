@@ -24,7 +24,9 @@ You are given a product row and one or more "known exact-match pages" — links 
 3. Your own judgement.
 
 ## Step 1 — Open every known page yourself
-Open each "known exact-match page" listed below, one at a time. Read the identifier or attributes the page actually displays — do not assume the earlier search was right. A known page counts as confirmed only when YOU read the row's identifier (or its brand + full description) on that page, in this call.
+Open each "known exact-match page" listed below, one at a time, in the order given (best first). Do not stop early while you have fewer than 7 different confirmed images and known pages remain unopened.
+Each known page says how an earlier search matched it. Matched by code or barcode: confirm that identifier on the page. Matched by description only: be stricter — confirm the brand, the full product name and every distinguishing attribute (colour, size, capacity, pack) before you use anything from that page.
+Read the identifier or attributes the page actually displays — do not assume the earlier search was right. A known page counts as confirmed only when YOU read the row's identifier (or its brand + full description) on that page, in this call.
 - If a known page cannot be opened, is blocked, or is not the exact item, note that and move to the next one. Never stop after the first failure.
 
 ## Step 2 — Search for MORE exact-match pages
@@ -37,6 +39,9 @@ Apply the same identity rules to every new page you find:
 
 ## Step 3 — Images, only from confirmed pages
 - From every page you confirmed yourself (known or newly found), take its direct image file links exactly as they appear — the listing's gallery, and other opened pages of the same exact item. Never invent, construct or complete a link, never use a page URL as an image, never borrow an image from a similar listing or from general image search results.
+- Only images of the exact variant on the row. If a page shows several colours, sizes or packs, take only the images of the variant that matches the row; images of any other variant are a different item.
+- Skip anything that is not a photo of the item: logos, icons, badges, banners, sprites, "image coming soon" or placeholder graphics, tiny thumbnails, images with a watermark or promotional overlay, and photos that show other products.
+- For each photo use the largest version the page itself offers (the gallery's zoom or full-size link, the srcset, or the page's main image tag). Never edit or rebuild a URL to make it bigger.
 - Return up to 7 images of the exact item, each a genuinely DIFFERENT view: a clear main product photo first, then other angles, close-up details, packaging, or (only if nothing else is available) the item in use. Never include the same photo twice at different sizes — keep only the largest. Never pad the list with near-duplicates or images of similar items to reach 7 — fewer real, distinct images is correct.
 - Prefer a clean product-only photo over a lifestyle or worn photo, unless the custom instruction says otherwise.
 
@@ -60,6 +65,13 @@ export interface ExactImagesPrompt {
   imageCount: number;
 }
 
+function describeMatchedOn(matchedOn: string): string {
+  const value = matchedOn.trim().toLowerCase();
+  if (value === "code" || value === "barcode") return value;
+  if (value.includes("description") || value.includes("brand")) return "description only (brand + description, no code)";
+  return "not stated";
+}
+
 /** Reuses the shared product-data/custom-instruction/website-rules sections; only the known-pages section is Exact Match's own. */
 export function buildExactImagesPrompt(input: ExactImagesPromptInput): ExactImagesPrompt {
   const brief = buildImageFinderBrief(input);
@@ -71,6 +83,7 @@ export function buildExactImagesPrompt(input: ExactImagesPromptInput): ExactImag
           "## Known exact-match pages (open every one of these first)",
           ...input.knownPages.map((page, index) => {
             const bits = [`${index + 1}. ${page.url}`];
+            bits.push(`   Matched by: ${describeMatchedOn(page.matchedOn)}`);
             if (page.evidence) bits.push(`   Evidence an earlier search saw there: "${page.evidence}"`);
             if (page.differences && page.differences.trim().toLowerCase() !== "none") {
               bits.push(`   Differences that earlier search reported: ${page.differences}`);
