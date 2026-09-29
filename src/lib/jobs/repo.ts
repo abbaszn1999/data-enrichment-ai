@@ -167,6 +167,8 @@ export async function finishJobRun(
     workerToken?: string;
     /** Never overwrite a status that is already terminal (e.g. a forced Stop). */
     onlyIfActive?: boolean;
+    /** Only a run no worker has started yet (still waiting in the queue). */
+    onlyIfQueued?: boolean;
   }
 ): Promise<JobRunRecord | null> {
   let query = admin
@@ -182,6 +184,7 @@ export async function finishJobRun(
     .eq("id", id);
   if (guard?.workerToken) query = query.eq("worker_token", guard.workerToken);
   if (guard?.onlyIfActive) query = query.in("status", ["queued", "running"]);
+  if (guard?.onlyIfQueued) query = query.eq("status", "queued");
   const { data, error } = await query.select("*").maybeSingle();
   if (error) throw new Error(error.message);
   return data ? mapRun(data as Record<string, unknown>) : null;

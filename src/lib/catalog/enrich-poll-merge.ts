@@ -68,6 +68,18 @@ export function catalogRunFinishedCounts(
   return { done, failed };
 }
 
+/**
+ * How long to wait before asking the server about a running enrichment again.
+ * Every open tab with a running job asks, so the interval is the platform's
+ * request load: a fresh run (or a tab just brought back to the front) checks
+ * often, and a long run settles into a slower rhythm. A failed check backs
+ * off further, up to 20 seconds.
+ */
+export function enrichPollDelayMs(elapsedMs: number, failures: number): number {
+  const base = elapsedMs < 120_000 ? 5_000 : elapsedMs < 600_000 ? 8_000 : 12_000;
+  return failures === 0 ? base : Math.min(base * 2 ** failures, 20_000);
+}
+
 export function isCatalogEnrichRunActive(
   status: string | null | undefined
 ): boolean {

@@ -13,7 +13,6 @@
  * Local/dev: omit RENDER_API_KEY and start routes run the orchestrator in-process.
  */
 import { task, type TaskContext } from "@renderinc/sdk/workflows";
-import { executeCatalogRow, type CatalogRowTaskInput } from "../src/lib/jobs/enrich-row";
 import { runEnrichSession } from "../src/lib/jobs/enrich-session";
 import { executeGalleryRow, type GalleryRowTaskInput } from "../src/lib/jobs/gallery-row";
 import { runGallerySession } from "../src/lib/jobs/gallery-session";
@@ -29,7 +28,6 @@ import { runMrCollectionsSession } from "../src/lib/jobs/mr-collections-session"
 import {
   ENRICH_ROW_TIMEOUT_SECONDS,
   GALLERY_ROW_TIMEOUT_SECONDS,
-  IMAGE_FINDER_ROW_TIMEOUT_SECONDS,
   SESSION_TIMEOUT_SECONDS,
   JOB_TASK_PLAN,
 } from "../src/lib/jobs/config";
@@ -45,30 +43,6 @@ const rowRetry = {
   waitDurationMs: 1000,
   backoffScaling: 1.5,
 };
-
-export const enrichRow = task(
-  {
-    name: "enrichRow",
-    timeoutSeconds: ENRICH_ROW_TIMEOUT_SECONDS,
-    plan: JOB_TASK_PLAN,
-    retry: rowRetry,
-  },
-  async (_ctx: TaskContext, input: CatalogRowTaskInput) => {
-    return executeCatalogRow(input);
-  }
-);
-
-export const imageFinderRow = task(
-  {
-    name: "imageFinderRow",
-    timeoutSeconds: IMAGE_FINDER_ROW_TIMEOUT_SECONDS,
-    plan: JOB_TASK_PLAN,
-    retry: rowRetry,
-  },
-  async (_ctx: TaskContext, input: CatalogRowTaskInput) => {
-    return executeCatalogRow(input);
-  }
-);
 
 export const galleryRow = task(
   {
@@ -101,16 +75,14 @@ export const enrichSession = task(
     plan: JOB_TASK_PLAN,
     retry: sessionRetry,
   },
-  async (ctx: TaskContext, runId: string) => {
-    await runEnrichSession(runId, {
-      processRow: (rowId, context) =>
-        ctx.run(context.imageFinder ? imageFinderRow : enrichRow, {
-          runId,
-          rowId,
-          learnedDomains: context.learnedDomains,
-          recheck: context.recheck,
-        }),
-    });
+  // Catalog rows run inside this one task (up to JOB_BATCH_SIZE at a time)
+  // instead of as a child task each. Rows spend their time waiting on OpenAI,
+  // so one instance handles them, a job holds one concurrency slot instead of
+  // nine, and no run ever waits on another run for a slot — which is what
+  // could freeze every job once the workspace's slots were all taken by
+  // sessions waiting on rows that could not start.
+  async (_ctx: TaskContext, runId: string) => {
+    await runEnrichSession(runId);
     return { ok: true, runId };
   }
 );

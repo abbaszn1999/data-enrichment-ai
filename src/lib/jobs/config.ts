@@ -26,6 +26,15 @@ export const CATALOG_HEARTBEAT_INTERVAL_MS = 30_000;
  * is then resumed, or finished if Stop was already pressed.
  */
 export const CATALOG_WORKER_STALE_MS = 150_000;
+/**
+ * A run Render accepted (it has a task_run_id) but has not started yet is
+ * waiting for a free concurrency slot, not dead: it has no heartbeat to send
+ * until its task begins. Restarting it every few minutes would only add
+ * duplicate entries to an already full queue, so it gets this much longer —
+ * long enough for a busy queue, short enough that a task Render lost is
+ * eventually dispatched again.
+ */
+export const CATALOG_QUEUE_WAIT_MS = 30 * 60_000;
 
 /** Cold-state blob flush cadence (Root Cause B / P0-3). */
 export const ENRICH_CHECKPOINT_ROWS = 50;

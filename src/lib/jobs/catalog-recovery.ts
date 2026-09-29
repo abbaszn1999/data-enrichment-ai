@@ -1,6 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase-admin";
 import { catalogRunFinishedCounts } from "@/lib/catalog/enrich-poll-merge";
-import { CATALOG_WORKER_STALE_MS } from "./config";
+import { CATALOG_QUEUE_WAIT_MS, CATALOG_WORKER_STALE_MS } from "./config";
 import { dispatchJob } from "./dispatch";
 import { loadProjectJsonAdmin } from "./project-json";
 import { claimStaleJobRun, finishJobRun, loadJobRun } from "./repo";
@@ -16,7 +16,16 @@ type Admin = ReturnType<typeof createAdminClient>;
 export function isCatalogWorkerStale(run: JobRunRecord, now = Date.now()): boolean {
   if (isTerminalJobStatus(run.status)) return false;
   const beat = run.heartbeat_at ? Date.parse(run.heartbeat_at) : Number.NaN;
-  return !Number.isFinite(beat) || now - beat >= CATALOG_WORKER_STALE_MS;
+  if (!Number.isFinite(beat)) return true;
+  // Waiting in Render's queue for a free slot: no worker exists yet, so there
+  // is nothing to heartbeat and nothing to recover.
+  if (isWaitingForSlot(run)) return now - beat >= CATALOG_QUEUE_WAIT_MS;
+  return now - beat >= CATALOG_WORKER_STALE_MS;
+}
+
+/** Accepted by Render but not started: the orchestrator has not begun yet. */
+export function isWaitingForSlot(run: Pick<JobRunRecord, "status" | "task_run_id">): boolean {
+  return run.status === "queued" && Boolean(run.task_run_id);
 }
 
 /**
@@ -25,7 +34,8 @@ export function isCatalogWorkerStale(run: JobRunRecord, now = Date.now()): boole
  */
 export async function forceFinishCatalogRun(
   admin: Admin,
-  run: JobRunRecord
+  run: JobRunRecord,
+  options?: { onlyIfQueued?: boolean }
 ): Promise<JobRunRecord> {
   if (isTerminalJobStatus(run.status)) return run;
   const project = await loadProjectJsonAdmin(run.workspace_id, run.session_id, admin);
@@ -44,7 +54,7 @@ export async function forceFinishCatalogRun(
     admin,
     run.id,
     { status: "cancelled", completedCount: counts.done, failedCount: counts.failed },
-    { onlyIfActive: true }
+    { onlyIfActive: true, ...(options?.onlyIfQueued ? { onlyIfQueued: true } : {}) }
   );
   if (!finished) {
     // The worker finished it first; report whatever it wrote.

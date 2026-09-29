@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { catalogRunFinishedCounts, overlayCatalogRowsForActiveRun } from "./enrich-poll-merge";
+import {
+  catalogRunFinishedCounts,
+  enrichPollDelayMs,
+  overlayCatalogRowsForActiveRun,
+} from "./enrich-poll-merge";
+
+describe("enrichPollDelayMs", () => {
+  it("checks a fresh run often, then settles into a slower rhythm", () => {
+    expect(enrichPollDelayMs(0, 0)).toBe(5_000);
+    expect(enrichPollDelayMs(119_999, 0)).toBe(5_000);
+    expect(enrichPollDelayMs(120_000, 0)).toBe(8_000);
+    expect(enrichPollDelayMs(600_000, 0)).toBe(12_000);
+    expect(enrichPollDelayMs(3_600_000, 0)).toBe(12_000);
+  });
+
+  it("is never faster than 5s, so 300 open tabs stay under ~60 requests/second", () => {
+    for (const elapsed of [0, 60_000, 300_000, 900_000]) {
+      expect(enrichPollDelayMs(elapsed, 0)).toBeGreaterThanOrEqual(5_000);
+    }
+  });
+
+  it("backs off after failures but never past 20s", () => {
+    expect(enrichPollDelayMs(0, 1)).toBe(10_000);
+    expect(enrichPollDelayMs(0, 5)).toBe(20_000);
+    expect(enrichPollDelayMs(900_000, 1)).toBe(20_000);
+  });
+});
 
 const rows = [
   { id: "r1", status: "done" },

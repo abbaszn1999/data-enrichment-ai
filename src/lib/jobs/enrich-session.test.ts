@@ -34,6 +34,7 @@ vi.mock("@/lib/supabase-admin", () => {
 
 const { runEnrichSession } = await import("./enrich-session");
 const { PROVIDER_UNAVAILABLE_JOB_ERROR } = await import("./enrich-row");
+const { IMAGE_FINDER_ROW_TIMEOUT_SECONDS } = await import("./config");
 
 const makeRow = (id: string, rowIndex: number): ProjectRow =>
   ({ id, rowIndex, originalData: { Code: `CODE${rowIndex}` }, enrichedData: {}, status: "pending" }) as unknown as ProjectRow;
@@ -247,6 +248,33 @@ describe("runEnrichSession lifecycle guarantees", () => {
       expect.objectContaining({ status: "completed", completedCount: 2, failedCount: 1 }),
       expect.anything()
     );
+  });
+
+  it("a row that hangs is failed at the row limit instead of freezing the whole job", async () => {
+    vi.useFakeTimers();
+    try {
+      const rows = setup(2);
+      repo.touchJobHeartbeat.mockResolvedValue(null);
+      // Rows now share the session's process, so nothing else would ever end
+      // a row that never comes back — and the heartbeat keeps the run "alive".
+      const processRow = vi.fn<CatalogProcessRow>((rowId) =>
+        rowId === "r1" ? new Promise<EnrichRowOutcome>(() => undefined) : Promise.resolve(ok(rowId))
+      );
+      const finished = runEnrichSession("run-1", { processRow });
+      await vi.advanceTimersByTimeAsync(IMAGE_FINDER_ROW_TIMEOUT_SECONDS * 1000);
+      await finished;
+
+      expect(rows.map((row) => row.status)).toEqual(["error", "done"]);
+      expect(rows[0]!.errorMessage).toContain("took too long");
+      expect(repo.finishJobRun).toHaveBeenCalledWith(
+        expect.anything(),
+        "run-1",
+        expect.objectContaining({ status: "completed", completedCount: 1, failedCount: 1 }),
+        expect.anything()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a resumed run skips rows it already finished, so OpenAI never bills them twice", async () => {

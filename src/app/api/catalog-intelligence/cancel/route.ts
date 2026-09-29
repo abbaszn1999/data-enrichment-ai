@@ -60,8 +60,14 @@ export async function POST(request: NextRequest) {
   }
 
   const requested = (await requestJobCancel(admin, runId, workspaceId)) ?? existing;
-  const run = isCatalogWorkerStale(requested)
-    ? await forceFinishCatalogRun(admin, requested)
-    : requested;
+  // A run still waiting for a free slot has nothing in flight to wait for, so
+  // Stop ends it right away instead of leaving it "stopping" until Render gets
+  // round to starting it. (If a worker starts in that instant, the guarded
+  // write does nothing and the worker sees the Stop flag itself.)
+  const neverStarted = requested.status === "queued";
+  const run =
+    neverStarted || isCatalogWorkerStale(requested)
+      ? await forceFinishCatalogRun(admin, requested, neverStarted ? { onlyIfQueued: true } : undefined)
+      : requested;
   return NextResponse.json({ ok: true, run });
 }

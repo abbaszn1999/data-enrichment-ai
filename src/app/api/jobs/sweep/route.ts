@@ -56,8 +56,11 @@ export async function POST(request: NextRequest) {
     .limit(JOB_SWEEP_LIMIT);
   for (const row of catalogActive ?? []) {
     try {
-      await recoverStaleCatalogRun(admin, mapJobRun(row as Record<string, unknown>));
-      catalogRecovered += 1;
+      const before = mapJobRun(row as Record<string, unknown>);
+      // Returns the same object when the run is not actually dead (e.g. it is
+      // waiting in Render's queue for a free slot).
+      const after = await recoverStaleCatalogRun(admin, before);
+      if (after !== before) catalogRecovered += 1;
     } catch (error) {
       console.error(
         "[jobs/sweep] catalog recovery failed",

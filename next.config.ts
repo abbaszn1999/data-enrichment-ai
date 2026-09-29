@@ -57,11 +57,6 @@ const nextConfig: NextConfig = {
         permanent: false,
       },
       {
-        source: "/api/enrich",
-        destination: "/api/catalog-intelligence",
-        permanent: false,
-      },
-      {
         source: "/api/enrich/:path*",
         destination: "/api/catalog-intelligence/:path*",
         permanent: false,

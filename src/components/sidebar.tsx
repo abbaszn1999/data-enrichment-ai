@@ -86,6 +86,7 @@ import {
   catalogEnrichingContextFromRun,
   catalogPollShouldApplySnapshot,
   catalogRunFinishedCounts,
+  enrichPollDelayMs,
   overlayCatalogRowsForActiveRun,
   type CatalogPollRun,
 } from "@/lib/catalog/enrich-poll-merge";
@@ -486,6 +487,7 @@ export function Sidebar() {
       enrichPollRef.current = null;
     }
     const loop = ++enrichPollLoopRef.current;
+    const startedAt = Date.now();
     let failures = 0;
     const tick = async () => {
       if (loop !== enrichPollLoopRef.current) return;
@@ -502,8 +504,7 @@ export function Sidebar() {
         enrichPollRef.current = null;
         return;
       }
-      const delay = failures === 0 ? 2500 : Math.min(2500 * 2 ** failures, 20_000);
-      enrichPollRef.current = setTimeout(tick, delay);
+      enrichPollRef.current = setTimeout(tick, enrichPollDelayMs(Date.now() - startedAt, failures));
     };
     void tick();
   }, [pollEnrichRun]);

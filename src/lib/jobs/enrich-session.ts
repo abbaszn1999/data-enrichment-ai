@@ -1,7 +1,13 @@
 import { randomUUID } from "crypto";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { createCheckpointGate, ENRICH_CHECKPOINT } from "./checkpoint";
-import { CATALOG_HEARTBEAT_INTERVAL_MS, JOB_BATCH_SIZE } from "./config";
+import {
+  CATALOG_HEARTBEAT_INTERVAL_MS,
+  ENRICH_ROW_TIMEOUT_SECONDS,
+  IMAGE_FINDER_ROW_TIMEOUT_SECONDS,
+  JOB_BATCH_SIZE,
+} from "./config";
+import { withRowBackstop } from "./row-backstop";
 import {
   catalogPendingRowIds,
   chargeCatalogRow,
@@ -224,12 +230,14 @@ async function runCatalogWork(
    * retries, a network error) becomes a failed row instead of taking the whole
    * run — and every other in-flight row — down with it.
    */
+  const rowTimeoutMs =
+    (imageFinder ? IMAGE_FINDER_ROW_TIMEOUT_SECONDS : ENRICH_ROW_TIMEOUT_SECONDS) * 1000;
   const runRow = async (rowId: string, context: CatalogRowContext): Promise<EnrichRowOutcome> => {
-    try {
-      if (options?.processRow) return await options.processRow(rowId, { ...context, imageFinder });
+    const work = async (): Promise<EnrichRowOutcome> => {
+      if (options?.processRow) return options.processRow(rowId, { ...context, imageFinder });
       const row = byId.get(rowId);
       if (!row) return { ok: false as const, rowId, error: "Row not found" };
-      return await processCatalogRow({
+      return processCatalogRow({
         sessionId: run.session_id,
         workspaceId: run.workspace_id,
         row,
@@ -241,6 +249,16 @@ async function runCatalogWork(
           return control.stop || control.superseded;
         },
         context,
+      });
+    };
+    try {
+      return await withRowBackstop(work(), rowTimeoutMs, () => {
+        console.error("[jobs/catalog] row timed out", { runId: run.id, rowId, rowTimeoutMs });
+        return {
+          ok: false as const,
+          rowId,
+          error: "This row took too long and was skipped. Run it again to retry.",
+        };
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Row processing failed";
