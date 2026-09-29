@@ -7,7 +7,14 @@
  */
 
 export const SEARCHAPI_BASE = "https://www.searchapi.io/api/v1/search";
-const REQUEST_TIMEOUT_MS = 45_000;
+/**
+ * Live calls answer in ~7-17s. A slow call is worth waiting for (SearchApi
+ * bills any 200 even if we already hung up), but the row still has to fit
+ * IMAGE_FINDER_ROW_TIMEOUT_SECONDS (1,500s): worst case is 2 row attempts x
+ * (2 searches x this + Agent 2's 300s + image checks) = 2 x (240 + 330) =
+ * 1,140s at 120s, leaving ~360s spare. Do not raise this past ~150s.
+ */
+const REQUEST_TIMEOUT_MS = 120_000;
 
 export function requireSearchApiKey(): string {
   const apiKey = process.env.SEARCHAPI_API_KEY?.trim();
