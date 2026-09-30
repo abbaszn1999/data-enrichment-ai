@@ -1,5 +1,6 @@
 import type {
   VisualizerProjectSettings,
+  VisualizerRow,
   VisualizerSession,
   VisualizerWorksheetJson,
 } from "@/lib/visualizer/types";
@@ -88,6 +89,25 @@ export async function getVisualizerSession(
     session: VisualizerSession;
     worksheet: VisualizerWorksheetJson | null;
     signedUrls?: Record<string, string>;
+  }>(res);
+}
+
+export async function getVisualizerRowsDelta(
+  workspaceId: string,
+  sessionId: string,
+  since: string | null
+) {
+  const params = new URLSearchParams({ workspaceId });
+  if (since) params.set("since", since);
+  const res = await fetch(
+    `/api/visualizer/sessions/${sessionId}/rows?${params.toString()}`
+  );
+  return parseJson<{
+    supported: boolean;
+    rows?: VisualizerRow[];
+    signedUrls?: Record<string, string>;
+    cursor?: string;
+    hasMore?: boolean;
   }>(res);
 }
 

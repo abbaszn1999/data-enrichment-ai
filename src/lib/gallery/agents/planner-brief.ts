@@ -1,7 +1,7 @@
 import type { AiImageModel } from "@/lib/gallery/agents/ai-shared";
 import { styleInstruction } from "@/lib/gallery/agents/ai-shared";
 import type { ClassifiedRow } from "@/lib/gallery/agents/gallery-brief";
-import { referenceMapText } from "@/lib/gallery/agents/reference-set";
+import { referenceMapText } from "@/lib/ai-images/reference-set";
 import type { GalleryAiSettings } from "@/lib/gallery/types";
 
 const MAX_FIELD_CHARS = 1_200;

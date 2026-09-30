@@ -28,7 +28,7 @@ import {
   readStoredGalleryPlan,
   type GalleryPlannerPlan,
 } from "@/lib/gallery/agents/planner-plan";
-import { bufferToDataUrl } from "@/lib/gallery/agents/reference-image";
+import { bufferToDataUrl } from "@/lib/ai-images/reference-image";
 import { galleryLog, galleryWarn } from "@/lib/gallery/log";
 import { loadGallerySkill } from "@/lib/gallery/skill-loader";
 import type { GalleryAiSettings, GalleryRow } from "@/lib/gallery/types";

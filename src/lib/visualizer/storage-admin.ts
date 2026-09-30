@@ -14,6 +14,7 @@ import { buildVisualizerResultsBuffer } from "@/lib/visualizer/results-xlsx";
 import {
   collectVisualizerImagePaths,
   resolveVisualizerHtmlImages,
+  stripUnfilledVisualizerMarkers,
 } from "@/lib/visualizer/html-embed";
 import { recordStorageWriteBytes } from "@/lib/observability/metrics";
 import { visualizerRowStoreEnabled } from "@/lib/catalog/flag";
@@ -222,7 +223,9 @@ export async function saveVisualizerResultsAdmin(
     rows: worksheet.rows.map((row) => ({
       ...row,
       generatedDescription: row.generatedDescription
-        ? resolveVisualizerHtmlImages(row.generatedDescription, signedUrls)
+        ? stripUnfilledVisualizerMarkers(
+            resolveVisualizerHtmlImages(row.generatedDescription, signedUrls)
+          )
         : row.generatedDescription,
     })),
   };

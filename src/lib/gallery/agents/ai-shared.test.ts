@@ -5,7 +5,7 @@ import {
   referenceFlags,
   type AiReferenceImage,
 } from "./ai-shared";
-import { orderReferences, selectShotReferences } from "./reference-set";
+import { orderReferences, selectShotReferences } from "@/lib/ai-images/reference-set";
 
 const ref = (role: AiReferenceImage["role"], key: string): AiReferenceImage => ({
   role,

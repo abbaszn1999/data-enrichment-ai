@@ -27,10 +27,10 @@ import {
   type AiReferenceRole,
 } from "@/lib/gallery/agents/ai-shared";
 import { GalleryPlannerError, planGalleryImages, type GalleryPlannerPlan } from "@/lib/gallery/agents/ai-planner-agent";
-import { generateAiGalleryImage } from "@/lib/gallery/agents/ai-gallery-agent";
+import { generateNanoBananaImage } from "@/lib/ai-images/nano-banana";
 import { classifyRowValues } from "@/lib/gallery/agents/gallery-brief";
-import { prepareReferenceImage } from "@/lib/gallery/agents/reference-image";
-import { MAX_PRODUCT_REFERENCES, orderReferences, selectShotReferences } from "@/lib/gallery/agents/reference-set";
+import { prepareReferenceImage } from "@/lib/ai-images/reference-image";
+import { MAX_PRODUCT_REFERENCES, orderReferences, selectShotReferences } from "@/lib/ai-images/reference-set";
 import { loadGallerySkill } from "@/lib/gallery/skill-loader";
 
 /** Images generated at the same time inside one row. */
@@ -333,7 +333,7 @@ export async function processAiRow(params: {
             failures.push(`Image ${slot + 1}: no planned prompt`);
             continue;
           }
-          const generated = await generateAiGalleryImage({
+          const generated = await generateNanoBananaImage({
             ai,
             model: imageModel,
             settings,

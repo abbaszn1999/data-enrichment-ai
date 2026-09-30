@@ -19,8 +19,8 @@ export const VisualizerDescriptionSettingsSchema = z.object({
 });
 
 export const VisualizerImagesSettingsSchema = z.object({
-  /** Always Nano Banana Pro — kept for legacy session JSON compat. */
-  tier: z.enum(["standard", "premium"]).default("premium"),
+  /** Standard = Nano Banana 2, Premium = Nano Banana Pro. */
+  tier: z.enum(["standard", "premium"]).default("standard"),
   aspectRatio: z
     .enum([
       "1:1",
@@ -93,7 +93,7 @@ export const VisualizerProjectSettingsSchema = z.object({
     maxPlaceholders: 4,
   }),
   images: VisualizerImagesSettingsSchema.default({
-    tier: "premium",
+    tier: "standard",
     aspectRatio: "1:1",
     resolution: "1K",
     outputFormat: "image/jpeg",
@@ -192,7 +192,6 @@ function migrateLegacyInput(input: unknown): unknown {
   description.imageCount = layoutResolved.imageCount;
   description.maxPlaceholders = layoutResolved.imageCount;
 
-  images.tier = "premium";
   images.aspectRatio = "1:1";
   images.resolution = "1K";
   images.instructions = "";
@@ -225,7 +224,6 @@ export function parseVisualizerProjectSettings(input: unknown) {
     },
     images: {
       ...parsed.images,
-      tier: "premium" as const,
       aspectRatio: "1:1",
       resolution: "1K",
       instructions: "",

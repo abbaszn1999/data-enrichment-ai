@@ -266,14 +266,17 @@ async function generateSynchronously(request: NextRequest) {
     phase === "description" || phase === "full"
       ? estimateDescriptionCredits({
           rowCount: targetIds.length,
-          tier: runtimeSettings.description.tier,
+          tier: runtimeSettings.images.tier,
+          imageCount: expectedPlaceholdersPerRow,
         })
       : { min: 0, max: 0 };
   const imagePlaceholderCount =
     phase === "images"
       ? targetIds.reduce(
           (sum, id) =>
-            sum + (rowsById.get(id)?.imagePlaceholders?.length || 0),
+            // Finished images are never regenerated, so only the empty slots are estimated.
+            sum +
+            ((rowsById.get(id)?.imagePlaceholders ?? []).filter((item) => !item.storagePath).length || 0),
           0
         )
       : phase === "full"

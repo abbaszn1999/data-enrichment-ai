@@ -57,6 +57,10 @@ export const GALLERY_SCRAPING_REASONING_EFFORT: EnrichReasoningEffort = "medium"
 export const GALLERY_PLANNER_OPENAI_MODEL: EnrichOpenAiModelId = "gpt-6.1-sol";
 export const GALLERY_PLANNER_REASONING_EFFORT: EnrichReasoningEffort = "medium";
 
+/** Products Visualizer planner: same fixed agent as the Gallery planner. */
+export const VISUALIZER_PLANNER_OPENAI_MODEL: EnrichOpenAiModelId = GALLERY_PLANNER_OPENAI_MODEL;
+export const VISUALIZER_PLANNER_REASONING_EFFORT: EnrichReasoningEffort = GALLERY_PLANNER_REASONING_EFFORT;
+
 export function resolveEnrichOpenAiModel(
   tier: EnrichmentModel | string | null | undefined
 ): EnrichOpenAiModelId {

@@ -1,9 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { createImageGenerationCost, type AiCallCost } from "@/lib/ai-pricing";
-import type { GalleryShotBrief } from "@/lib/gallery/agents/planner-plan";
-import { referenceMapText } from "@/lib/gallery/agents/reference-set";
+import { referenceMapText } from "@/lib/ai-images/reference-set";
 import { galleryLog, galleryWarn } from "@/lib/gallery/log";
-import type { GalleryAiSettings } from "@/lib/gallery/types";
 import {
   buildAiImageResponseFormat,
   convertImageFormat,
@@ -18,7 +16,7 @@ import {
  * attached images (same numbering the planner used) and the fixed identity rules.
  */
 export function buildNanoBananaPrompt(params: {
-  shot: Pick<GalleryShotBrief, "prompt" | "specClaim">;
+  shot: { prompt: string };
   references: AiReferenceImage[];
   identityRules: string;
 }): string {
@@ -31,6 +29,18 @@ export function buildNanoBananaPrompt(params: {
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+export interface NanoBananaSettings {
+  aspectRatio: string;
+  resolution: string;
+  outputFormat: string;
+  groundWithSearch: boolean;
+}
+
+export interface NanoBananaShot {
+  prompt: string;
+  perspective?: string;
 }
 
 export interface GalleryImageResult {
@@ -53,11 +63,11 @@ export function isRetryableImageError(message: string): boolean {
  * carries the error and any usage Google reported, so the row can still bill it.
  * One retry covers a rate limit, a 5xx or a timeout.
  */
-export async function generateAiGalleryImage(params: {
+export async function generateNanoBananaImage(params: {
   ai: GoogleGenAI;
   model: AiImageModel;
-  settings: Pick<GalleryAiSettings, "aspectRatio" | "resolution" | "outputFormat" | "groundWithSearch">;
-  shot: GalleryShotBrief;
+  settings: NanoBananaSettings;
+  shot: NanoBananaShot;
   references: AiReferenceImage[];
   identityRules: string;
   rowId: string;
@@ -81,7 +91,7 @@ export async function generateAiGalleryImage(params: {
     rowId: params.rowId,
     model,
     galleryIndex: params.galleryIndex,
-    perspective: params.shot.perspective,
+    perspective: params.shot.perspective ?? null,
     references: params.references.map((reference) => reference.role),
     responseFormat,
     promptChars: prompt.length,

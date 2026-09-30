@@ -1,9 +1,9 @@
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import type { GoogleGenAI } from "@google/genai";
-import { buildNanoBananaPrompt, generateAiGalleryImage, isRetryableImageError } from "./ai-gallery-agent";
-import type { AiReferenceImage } from "./ai-shared";
-import { buildAiRowCharge } from "../agent/ai-row-billing";
+import { buildNanoBananaPrompt, generateNanoBananaImage, isRetryableImageError } from "./nano-banana";
+import type { AiReferenceImage } from "@/lib/gallery/agents/ai-shared";
+import { buildAiRowCharge } from "@/lib/gallery/agent/ai-row-billing";
 
 const shot = {
   perspective: "front" as const,
@@ -45,7 +45,7 @@ describe("buildNanoBananaPrompt", () => {
   });
 });
 
-describe("generateAiGalleryImage", () => {
+describe("generateNanoBananaImage", () => {
   it("sends the prompt and every reference and prices the call from usage", async () => {
     const create = vi.fn().mockResolvedValue({
       status: "completed",
@@ -53,7 +53,7 @@ describe("generateAiGalleryImage", () => {
       output_image: { data: await jpegBase64(), mime_type: "image/jpeg" },
       usage,
     });
-    const result = await generateAiGalleryImage({
+    const result = await generateNanoBananaImage({
       ai: fakeAi(create),
       model: "gemini-3.1-flash-image",
       settings,
@@ -78,7 +78,7 @@ describe("generateAiGalleryImage", () => {
       output_image: { data: await jpegBase64(), mime_type: "image/jpeg" },
       usage,
     });
-    const result = await generateAiGalleryImage({
+    const result = await generateNanoBananaImage({
       ai: fakeAi(create),
       model: "gemini-3-pro-image",
       settings: { ...settings, outputFormat: "image/png" },
@@ -100,7 +100,7 @@ describe("generateAiGalleryImage", () => {
       status: "completed",
       usage: { total_input_tokens: 3000, total_output_tokens: 0, total_thought_tokens: 400 },
     });
-    const result = await generateAiGalleryImage({
+    const result = await generateNanoBananaImage({
       ai: fakeAi(create),
       model: "gemini-3-pro-image",
       settings,
@@ -121,7 +121,7 @@ describe("generateAiGalleryImage", () => {
       .fn()
       .mockRejectedValueOnce(new Error("429 Too Many Requests"))
       .mockResolvedValueOnce({ status: "completed", output_image: { data: await jpegBase64(), mime_type: "image/jpeg" }, usage });
-    const result = await generateAiGalleryImage({
+    const result = await generateNanoBananaImage({
       ai: fakeAi(create),
       model: "gemini-3.1-flash-image",
       settings,
@@ -137,7 +137,7 @@ describe("generateAiGalleryImage", () => {
 
   it("does not retry a bad request", async () => {
     const create = vi.fn().mockRejectedValue(new Error("400 invalid argument"));
-    const result = await generateAiGalleryImage({
+    const result = await generateNanoBananaImage({
       ai: fakeAi(create),
       model: "gemini-3.1-flash-image",
       settings,
@@ -161,7 +161,7 @@ describe("buildAiRowCharge", () => {
       .mockResolvedValueOnce({ status: "completed", usage: { total_input_tokens: 2000, total_output_tokens: 0, total_thought_tokens: 300 } })
       .mockResolvedValueOnce({ status: "completed", output_image: { data: await jpegBase64(), mime_type: "image/jpeg" }, usage });
     const run = () =>
-      generateAiGalleryImage({
+      generateNanoBananaImage({
         ai: fakeAi(create),
         model: "gemini-3.1-flash-image",
         settings,

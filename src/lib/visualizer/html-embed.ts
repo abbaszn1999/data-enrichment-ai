@@ -38,6 +38,11 @@ export function resolveVisualizerHtmlImages(
   );
 }
 
+/** Exports never carry a raw [imageplaceholder-N] marker for an image that was not created. */
+export function stripUnfilledVisualizerMarkers(descriptionHtml: string): string {
+  return descriptionHtml.replace(/\[imageplaceholder-\d+\]/gi, "");
+}
+
 export function collectVisualizerImagePaths(
   placeholders: VisualizerImagePlaceholder[] | undefined
 ): string[] {

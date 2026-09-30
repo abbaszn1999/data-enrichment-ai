@@ -58,6 +58,7 @@ import {
 import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
 import { TableSelectHeader } from "@/components/table-select-header";
 import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
+import { SheetImage } from "@/components/sheet-image";
 import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
 import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
 import { ShareSheetButton } from "@/components/share/share-sheet-button";
@@ -76,6 +77,7 @@ import {
   deleteVisualizerAsset,
   generateVisualizerFull,
   getVisualizerProgress,
+  getVisualizerRowsDelta,
   getVisualizerSession,
   listVisualizerSessions,
   requestVisualizerGenerationStop,
@@ -85,6 +87,7 @@ import {
 } from "@/lib/visualizer/client";
 import {
   adoptIncomingVisualizerWorksheet,
+  mergePolledVisualizerRow,
   mergePolledVisualizerWorksheet,
   visualizerRowIsBusy,
   visualizerRunIsActive,
@@ -464,6 +467,44 @@ export default function ProductsVisualizerPage() {
     void loadProject();
   }, [loadProject]);
 
+  // Signed image links live for one hour. Refresh them on a timer, and when the
+  // user returns to the tab after leaving it idle, so nothing turns into a broken image.
+  const hasWorksheet = !!worksheet;
+  const signedAtRef = useRef(Date.now());
+  useEffect(() => {
+    signedAtRef.current = Date.now();
+  }, [projectId]);
+  useEffect(() => {
+    if (!workspace?.id || !projectId || !hasWorksheet) return;
+    let cancelled = false;
+    const refreshSignedUrls = async () => {
+      try {
+        const payload = await getVisualizerSession(workspace.id, projectId, {
+          includeSignedUrls: true,
+        });
+        if (!cancelled && payload.signedUrls) {
+          signedAtRef.current = Date.now();
+          setSignedUrls((current) => ({ ...current, ...payload.signedUrls }));
+        }
+      } catch {
+        // A later focus or timer refresh can recover transient failures.
+      }
+    };
+    const onReturn = () => {
+      if (document.visibilityState === "hidden") return;
+      if (Date.now() - signedAtRef.current > 45 * 60 * 1000) void refreshSignedUrls();
+    };
+    window.addEventListener("focus", onReturn);
+    document.addEventListener("visibilitychange", onReturn);
+    const timer = window.setInterval(refreshSignedUrls, 50 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onReturn);
+      document.removeEventListener("visibilitychange", onReturn);
+      window.clearInterval(timer);
+    };
+  }, [workspace?.id, projectId, hasWorksheet]);
+
   useEffect(() => {
     setSelectedRowIds(new Set());
     setReviewRowId(null);
@@ -494,6 +535,44 @@ export default function ProductsVisualizerPage() {
     if (!workspace?.id || !projectId || !shouldPollGeneration) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // Delta polling state: changed rows only, never the whole worksheet.
+    let deltaCursor: string | null = null;
+    let deltaSupported = true;
+
+    const pollDeltaRows = async (): Promise<boolean> => {
+      if (!deltaSupported) return false;
+      let hasMore = true;
+      for (let page = 0; hasMore && page < 5 && !cancelled; page += 1) {
+        const delta = await getVisualizerRowsDelta(workspace.id, projectId, deltaCursor);
+        if (!delta.supported) {
+          deltaSupported = false;
+          return false;
+        }
+        if (delta.cursor) deltaCursor = delta.cursor;
+        hasMore = Boolean(delta.hasMore);
+        const changed = delta.rows ?? [];
+        if (delta.signedUrls && Object.keys(delta.signedUrls).length > 0) {
+          setSignedUrls((current) => ({ ...current, ...delta.signedUrls }));
+        }
+        if (changed.length === 0) continue;
+        const changedById = new Map(changed.map((row) => [row.id, row]));
+        setWorksheet((current) => {
+          if (!current) return current;
+          const next = {
+            ...current,
+            rows: current.rows.map((row) => {
+              const polled = changedById.get(row.id);
+              return polled
+                ? mergePolledVisualizerRow(row, polled, { clientRunActive: generating })
+                : row;
+            }),
+          };
+          worksheetRef.current = next;
+          return next;
+        });
+      }
+      return true;
+    };
 
     const pollProgress = async () => {
       try {
@@ -559,10 +638,20 @@ export default function ProductsVisualizerPage() {
           lastCreditsProgressRef.current = done;
           invalidateCredits();
         }
+        let deltaHandled = false;
+        if (jobStillRunning) {
+          try {
+            deltaHandled = await pollDeltaRows();
+          } catch {
+            deltaHandled = false;
+          }
+          if (cancelled) return;
+        }
         const serverRevision = snapshotRevision(progress.worksheetRevision);
         const needsWorksheet =
-          serverRevision > worksheetRevisionRef.current ||
-          (!jobStillRunning && (localBusy || localRunActive));
+          !deltaHandled &&
+          (serverRevision > worksheetRevisionRef.current ||
+            (!jobStillRunning && (localBusy || localRunActive)));
         if (needsWorksheet) {
           const fresh = await getVisualizerSession(workspace.id, projectId, {
             includeSignedUrls: true,
@@ -749,10 +838,13 @@ export default function ProductsVisualizerPage() {
     }
   };
 
-  const updateDescriptionTier = (tier: "standard" | "premium") => {
+  // Quality only picks the image model (Standard: Nano Banana 2, Premium: Nano Banana Pro);
+  // the planner is always GPT-6.1 Sol.
+  const updateImageQuality = (tier: "standard" | "premium") => {
     setSettings((current) => ({
       ...current,
       description: { ...current.description, tier },
+      images: { ...current.images, tier },
     }));
     setSaveStatus("dirty");
   };
@@ -1847,9 +1939,10 @@ export default function ProductsVisualizerPage() {
 
             <section className="space-y-3 border-t pt-4">
               <div>
-                <h2 className="text-xs font-semibold">Description agent</h2>
+                <h2 className="text-xs font-semibold">Image quality</h2>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  Powered by Standard or Premium writing.
+                  Descriptions and image prompts are written by GPT-6.1 Sol.
+                  Quality picks the image model.
                 </p>
               </div>
               <div className="grid grid-cols-2 rounded-xl bg-muted/60 p-1">
@@ -1858,14 +1951,17 @@ export default function ProductsVisualizerPage() {
                     key={tier}
                     type="button"
                     disabled={!canEdit}
-                    onClick={() => updateDescriptionTier(tier)}
+                    onClick={() => updateImageQuality(tier)}
                     className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
-                      settings.description.tier === tier
+                      settings.images.tier === tier
                         ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]"
                         : "text-muted-foreground"
                     }`}
                   >
-                    {tier === "standard" ? "Standard" : "Premium"}
+                    <span className="block">{tier === "standard" ? "Standard" : "Premium"}</span>
+                    <span className="block text-[10px] font-normal opacity-80">
+                      {tier === "standard" ? "Nano Banana 2" : "Nano Banana Pro"}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -1886,8 +1982,13 @@ export default function ProductsVisualizerPage() {
                     updateDescriptionField("instructions", event.target.value)
                   }
                   className="min-h-24 w-full resize-none rounded-xl border border-border/60 bg-background p-3 text-xs leading-relaxed outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-[#6B358D]/40 disabled:opacity-60"
-                  placeholder="Tone, SEO keywords, claims to emphasize or avoid…"
+                  placeholder="Tone, SEO keywords, claims to emphasize or avoid, scenes, mood…"
                 />
+                <span className="block text-[10px] leading-snug text-muted-foreground">
+                  Sent to the planner together with the layout, your selected
+                  columns and the product photos. It shapes both the copy and
+                  every image prompt.
+                </span>
               </label>
             </section>
 
@@ -1932,6 +2033,10 @@ export default function ProductsVisualizerPage() {
                     <span className="text-[11px] font-medium text-muted-foreground">
                       Brand logo
                     </span>
+                    <p className="text-[10px] leading-snug text-muted-foreground">
+                      The planner places the logo only in shots where it fits
+                      naturally, such as packaging, a tag or a sign.
+                    </p>
                     <div className="group relative">
                       <button
                         type="button"
@@ -1941,11 +2046,11 @@ export default function ProductsVisualizerPage() {
                       >
                         {settings.images.logoPath &&
                         signedUrls[settings.images.logoPath] ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={signedUrls[settings.images.logoPath]}
+                          <SheetImage
+                            url={signedUrls[settings.images.logoPath]}
                             alt="Brand logo"
                             className="absolute inset-0 h-full w-full object-cover"
+                            tileClassName="absolute inset-0 flex items-center justify-center bg-muted/40 text-[10px] text-muted-foreground"
                           />
                         ) : (
                           <span>Upload brand logo</span>
@@ -2021,11 +2126,11 @@ export default function ProductsVisualizerPage() {
                         >
                           {settings.images.brandGuidePath &&
                           signedUrls[settings.images.brandGuidePath] ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={signedUrls[settings.images.brandGuidePath]}
+                            <SheetImage
+                              url={signedUrls[settings.images.brandGuidePath]}
                               alt="Brand guide"
                               className="absolute inset-0 h-full w-full object-cover"
+                              tileClassName="absolute inset-0 flex items-center justify-center bg-muted/40 text-[10px] text-muted-foreground"
                             />
                           ) : (
                             <span>Upload brand guide</span>
@@ -2556,9 +2661,8 @@ export default function ProductsVisualizerPage() {
                                             className="group/image relative h-10 w-10 shrink-0 overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                                             aria-label={`Preview generated image ${idx + 1}`}
                                           >
-                                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                                            <img
-                                              src={thumb.src}
+                                            <SheetImage
+                                              url={thumb.src}
                                               alt={thumb.alt}
                                               className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
                                             />
@@ -2614,11 +2718,11 @@ export default function ProductsVisualizerPage() {
                                       title={value}
                                       className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                                     >
-                                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                                      <img
-                                        src={value.trim()}
+                                      <SheetImage
+                                        url={value.trim()}
                                         alt=""
                                         className="h-12 w-12 rounded border object-cover"
+                                        tileClassName="flex h-12 w-12 flex-col items-center justify-center rounded border bg-muted/40 text-[8px] leading-tight text-muted-foreground"
                                       />
                                     </button>
                                   ) : (
@@ -2827,17 +2931,24 @@ export default function ProductsVisualizerPage() {
                                     </span>
                                   </div>
                                   {imageUrl ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img
-                                      src={imageUrl}
+                                    <SheetImage
+                                      url={imageUrl}
                                       alt={
                                         item.alt || `Placeholder ${item.index}`
                                       }
                                       className="mb-2 max-h-56 w-full rounded-md border object-contain bg-muted/20"
+                                      tileClassName="mb-2 flex h-24 w-full items-center justify-center rounded-md border bg-muted/30 text-[11px] text-muted-foreground"
                                     />
                                   ) : null}
-                                  <p className="text-[12px] leading-relaxed text-muted-foreground">
-                                    {item.visualBrief}
+                                  {item.specClaim || item.perspective ? (
+                                    <p className="mb-1 text-[11px] font-medium">
+                                      {[item.specClaim, item.perspective?.replace(/_/g, " ")]
+                                        .filter(Boolean)
+                                        .join(" · ")}
+                                    </p>
+                                  ) : null}
+                                  <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted-foreground">
+                                    {item.prompt || item.visualBrief}
                                   </p>
                                 </article>
                               );
@@ -2923,11 +3034,11 @@ export default function ProductsVisualizerPage() {
                       <div className="relative flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
                         {active ? (
                           <>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={active.src}
+                            <SheetImage
+                              url={active.src}
                               alt={active.alt}
                               className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
+                              tileClassName="flex h-64 w-64 flex-col items-center justify-center rounded-lg bg-muted/40 text-xs text-muted-foreground"
                             />
                             {dialogThumbs.length > 1 ? (
                               <>
@@ -2974,9 +3085,8 @@ export default function ProductsVisualizerPage() {
                               }`}
                               aria-label={`View image ${index + 1}`}
                             >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={thumb.src}
+                              <SheetImage
+                                url={thumb.src}
                                 alt={thumb.alt}
                                 className="h-full w-full object-cover"
                               />

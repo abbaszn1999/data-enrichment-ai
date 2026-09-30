@@ -22,7 +22,7 @@ import { createCheckpointGate, WORKSHEET_CHECKPOINT } from "./checkpoint";
 import { isInsufficientCredits } from "./credits";
 import { executeVisualizerRow, type VisualizerRowOutcome } from "./visualizer-row";
 import type { VisualizerJobSettings } from "./visualizer-settings";
-import { runJobWithFailureGuard } from "./guard";
+import { runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
   finishJobRun,
@@ -334,7 +334,13 @@ async function runVisualizerSessionInner(
 
   const workerCount = Math.min(JOB_BATCH_SIZE, remainingIds.length || 1);
   if (remainingIds.length > 0) {
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    // A row runs for minutes (planner plus several images); keep heartbeat_at fresh so the
+    // sweep never mistakes a busy run for a dead one and starts a second worker.
+    await withHeartbeat(
+      run.id,
+      () => Promise.all(Array.from({ length: workerCount }, () => worker())),
+      30_000
+    );
   }
   await worksheetWriteQueue.catch(() => undefined);
 

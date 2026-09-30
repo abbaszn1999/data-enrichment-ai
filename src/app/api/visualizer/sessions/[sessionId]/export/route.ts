@@ -5,7 +5,10 @@ import {
   signVisualizerWorksheetImages,
 } from "@/lib/visualizer/storage-admin";
 import { buildVisualizerResultsTable } from "@/lib/visualizer/results-xlsx";
-import { resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
+import {
+  resolveVisualizerHtmlImages,
+  stripUnfilledVisualizerMarkers,
+} from "@/lib/visualizer/html-embed";
 import { applyVisualizerProjectSettings } from "@/lib/visualizer/types";
 import { parseVisualizerProjectSettings } from "@/lib/visualizer/settings-schema";
 import { visualizerWarn } from "@/lib/visualizer/log";
@@ -85,7 +88,9 @@ async function exportVisualizerWorkbook(
     exportRows.map((row) => [
       row.id,
       row.generatedDescription
-        ? resolveVisualizerHtmlImages(row.generatedDescription, signedUrls)
+        ? stripUnfilledVisualizerMarkers(
+            resolveVisualizerHtmlImages(row.generatedDescription, signedUrls)
+          )
         : row.generatedDescription,
     ])
   );

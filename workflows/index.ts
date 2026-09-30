@@ -26,7 +26,6 @@ import { runMrClassifySession } from "../src/lib/jobs/mr-classify-session";
 import { runFaClassifySession } from "../src/lib/jobs/fa-classify-session";
 import { runMrCollectionsSession } from "../src/lib/jobs/mr-collections-session";
 import {
-  ENRICH_ROW_TIMEOUT_SECONDS,
   GALLERY_ROW_TIMEOUT_SECONDS,
   SESSION_TIMEOUT_SECONDS,
   JOB_TASK_PLAN,
@@ -59,7 +58,7 @@ export const galleryRow = task(
 export const visualizerRow = task(
   {
     name: "visualizerRow",
-    timeoutSeconds: ENRICH_ROW_TIMEOUT_SECONDS,
+    timeoutSeconds: GALLERY_ROW_TIMEOUT_SECONDS,
     plan: JOB_TASK_PLAN,
     retry: rowRetry,
   },

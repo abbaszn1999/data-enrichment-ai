@@ -1,10 +1,14 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { visualizerRowStoreEnabled } from "@/lib/catalog/flag";
+import { upsertWorksheetRow } from "@/lib/worksheet-rows/store";
 import { processDescriptionRow } from "@/lib/visualizer/process-description-row";
 import { processImagesRow } from "@/lib/visualizer/process-images-row";
+import { parseVisualizerProjectSettings } from "@/lib/visualizer/settings-schema";
 import { loadVisualizerWorksheetAdmin } from "@/lib/visualizer/storage-admin";
-import type { VisualizerRow } from "@/lib/visualizer/types";
+import type { VisualizerProjectSettings, VisualizerRow } from "@/lib/visualizer/types";
 import { isInsufficientCredits } from "./credits";
-import { isJobCancelRequested, loadJobRun } from "./repo";
+import { loadJobRun } from "./repo";
+import { isVisualizerCancelled } from "./visualizer-cancel";
 import type { VisualizerJobSettings } from "./visualizer-settings";
 
 export type VisualizerRowTaskInput = {
@@ -22,6 +26,41 @@ export type VisualizerRowOutcome = {
   error?: string;
   noCredits?: boolean;
 };
+
+/** Time a row task may use: the visualizerRow task timeout (1500s) minus a margin for billing and cleanup. */
+export const VISUALIZER_ROW_DEADLINE_MS = 1_380_000;
+
+/**
+ * A row task needs only its own row plus the run's frozen settings. Loading the
+ * whole worksheet (blob + every row of a large sheet) for each child task would
+ * multiply the reads by the row count, so the row comes straight from the row
+ * store. Returns null when that is not possible (row store off, row missing)
+ * and the caller falls back to the full load.
+ */
+export async function loadVisualizerRowContext(params: {
+  admin: ReturnType<typeof createAdminClient>;
+  sessionId: string;
+  rowId: string;
+  jobSettings: VisualizerJobSettings;
+}): Promise<{ row: VisualizerRow; settings: VisualizerProjectSettings } | null> {
+  if (!visualizerRowStoreEnabled() || !params.jobSettings.runtimeSettings) return null;
+  const { data, error } = await params.admin
+    .from("visualizer_session_rows")
+    .select("row_id, row_index, status, data")
+    .eq("session_id", params.sessionId)
+    .eq("row_id", params.rowId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const payload = (data.data ?? {}) as Partial<VisualizerRow>;
+  if (!payload.originalData || typeof payload.originalData !== "object") return null;
+  const row: VisualizerRow = {
+    ...(payload as VisualizerRow),
+    id: data.row_id as string,
+    rowIndex: Number(data.row_index ?? 0),
+    status: data.status as VisualizerRow["status"],
+  };
+  return { row, settings: parseVisualizerProjectSettings(params.jobSettings.runtimeSettings) };
+}
 
 export async function executeVisualizerRow(
   input: VisualizerRowTaskInput
@@ -45,14 +84,26 @@ export async function executeVisualizerRow(
       error: "Job run not found",
     };
   }
-  const settings = run.settings as VisualizerJobSettings;
-  const phase = settings.phase ?? "full";
-  const worksheet = await loadVisualizerWorksheetAdmin(
-    run.workspace_id,
-    run.session_id
-  );
-  const row = worksheet?.rows.find((candidate) => candidate.id === input.rowId);
-  if (!worksheet || !row || !settings.runtimeSettings) {
+  const jobSettings = run.settings as VisualizerJobSettings;
+  const phase = jobSettings.phase ?? "full";
+
+  let row: VisualizerRow | undefined;
+  let settings: VisualizerProjectSettings | undefined;
+  const single = await loadVisualizerRowContext({
+    admin,
+    sessionId: run.session_id,
+    rowId: input.rowId,
+    jobSettings,
+  });
+  if (single) {
+    row = single.row;
+    settings = single.settings;
+  } else if (jobSettings.runtimeSettings) {
+    const worksheet = await loadVisualizerWorksheetAdmin(run.workspace_id, run.session_id);
+    row = worksheet?.rows.find((candidate) => candidate.id === input.rowId);
+    settings = parseVisualizerProjectSettings(jobSettings.runtimeSettings);
+  }
+  if (!row || !settings) {
     return {
       rowId: input.rowId,
       row: {
@@ -68,15 +119,25 @@ export async function executeVisualizerRow(
     };
   }
 
+  const startedAt = Date.now();
+  const rowState: VisualizerRow = structuredClone(row);
+  // Each checkpoint writes the row to the row store, so a client that left the
+  // page and came back sees the description and every finished image.
+  const storeCheckpoint = async (patch: Partial<VisualizerRow>) => {
+    if (!visualizerRowStoreEnabled()) return;
+    Object.assign(rowState, patch, { status: "generating" as const });
+    await upsertWorksheetRow(admin, "visualizer_session_rows", run.session_id, rowState);
+  };
   const shared = {
     admin,
     workspaceId: run.workspace_id,
     sessionId: run.session_id,
-    worksheet: structuredClone(worksheet),
-    ownerUserId: settings.ownerUserId,
-    actorUserId: settings.actorUserId,
-    runId: settings.visualizerRunId || run.id,
-    settings: settings.runtimeSettings,
+    ownerUserId: jobSettings.ownerUserId,
+    actorUserId: jobSettings.actorUserId,
+    runId: jobSettings.visualizerRunId || run.id,
+    settings,
+    deadlineAt: startedAt + VISUALIZER_ROW_DEADLINE_MS,
+    shouldCancel: () => isVisualizerCancelled(admin, run.id, run.session_id, run.workspace_id),
   };
 
   let creditsUsed = 0;
@@ -99,17 +160,25 @@ export async function executeVisualizerRow(
       if (descResult.row.status !== "description_ready") {
         failed = true;
       } else if (phase === "full") {
+        const withImages: VisualizerRow = {
+          ...descResult.row,
+          status: "generating",
+          generationStage: "images",
+          imagePlaceholders: (descResult.row.imagePlaceholders ?? []).map((item) => ({
+            ...item,
+            storagePath: null,
+          })),
+        };
+        // The paid description is saved before the first image starts.
+        await storeCheckpoint({
+          generatedDescription: withImages.generatedDescription,
+          imagePlaceholders: withImages.imagePlaceholders,
+          generationStage: "images",
+        }).catch(() => undefined);
         const imageResult = await processImagesRow({
           ...shared,
-          row: {
-            ...descResult.row,
-            status: "generating",
-            generationStage: "images",
-            imagePlaceholders: (descResult.row.imagePlaceholders ?? []).map(
-              (item) => ({ ...item, storagePath: null })
-            ),
-          },
-          shouldCancel: () => isJobCancelRequested(admin, run.id),
+          row: withImages,
+          onCheckpoint: storeCheckpoint,
         });
         creditsUsed += imageResult.creditsUsed;
         cost += imageResult.cost;
@@ -127,7 +196,7 @@ export async function executeVisualizerRow(
       const imageResult = await processImagesRow({
         ...shared,
         row: finalRow,
-        shouldCancel: () => isJobCancelRequested(admin, run.id),
+        onCheckpoint: storeCheckpoint,
       });
       creditsUsed += imageResult.creditsUsed;
       cost += imageResult.cost;

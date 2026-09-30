@@ -1,54 +1,39 @@
 import { createAdminClient } from "@/lib/supabase-admin";
-import { costToCredits } from "@/lib/ai-pricing";
-import {
-  generateProductDescription,
-  type DescriptionReferenceImage,
-} from "@/lib/visualizer/agents/description-agent";
+import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
+import { VISUALIZER_PLANNER_OPENAI_MODEL } from "@/lib/enrich/models";
+import { planVisualizerContent, VisualizerPlannerError } from "@/lib/visualizer/agents/description-agent";
+import { buildDescriptionCharge } from "@/lib/visualizer/billing";
 import { deductVisualizerCredits } from "@/lib/visualizer/credits";
+import { collectVisualizerImagePaths } from "@/lib/visualizer/html-embed";
 import { shouldChargeVisualizerCredits } from "@/lib/visualizer/pricing";
+import { loadVisualizerReferences } from "@/lib/visualizer/references";
 import { mappedProductFields } from "@/lib/visualizer/row-fields";
 import { visualizerLog, visualizerWarn } from "@/lib/visualizer/log";
-import { downloadVisualizerBytesAdmin } from "@/lib/visualizer/storage-admin";
-import type {
-  VisualizerProjectSettings,
-  VisualizerRow,
-  VisualizerWorksheetJson,
+import { removeVisualizerPathsAdmin } from "@/lib/visualizer/storage-admin";
+import {
+  resolveVisualizerImageModel,
+  type VisualizerProjectSettings,
+  type VisualizerRow,
+  type VisualizerWorksheetJson,
 } from "@/lib/visualizer/types";
-import { downloadImageBytes } from "@/lib/gallery/providers/serper-images";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
-async function loadStoredReferenceImage(
-  path: string | null | undefined,
-  label: string
-): Promise<DescriptionReferenceImage | null> {
-  if (!path) return null;
-  try {
-    const stored = await downloadVisualizerBytesAdmin(path);
-    if (!stored) return null;
-    return {
-      buffer: stored.buffer,
-      contentType: stored.contentType || "image/jpeg",
-    };
-  } catch (error) {
-    visualizerWarn("description-row", `Could not download ${label}`, {
-      path,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  }
-}
+/** Time the planner needs before it may start: image loading, two attempts, saving. */
+const PLANNING_MIN_REMAINING_MS = 300_000;
 
 export async function processDescriptionRow(params: {
   admin: Admin;
   workspaceId: string;
   sessionId: string;
-  worksheet: VisualizerWorksheetJson;
+  worksheet?: VisualizerWorksheetJson;
   row: VisualizerRow;
   settings: VisualizerProjectSettings;
   ownerUserId: string;
   actorUserId: string;
   runId: string;
+  deadlineAt?: number;
+  shouldCancel?: () => Promise<boolean>;
 }): Promise<{
   row: VisualizerRow;
   creditsUsed: number;
@@ -61,80 +46,79 @@ export async function processDescriptionRow(params: {
     ...row,
     errorMessage: undefined,
   };
+  const fail = (message: string, unbilledCost = 0) => {
+    if (unbilledCost > 0) {
+      visualizerWarn("description-row", "Row failed after provider usage; not charged to the customer", {
+        rowId: row.id,
+        dollarCost: unbilledCost,
+        error: message,
+      });
+    }
+    return {
+      row: {
+        ...next,
+        status: "failed" as const,
+        errorMessage: message.slice(0, 500),
+        generatedDescription: undefined,
+        imagePlaceholders: undefined,
+      },
+      creditsUsed: 0,
+      cost: unbilledCost,
+      error: message,
+    };
+  };
 
   const hasContext = Object.entries(product).some(
     ([key, value]) => key !== "productImage" && value.trim().length > 0
   );
-  if (!hasContext) {
-    next.status = "failed";
-    next.errorMessage = "Selected columns are empty for this product";
-    return { row: next, creditsUsed: 0, cost: 0, error: next.errorMessage };
+  if (!hasContext) return fail("Selected columns are empty for this product");
+
+  if (params.deadlineAt && params.deadlineAt - Date.now() < PLANNING_MIN_REMAINING_MS) {
+    return fail("Run time budget reached; retry this product");
   }
 
-  let productImage:
-    | { url: string; buffer?: Buffer; contentType?: string }
-    | undefined;
-  if (product.productImage && /^https?:\/\//i.test(product.productImage)) {
-    try {
-      const downloaded = await downloadImageBytes(product.productImage);
-      if (downloaded) {
-        productImage = {
-          url: product.productImage,
-          buffer: downloaded.buffer,
-          contentType: downloaded.contentType,
-        };
-      } else {
-        productImage = { url: product.productImage };
-      }
-    } catch (error) {
-      visualizerWarn("description-row", "Could not download product image", {
-        rowId: row.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      productImage = { url: product.productImage };
-    }
+  const references = await loadVisualizerReferences({ row, settings });
+  if (references.productCount === 0) {
+    return fail("Could not download the product image from the selected image column");
+  }
+  if (references.staleLogo || references.staleBrandGuide) {
+    visualizerWarn("description-row", "A brand asset could not be loaded; continuing without it", {
+      rowId: row.id,
+      logo: references.staleLogo,
+      brandGuide: references.staleBrandGuide,
+    });
   }
 
-  const images = settings.images;
-  const brandingEnabled = images.brandingEnabled === true;
-
-  const [logoImage, brandGuideImage] = await Promise.all([
-    brandingEnabled
-      ? loadStoredReferenceImage(images.logoPath, "brand logo")
-      : Promise.resolve(null),
-    brandingEnabled && images.brandGuideMode === "image"
-      ? loadStoredReferenceImage(images.brandGuidePath, "brand guide")
-      : Promise.resolve(null),
-  ]);
-
-  visualizerLog("description-row", `Generating description for row ${row.id}`, {
-    hasImage: !!productImage,
-    brandingEnabled,
-    hasLogoImage: !!logoImage,
-    hasBrandGuideImage: !!brandGuideImage,
-    tier: settings.description.tier,
+  const imageModel = resolveVisualizerImageModel(settings.images.tier);
+  visualizerLog("description-row", `Planning row ${row.id}`, {
+    tier: settings.images.tier,
+    imageModel,
+    references: references.counts,
+    layoutId: settings.description.layoutId,
+    imageCount: settings.description.imageCount,
   });
 
+  const plannerCosts: AiCallCost[] = [];
   try {
-    const result = await generateProductDescription({
-      product,
-      tier: settings.description.tier,
-      brand: settings.brand,
-      layoutId: settings.description.layoutId,
-      imageCount: settings.description.imageCount,
-      customInstructions: settings.description.instructions,
-      productImage,
-      images: settings.images,
-      logoImage,
-      brandGuideImage,
+    const plan = await planVisualizerContent({
+      row,
+      settings,
+      references: references.ordered,
+      shouldCancel: params.shouldCancel,
     });
+    plannerCosts.push(...plan.costs);
 
-    next.generatedDescription = result.description;
-    next.imagePlaceholders = result.imagePlaceholders;
-    next.status = "description_ready";
-    next.errorMessage = undefined;
+    const charge = buildDescriptionCharge({
+      plannerCosts,
+      plannerModel: VISUALIZER_PLANNER_OPENAI_MODEL,
+      imageModel,
+      tier: settings.images.tier,
+      layoutId: settings.description.layoutId,
+      requestedImages: plan.imagePlaceholders.length,
+      references: references.counts,
+    });
+    let creditsUsed = charge.totals.totalCredits;
 
-    const creditsUsed = costToCredits(result.cost.totalCost);
     if (shouldChargeVisualizerCredits(creditsUsed)) {
       const deduct = await deductVisualizerCredits({
         admin: params.admin,
@@ -148,40 +132,39 @@ export async function processDescriptionRow(params: {
         details: {
           runId: params.runId,
           idempotencyKey: `${params.runId}:visualizer_description:${row.id}`,
-          model: result.model,
           phase: "description",
-          cost: result.cost.totalCost,
-          placeholderCount: result.imagePlaceholders.length,
-          thinkingLevel: "high",
+          placeholderCount: plan.imagePlaceholders.length,
+          notes: plan.notes,
+          ...charge.details,
         },
       });
       if (!deduct.success) {
-        next.status = "failed";
-        next.errorMessage = deduct.error || "Credit deduction failed";
-        next.generatedDescription = undefined;
-        next.imagePlaceholders = undefined;
-        return {
-          row: next,
-          creditsUsed: 0,
-          cost: 0,
-          error: next.errorMessage,
-        };
+        return fail(deduct.error || "Credit deduction failed", charge.totals.totalCost);
       }
+      if (deduct.duplicate) creditsUsed = 0;
     }
 
-    return {
-      row: next,
-      creditsUsed,
-      cost: result.cost.totalCost,
-    };
+    // A new description replaces the page, so images from an earlier run are no longer used.
+    const oldPaths = collectVisualizerImagePaths(row.imagePlaceholders);
+    if (oldPaths.length > 0) {
+      await removeVisualizerPathsAdmin(oldPaths).catch((error) => {
+        visualizerWarn("description-row", "Old images could not be removed", {
+          rowId: row.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
+    next.generatedDescription = plan.description;
+    next.imagePlaceholders = plan.imagePlaceholders;
+    next.status = "description_ready";
+    next.errorMessage = undefined;
+
+    return { row: next, creditsUsed, cost: charge.totals.totalCost };
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Description generation failed";
+    if (error instanceof VisualizerPlannerError) plannerCosts.push(...error.costs);
+    const message = error instanceof Error ? error.message : "Description generation failed";
     visualizerWarn("description-row", `Row ${row.id} failed`, { message });
-    next.status = "failed";
-    next.errorMessage = message.slice(0, 500);
-    next.generatedDescription = undefined;
-    next.imagePlaceholders = undefined;
-    return { row: next, creditsUsed: 0, cost: 0, error: message };
+    return fail(message, sumCosts(plannerCosts).totalCost);
   }
 }

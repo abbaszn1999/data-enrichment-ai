@@ -1,4 +1,5 @@
 import { parseVisualizerProjectSettings } from "@/lib/visualizer/settings-schema";
+import { VISUALIZER_PLANNER_OPENAI_MODEL, type EnrichOpenAiModelId } from "@/lib/enrich/models";
 import {
   DEFAULT_VISUALIZER_LAYOUT_ID,
   type VisualizerLayoutId,
@@ -94,6 +95,12 @@ export interface VisualizerImagePlaceholder {
   /** Spec this slot proves (waterproof, UV protection, …). Optional on
    *  rows saved before skill 01 required it. */
   specClaim?: string;
+  /** Complete Nano Banana prompt written by the planner. Older rows only have visualBrief. */
+  prompt?: string;
+  /** Camera perspective the planner chose for this slot. */
+  perspective?: string;
+  /** True when the brand logo is sent with this slot's image request. */
+  useLogo?: boolean;
   storagePath?: string | null;
 }
 
@@ -171,7 +178,7 @@ export const DEFAULT_VISUALIZER_DESCRIPTION: VisualizerDescriptionSettings = {
 };
 
 export const DEFAULT_VISUALIZER_IMAGES: VisualizerImagesSettings = {
-  tier: "premium",
+  tier: "standard",
   aspectRatio: "1:1",
   resolution: "1K",
   outputFormat: "image/jpeg",
@@ -288,6 +295,9 @@ export function normalizeVisualizerWorksheet(
             visualBrief: String(item.visualBrief || ""),
             alt: String(item.alt || ""),
             specClaim: item.specClaim ? String(item.specClaim) : undefined,
+            prompt: item.prompt ? String(item.prompt) : undefined,
+            perspective: item.perspective ? String(item.perspective) : undefined,
+            useLogo: item.useLogo === true ? true : undefined,
             storagePath: item.storagePath ? String(item.storagePath) : null,
           }))
         : undefined,
@@ -322,11 +332,16 @@ export function createEmptyVisualizerWorksheet(
   };
 }
 
-/** Standard/Premium → OpenAI description models (same as Gallery Scraping). */
+/**
+ * The planner (description + per-image prompts) is one fixed agent for both
+ * quality tiers: GPT-6.1 Sol at medium reasoning. The tier only picks the
+ * image model.
+ */
 export function resolveVisualizerDescriptionModel(
-  tier: VisualizerTier | undefined
-): "gpt-5.6-terra" | "gpt-5.6-sol" {
-  return tier === "premium" ? "gpt-5.6-sol" : "gpt-5.6-terra";
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept so callers stay tier-aware
+  _tier?: VisualizerTier | undefined
+): EnrichOpenAiModelId {
+  return VISUALIZER_PLANNER_OPENAI_MODEL;
 }
 
 /** Standard/Premium → Gemini image models (same as Gallery AI). */
