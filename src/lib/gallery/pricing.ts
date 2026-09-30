@@ -1,19 +1,17 @@
 import {
   costToCredits,
-  calculateGroundedCallCost,
+  calculateOpenAiWebSearchCost,
   getImageOutputCost,
   getModelPricing,
 } from "@/lib/ai-pricing";
-import { resolveScrapingModel } from "@/lib/gallery/agents/scraping-shared";
+import { resolveGalleryPlannerModel } from "@/lib/gallery/agents/planner-model";
+import { GALLERY_SCRAPING_OPENAI_MODEL } from "@/lib/enrich/models";
 import type {
   GalleryAiSettings,
   GalleryProvider,
   GallerySearchDepth,
   GalleryScrapingSettings,
 } from "@/lib/gallery/types";
-
-const SCRAPE_ESTIMATE_INPUT_TOKENS = 12_000;
-const SCRAPE_ESTIMATE_OUTPUT_TOKENS = 800;
 
 export function shouldChargeGalleryCredits(credits: number): boolean {
   return Number.isFinite(credits) && credits > 0;
@@ -22,88 +20,87 @@ export function shouldChargeGalleryCredits(credits: number): boolean {
 export type GalleryCreditEstimateRange = {
   min: number;
   max: number;
-  expectedQueriesPerStage: number;
-  highQueriesPerStage: number;
+  /** Research rounds assumed per row for the expected and the high case. */
+  expectedRounds: number;
+  highRounds: number;
 };
+
+/**
+ * One gallery-research row is a multi-round GPT-6.1 Sol loop. Each round
+ * re-reads the growing conversation (mostly served from the prompt cache)
+ * and adds fresh tool output. Modeled per round, then priced with the same
+ * per-request calculator the real charge uses, so long-context tiers and
+ * cached rates match.
+ */
+export type GalleryResearchProfile = { rounds: number; searches: number };
+
+export const GALLERY_ESTIMATE_PROFILES: Record<
+  GallerySearchDepth,
+  { expected: GalleryResearchProfile; high: GalleryResearchProfile }
+> = {
+  low: { expected: { rounds: 5, searches: 2 }, high: { rounds: 10, searches: 3 } },
+  medium: { expected: { rounds: 8, searches: 3 }, high: { rounds: 16, searches: 5 } },
+  high: { expected: { rounds: 12, searches: 4 }, high: { rounds: 22, searches: 8 } },
+};
+
+/** Skill + brief + attached input images on the first round. */
+const ESTIMATE_BASE_INPUT_TOKENS = 9_000;
+/** Fresh tool output added to the conversation per round. */
+const ESTIMATE_STEP_INPUT_TOKENS = 4_500;
+/** Share of the previous context served from the prompt cache. */
+const ESTIMATE_CACHE_SHARE = 0.9;
+const ESTIMATE_ROUND_OUTPUT_TOKENS = 900;
+const ESTIMATE_FINAL_OUTPUT_TOKENS = 1_500;
+
+export function estimateGalleryResearchRowCost(profile: GalleryResearchProfile): number {
+  let total = 0;
+  for (let round = 1; round <= profile.rounds; round += 1) {
+    const context = ESTIMATE_BASE_INPUT_TOKENS + (round - 1) * ESTIMATE_STEP_INPUT_TOKENS;
+    const previous = round === 1 ? 0 : context - ESTIMATE_STEP_INPUT_TOKENS;
+    const cached = Math.round(previous * ESTIMATE_CACHE_SHARE);
+    const output = round === profile.rounds ? ESTIMATE_FINAL_OUTPUT_TOKENS : ESTIMATE_ROUND_OUTPUT_TOKENS;
+    total += calculateOpenAiWebSearchCost(
+      GALLERY_SCRAPING_OPENAI_MODEL,
+      {
+        input_tokens: context,
+        input_tokens_details: { cached_tokens: cached },
+        output_tokens: output,
+      },
+      round <= profile.searches ? 1 : 0
+    ).totalCost;
+  }
+  return total;
+}
 
 export function estimateScrapingCreditRange(options: {
   rowCount: number;
   searchDepth?: GallerySearchDepth;
+  /** @deprecated Scraping is one stage per row; kept so older callers compile. */
   rowsWithOriginal?: number;
-  observedMedianQueries?: number;
-  observedP90Queries?: number;
+  /** @deprecated Scraping has no tiers. */
   tier?: GalleryScrapingSettings["tier"];
 }): GalleryCreditEstimateRange {
   const rowCount = Math.max(0, options.rowCount);
+  const profile = GALLERY_ESTIMATE_PROFILES[options.searchDepth ?? "high"] ?? GALLERY_ESTIMATE_PROFILES.high;
   if (rowCount === 0) {
-    return { min: 0, max: 0, expectedQueriesPerStage: 0, highQueriesPerStage: 0 };
+    return { min: 0, max: 0, expectedRounds: profile.expected.rounds, highRounds: profile.high.rounds };
   }
-  // Rows without an original image use separate Main and Gallery search agents.
-  // Rows with a trusted original need only the Gallery search agent.
-  const rowsWithOriginal = Math.min(
-    rowCount,
-    Math.max(0, options.rowsWithOriginal ?? 0)
-  );
-  const stages = rowCount * 2 - rowsWithOriginal;
-  const configured = 1;
-  const expectedQueriesPerStage = Math.max(
-    1,
-    Math.round(options.observedMedianQueries || configured)
-  );
-  const highQueriesPerStage = Math.max(
-    expectedQueriesPerStage,
-    Math.ceil(options.observedP90Queries || configured * 2)
-  );
-  const model = resolveScrapingModel(options.tier);
-  const usage = (factor: number) => ({
-    promptTokenCount: Math.round(SCRAPE_ESTIMATE_INPUT_TOKENS * stages * factor),
-    candidatesTokenCount: Math.round(
-      SCRAPE_ESTIMATE_OUTPUT_TOKENS * stages * factor
-    ),
-    totalTokenCount: Math.round(
-      (SCRAPE_ESTIMATE_INPUT_TOKENS + SCRAPE_ESTIMATE_OUTPUT_TOKENS) *
-        stages *
-        factor
-    ),
-  });
-  const minimum = costToCredits(
-    calculateGroundedCallCost(
-      model,
-      usage(0.75),
-      expectedQueriesPerStage * stages
-    ).totalCost
-  );
-  const maximum = costToCredits(
-    calculateGroundedCallCost(
-      model,
-      usage(1.5),
-      highQueriesPerStage * stages
-    ).totalCost
-  );
+  const minimum = costToCredits(estimateGalleryResearchRowCost(profile.expected) * rowCount);
+  const maximum = costToCredits(estimateGalleryResearchRowCost(profile.high) * rowCount);
   return {
     min: Math.round(minimum * 1000) / 1000,
     max: Math.round(maximum * 1000) / 1000,
-    expectedQueriesPerStage,
-    highQueriesPerStage,
+    expectedRounds: profile.expected.rounds,
+    highRounds: profile.high.rounds,
   };
 }
 
-/**
- * Conservative preflight for Scraping path:
- * Separate Main and Gallery requests when Main must be sourced.
- */
+/** Preflight for the Scraping path: the high-case estimate. */
 export function estimateScrapingCredits(
   rowCount: number,
-  searchDepth: GallerySearchDepth = "medium",
-  rowsWithOriginal = 0,
-  tier: GalleryScrapingSettings["tier"] = "standard"
+  searchDepth: GallerySearchDepth = "high"
 ): number {
-  return estimateScrapingCreditRange({
-    rowCount,
-    searchDepth,
-    rowsWithOriginal,
-    tier,
-  }).max;
+  return estimateScrapingCreditRange({ rowCount, searchDepth }).max;
 }
 
 const PLANNER_ESTIMATE_INPUT_TOKENS = 4_500;
@@ -115,17 +112,12 @@ export function estimatePlannerCredits(options: {
 }): number {
   const rowCount = Math.max(0, options.rowCount);
   if (rowCount === 0) return 0;
-  const model = resolveScrapingModel(options.tier);
+  const model = resolveGalleryPlannerModel(options.tier);
   const pricing = getModelPricing(model);
   const perRow =
     (PLANNER_ESTIMATE_INPUT_TOKENS / 1_000_000) * pricing.inputPerMillion +
     (PLANNER_ESTIMATE_OUTPUT_TOKENS / 1_000_000) * pricing.outputPerMillion;
   return Math.round(costToCredits(perRow * rowCount * 1.4) * 1000) / 1000;
-}
-
-/** @deprecated Use estimateScrapingCredits */
-export function estimateGoogleCredits(rowCount: number): number {
-  return estimateScrapingCredits(rowCount, "medium");
 }
 
 export function estimateGalleryCredits(
@@ -136,7 +128,6 @@ export function estimateGalleryCredits(
     generateMainPerRow?: boolean;
     generateMainCount?: number;
     searchDepth?: GallerySearchDepth;
-    rowsWithOriginal?: number;
     tier?: GalleryScrapingSettings["tier"];
   }
 ): number {
@@ -176,10 +167,5 @@ export function estimateGalleryCredits(
     return Math.round((imageCredits + plannerCredits) * 1000) / 1000;
   }
 
-  return estimateScrapingCredits(
-    rowCount,
-    options?.searchDepth || "medium",
-    options?.rowsWithOriginal ?? 0,
-    options?.tier || "standard"
-  );
+  return estimateScrapingCredits(rowCount, options?.searchDepth || "high");
 }

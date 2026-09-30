@@ -17,11 +17,11 @@ import {
   type GalleryRowOutcome,
 } from "./gallery-row";
 import type { GalleryJobSettings } from "./gallery-settings";
-import { runJobWithFailureGuard } from "./guard";
+import { isGalleryCancelled } from "./gallery-cancel";
+import { runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
   finishJobRun,
-  isJobCancelRequested,
   loadJobRun,
   markJobRunning,
   touchJobHeartbeat,
@@ -79,9 +79,24 @@ async function runGallerySessionInner(
   let stopObserved = false;
   const gate = createCheckpointGate(WORKSHEET_CHECKPOINT);
 
-  const persist = async () => {
-    await persistGalleryWorksheet(admin, workspaceId, sessionId, worksheet!);
+  // Rows are upserted to the row store one by one as they finish, so a
+  // checkpoint only refreshes the worksheet blob. The full row-store sync
+  // (thousands of rows) runs once, when the run ends.
+  const persist = async (options?: { full?: boolean }) => {
+    await persistGalleryWorksheet(admin, workspaceId, sessionId, worksheet!, {
+      skipRowStoreSync: galleryRowStoreEnabled() && !options?.full,
+    });
     gate.markFlushed();
+  };
+  const rowIndexById = new Map(worksheet.rows.map((row, index) => [row.id, index]));
+  // The map is a fast path only: a conflict merge can reorder or drop rows.
+  const findRowIndex = (id: string): number => {
+    const cached = rowIndexById.get(id);
+    if (cached !== undefined && worksheet!.rows[cached]?.id === id) return cached;
+    const found = worksheet!.rows.findIndex((row) => row.id === id);
+    if (found >= 0) rowIndexById.set(id, found);
+    else rowIndexById.delete(id);
+    return found;
   };
 
   // In-memory mutations are serialized. Transient "generating" status stays
@@ -96,7 +111,8 @@ async function runGallerySessionInner(
     const operation = writeQueue.then(async () => {
       mutate();
       if (options?.rowId && galleryRowStoreEnabled()) {
-        const row = worksheet!.rows.find((candidate) => candidate.id === options.rowId);
+        const rowAt = findRowIndex(options.rowId);
+        const row = rowAt < 0 ? undefined : worksheet!.rows[rowAt];
         if (row) {
           await upsertWorksheetRow(
             admin,
@@ -118,7 +134,8 @@ async function runGallerySessionInner(
   };
 
   const remainingIds = targetIds.filter((id) => {
-    const row = worksheet!.rows.find((candidate) => candidate.id === id);
+    const at = findRowIndex(id);
+    const row = at < 0 ? undefined : worksheet!.rows[at];
     return row && row.status !== "ready" && row.status !== "failed";
   });
 
@@ -140,7 +157,7 @@ async function runGallerySessionInner(
       const rowId = remainingIds[index]!;
 
       await commitWorksheet(() => {
-        const rowIndex = worksheet!.rows.findIndex((row) => row.id === rowId);
+        const rowIndex = findRowIndex(rowId);
         if (rowIndex < 0) return;
         worksheet!.rows[rowIndex] = applyGenerationRowPatch({
           storageRow: worksheet!.rows[rowIndex],
@@ -157,7 +174,7 @@ async function runGallerySessionInner(
       const outcome: GalleryRowOutcome = await processRow(rowId);
 
       await commitWorksheet(() => {
-        const rowIndex = worksheet!.rows.findIndex((row) => row.id === outcome.rowId);
+        const rowIndex = findRowIndex(outcome.rowId);
         if (rowIndex < 0) return;
         if (outcome.noCredits) {
           pausedNoCredits = true;
@@ -213,7 +230,13 @@ async function runGallerySessionInner(
 
   const workerCount = Math.min(JOB_BATCH_SIZE, remainingIds.length || 1);
   if (remainingIds.length > 0) {
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    // A research row runs for minutes; keep heartbeat_at fresh so the sweep
+    // never mistakes a busy run for a dead one and starts a second worker.
+    await withHeartbeat(
+      run.id,
+      () => Promise.all(Array.from({ length: workerCount }, () => worker())),
+      30_000
+    );
   }
   await writeQueue.catch(() => undefined);
 
@@ -238,7 +261,7 @@ async function runGallerySessionInner(
     row.generationStage = undefined;
     row.generationTarget = undefined;
   }
-  await persist();
+  await persist({ full: true });
 
   const totals = counts(worksheet);
   const finalStatus =
@@ -330,28 +353,12 @@ function markRunCancelled(worksheet: GalleryWorksheetJson, targetIds: string[]) 
   }
 }
 
-async function isGalleryCancelled(
-  admin: Admin,
-  runId: string,
-  sessionId: string,
-  workspaceId: string
-): Promise<boolean> {
-  if (await isJobCancelRequested(admin, runId)) return true;
-  const { data, error } = await admin
-    .from("gallery_sessions")
-    .select("cancel_requested")
-    .eq("id", sessionId)
-    .eq("workspace_id", workspaceId)
-    .single();
-  if (error) throw error;
-  return Boolean(data?.cancel_requested);
-}
-
 async function persistGalleryWorksheet(
   admin: Admin,
   workspaceId: string,
   sessionId: string,
-  worksheet: GalleryWorksheetJson
+  worksheet: GalleryWorksheetJson,
+  options?: { skipRowStoreSync?: boolean }
 ): Promise<void> {
   let attemptRevision = Number(worksheet.revision ?? 0);
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -366,7 +373,7 @@ async function persistGalleryWorksheet(
     if (revisionError) throw revisionError;
     if (nextRevision !== null && nextRevision !== undefined) {
       worksheet.revision = Number(nextRevision);
-      await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet, Number(nextRevision));
+      await saveGalleryWorksheetAdmin(workspaceId, sessionId, worksheet, Number(nextRevision), options);
       return;
     }
     const stored = await loadGalleryWorksheetMatchingRevisionAdmin(

@@ -2,7 +2,7 @@ import {
   calculateOpenAiWebSearchCost,
   type AiCallCost,
 } from "@/lib/ai-pricing";
-import { resolveScrapingModel } from "@/lib/gallery/agents/scraping-shared";
+import { resolveGalleryPlannerModel } from "@/lib/gallery/agents/planner-model";
 import {
   buildPlannerJsonClosing,
   buildPlannerProductImageIntro,
@@ -200,7 +200,7 @@ export async function planGalleryImages(params: {
   }
 
   const apiKey = requireOpenAiApiKey();
-  const model = resolveScrapingModel(params.worksheet.settings.ai.tier);
+  const model = resolveGalleryPlannerModel(params.worksheet.settings.ai.tier);
   const skill = await loadGallerySkill("planner");
   const prompt = buildPlannerUserPrompt({
     worksheet: params.worksheet,

@@ -330,20 +330,11 @@ async function generateSynchronously(request: NextRequest) {
     );
   }
 
-  const rowsWithOriginal =
-    provider === "scraping" && worksheet.originalImageColumn
-      ? targetIds.filter((id) => {
-          const value = rowsById.get(id)?.originalData[worksheet.originalImageColumn!];
-          return typeof value === "string" && value.trim().length > 0;
-        }).length
-      : 0;
   const estimateRange =
     provider === "scraping"
       ? estimateScrapingCreditRange({
           rowCount: targetIds.length,
           searchDepth: worksheet.settings.scraping.searchDepth,
-          rowsWithOriginal,
-          tier: worksheet.settings.scraping.tier,
         })
       : null;
   const estimatedCredits =
@@ -351,8 +342,7 @@ async function generateSynchronously(request: NextRequest) {
     estimateGalleryCredits(provider, targetIds.length, worksheet.settings.ai, {
       generateMainCount: 0,
       searchDepth: worksheet.settings.scraping.searchDepth,
-      rowsWithOriginal,
-      tier: worksheet.settings.scraping.tier,
+      tier: worksheet.settings.ai.tier,
     });
 
   if (body.estimateOnly) {

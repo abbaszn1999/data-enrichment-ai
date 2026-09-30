@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireGalleryAuth } from "@/lib/gallery/auth";
 import { parseGalleryProjectSettings } from "@/lib/gallery/settings-schema";
 import {
+  loadGalleryWorksheetAdmin,
   loadGalleryWorksheetMatchingRevisionAdmin,
   saveGalleryWorksheetAdmin,
 } from "@/lib/gallery/storage-admin";
+import { galleryRowStoreEnabled } from "@/lib/catalog/flag";
+import type { createAdminClient } from "@/lib/supabase-admin";
 import { withGalleryWorksheetLock } from "@/lib/gallery/worksheet-lock";
 import {
   galleryReferencePathsBelongToSession,
@@ -19,6 +22,31 @@ import {
 
 type Ctx = { params: Promise<{ sessionId: string }> };
 
+/**
+ * Column names of a session without downloading the worksheet: every row
+ * carries all columns, so one row of the row store is enough. Falls back to
+ * the stored worksheet only when the row store is off or empty.
+ */
+async function loadSessionColumns(
+  admin: ReturnType<typeof createAdminClient>,
+  workspaceId: string,
+  sessionId: string
+): Promise<string[] | null> {
+  if (galleryRowStoreEnabled()) {
+    const { data } = await admin
+      .from("gallery_session_rows")
+      .select("data")
+      .eq("session_id", sessionId)
+      .order("row_index", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    const original = (data?.data as { originalData?: Record<string, unknown> } | null)?.originalData;
+    if (original && typeof original === "object") return Object.keys(original);
+  }
+  const worksheet = await loadGalleryWorksheetAdmin(workspaceId, sessionId);
+  return worksheet ? worksheet.columns : null;
+}
+
 /** PUT — atomically claim and explicitly replace project settings + worksheet. */
 export async function PUT(request: NextRequest, context: Ctx) {
   const { sessionId } = await context.params;
@@ -32,12 +60,13 @@ export async function PUT(request: NextRequest, context: Ctx) {
   const workspaceId = String(body?.workspaceId || "");
   const expectedRevision = Number(body?.expectedRevision);
   const expectedWorksheetRevision = Number(body?.expectedWorksheetRevision);
+  const settingsOnly = !body?.worksheet;
   if (
     !workspaceId ||
     !Number.isInteger(expectedRevision) ||
     expectedRevision < 0 ||
-    !Number.isInteger(expectedWorksheetRevision) ||
-    expectedWorksheetRevision < 0
+    (!settingsOnly &&
+      (!Number.isInteger(expectedWorksheetRevision) || expectedWorksheetRevision < 0))
   ) {
     return NextResponse.json(
       { error: "workspaceId and valid revisions are required" },
@@ -69,6 +98,74 @@ export async function PUT(request: NextRequest, context: Ctx) {
       { status: 400, headers: auth.headers }
     );
   }
+  if (settingsOnly) {
+    // Autosave path: only the project settings change (gallery_sessions.settings).
+    // The worksheet is never re-uploaded, so it is safe while a run is active
+    // (the run uses the settings frozen when it started).
+    const columns = await loadSessionColumns(auth.admin, workspaceId, sessionId);
+    if (!columns) {
+      return NextResponse.json(
+        { error: "Worksheet not found" },
+        { status: 404, headers: auth.headers }
+      );
+    }
+    if (
+      (settings.originalImageColumn !== null &&
+        !columns.includes(settings.originalImageColumn)) ||
+      settings.selectedColumns.some((column) => !columns.includes(column)) ||
+      new Set(settings.selectedColumns).size !== settings.selectedColumns.length
+    ) {
+      return NextResponse.json(
+        { error: "One or more selected worksheet columns are invalid" },
+        { status: 400, headers: auth.headers }
+      );
+    }
+    const { data: current, error: currentError } = await auth.admin
+      .from("gallery_sessions")
+      .select("*")
+      .eq("id", sessionId)
+      .eq("workspace_id", workspaceId)
+      .single();
+    if (currentError || !current) {
+      return NextResponse.json(
+        { error: "Gallery session not found" },
+        { status: 404, headers: auth.headers }
+      );
+    }
+    const { data: nextRevision, error: saveError } = await auth.admin.rpc(
+      "save_gallery_session_settings",
+      {
+        p_session_id: sessionId,
+        p_workspace_id: workspaceId,
+        p_expected_revision: expectedRevision,
+        p_settings: settings,
+      }
+    );
+    if (saveError) {
+      return NextResponse.json(
+        { error: saveError.message },
+        { status: 500, headers: auth.headers }
+      );
+    }
+    if (nextRevision === null || nextRevision === undefined) {
+      return NextResponse.json(
+        { error: "Project changed in another tab. Reload and try again." },
+        { status: 409, headers: auth.headers }
+      );
+    }
+    return NextResponse.json(
+      {
+        session: {
+          ...(current as GallerySession),
+          settings,
+          settings_revision: Number(nextRevision),
+        },
+        settings,
+      },
+      { headers: auth.headers }
+    );
+  }
+
   const suppliedWorksheet = body?.worksheet;
   if (
     !suppliedWorksheet ||

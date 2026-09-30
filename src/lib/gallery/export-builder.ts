@@ -1,4 +1,5 @@
 import type { GalleryWorksheetJson } from "@/lib/gallery/types";
+import { imageRefsMatch } from "@/lib/gallery/image-refs";
 import { mapLimit } from "@/lib/async/map-limit";
 import type { TableExport } from "@/lib/export/table-file";
 
@@ -9,7 +10,22 @@ export function buildGalleryExportHeaders(worksheet: GalleryWorksheetJson): stri
   const leading: string[] = [];
   if (!hasOriginal) leading.push("Main Image");
   leading.push("Gallery Images");
+  // The page each gallery image came from, in the same order as Gallery Images.
+  if (!originalCols.includes(GALLERY_SOURCES_HEADER)) leading.push(GALLERY_SOURCES_HEADER);
   return [...leading, ...originalCols];
+}
+
+export const GALLERY_SOURCES_HEADER = "Gallery Sources";
+
+/** One page URL per gallery image (same order and count as Gallery Images); blank when unknown. */
+export function galleryImageSources(row: GalleryWorksheetJson["rows"][number]): string[] {
+  const metas = row.sourceMeta?.images ?? [];
+  return (row.galleryImagePaths ?? []).map((path) => {
+    const meta = metas.find(
+      (item) => item.role !== "main" && imageRefsMatch(item.ref || item.url || "", path)
+    );
+    return meta?.pageUrl ?? meta?.sourceUrl ?? "";
+  });
 }
 
 function rowMainPaths(row: GalleryWorksheetJson["rows"][number]): string[] {
@@ -49,9 +65,18 @@ export async function buildGalleryExportTable(
     headers,
     rows: rows.map((row) => {
       const mainPaths = rowMainPaths(row);
+      const sources = galleryImageSources(row);
       const values: string[] = [];
       if (!hasOriginal) values.push(urls(mainPaths));
       values.push(urls(row.galleryImagePaths));
+      if (!worksheet.columns.includes(GALLERY_SOURCES_HEADER)) {
+        // Keep one line per exported image so the two cells line up.
+        const lines = row.galleryImagePaths
+          .map((path, index) => ({ path, source: sources[index] ?? "" }))
+          .filter((item) => signed.get(item.path))
+          .map((item) => item.source);
+        values.push(lines.some(Boolean) ? lines.join(",\n") : "");
+      }
       for (const col of worksheet.columns) {
         const raw = String(row.originalData[col] ?? "");
         values.push(

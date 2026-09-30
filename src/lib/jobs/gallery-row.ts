@@ -1,15 +1,19 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { galleryRowStoreEnabled } from "@/lib/catalog/flag";
 import { processAiRow } from "@/lib/gallery/agent/process-ai-row";
 import { processScrapingRow } from "@/lib/gallery/agent/process-row";
 import { galleryLog, galleryWarn } from "@/lib/gallery/log";
 import { loadGalleryWorksheetAdmin } from "@/lib/gallery/storage-admin";
-import type {
-  GalleryProjectSettings,
+import {
+  applyGalleryProjectSettings,
+  createEmptyWorksheet,
+  type GalleryProjectSettings,
   GalleryRow,
   GalleryRunPhase,
   GalleryWorksheetJson,
 } from "@/lib/gallery/types";
 import { isInsufficientCredits } from "./credits";
+import { isGalleryCancelled } from "./gallery-cancel";
 import {
   hydrateGalleryWorksheetForJob,
   parseGalleryJobRuntimeSettings,
@@ -84,6 +88,47 @@ export async function resolveGalleryRowWorksheet(params: {
   return hydrated;
 }
 
+/**
+ * A Scraping row task needs only its own row plus the run's frozen settings.
+ * Loading the whole worksheet (blob + every row of a 5,000-row sheet) for each
+ * child task would multiply the reads by the row count, so the row comes
+ * straight from the row store. Returns null when that is not possible (row
+ * store off, row missing) and the caller falls back to the full load.
+ */
+export async function loadGalleryRowContext(params: {
+  admin: ReturnType<typeof createAdminClient>;
+  workspaceId: string;
+  sessionId: string;
+  rowId: string;
+  jobSettings: GalleryJobSettings;
+}): Promise<{ worksheet: GalleryWorksheetJson; row: GalleryRow } | null> {
+  if (params.jobSettings.provider === "ai" || !galleryRowStoreEnabled()) return null;
+  const runtime =
+    parseGalleryJobRuntimeSettings(params.jobSettings.runtimeSettings) ??
+    (await loadGallerySessionSettings(params.admin, params.workspaceId, params.sessionId));
+  if (!runtime) return null;
+  const { data, error } = await params.admin
+    .from("gallery_session_rows")
+    .select("row_id, row_index, status, data")
+    .eq("session_id", params.sessionId)
+    .eq("row_id", params.rowId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const payload = (data.data ?? {}) as Partial<GalleryRow>;
+  if (!payload.originalData || typeof payload.originalData !== "object") return null;
+  const row: GalleryRow = {
+    ...(payload as GalleryRow),
+    id: data.row_id as string,
+    rowIndex: Number(data.row_index ?? 0),
+    status: data.status as GalleryRow["status"],
+    galleryImagePaths: Array.isArray(payload.galleryImagePaths) ? payload.galleryImagePaths : [],
+    mainImagePath: payload.mainImagePath ?? null,
+  };
+  const base = createEmptyWorksheet(params.sessionId, Object.keys(row.originalData), []);
+  const worksheet = applyGalleryProjectSettings({ ...base, rows: [row] }, runtime);
+  return { worksheet, row };
+}
+
 export async function executeGalleryRow(
   input: GalleryRowTaskInput
 ): Promise<GalleryRowOutcome> {
@@ -99,10 +144,16 @@ export async function executeGalleryRow(
     };
   }
   const settings = run.settings as GalleryJobSettings;
-  const loaded = await loadGalleryWorksheetAdmin(
-    run.workspace_id,
-    run.session_id
-  );
+  const single = await loadGalleryRowContext({
+    admin,
+    workspaceId: run.workspace_id,
+    sessionId: run.session_id,
+    rowId: input.rowId,
+    jobSettings: settings,
+  });
+  const loaded =
+    single?.worksheet ??
+    (await loadGalleryWorksheetAdmin(run.workspace_id, run.session_id));
   if (!loaded) {
     return {
       rowId: input.rowId,
@@ -112,13 +163,15 @@ export async function executeGalleryRow(
       cost: 0,
     };
   }
-  const worksheet = await resolveGalleryRowWorksheet({
-    admin,
-    workspaceId: run.workspace_id,
-    sessionId: run.session_id,
-    worksheet: loaded,
-    jobSettings: settings,
-  });
+  const worksheet = single
+    ? single.worksheet
+    : await resolveGalleryRowWorksheet({
+        admin,
+        workspaceId: run.workspace_id,
+        sessionId: run.session_id,
+        worksheet: loaded,
+        jobSettings: settings,
+      });
   const row = worksheet.rows.find((candidate) => candidate.id === input.rowId);
   if (!row) {
     return {
@@ -142,6 +195,9 @@ export async function executeGalleryRow(
     runId: settings.galleryRunId || run.id,
     runPhase,
     onCheckpoint: async () => undefined,
+    // Checked between research rounds: Stop ends the row within one round.
+    shouldCancel: () =>
+      isGalleryCancelled(admin, run.id, run.session_id, run.workspace_id),
   };
 
   let result: Awaited<ReturnType<typeof processScrapingRow>>;

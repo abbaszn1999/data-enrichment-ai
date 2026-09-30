@@ -3,30 +3,47 @@
 import { useState } from "react";
 import { ImageOff } from "lucide-react";
 
-/** Same-origin, inline and blob images need no proxy. */
+/** Storage links are already ours and signed; everything else goes through the cached proxy. */
 function needsProxy(url: string): boolean {
-  return /^https?:\/\//i.test(url);
+  return /^https?:\/\//i.test(url) && !/\/storage\/v1\/object\//i.test(url);
 }
 
 export function proxiedImageSrc(url: string): string {
   return needsProxy(url) ? `/api/image-proxy?url=${encodeURIComponent(url)}` : url;
 }
 
+/** Ordered sources to try: proxy, original link, then the fallback link the same way. */
+function buildSources(url: string, fallbackUrl?: string | null): string[] {
+  const out: string[] = [];
+  const add = (value: string) => {
+    if (value && !out.includes(value)) out.push(value);
+  };
+  for (const candidate of [url, fallbackUrl ?? ""]) {
+    if (!candidate) continue;
+    if (needsProxy(candidate)) add(proxiedImageSrc(candidate));
+    add(candidate);
+  }
+  return out;
+}
+
 /**
  * A sheet image that keeps working when the store's link goes stale or blocks
  * hot-linking: it loads through our cached proxy first (a week in the CDN, so
- * re-opening a sheet is fast), then tries the original link, and if both fail
- * shows an "Image unavailable" tile instead of a broken image. The stored link
- * is never changed, so exports still carry the original URL.
+ * re-opening a sheet is fast), then tries the original link, then the fallback
+ * link, and if all fail shows an "Image unavailable" tile instead of a broken
+ * image. The stored link is never changed, so exports still carry the original URL.
  */
 export function SheetImage({
   url,
+  fallbackUrl,
   alt,
   className,
   tileClassName,
   linkOnFail = false,
 }: {
   url: string;
+  /** Another link for the same image, tried after the main one fails. */
+  fallbackUrl?: string | null;
   alt: string;
   /** Classes for the loaded image. */
   className?: string;
@@ -35,15 +52,16 @@ export function SheetImage({
   /** Show the original link under the tile (for large previews). */
   linkOnFail?: boolean;
 }) {
-  // 0 = proxy, 1 = original link, 2 = failed.
-  const [stage, setStage] = useState<0 | 1 | 2>(needsProxy(url) ? 0 : 1);
-  const [forUrl, setForUrl] = useState(url);
-  if (forUrl !== url) {
-    setForUrl(url);
-    setStage(needsProxy(url) ? 0 : 1);
+  const key = `${url}|${fallbackUrl ?? ""}`;
+  const [attempt, setAttempt] = useState(0);
+  const [forKey, setForKey] = useState(key);
+  if (forKey !== key) {
+    setForKey(key);
+    setAttempt(0);
   }
+  const sources = buildSources(url, fallbackUrl);
 
-  if (stage === 2) {
+  if (attempt >= sources.length) {
     return (
       <span
         className={
@@ -72,13 +90,13 @@ export function SheetImage({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={stage === 0 ? proxiedImageSrc(url) : url}
+      src={sources[attempt]}
       alt={alt}
       loading="lazy"
       decoding="async"
       referrerPolicy="no-referrer"
       className={className}
-      onError={() => setStage((current) => (current === 0 ? 1 : 2))}
+      onError={() => setAttempt((current) => current + 1)}
     />
   );
 }

@@ -1,4 +1,5 @@
 import type {
+  GalleryRow,
   GallerySession,
   GalleryWorksheetJson,
   GalleryProvider,
@@ -91,6 +92,25 @@ export async function getGalleryProgress(workspaceId: string, sessionId: string)
   }>(res);
 }
 
+export async function getGalleryRowsDelta(
+  workspaceId: string,
+  sessionId: string,
+  since: string | null
+) {
+  const params = new URLSearchParams({ workspaceId });
+  if (since) params.set("since", since);
+  const res = await fetch(
+    `/api/gallery/sessions/${sessionId}/rows?${params.toString()}`
+  );
+  return parseJson<{
+    supported: boolean;
+    rows?: GalleryRow[];
+    signedUrls?: Record<string, string>;
+    cursor?: string;
+    hasMore?: boolean;
+  }>(res);
+}
+
 export async function patchGallerySession(params: {
   workspaceId: string;
   sessionId: string;
@@ -117,26 +137,34 @@ export async function saveGallerySettings(params: {
   expectedRevision: number;
   expectedWorksheetRevision: number;
   settings: GalleryProjectSettings;
-  worksheet: GalleryWorksheetJson;
+  /** Omit for a settings-only save (autosave): the worksheet is not re-uploaded. */
+  worksheet?: GalleryWorksheetJson;
+  /** Lets the page flush a pending change while it is being closed. */
+  keepalive?: boolean;
 }) {
   const res = await fetch(
     `/api/gallery/sessions/${params.sessionId}/settings`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
+      keepalive: params.keepalive,
       body: JSON.stringify({
         workspaceId: params.workspaceId,
         expectedRevision: params.expectedRevision,
-        expectedWorksheetRevision: params.expectedWorksheetRevision,
+        ...(params.worksheet
+          ? {
+              expectedWorksheetRevision: params.expectedWorksheetRevision,
+              worksheet: params.worksheet,
+            }
+          : {}),
         settings: params.settings,
-        worksheet: params.worksheet,
       }),
     }
   );
   return parseJson<{
     session: GallerySession;
     settings: GalleryProjectSettings;
-    worksheet: GalleryWorksheetJson;
+    worksheet?: GalleryWorksheetJson;
   }>(res);
 }
 

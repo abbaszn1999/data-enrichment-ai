@@ -41,6 +41,14 @@ export const IMAGE_FINDER_OPENAI_MODEL: EnrichOpenAiModelId = "gpt-6.1-sol";
 export const IMAGE_FINDER_REASONING_EFFORT: EnrichReasoningEffort = "high";
 export type EnrichSearchContextSize = "medium" | "high";
 
+/**
+ * Products Gallery scraping mode is ONE fixed agent: GPT-6.1 Sol, medium
+ * reasoning. Its research depth (Advanced settings) scales page, image-view
+ * and round budgets, not the model.
+ */
+export const GALLERY_SCRAPING_OPENAI_MODEL: EnrichOpenAiModelId = "gpt-6.1-sol";
+export const GALLERY_SCRAPING_REASONING_EFFORT: EnrichReasoningEffort = "medium";
+
 export function resolveEnrichOpenAiModel(
   tier: EnrichmentModel | string | null | undefined
 ): EnrichOpenAiModelId {

@@ -1,4 +1,4 @@
-import type { GalleryWorksheetJson } from "@/lib/gallery/types";
+import type { GalleryRow, GalleryWorksheetJson } from "@/lib/gallery/types";
 import { createSignedUrlsAdmin } from "@/lib/gallery/storage-admin";
 
 export function collectGalleryImagePaths(
@@ -36,4 +36,24 @@ export async function signGalleryWorksheetImages(
     collectGalleryImagePaths(worksheet, rowIds),
     expiresInSec
   );
+}
+
+/** Signed URLs for the stored images of specific rows (delta polling). */
+export async function signGalleryRowImages(
+  rows: GalleryRow[],
+  expiresInSec = 3600
+): Promise<Record<string, string>> {
+  const paths = new Set<string>();
+  for (const row of rows) {
+    const main = row.mainImagePaths?.length
+      ? row.mainImagePaths
+      : row.mainImagePath
+        ? [row.mainImagePath]
+        : [];
+    for (const path of [...main, ...(row.galleryImagePaths ?? [])]) {
+      if (path && !/^https?:\/\//i.test(path)) paths.add(path);
+    }
+  }
+  if (paths.size === 0) return {};
+  return createSignedUrlsAdmin([...paths], expiresInSec);
 }

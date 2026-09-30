@@ -92,6 +92,7 @@ import {
   getGalleryProgress,
   patchGallerySession,
   saveGallerySettings,
+  getGalleryRowsDelta,
   generateGallery,
   requestGalleryGenerationStop,
   deleteGallerySession,
@@ -120,6 +121,8 @@ import {
   resolveSelectionRunPhase,
 } from "@/lib/gallery/types";
 import { parseImageUrls, listColumnsWithHttpUrls } from "@/lib/gallery/image-urls";
+import { SheetImage } from "@/components/sheet-image";
+import { isImageFileUrl } from "@/lib/gallery/agents/gallery-brief";
 import { imageRefsMatch } from "@/lib/gallery/image-refs";
 import {
   pendingImageDeleteKey,
@@ -375,7 +378,6 @@ export default function ProductsGalleryPage() {
   ] = useState(false);
   const [scrapingImages, setScrapingImages] = useState("4");
   const [scrapingInstructions, setScrapingInstructions] = useState("");
-  const [scrapingModel, setScrapingModel] = useState<"standard" | "pro">("standard");
   const [scrapingSearchDepth, setScrapingSearchDepth] = useState("high");
   const [scrapingSourcePolicy, setScrapingSourcePolicy] = useState("any");
   const [scrapingResolution, setScrapingResolution] = useState("1200");
@@ -440,6 +442,8 @@ export default function ProductsGalleryPage() {
   const lastSavedSettingsSignatureRef = useRef("");
   const currentSettingsSignatureRef = useRef("");
   const worksheetRevisionRef = useRef(0);
+  const settingsSaveInFlightRef = useRef(false);
+  const flushSettingsRef = useRef<() => void>(() => undefined);
   const settingsRevisionRef = useRef(0);
   const worksheetRef = useRef<GalleryWorksheetJson | null>(null);
   const stopRequestedRef = useRef(false);
@@ -525,20 +529,20 @@ export default function ProductsGalleryPage() {
         ? ws.originalImageColumn
         : null;
     const initialSelected = ws.selectedColumns.length
-      ? ws.selectedColumns
-      : ws.columns;
-    setSelectedColumns(
-      new Set(
-        initialSelected.filter((column) => column !== imageColumn)
-      )
-    );
+      ? [...ws.selectedColumns]
+      : [...ws.columns];
+    // The Main image column is an input to the agent: it is always selected
+    // (older sessions stored it outside the selection).
+    if (imageColumn && !initialSelected.includes(imageColumn)) {
+      initialSelected.push(imageColumn);
+    }
+    setSelectedColumns(new Set(initialSelected));
     setColumnLayout(ws.columnLayout ?? EMPTY_COLUMN_LAYOUT);
     setActiveTab(ws.settings.provider === "ai" ? "ai" : "scraping");
 
     const g = ws.settings.scraping ?? DEFAULT_SCRAPING_SETTINGS;
     setScrapingImages(String(g.imagesPerRow ?? 4));
     setScrapingInstructions(g.instructions || "");
-    setScrapingModel(g.tier === "premium" ? "pro" : "standard");
     setScrapingSearchDepth(g.searchDepth || "high");
     setScrapingSourcePolicy(g.sourcePolicy || "any");
     setScrapingResolution(String(g.minResolution ?? 1200));
@@ -640,7 +644,8 @@ export default function ProductsGalleryPage() {
         imagesPerRow: 1,
         instructions: "",
       },
-      tier: scrapingModel === "pro" ? "premium" : "standard",
+      // One fixed research agent; the field stays only for old sessions.
+      tier: "standard",
       imagesPerRow: Number(scrapingImages) || 4,
       instructions: scrapingInstructions.slice(0, 2_000),
       searchDepth:
@@ -689,9 +694,11 @@ export default function ProductsGalleryPage() {
       provider: activeTab,
       originalImageColumn: originalImageColumn === "none" ? null : originalImageColumn,
       originalImageSelectionExplicit,
-      selectedColumns: Array.from(selectedColumns).filter(
-        (column) =>
-          !(originalImageColumn !== "none" && column === originalImageColumn)
+      selectedColumns: Array.from(
+        new Set([
+          ...selectedColumns,
+          ...(originalImageColumn !== "none" ? [originalImageColumn] : []),
+        ])
       ),
       columnLayout,
       scraping,
@@ -713,7 +720,6 @@ export default function ProductsGalleryPage() {
     scrapingAspectRatio,
     scrapingImages,
     scrapingInstructions,
-    scrapingModel,
     scrapingResolution,
     scrapingSearchDepth,
     scrapingSourcePolicy,
@@ -739,21 +745,23 @@ export default function ProductsGalleryPage() {
   );
 
   const persistSettings = useCallback(async (
-    worksheetOverride?: NonNullable<typeof worksheet>
+    options?: { silent?: boolean }
   ) => {
-    const worksheetToSave = worksheetOverride ?? worksheet;
-    if (!workspace || !projectId || !canEdit || !worksheetToSave) return null;
+    if (!workspace || !projectId || !canEdit || !worksheet) return null;
     if (generationRun || isGenerating || isStoppingGeneration) {
-      return worksheetToSave;
+      return worksheet;
     }
     const settings = buildSettingsPatch();
     const signature = JSON.stringify(settings);
     if (signature === lastSavedSettingsSignatureRef.current) {
       setSaveStatus("saved");
-      return worksheetToSave;
+      return worksheet;
     }
     setSaveStatus("saving");
+    settingsSaveInFlightRef.current = true;
     try {
+      // Settings-only save: the worksheet is never re-uploaded, so this stays
+      // fast on large sheets and never touches the worksheet revision.
       const result = await enqueueMutation(() =>
         saveGallerySettings({
           workspaceId: workspace.id,
@@ -761,11 +769,9 @@ export default function ProductsGalleryPage() {
           expectedRevision: settingsRevisionRef.current,
           expectedWorksheetRevision: worksheetRevisionRef.current,
           settings,
-          worksheet: worksheetToSave,
         })
       );
       settingsRevisionRef.current = Number(result.session.settings_revision);
-      worksheetRevisionRef.current = Number(result.session.worksheet_revision);
       lastSavedSettingsSignatureRef.current = signature;
       setActiveSession(result.session);
       setSessions((current) =>
@@ -776,8 +782,7 @@ export default function ProductsGalleryPage() {
       setWorksheet((current) =>
         current
           ? {
-              ...result.worksheet,
-              rows: result.worksheet.rows,
+              ...current,
               originalImageColumn: result.settings.originalImageColumn,
               originalImageSelectionExplicit:
                 result.settings.originalImageSelectionExplicit,
@@ -793,11 +798,13 @@ export default function ProductsGalleryPage() {
       const latestSignature = JSON.stringify(buildSettingsPatch());
       currentSettingsSignatureRef.current = latestSignature;
       setSaveStatus(latestSignature === signature ? "saved" : "dirty");
-      toast.success("Settings saved");
+      if (!options?.silent) toast.success("Settings saved");
       return worksheet;
     } catch (error) {
       setSaveStatus("error");
       throw error;
+    } finally {
+      settingsSaveInFlightRef.current = false;
     }
   }, [
     buildSettingsPatch,
@@ -833,6 +840,83 @@ export default function ProductsGalleryPage() {
     saveStatus,
     worksheet,
   ]);
+
+  // Autosave: settings persist about 800ms after the last change.
+  useEffect(() => {
+    if (
+      saveStatus !== "dirty" ||
+      !canEdit ||
+      !!rowDraft ||
+      !!editingRowId ||
+      !!generationRun ||
+      isGenerating ||
+      isStoppingGeneration
+    ) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      void persistSettings({ silent: true }).catch(() => undefined);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [
+    canEdit,
+    editingRowId,
+    generationRun,
+    isGenerating,
+    isStoppingGeneration,
+    persistSettings,
+    rowDraft,
+    saveStatus,
+  ]);
+
+  // Flush a pending change while the tab is being closed or hidden.
+  flushSettingsRef.current = () => {
+    if (
+      !workspace ||
+      !projectId ||
+      !canEdit ||
+      !worksheet ||
+      !!rowDraft ||
+      settingsSaveInFlightRef.current ||
+      generationRun ||
+      isGenerating ||
+      isStoppingGeneration
+    ) {
+      return;
+    }
+    const settings = buildSettingsPatch();
+    const signature = JSON.stringify(settings);
+    if (signature === lastSavedSettingsSignatureRef.current) return;
+    settingsSaveInFlightRef.current = true;
+    void saveGallerySettings({
+      workspaceId: workspace.id,
+      sessionId: projectId,
+      expectedRevision: settingsRevisionRef.current,
+      expectedWorksheetRevision: worksheetRevisionRef.current,
+      settings,
+      keepalive: true,
+    })
+      .then((result) => {
+        settingsRevisionRef.current = Number(result.session.settings_revision);
+        lastSavedSettingsSignatureRef.current = signature;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        settingsSaveInFlightRef.current = false;
+      });
+  };
+  useEffect(() => {
+    const onHide = () => flushSettingsRef.current();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushSettingsRef.current();
+    };
+    window.addEventListener("pagehide", onHide);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   const setAiAssetPreview = (
     kind: GalleryAiAssetKind,
@@ -975,7 +1059,10 @@ export default function ProductsGalleryPage() {
     }
   };
 
-  const productColumns = useMemo(
+  /** Every column is listed in the picker, including the Main image column. */
+  const productColumns = worksheetColumns;
+  /** Sheet display order: the Main image column is placed first separately. */
+  const sheetProductColumns = useMemo(
     () =>
       worksheetColumns.filter(
         (column) =>
@@ -983,6 +1070,25 @@ export default function ProductsGalleryPage() {
       ),
     [hasOriginalImageColumn, originalImageColumn, worksheetColumns]
   );
+
+  /** Columns holding image files ("images") or web pages ("sources"). */
+  const columnKinds = useMemo(() => {
+    const kinds: Record<string, "images" | "sources"> = {};
+    const sample = (worksheet?.rows ?? []).slice(0, 40);
+    for (const column of worksheetColumns) {
+      let imageUrls = 0;
+      let pageUrls = 0;
+      for (const row of sample) {
+        for (const url of parseImageUrls(row.originalData?.[column])) {
+          if (isImageFileUrl(url)) imageUrls += 1;
+          else pageUrls += 1;
+        }
+      }
+      if (imageUrls + pageUrls === 0) continue;
+      kinds[column] = imageUrls >= pageUrls ? "images" : "sources";
+    }
+    return kinds;
+  }, [worksheet?.rows, worksheetColumns]);
 
   /** Original-image picker: only columns whose values are primarily http(s) URLs. */
   const originalImageCandidateColumns = useMemo(() => {
@@ -1021,10 +1127,11 @@ export default function ProductsGalleryPage() {
 
   const toggleAllColumns = () => {
     setSelectedColumns((current) => {
+      const locked = hasOriginalImageColumn ? [originalImageColumn] : [];
       const allSelected =
         productColumns.length > 0 &&
         productColumns.every((column) => current.has(column));
-      return allSelected ? new Set() : new Set(productColumns);
+      return allSelected ? new Set(locked) : new Set(productColumns);
     });
   };
 
@@ -1161,6 +1268,52 @@ export default function ProductsGalleryPage() {
     if (!workspace?.id || !projectId || !shouldPollGeneration) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // Delta polling state: changed rows only, never the whole worksheet.
+    let deltaCursor: string | null = null;
+    let deltaSupported = true;
+
+    const pollDeltaRows = async (worksheetRevision: number): Promise<boolean> => {
+      if (!deltaSupported) return false;
+      let hasMore = true;
+      for (let page = 0; hasMore && page < 5 && !cancelled; page += 1) {
+        const delta = await getGalleryRowsDelta(workspace.id, projectId, deltaCursor);
+        if (!delta.supported) {
+          deltaSupported = false;
+          return false;
+        }
+        if (delta.cursor) deltaCursor = delta.cursor;
+        hasMore = Boolean(delta.hasMore);
+        const changed = delta.rows ?? [];
+        if (delta.signedUrls && Object.keys(delta.signedUrls).length > 0) {
+          setSignedUrls((current) => ({ ...current, ...delta.signedUrls }));
+        }
+        if (changed.length === 0) continue;
+        const changedById = new Map(changed.map((row) => [row.id, row]));
+        setWorksheet((current) => {
+          if (!current) return current;
+          const polled = stripPendingDeletesFromWorksheet(
+            {
+              ...current,
+              rows: current.rows.map((row) => changedById.get(row.id) ?? row),
+              revision: Math.max(
+                snapshotRevision(worksheetRevision),
+                snapshotRevision(current.revision)
+              ),
+            },
+            pendingImageDeletesRef.current
+          );
+          const applied = mergePolledGenerationWorksheet({
+            local: current,
+            polled,
+            clientRunActive: isGenerating,
+          });
+          const next = { ...current, rows: applied.rows, revision: applied.revision };
+          worksheetRef.current = next;
+          return next;
+        });
+      }
+      return true;
+    };
 
     const pollProgress = async () => {
       try {
@@ -1222,10 +1375,20 @@ export default function ProductsGalleryPage() {
           lastCreditsProgressRef.current = done;
           invalidateCredits();
         }
+        let deltaHandled = false;
+        if (jobStillRunning) {
+          try {
+            deltaHandled = await pollDeltaRows(progress.worksheetRevision);
+          } catch {
+            deltaHandled = false;
+          }
+          if (cancelled) return;
+        }
         const serverRevision = snapshotRevision(progress.worksheetRevision);
         const needsWorksheet =
-          serverRevision > worksheetRevisionRef.current ||
-          (!jobStillRunning && (localBusy || localRunActive));
+          !deltaHandled &&
+          (serverRevision > worksheetRevisionRef.current ||
+            (!jobStillRunning && (localBusy || localRunActive)));
         if (needsWorksheet) {
           const fresh = await getGallerySession(workspace.id, projectId, {
             includeSignedUrls: false,
@@ -1345,12 +1508,12 @@ export default function ProductsGalleryPage() {
       ...(selectedImageColumn ? [selectedImageColumn] : []),
       RESULT_MAIN,
       RESULT_GALLERY,
-      ...productColumns,
+      ...sheetProductColumns,
     ];
   }, [
     hasOriginalImageColumn,
     originalImageColumn,
-    productColumns,
+    sheetProductColumns,
     worksheetColumns,
   ]);
 
@@ -2189,8 +2352,18 @@ export default function ProductsGalleryPage() {
   };
 
   const closeProjectSafely = async () => {
-    if (saveStatus === "dirty" || rowDraft) {
+    if (rowDraft) {
       setShowLeaveWithoutSaving(true);
+      return;
+    }
+    if (saveStatus === "dirty" || saveStatus === "saving") {
+      // Settings save in one small request: finish it, then leave.
+      try {
+        await persistSettings({ silent: true });
+        closeProject();
+      } catch {
+        setShowLeaveWithoutSaving(true);
+      }
       return;
     }
     closeProject();
@@ -2213,7 +2386,8 @@ export default function ProductsGalleryPage() {
         setEditingRowId(null);
         setRowDraft(null);
       }
-      await persistSettings(latestWorksheet ?? undefined);
+      void latestWorksheet;
+      await persistSettings({ silent: true });
       setShowLeaveWithoutSaving(false);
       closeProject();
     } catch (error) {
@@ -2793,12 +2967,9 @@ export default function ProductsGalleryPage() {
                     setOriginalImageSelectionExplicit(true);
                     setOriginalImageColumn(next);
                     if (next !== "none") {
-                      setSelectedColumns((current) => {
-                        if (!current.has(next)) return current;
-                        const nextSelected = new Set(current);
-                        nextSelected.delete(next);
-                        return nextSelected;
-                      });
+                      setSelectedColumns((current) =>
+                        current.has(next) ? current : new Set([...current, next])
+                      );
                     }
                   }}
                   disabled={!canEdit}
@@ -2830,8 +3001,9 @@ export default function ProductsGalleryPage() {
                   <FileSpreadsheet className="h-3.5 w-3.5 text-muted-foreground" />
                   <h3 className="text-xs font-semibold">Worksheet columns</h3>
                   <InfoTip>
-                    The agent uses the selected columns to understand each product. All columns are
-                    selected by default.
+                    The agent uses the selected columns to understand each product. Every column is
+                    selected by default, including the image and source columns. Image columns are
+                    shown to the agent as pictures; source columns are opened first.
                   </InfoTip>
                 </div>
                 <div className="overflow-hidden rounded-md border">
@@ -2859,7 +3031,11 @@ export default function ProductsGalleryPage() {
                   </div>
                   <div className="max-h-[218px] overflow-y-auto">
                     {productColumns.map((column) => {
-                      const isSelected = selectedColumns.has(column);
+                      const isMainImageColumn =
+                        hasOriginalImageColumn && column === originalImageColumn;
+                      const isSelected =
+                        isMainImageColumn || selectedColumns.has(column);
+                      const kind = columnKinds[column];
                       return (
                         <label
                           key={column}
@@ -2868,12 +3044,23 @@ export default function ProductsGalleryPage() {
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            disabled={!canEdit}
+                            disabled={!canEdit || isMainImageColumn}
                             onChange={() => toggleColumn(column)}
                             className="mt-0.5 h-3.5 w-3.5 accent-primary"
                           />
                           <span className="min-w-0">
-                            <span className="block truncate text-xs font-medium">{column}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="truncate text-xs font-medium">{column}</span>
+                              {isMainImageColumn ? (
+                                <span className="shrink-0 rounded bg-[#400095]/10 px-1 py-px text-[9px] font-semibold uppercase text-[#400095] dark:bg-[#F76D01]/15 dark:text-[#F76D01]">
+                                  Main image
+                                </span>
+                              ) : kind ? (
+                                <span className="shrink-0 rounded bg-muted px-1 py-px text-[9px] font-semibold uppercase text-muted-foreground">
+                                  {kind === "images" ? "Images" : "Sources"}
+                                </span>
+                              ) : null}
+                            </span>
                             <span className="block truncate text-[10px] text-muted-foreground">
                               {sampleForColumn(column)}
                             </span>
@@ -2905,46 +3092,27 @@ export default function ProductsGalleryPage() {
                         </InfoTip>
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        Powered by Standard or Premium image search.
+                        Gallery research agent (GPT-6.1 Sol). It studies the product, opens the
+                        source pages in your sheet and searches the web for more galleries of the
+                        exact same item.
                       </p>
                     </div>
-                    <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
-                      <button
-                        type="button"
-                        onClick={() => setScrapingModel("standard")}
-                        className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
-                          scrapingModel === "standard"
-                            ? "bg-background shadow-sm"
-                            : "text-muted-foreground"
-                        }`}
-                      >
-                        Standard
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setScrapingModel("pro")}
-                        className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
-                          scrapingModel === "pro"
-                            ? "bg-background shadow-sm"
-                            : "text-muted-foreground"
-                        }`}
-                      >
-                        Premium
-                      </button>
-                    </div>
                     <ConfigSelect
-                      label="Gallery images per product"
+                      label="New gallery images per product"
                       value={scrapingImages}
                       onChange={setScrapingImages}
                       options={[
-                        { value: "1", label: "1 image" },
-                        { value: "2", label: "2 images" },
-                        { value: "4", label: "4 images" },
-                        { value: "6", label: "6 images" },
-                        { value: "8", label: "8 images" },
-                        { value: "10", label: "10 images" },
+                        { value: "1", label: "1 new image" },
+                        { value: "2", label: "2 new images" },
+                        { value: "4", label: "4 new images" },
+                        { value: "6", label: "6 new images" },
+                        { value: "8", label: "8 new images" },
+                        { value: "10", label: "10 new images" },
                       ]}
                     />
+                    <p className="-mt-1 text-[11px] text-muted-foreground">
+                      Images already in your sheet are used as references and are never repeated.
+                    </p>
                     <label className="block space-y-1.5">
                       <span className="text-[11px] font-medium text-muted-foreground">
                         Gallery · Custom instructions
@@ -3384,18 +3552,18 @@ export default function ProductsGalleryPage() {
                         Selection filters
                       </p>
                       <ConfigSelect
-                        label="Candidate depth"
+                        label="Research depth"
                         value={scrapingSearchDepth}
                         onChange={setScrapingSearchDepth}
                         options={[
-                          { value: "low", label: "Low — fewer candidates" },
-                          { value: "medium", label: "Medium — recommended" },
-                          { value: "high", label: "High — more candidates" },
+                          { value: "low", label: "Low — about 10 pages, fastest" },
+                          { value: "medium", label: "Medium — about 20 pages" },
+                          { value: "high", label: "High — about 30 pages, most thorough" },
                         ]}
                       />
                       <p className="text-[10px] leading-snug text-muted-foreground">
-                        Collects more image candidates than your target count, then filters down to
-                        the best matches.
+                        How many pages the agent may open per product. Deeper research finds more
+                        galleries but costs more credits.
                       </p>
                       <ConfigSelect
                         label="Source preference"
@@ -3431,8 +3599,8 @@ export default function ProductsGalleryPage() {
                         ]}
                       />
                       <p className="px-0.5 text-[10px] leading-snug text-muted-foreground">
-                        These filters apply to the Gallery agent only. Main uses only its image
-                        count and custom instructions. Exact product matching is always enforced.
+                        These filters apply to the Gallery agent only. Exact product matching is always enforced. Preferred resolution and aspect ratio rank the
+                        results and are never a reason to accept a different product.
                       </p>
                     </div>
                   ) : (
@@ -3847,20 +4015,11 @@ export default function ProductsGalleryPage() {
                                                 className="block h-full w-full overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                                                 aria-label={`Preview main image ${idx + 1}`}
                                               >
-                                                <img
-                                                  className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
-                                                  src={src}
+                                                <SheetImage
+                                                  url={src}
+                                                  fallbackUrl={fallbackSrc}
                                                   alt=""
-                                                  onError={(event) => {
-                                                    if (
-                                                      fallbackSrc &&
-                                                      event.currentTarget.src !==
-                                                        fallbackSrc
-                                                    ) {
-                                                      event.currentTarget.src =
-                                                        fallbackSrc;
-                                                    }
-                                                  }}
+                                                  className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
                                                 />
                                               </button>
                                               {canEdit && (
@@ -3966,19 +4125,12 @@ export default function ProductsGalleryPage() {
                                               className="block h-full w-full overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                                               aria-label={`Preview gallery image ${idx + 1}`}
                                             >
-                                              <img
-                                                className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
-                                                src={src}
-                                                alt=""
-                                                onError={(event) => {
-                                                  if (
-                                                    fallbackSrc &&
-                                                    event.currentTarget.src !== fallbackSrc
-                                                  ) {
-                                                    event.currentTarget.src = fallbackSrc;
-                                                  }
-                                                }}
-                                              />
+                                              <SheetImage
+                                                  url={src}
+                                                  fallbackUrl={fallbackSrc}
+                                                  alt=""
+                                                  className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
+                                                />
                                             </button>
                                             {canEdit && (
                                               <button
@@ -4067,10 +4219,11 @@ export default function ProductsGalleryPage() {
                                       className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                                     >
                                       {getRowOriginalSrc(row) ? (
-                                        <img
-                                          className="h-9 w-9 rounded object-cover"
-                                          src={getRowOriginalSrc(row)!}
+                                        <SheetImage
+                                          url={getRowOriginalSrc(row)!}
                                           alt=""
+                                          className="h-9 w-9 rounded object-cover"
+                                          tileClassName="flex h-9 w-9 items-center justify-center rounded border border-dashed bg-muted/40 text-center text-[7px] leading-none text-muted-foreground"
                                         />
                                       ) : (
                                         <div className="flex h-9 w-9 items-center justify-center rounded border border-dashed text-muted-foreground">
@@ -4296,18 +4449,13 @@ export default function ProductsGalleryPage() {
               <div className="relative flex min-h-[360px] flex-col items-center justify-center gap-3 bg-muted/20 p-6 md:min-h-[62vh]">
                 {activeImagePreviewSrc ? (
                   <>
-                    <img
-                      src={activeImagePreviewSrc}
+                    <SheetImage
+                      url={activeImagePreviewSrc}
+                      fallbackUrl={activeImageFallbackSrc}
                       alt=""
+                      linkOnFail
                       className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
-                      onError={(event) => {
-                        if (
-                          activeImageFallbackSrc &&
-                          event.currentTarget.src !== activeImageFallbackSrc
-                        ) {
-                          event.currentTarget.src = activeImageFallbackSrc;
-                        }
-                      }}
+                      tileClassName="flex h-64 w-full max-w-sm flex-col items-center justify-center gap-1 rounded-lg bg-muted/40 p-4 text-center text-xs text-muted-foreground"
                     />
                     {imageDialogPaths.length > 1 ? (
                       <>
@@ -4375,18 +4523,11 @@ export default function ProductsGalleryPage() {
                           className="h-full w-full"
                           aria-label={`View image ${index + 1}`}
                         >
-                          <img
-                            src={src}
+                          <SheetImage
+                            url={src}
+                            fallbackUrl={fallbackSrc}
                             alt=""
                             className="h-full w-full object-cover"
-                            onError={(event) => {
-                              if (
-                                fallbackSrc &&
-                                event.currentTarget.src !== fallbackSrc
-                              ) {
-                                event.currentTarget.src = fallbackSrc;
-                              }
-                            }}
                           />
                         </button>
                         {canEdit && (

@@ -18,6 +18,7 @@ import {
   type GalleryWorksheetJson,
 } from "@/lib/gallery/types";
 import { galleryWarn } from "@/lib/gallery/log";
+import { loadActiveJobForSession } from "@/lib/jobs/repo";
 import { withGalleryWorksheetLock } from "@/lib/gallery/worksheet-lock";
 import { imageRefsMatch } from "@/lib/gallery/image-refs";
 import { getGalleryPrefix } from "@/lib/gallery/storage-paths";
@@ -32,6 +33,9 @@ import {
 } from "@/lib/observability/metrics";
 
 type Ctx = { params: Promise<{ sessionId: string }> };
+
+/** No heartbeat for this long: the worker is gone (the sweep re-dispatches after 10 minutes). */
+const GALLERY_RUN_DEAD_AFTER_MS = 45 * 60 * 1000;
 
 async function loadOwnedSession(
   admin: ReturnType<typeof createAdminClient>,
@@ -167,6 +171,19 @@ export async function GET(request: NextRequest, context: Ctx) {
   const runIsActive =
     hydratedWorksheet.activeRun?.status === "running" ||
     hydratedWorksheet.activeRun?.status === "queued";
+  // A run is alive while its job keeps a heartbeat (research rows take
+  // minutes and a big run takes hours), whatever its start time says.
+  let jobIsAlive = false;
+  if (runIsActive && session.status === "processing") {
+    const activeJob = await loadActiveJobForSession(auth.admin, {
+      kind: "gallery",
+      sessionId,
+      workspaceId,
+    });
+    const beat = activeJob?.heartbeat_at ?? activeJob?.created_at;
+    jobIsAlive =
+      !!beat && Date.now() - new Date(beat).getTime() < GALLERY_RUN_DEAD_AFTER_MS;
+  }
   if (
     hydratedWorksheet.activeRun &&
     runIsActive &&
@@ -185,6 +202,7 @@ export async function GET(request: NextRequest, context: Ctx) {
   } else if (
     hydratedWorksheet.activeRun &&
     runIsActive &&
+    !jobIsAlive &&
     (!runStartedAt ||
       Date.now() - new Date(runStartedAt).getTime() > 10 * 60 * 1000)
   ) {

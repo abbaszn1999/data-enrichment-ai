@@ -180,6 +180,8 @@ export interface GalleryImageProvenance {
   pageUrl?: string;
   fallbackUrl?: string;
   title?: string;
+  /** Gallery research: front, back, detail, packaging, in_use, ... */
+  perspective?: string;
 }
 
 export interface GalleryRowSourceMeta {

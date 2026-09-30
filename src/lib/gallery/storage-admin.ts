@@ -180,7 +180,11 @@ export async function saveGalleryWorksheetAdmin(
   workspaceId: string,
   sessionId: string,
   worksheet: GalleryWorksheetJson,
-  revision?: number
+  revision?: number,
+  options?: {
+    /** Rows are already upserted one by one (running job): refresh the blob only. */
+    skipRowStoreSync?: boolean;
+  }
 ): Promise<string> {
   const path = getGalleryWorksheetPath(workspaceId, sessionId);
   const normalized = normalizeGalleryWorksheet(worksheet);
@@ -207,7 +211,7 @@ export async function saveGalleryWorksheetAdmin(
       kind: "gallery",
       workspaceId,
     });
-    if (galleryRowStoreEnabled()) {
+    if (galleryRowStoreEnabled() && !options?.skipRowStoreSync) {
       await replaceWorksheetRows(
         admin,
         "gallery_session_rows",

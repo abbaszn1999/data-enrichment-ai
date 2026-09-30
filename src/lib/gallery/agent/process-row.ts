@@ -4,7 +4,9 @@ import {
   type AiCallCost,
 } from "@/lib/ai-pricing";
 import { updateCachedCredits } from "@/lib/workspace-context";
-import { searchScrapingGalleryImages } from "@/lib/gallery/agents/scraping-gallery-agent";
+import { researchGalleryImages } from "@/lib/gallery/agents/gallery-research-agent";
+import { GALLERY_SCRAPING_OPENAI_MODEL } from "@/lib/enrich/models";
+import { billedCostsOf } from "@/lib/enrich/openai";
 import { removeGalleryAssets } from "@/lib/gallery/storage-assets";
 import { downloadGalleryBytesAdmin } from "@/lib/gallery/storage-admin";
 import {
@@ -113,6 +115,8 @@ export async function processScrapingRow(params: {
   runPhase?: GalleryRunPhase;
   deadlineAt?: number;
   onCheckpoint?: (patch: Partial<GalleryRow>) => Promise<void>;
+  /** Checked between research rounds so Stop takes effect within one round. */
+  shouldCancel?: () => Promise<boolean>;
 }): Promise<{
   row: GalleryRow;
   creditsUsed: number;
@@ -287,9 +291,11 @@ export async function processScrapingRow(params: {
   const galleryPaths: string[] = [];
   let galleryNote: string | undefined;
 
+  let researchStats: Record<string, unknown> | undefined;
+  let unverifiedNote = "";
   if (runGallery && galleryCount > 0) {
-    ensureTime(120_000, "OpenAI gallery search");
-    trace.stage("gallery-scrape", "Selecting exact Gallery images with OpenAI");
+    ensureTime(180_000, "gallery research");
+    trace.stage("gallery-scrape", "Researching new Gallery images with GPT-6.1 Sol");
     // Clear previous Gallery paths while this stage runs so the UI stays in
     // skeleton mode for the whole field (no one-by-one / stale reveals).
     await params.onCheckpoint?.({
@@ -297,8 +303,8 @@ export async function processScrapingRow(params: {
       galleryImagePaths: [],
     });
 
-    // Scraping attaches Main as public HTTPS URLs for OpenAI input_image.image_url.
-    // Legacy internal storage paths are loaded as bytes → data URL instead.
+    // Public Main links go to the model as URLs; legacy internal storage
+    // paths are loaded as bytes and attached as data URLs.
     const galleryMainImages: MainAttachment[] =
       mainAttachments.length > 0
         ? [...mainAttachments]
@@ -328,26 +334,35 @@ export async function processScrapingRow(params: {
     );
     if (usableMainImages.length === 0) {
       return fail(
-        "No usable Main image URL for gallery search. Find Main images first or retry.",
+        "No usable Main image for gallery search. Check the original image column or retry.",
         { stage: "gallery", mainUrl: mainPaths[0] ?? "" }
       );
     }
 
     try {
-      const gallerySearch = await searchScrapingGalleryImages({
+      const research = await researchGalleryImages({
         rowData: row.originalData,
         selectedColumns: selected,
+        mainImageUrls: usableMainImages
+          .filter((attachment) => isHttpUrl(attachment.url))
+          .map((attachment) => attachment.url),
+        extraInputImages: usableMainImages
+          .filter((attachment) => attachment.buffer)
+          .map(
+            (attachment) =>
+              `data:${attachment.contentType || "image/jpeg"};base64,${attachment.buffer!.toString("base64")}`
+          ),
         settings,
         requestedGalleryImages: galleryCount,
-        mainImages: usableMainImages,
+        shouldCancel: params.shouldCancel,
       });
-      await recordUsage("openai-gallery-search", gallerySearch.cost);
-      searchQueryCount += gallerySearch.searchCallCount;
-      if (gallerySearch.productIdentity) {
-        productIdentity = gallerySearch.productIdentity;
-      }
+      for (const cost of research.costs) await recordUsage("gallery-research", cost);
+      searchQueryCount += research.searchCallCount;
+      productIdentity = research.productIdentity;
+      unverifiedNote = research.unverifiedNote;
+      researchStats = { ...research.stats, rejected: research.rejections.length };
 
-      for (const candidate of gallerySearch.galleryCandidates) {
+      for (const candidate of research.images) {
         if (galleryPaths.length >= galleryCount) break;
         if (galleryPaths.includes(candidate.imageUrl)) continue;
         galleryPaths.push(candidate.imageUrl);
@@ -358,18 +373,13 @@ export async function processScrapingRow(params: {
           sourceUrl: candidate.imageUrl,
           pageUrl: candidate.pageUrl,
           title: candidate.title,
+          perspective: candidate.perspective,
           role: "gallery",
-          fallbackUrl:
-            candidate.thumbnailUrl &&
-            candidate.thumbnailUrl !== candidate.imageUrl
-              ? candidate.thumbnailUrl
-              : candidate.canonicalUrl !== candidate.imageUrl
-                ? candidate.canonicalUrl
-                : undefined,
+          fallbackUrl: candidate.imageUrl,
         });
       }
 
-      // Batch reveal Gallery only when the selection pass finishes.
+      // Batch reveal Gallery only when the research pass finishes.
       await params.onCheckpoint?.({
         mainImagePaths: mainPaths,
         mainImagePath: mainPath,
@@ -386,8 +396,10 @@ export async function processScrapingRow(params: {
         galleryNote = NO_GALLERY_MESSAGE;
       }
     } catch (error) {
+      // Rounds OpenAI already billed are recorded (usage), never charged to the customer.
+      for (const cost of billedCostsOf(error)) await recordUsage("gallery-research", cost);
       return fail(
-        error instanceof Error ? error.message : "OpenAI image search failed",
+        error instanceof Error ? error.message : "Gallery research failed",
         { stage: "gallery" }
       );
     }
@@ -416,7 +428,17 @@ export async function processScrapingRow(params: {
           details: {
             idempotencyKey: `${params.runId}:${row.id}:${runPhase}`,
             provider: "scraping",
-            pipeline: "openai-web-image-search",
+            pipeline: "gallery-research",
+            model: GALLERY_SCRAPING_OPENAI_MODEL,
+            rounds: costs.length,
+            tokens: {
+              input: costs.reduce((sum, c) => sum + c.usage.promptTokens, 0),
+              cached: costs.reduce((sum, c) => sum + c.usage.cachedTokens, 0),
+              output: costs.reduce((sum, c) => sum + c.usage.candidatesTokens, 0),
+              reasoning: costs.reduce((sum, c) => sum + c.usage.thoughtsTokens, 0),
+              total: totals.totalTokens,
+            },
+            research: researchStats,
             runPhase,
             searchQueryCount,
             productIdentity,
@@ -483,8 +505,10 @@ export async function processScrapingRow(params: {
       galleryImagePaths: finalGalleryPaths,
       sourceMeta: {
         provider: "scraping",
-        pipeline: "openai-web-image-search-url-preview",
-        model: "server-managed",
+        pipeline: "gallery-research",
+        model: GALLERY_SCRAPING_OPENAI_MODEL,
+        researchStats,
+        ...(unverifiedNote ? { unverifiedNote } : {}),
         runPhase,
         productIdentity,
         searchQueryCount,
