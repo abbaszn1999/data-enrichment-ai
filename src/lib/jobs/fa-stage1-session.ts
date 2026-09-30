@@ -10,6 +10,11 @@ import {
   saveProjectSliceAdmin,
 } from "@/lib/free-assessment/storage-admin";
 import { markSliceSavedAdmin } from "@/lib/free-assessment/server-persist";
+import {
+  assertAiBudget,
+  bindAiBillingOrThrow,
+  runWithAiBilling,
+} from "@/lib/billing/ai-wallet-billing";
 import { runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
@@ -21,7 +26,11 @@ import {
 } from "./repo";
 
 export async function runFaStage1Session(runId: string): Promise<void> {
-  await runJobWithFailureGuard(runId, () => runFaStage1SessionInner(runId));
+  await runJobWithFailureGuard(runId, () =>
+    runWithAiBilling({ wallet: "free-assessment", operation: "fa_stage1" }, () =>
+      runFaStage1SessionInner(runId)
+    )
+  );
 }
 
 async function runFaStage1SessionInner(runId: string): Promise<void> {
@@ -30,6 +39,7 @@ async function runFaStage1SessionInner(runId: string): Promise<void> {
   if (!job || job.kind !== "fa_stage1") return;
   const projectId = String(job.settings.projectId || job.session_id);
   const workspaceId = job.workspace_id;
+  await bindAiBillingOrThrow({ admin, workspaceId, userId: job.created_by });
   await markJobRunning(admin, job.id);
 
   await withHeartbeat(job.id, async () => {
@@ -72,6 +82,7 @@ async function runFaStage1SessionInner(runId: string): Promise<void> {
         completed: checkpoint.offset,
         failed: 0,
       });
+      assertAiBudget();
       if (!step.done || !step.result) continue;
 
       const nichesPayload = {

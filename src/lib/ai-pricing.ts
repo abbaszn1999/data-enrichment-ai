@@ -38,6 +38,15 @@ export const SERPAPI_COST_PER_SEARCH = 0.025;
 // for margin-sensitive decisions.
 export const SEARCHAPI_COST_PER_SEARCH = 0.004;
 
+// ─── OpenAI Embeddings Pricing ──────────────────────────────────────
+// Source: https://openai.com/api/pricing — text-embedding-3-small, $0.02 / 1M tokens.
+export const OPENAI_EMBEDDING_SMALL_USD_PER_MILLION_TOKENS = 0.02;
+
+export function embeddingCostUsd(totalTokens: number): number {
+  if (!Number.isFinite(totalTokens) || totalTokens <= 0) return 0;
+  return (totalTokens / 1_000_000) * OPENAI_EMBEDDING_SMALL_USD_PER_MILLION_TOKENS;
+}
+
 /** OpenAI GPT-5.6 / GPT-6 long-context threshold (input tokens). */
 export const OPENAI_LONG_CONTEXT_INPUT_TOKENS = 272_000;
 

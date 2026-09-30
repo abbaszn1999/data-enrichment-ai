@@ -3,6 +3,11 @@ import {
   runFaClassifyThenClean,
   type ClassifyCheckpoint,
 } from "@/lib/free-assessment/classify-page";
+import {
+  assertAiBudget,
+  bindAiBillingOrThrow,
+  runWithAiBilling,
+} from "@/lib/billing/ai-wallet-billing";
 import { runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
@@ -14,7 +19,11 @@ import {
 } from "./repo";
 
 export async function runFaClassifySession(runId: string): Promise<void> {
-  await runJobWithFailureGuard(runId, () => runFaClassifySessionInner(runId));
+  await runJobWithFailureGuard(runId, () =>
+    runWithAiBilling({ wallet: "free-assessment", operation: "fa_classify" }, () =>
+      runFaClassifySessionInner(runId)
+    )
+  );
 }
 
 async function runFaClassifySessionInner(runId: string): Promise<void> {
@@ -23,6 +32,7 @@ async function runFaClassifySessionInner(runId: string): Promise<void> {
   if (!job || job.kind !== "fa_classify") return;
   const projectId = String(job.settings.projectId || job.session_id);
   const workspaceId = job.workspace_id;
+  await bindAiBillingOrThrow({ admin, workspaceId, userId: job.created_by });
   const resume = (job.settings.checkpoint as ClassifyCheckpoint | undefined) ?? null;
   await markJobRunning(admin, job.id);
 
@@ -42,6 +52,7 @@ async function runFaClassifySessionInner(runId: string): Promise<void> {
             checkpoint: progress.checkpoint,
           },
         });
+        assertAiBudget();
       },
     })
   );

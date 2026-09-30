@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withAiWalletBilling } from "@/lib/billing/ai-wallet-billing";
 import {
   agentAnalyzeBodySchema,
   jsonError,
@@ -88,7 +89,7 @@ export async function GET(request: NextRequest) {
   );
 }
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   let json: unknown;
   try {
     json = await request.json();
@@ -161,3 +162,5 @@ export async function POST(request: NextRequest) {
     return jsonError(msg, status);
   }
 }
+
+export const POST = withAiWalletBilling("market-research", "mr_analyze", handlePost);

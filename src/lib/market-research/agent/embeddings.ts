@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { embeddingCostUsd } from "@/lib/ai-pricing";
+import { ensureAiBudget, recordAiSpend } from "@/lib/billing/ai-wallet-billing";
 
 /**
  * Dense text embeddings used as the first-pass retrieval filter.
@@ -82,6 +84,7 @@ async function requestEmbeddings(
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
+  await ensureAiBudget();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -109,7 +112,9 @@ async function requestEmbeddings(
 
     const payload = (await response.json()) as {
       data?: Array<{ index: number; embedding: number[] }>;
+      usage?: { total_tokens?: number };
     };
+    recordAiSpend(embeddingCostUsd(payload.usage?.total_tokens ?? 0));
 
     const items = payload.data ?? [];
     const ordered: number[][] = new Array(inputs.length);

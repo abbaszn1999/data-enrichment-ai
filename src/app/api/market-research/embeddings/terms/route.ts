@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withAiWalletBilling } from "@/lib/billing/ai-wallet-billing";
 import {
   embeddingsTermsBodySchema,
   jsonError,
@@ -40,7 +41,7 @@ const EMBED_CONCURRENCY = 5;
 
 type SeedsSlicePayload = { seedRows: MockSeedRow[]; manualSeeds: MockSeedRow[] };
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   let json: unknown;
   try {
     json = await request.json();
@@ -183,3 +184,5 @@ export async function POST(request: NextRequest) {
     return jsonError(msg, 500);
   }
 }
+
+export const POST = withAiWalletBilling("market-research", "mr_terms", handlePost);

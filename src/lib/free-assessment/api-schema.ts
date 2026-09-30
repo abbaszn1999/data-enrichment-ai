@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { requireGalleryAuth } from "@/lib/gallery/auth";
+import { aiBillingActive, bindAiBilling } from "@/lib/billing/ai-wallet-billing";
 
 export const workspaceIdSchema = z.string().uuid();
 export const projectIdSchema = z.string().uuid();
@@ -199,8 +200,20 @@ export const agentDedupeCollectionsBodySchema = z.object({
   projectId: projectIdSchema,
 });
 
+/** Inside an AI route (billing scope) this also binds the wallet payer and
+ *  refuses with 402 when the wallet is empty. */
 export async function requireFaWrite(workspaceId: string) {
-  return requireGalleryAuth({ workspaceId, requireWrite: true });
+  const auth = await requireGalleryAuth({ workspaceId, requireWrite: true });
+  if (!auth.ok || !aiBillingActive()) return auth;
+  const blocked = await bindAiBilling({ admin: auth.admin, workspaceId, userId: auth.user.id });
+  if (!blocked) return auth;
+  return {
+    ok: false as const,
+    response: NextResponse.json(
+      { error: blocked, code: "WALLET_EMPTY" },
+      { status: 402, headers: auth.headers }
+    ),
+  };
 }
 
 export async function requireFaAdmin(workspaceId: string) {

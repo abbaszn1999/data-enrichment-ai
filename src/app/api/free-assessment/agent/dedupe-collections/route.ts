@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withAiWalletBilling } from "@/lib/billing/ai-wallet-billing";
 import {
   agentDedupeCollectionsBodySchema,
   jsonError,
@@ -21,7 +22,7 @@ type NichesSlicePayload = { niches: NicheReading[]; structuredNiches: MockNiche[
 // after only reading niche names) by cluster/route.ts. Never removes
 // anything server-side — flagging is `status: "duplicate"`; the merchant
 // removes flagged rows manually via the "Remove Duplicates" button in Tab 5.
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   let json: unknown;
   try {
     json = await request.json();
@@ -99,3 +100,5 @@ export async function POST(request: NextRequest) {
     return jsonError(msg, 500);
   }
 }
+
+export const POST = withAiWalletBilling("free-assessment", "fa_dedupe_collections", handlePost);

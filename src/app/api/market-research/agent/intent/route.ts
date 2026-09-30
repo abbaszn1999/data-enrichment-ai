@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withAiWalletBilling } from "@/lib/billing/ai-wallet-billing";
 import {
   agentIntentBodySchema,
   jsonError,
@@ -30,7 +31,7 @@ export const maxDuration = 60;
 // the archive holds tens of thousands of rows.
 const PAGE_SIZE = 500;
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   let json: unknown;
   try {
     json = await request.json();
@@ -166,3 +167,5 @@ export async function POST(request: NextRequest) {
     return jsonError(msg, 500);
   }
 }
+
+export const POST = withAiWalletBilling("market-research", "mr_intent", handlePost);

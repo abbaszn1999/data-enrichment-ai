@@ -1,6 +1,7 @@
 import { calculateCallCost, costToCredits, type AiCallCost } from "@/lib/ai-pricing";
 import { loadSkill, type MrThinkingLevel, type MarketResearchSkill } from "./skill-loader";
 import { aiJsonParse } from "ai-json-safe-parse";
+import { ensureAiBudget, recordAiSpend } from "@/lib/billing/ai-wallet-billing";
 
 export const MR_DEFAULT_MODEL = "gemini-3.8-flash";
 
@@ -94,6 +95,7 @@ export async function runGeminiMarketResearch<T = unknown>(
     .filter(Boolean)
     .join("\n\n");
 
+  await ensureAiBudget();
   const response = await ai.models.generateContent({
     model: modelName,
     contents: [
@@ -112,6 +114,10 @@ export async function runGeminiMarketResearch<T = unknown>(
       },
     },
   });
+
+  const usageMetadata = response.usageMetadata;
+  const cost = calculateCallCost(modelName, usageMetadata);
+  recordAiSpend(cost.totalCost);
 
   const finishReason = response.candidates?.[0]?.finishReason as string | undefined;
   if (finishReason && INCOMPLETE_FINISH_REASONS.has(finishReason)) {
@@ -138,8 +144,6 @@ export async function runGeminiMarketResearch<T = unknown>(
     parsed = recovered.data;
   }
 
-  const usageMetadata = response.usageMetadata;
-  const cost = calculateCallCost(modelName, usageMetadata);
   const credits = costToCredits(cost.totalCost);
 
   return {

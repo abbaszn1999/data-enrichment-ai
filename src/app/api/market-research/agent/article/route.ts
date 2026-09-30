@@ -11,6 +11,8 @@ import {
   loadGeneratedArticles,
   startOrResumeArticleJob,
 } from "@/lib/market-research/agent/article-jobs";
+import { chargeAiCostOnce, WalletExhaustedError } from "@/lib/billing/ai-wallet-billing";
+import { readWorkspaceWallet } from "@/lib/wallet/server";
 
 export const maxDuration = 60;
 
@@ -85,6 +87,13 @@ export async function POST(request: NextRequest) {
     const jobs = await loadArticleJobs(auth.admin, workspaceId, projectId);
     let job = jobs[article.id];
     if (mode !== "poll") {
+      const wallet = await readWorkspaceWallet(auth.admin, workspaceId);
+      if (!(wallet.balance > 0)) {
+        return NextResponse.json(
+          { error: new WalletExhaustedError("market-research").message, code: "WALLET_EMPTY" },
+          { status: 402, headers: auth.headers }
+        );
+      }
       const started = await startOrResumeArticleJob(
         auth.admin,
         workspaceId,
@@ -124,6 +133,11 @@ export async function POST(request: NextRequest) {
     }
 
     if (result.status === "ready") {
+      await chargeAiCostOnce(
+        "market-research",
+        { admin: auth.admin, workspaceId, userId: auth.user.id },
+        { operation: "mr_article", amountUsd: result.cost, key: job.openaiResponseId }
+      );
       return NextResponse.json(
         { article: result.article, cost: result.cost, pending: false },
         { headers: auth.headers }

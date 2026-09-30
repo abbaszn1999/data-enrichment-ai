@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withAiWalletBilling } from "@/lib/billing/ai-wallet-billing";
 import {
   agentClusterBodySchema,
   jsonError,
@@ -34,7 +35,7 @@ const PAGE_SIZE = 10;
 type SeedsSlicePayload = { seedRows: MockSeedRow[]; manualSeeds: MockSeedRow[] };
 type NichesSlicePayload = { niches: NicheReading[]; structuredNiches: MockNiche[] };
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   let json: unknown;
   try {
     json = await request.json();
@@ -206,3 +207,5 @@ export async function POST(request: NextRequest) {
     return jsonError(msg, 500);
   }
 }
+
+export const POST = withAiWalletBilling("market-research", "mr_cluster", handlePost);

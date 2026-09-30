@@ -3,6 +3,11 @@ import {
   runMrClassifyThenClean,
   type ClassifyCheckpoint,
 } from "@/lib/market-research/classify-page";
+import {
+  assertAiBudget,
+  bindAiBillingOrThrow,
+  runWithAiBilling,
+} from "@/lib/billing/ai-wallet-billing";
 import { runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
@@ -14,7 +19,11 @@ import {
 } from "./repo";
 
 export async function runMrClassifySession(runId: string): Promise<void> {
-  await runJobWithFailureGuard(runId, () => runMrClassifySessionInner(runId));
+  await runJobWithFailureGuard(runId, () =>
+    runWithAiBilling({ wallet: "market-research", operation: "mr_classify" }, () =>
+      runMrClassifySessionInner(runId)
+    )
+  );
 }
 
 async function runMrClassifySessionInner(runId: string): Promise<void> {
@@ -23,6 +32,7 @@ async function runMrClassifySessionInner(runId: string): Promise<void> {
   if (!job || job.kind !== "mr_classify") return;
   const projectId = String(job.settings.projectId || job.session_id);
   const workspaceId = job.workspace_id;
+  await bindAiBillingOrThrow({ admin, workspaceId, userId: job.created_by });
   const resume = (job.settings.checkpoint as ClassifyCheckpoint | undefined) ?? null;
   await markJobRunning(admin, job.id);
 
@@ -42,6 +52,7 @@ async function runMrClassifySessionInner(runId: string): Promise<void> {
             checkpoint: progress.checkpoint,
           },
         });
+        assertAiBudget();
       },
     })
   );
