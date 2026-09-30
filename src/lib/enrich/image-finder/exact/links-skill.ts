@@ -72,8 +72,25 @@ export interface BuildExactLinksQueryInput {
   /** Code-like values already extracted from the row (see tools/identifiers.ts). */
   rowIdentifiers: string[];
   customInstruction?: string;
+  /** Store owner's website rules (already sanitized). The link checks enforce them; the prompt steers the search. */
+  allowedDomains?: string[];
+  blockedDomains?: string[];
   /** 1 = normal search; 2 = second try with different angles. Defaults to 1. */
   attempt?: ExactLinksAttempt;
+}
+
+/** Only the first few domains go into the query (the link checks still enforce the full list). */
+const MAX_PROMPT_DOMAINS = 30;
+
+function websiteRuleLines(allowed: string[], blocked: string[]): string[] {
+  const lines: string[] = [];
+  if (allowed.length > 0) {
+    lines.push(`Website rules: only return pages on these websites: ${allowed.slice(0, MAX_PROMPT_DOMAINS).join(", ")}.`);
+  }
+  if (blocked.length > 0) {
+    lines.push(`Website rules: never return pages on these websites: ${blocked.slice(0, MAX_PROMPT_DOMAINS).join(", ")}.`);
+  }
+  return lines;
 }
 
 function taskLines(identifiers: string[], attempt: ExactLinksAttempt): string[] {
@@ -122,7 +139,8 @@ function composeQuery(
   fieldLines: string[],
   identifiers: string[],
   instruction: string,
-  attempt: ExactLinksAttempt
+  attempt: ExactLinksAttempt,
+  ruleLines: string[]
 ): string {
   const lines: string[] = [
     ...taskLines(identifiers, attempt),
@@ -145,6 +163,7 @@ function composeQuery(
     "",
     "STEP 3 — STORE OWNER INSTRUCTION",
     instruction || "None given.",
+    ...ruleLines,
     "It narrows or redirects the search (preferred or excluded sites, brands, regions) and overrides the defaults in these steps where they conflict, but it can never justify accepting a different product than the one Step 2 identified.",
     "",
     ...searchStepLines(attempt),
@@ -179,12 +198,13 @@ export function buildExactLinksQuery(input: BuildExactLinksQueryInput): string {
   const identifiers = input.rowIdentifiers;
   const attempt = input.attempt ?? 1;
   const instruction = (input.customInstruction ?? "").trim().slice(0, MAX_INSTRUCTION_CHARS);
+  const ruleLines = websiteRuleLines(input.allowedDomains ?? [], input.blockedDomains ?? []);
   let fields = productDataLines(input.rowData);
 
-  let query = composeQuery(fields, identifiers, instruction, attempt);
+  let query = composeQuery(fields, identifiers, instruction, attempt, ruleLines);
   while (query.length > MAX_QUERY_CHARS && fields.length > 1) {
     fields = fields.slice(0, -1);
-    query = composeQuery(fields, identifiers, instruction, attempt);
+    query = composeQuery(fields, identifiers, instruction, attempt, ruleLines);
   }
   return query;
 }

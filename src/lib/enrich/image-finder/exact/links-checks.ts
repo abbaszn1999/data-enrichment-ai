@@ -7,6 +7,7 @@
  * checks catch what the prompt alone did not. Pure (no runtime imports) so
  * it is cheap to test.
  */
+import { hostMatchesDomain, type DomainRules } from "../../domains";
 import { EXACT_LINKS_MAX, type ExactLinkCandidate } from "./links-skill";
 
 export interface CheckedExactLink {
@@ -83,13 +84,20 @@ function evidenceShowsVariant(evidence: string, identifiers: string[]): boolean 
 export function checkExactLinks(
   candidates: ExactLinkCandidate[],
   identifiers: string[],
-  maxLinks = EXACT_LINKS_MAX
+  maxLinks = EXACT_LINKS_MAX,
+  domainRules?: DomainRules
 ): CheckedExactLink[] {
-  return checkExactLinksDetailed(candidates, identifiers, maxLinks).links;
+  return checkExactLinksDetailed(candidates, identifiers, maxLinks, domainRules).links;
 }
 
 /** Why a candidate link was dropped. */
-export type RejectedLinkReason = "not_full_url" | "non_product_site" | "variant_in_evidence" | "duplicate";
+export type RejectedLinkReason =
+  | "not_full_url"
+  | "non_product_site"
+  | "blocked_site"
+  | "outside_allowed_sites"
+  | "variant_in_evidence"
+  | "duplicate";
 
 export interface CheckedExactLinks {
   links: CheckedExactLink[];
@@ -101,7 +109,8 @@ export interface CheckedExactLinks {
 export function checkExactLinksDetailed(
   candidates: ExactLinkCandidate[],
   identifiers: string[],
-  maxLinks = EXACT_LINKS_MAX
+  maxLinks = EXACT_LINKS_MAX,
+  domainRules?: DomainRules
 ): CheckedExactLinks {
   const links: CheckedExactLink[] = [];
   const rejected: Partial<Record<RejectedLinkReason, number>> = {};
@@ -119,6 +128,20 @@ export function checkExactLinksDetailed(
     }
     if (isNonProductHost(host)) {
       reject("non_product_site");
+      continue;
+    }
+    // The store owner's website rules are enforced here too, so Agent 2 is
+    // never handed a page it is not allowed to use.
+    if (domainRules && domainRules.blockedDomains.some((domain) => hostMatchesDomain(host, domain))) {
+      reject("blocked_site");
+      continue;
+    }
+    if (
+      domainRules &&
+      domainRules.allowedDomains.length > 0 &&
+      !domainRules.allowedDomains.some((domain) => hostMatchesDomain(host, domain))
+    ) {
+      reject("outside_allowed_sites");
       continue;
     }
     if (evidenceShowsVariant(candidate.evidence ?? "", identifiers)) {
@@ -148,6 +171,8 @@ export function checkExactLinksDetailed(
 const REJECT_LABELS: Record<RejectedLinkReason, string> = {
   not_full_url: "not a full product URL",
   non_product_site: "not a product-page site",
+  blocked_site: "on a blocked website",
+  outside_allowed_sites: "outside the allowed websites",
   variant_in_evidence: "evidence showed a different variant",
   duplicate: "duplicate",
 };

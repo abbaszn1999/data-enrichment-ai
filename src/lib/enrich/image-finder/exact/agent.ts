@@ -119,6 +119,7 @@ export async function findProductImagesExact(
     rowData: params.productData,
     rowIdentifiers: identifierValues,
     customInstruction,
+    domainRules,
     shouldCancel: params.shouldCancel,
   });
   const checkedLinks: CheckedExactLink[] = linksSearch.links;

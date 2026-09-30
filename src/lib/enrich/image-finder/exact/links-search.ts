@@ -11,6 +11,7 @@
  * the failure in the note).
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
+import type { DomainRules } from "../../domains";
 import { EnrichCancelledError } from "../../openai";
 import { checkExactLinksDetailed, describeRejected, type CheckedExactLink } from "./links-checks";
 import {
@@ -25,6 +26,8 @@ export interface SearchExactLinksInput {
   rowData: Record<string, string>;
   rowIdentifiers: string[];
   customInstruction?: string;
+  /** Store owner's website rules (already sanitized): steer Agent 1's search and are enforced on its links. */
+  domainRules?: DomainRules;
   shouldCancel?: () => Promise<boolean>;
 }
 
@@ -48,11 +51,18 @@ async function runAttempt(input: SearchExactLinksInput, attempt: ExactLinksAttem
     rowData: input.rowData,
     rowIdentifiers: input.rowIdentifiers,
     customInstruction: input.customInstruction,
+    allowedDomains: input.domainRules?.allowedDomains,
+    blockedDomains: input.domainRules?.blockedDomains,
     attempt,
   });
   const { text } = await callGoogleAiMode(query);
   const answer = parseExactLinksAnswer(text);
-  const { links, rejected } = checkExactLinksDetailed(answer.matches, input.rowIdentifiers, EXACT_LINKS_MAX);
+  const { links, rejected } = checkExactLinksDetailed(
+    answer.matches,
+    input.rowIdentifiers,
+    EXACT_LINKS_MAX,
+    input.domainRules
+  );
 
   if (links.length > 0) return { links, summary: "" };
   if (!answer.readable) return { links: [], summary: "the answer could not be read" };
