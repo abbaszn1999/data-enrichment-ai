@@ -33,6 +33,16 @@ const NON_PRODUCT_HOST_PATTERNS: RegExp[] = [
   /(^|\.)radiomuseum\.org$/i,
   /(^|\.)google\.[a-z.]+$/i,
   /(^|\.)bing\.com$/i,
+  // Pages Google AI Mode cites as sources that are never a product listing.
+  /(^|\.)youtube\.com$/i,
+  /(^|\.)youtu\.be$/i,
+  /(^|\.)facebook\.com$/i,
+  /(^|\.)instagram\.com$/i,
+  /(^|\.)tiktok\.com$/i,
+  /(^|\.)reddit\.com$/i,
+  /(^|\.)pinterest\.[a-z.]+$/i,
+  /(^|\.)wikipedia\.org$/i,
+  /(^|\.)quora\.com$/i,
 ];
 
 /**

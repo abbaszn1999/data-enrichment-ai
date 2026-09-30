@@ -32,13 +32,28 @@ function urlList(items: unknown[], key: "imageUrl" | "uri"): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Which link field a URL-list column carries. Decided by the column id and,
+ * for any other column (Image sources is `imageSourceUrls`, not `sourceUrls`),
+ * by the shape of the entries themselves.
+ */
+function urlListKey(columnId: string, items: unknown[]): "imageUrl" | "uri" | null {
+  if (columnId === "imageUrls") return "imageUrl";
+  if (columnId === "sourceUrls") return "uri";
+  const first = items.find((item) => typeof item === "object" && item !== null) as Record<string, unknown> | undefined;
+  if (!first) return null;
+  if ("uri" in first) return "uri";
+  if ("imageUrl" in first) return "imageUrl";
+  return null;
+}
+
 /** Flattens any enriched value to a single spreadsheet cell string. */
 export function enrichedValueToText(value: unknown, columnId: string): string {
   if (value === undefined || value === null) return "";
 
   if (Array.isArray(value)) {
-    if (columnId === "imageUrls") return urlList(value, "imageUrl").join("\n");
-    if (columnId === "sourceUrls") return urlList(value, "uri").join("\n");
+    const urlKey = urlListKey(columnId, value);
+    if (urlKey) return urlList(value, urlKey).join("\n");
     if (value.some(isFaqEntry)) return faqToText(value);
     return value
       .map((i) => {
@@ -59,8 +74,8 @@ export function enrichedValueToJson(value: unknown, columnId: string): unknown {
   if (value === undefined || value === null) return "";
 
   if (Array.isArray(value)) {
-    if (columnId === "imageUrls") return urlList(value, "imageUrl");
-    if (columnId === "sourceUrls") return urlList(value, "uri");
+    const urlKey = urlListKey(columnId, value);
+    if (urlKey) return urlList(value, urlKey);
     if (value.some(isFaqEntry)) {
       return value.filter(isFaqEntry).map((i) => ({
         question: i.question ?? "",

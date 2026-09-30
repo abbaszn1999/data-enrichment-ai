@@ -386,12 +386,20 @@ export async function runEnrichOpenAiResponse(params: {
       throw new Error(message);
     };
 
-    const send = async (request: Record<string, unknown>): Promise<OpenAiResponse> => {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) fail("timeout");
+    /**
+     * One request, answered when OpenAI finishes it. Responses background
+     * mode was tried (scripts/openai-background-lab.mts) and rejected: a
+     * response cancelled mid-run reports usage 0 even though it worked, so
+     * it cannot recover the cost of a timed-out call. The row/tier budgets
+     * are therefore sized so calls normally finish, and only a call cut off
+     * by the budget goes unrecorded (it is never charged to the customer).
+     */
+    const sendDirect = async (
+      request: Record<string, unknown>,
+      remainingMs: number
+    ): Promise<{ ok: boolean; status: number; rawText: string }> => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(new Error("timeout")), remainingMs);
-
       let response: Response;
       try {
         response = await fetch(OPENAI_RESPONSES_URL, {
@@ -411,26 +419,38 @@ export async function runEnrichOpenAiResponse(params: {
       } finally {
         clearTimeout(timeoutId);
       }
+      return { ok: response.ok, status: response.status, rawText: await response.text() };
+    };
 
-      const rawText = await response.text();
+    const send = async (request: Record<string, unknown>): Promise<OpenAiResponse> => {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) fail("timeout");
+
+      const { ok, status: httpStatus, rawText } = await sendDirect(request, remainingMs);
       let body: OpenAiResponse;
       try {
         body = JSON.parse(rawText) as OpenAiResponse;
       } catch {
-        return fail(`OpenAI enrich returned invalid JSON (${response.status})`);
+        return fail(`OpenAI enrich returned invalid JSON (${httpStatus})`);
       }
 
       const roundSearchCalls = countWebSearchCalls(body);
       searchCallCount += roundSearchCalls;
+      // Recorded before anything below can fail, so a billed call is never lost.
       if (body.usage) {
         costs.push(calculateOpenAiWebSearchCost(model, body.usage, roundSearchCalls));
+      } else if (ok && body.status === "completed") {
+        console.error("[Enrich OpenAI] Completed response carried no usage; this call cannot be costed", {
+          id: body.id,
+          model,
+        });
       }
-      if (!response.ok) {
+      if (!ok || body.status === "failed") {
         if (isOpenAiProviderUnavailable(body.error)) {
-          console.error("[Enrich OpenAI] Provider account unavailable", { status: response.status, code: body.error?.code });
+          console.error("[Enrich OpenAI] Provider account unavailable", { status: httpStatus, code: body.error?.code });
           throw new EnrichProviderUnavailableError(undefined, [...costs]);
         }
-        fail(body.error?.message || `OpenAI enrich failed (${response.status})`);
+        fail(body.error?.message || `OpenAI enrich failed (${httpStatus})`);
       }
       if (body.status && body.status !== "completed") {
         fail(`OpenAI enrich ended with status ${body.status}`);

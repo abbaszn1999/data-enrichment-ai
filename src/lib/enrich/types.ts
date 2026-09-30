@@ -37,6 +37,8 @@ export type EnrichColumnConfig = Pick<
 export interface EnrichAgentResult {
   data: Record<string, unknown>;
   costs: AiCallCost[];
+  /** Image Finder: which tiers ran for this row and which one found the images (recorded with the charge). */
+  meta?: { tiersRun: string[]; foundBy?: string };
 }
 
 export interface EnrichAgentParams {

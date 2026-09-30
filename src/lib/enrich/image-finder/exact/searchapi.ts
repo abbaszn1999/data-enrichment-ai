@@ -9,10 +9,9 @@
 export const SEARCHAPI_BASE = "https://www.searchapi.io/api/v1/search";
 /**
  * Live calls answer in ~7-17s. A slow call is worth waiting for (SearchApi
- * bills any 200 even if we already hung up), but the row still has to fit
- * IMAGE_FINDER_ROW_TIMEOUT_SECONDS (1,500s): worst case is 2 row attempts x
- * (2 searches x this + Agent 2's 300s + image checks) = 2 x (240 + 330) =
- * 1,140s at 120s, leaving ~360s spare. Do not raise this past ~150s.
+ * bills any 200 even if we already hung up), but the row still has to fit the
+ * Image Finder chain (see pipeline.ts): Exact runs up to 2 searches of this
+ * length plus Agent 2's 300s. Do not raise this past ~150s.
  */
 const REQUEST_TIMEOUT_MS = 120_000;
 
@@ -26,6 +25,21 @@ export function requireSearchApiKey(): string {
   return apiKey;
 }
 
+/**
+ * A failed Google AI Mode call. `billed` says whether SearchApi charged for
+ * it: it bills a request that returned HTTP 200 with a Success status, and
+ * does not bill errors, timeouts we never got an answer to, or non-200s.
+ */
+export class SearchApiCallError extends Error {
+  readonly billed: boolean;
+
+  constructor(message: string, billed: boolean) {
+    super(message);
+    this.name = "SearchApiCallError";
+    this.billed = billed;
+  }
+}
+
 export interface GoogleAiModeReferenceLink {
   link: string;
   title?: string;
@@ -34,24 +48,66 @@ export interface GoogleAiModeReferenceLink {
 }
 
 export interface GoogleAiModeResult {
-  /** The model's raw answer text (text_blocks joined, falling back to markdown). */
+  /** The answer text to read first (text_blocks joined, else markdown). Empty when the call returned no text. */
   text: string;
+  /**
+   * Every distinct rendering of the answer, best first: the joined
+   * text_blocks (list and table items included) and the markdown. A parser
+   * tries each, because the JSON we asked for can sit in either.
+   */
+  texts: string[];
   referenceLinks: GoogleAiModeReferenceLink[];
+  httpStatus: number;
+  elapsedMs: number;
 }
 
 interface GoogleAiModeApiResponse {
   search_metadata?: { status?: string };
-  text_blocks?: Array<{ answer?: unknown }>;
-  markdown?: string;
+  text_blocks?: unknown[];
+  markdown?: unknown;
   reference_links?: Array<{ link?: unknown; title?: unknown; snippet?: unknown; source?: unknown }>;
   error?: unknown;
 }
 
+/** Keys of a text block that carry readable text. */
+const TEXT_KEYS = new Set(["answer", "code", "text", "content", "value", "snippet"]);
+
 /**
- * Calls SearchApi's Google AI Mode engine with one query. Billed on success
- * (HTTP 200) only — see SEARCHAPI_COST_PER_SEARCH in lib/ai-pricing.ts. The
- * caller is responsible for recording that cost even when the answer ends up
- * unusable (the request still happened and SearchApi still billed it).
+ * Text of one text_blocks entry, including list items and table cells, which
+ * nest their text under other keys than a plain paragraph's `answer`.
+ */
+function blockText(block: unknown, depth = 0): string[] {
+  if (depth > 6 || block === null || block === undefined) return [];
+  if (typeof block === "string") return [block];
+  if (Array.isArray(block)) return block.flatMap((item) => blockText(item, depth + 1));
+  if (typeof block !== "object") return [];
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(block as Record<string, unknown>)) {
+    if (TEXT_KEYS.has(key) && typeof value === "string") out.push(value);
+    else if (value && typeof value === "object") out.push(...blockText(value, depth + 1));
+  }
+  return out;
+}
+
+/** The distinct renderings of an answer, in the order a parser should try them. */
+export function answerTexts(data: Pick<GoogleAiModeApiResponse, "text_blocks" | "markdown">): string[] {
+  const fromBlocks = (Array.isArray(data.text_blocks) ? data.text_blocks : [])
+    .flatMap((block) => blockText(block))
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n");
+  const markdown = typeof data.markdown === "string" ? data.markdown.trim() : "";
+  const texts: string[] = [];
+  if (fromBlocks) texts.push(fromBlocks);
+  if (markdown && markdown !== fromBlocks) texts.push(markdown);
+  return texts;
+}
+
+/**
+ * Calls SearchApi's Google AI Mode engine with one query. Returns only for a
+ * billed call (HTTP 200, Success): the caller records that cost immediately,
+ * even when the answer then turns out unusable. A call that throws was not
+ * billed unless the error says so (SearchApiCallError.billed).
  */
 export async function callGoogleAiMode(query: string): Promise<GoogleAiModeResult> {
   const apiKey = requireSearchApiKey();
@@ -61,6 +117,7 @@ export async function callGoogleAiMode(query: string): Promise<GoogleAiModeResul
     api_key: apiKey,
   });
 
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("timeout")), REQUEST_TIMEOUT_MS);
   let response: Response;
@@ -71,34 +128,47 @@ export async function callGoogleAiMode(query: string): Promise<GoogleAiModeResul
       headers: { Accept: "application/json" },
     });
   } catch (error) {
-    throw new Error(
-      `SearchApi Google AI Mode request failed: ${error instanceof Error ? error.message : String(error)}`
+    throw new SearchApiCallError(
+      `SearchApi Google AI Mode request failed: ${error instanceof Error ? error.message : String(error)}`,
+      false
     );
   } finally {
     clearTimeout(timer);
   }
 
-  const rawText = await response.text();
+  let rawText: string;
+  try {
+    rawText = await response.text();
+  } catch (error) {
+    throw new SearchApiCallError(
+      `SearchApi Google AI Mode response could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      false
+    );
+  }
   if (!response.ok) {
-    throw new Error(`SearchApi Google AI Mode failed (${response.status}): ${rawText.slice(0, 300)}`);
+    throw new SearchApiCallError(
+      `SearchApi Google AI Mode failed (${response.status}): ${rawText.slice(0, 300)}`,
+      false
+    );
   }
 
   let data: GoogleAiModeApiResponse;
   try {
     data = JSON.parse(rawText) as GoogleAiModeApiResponse;
   } catch {
-    throw new Error("SearchApi Google AI Mode returned non-JSON body");
+    throw new SearchApiCallError("SearchApi Google AI Mode returned non-JSON body", false);
   }
-  if (data.error) {
-    throw new Error(String(data.error));
+  const status = data.search_metadata?.status;
+  if (data.error || (typeof status === "string" && status !== "Success")) {
+    // SearchApi charges Success responses only; an error body is not one.
+    console.warn("[Image Finder/Exact] Google AI Mode returned an error body with HTTP 200", {
+      status,
+      error: String(data.error ?? "").slice(0, 200),
+    });
+    throw new SearchApiCallError(String(data.error ?? `SearchApi status ${status}`), false);
   }
 
-  const fromBlocks = (data.text_blocks ?? [])
-    .map((block) => (typeof block?.answer === "string" ? block.answer : ""))
-    .filter(Boolean)
-    .join("\n");
-  const text = fromBlocks || (typeof data.markdown === "string" ? data.markdown : "");
-
+  const texts = answerTexts(data);
   const referenceLinks: GoogleAiModeReferenceLink[] = (data.reference_links ?? [])
     .map((ref) => ({
       link: String(ref?.link ?? "").trim(),
@@ -108,5 +178,11 @@ export async function callGoogleAiMode(query: string): Promise<GoogleAiModeResul
     }))
     .filter((ref) => /^https?:\/\//i.test(ref.link));
 
-  return { text, referenceLinks };
+  return {
+    text: texts[0] ?? "",
+    texts,
+    referenceLinks,
+    httpStatus: response.status,
+    elapsedMs: Date.now() - startedAt,
+  };
 }

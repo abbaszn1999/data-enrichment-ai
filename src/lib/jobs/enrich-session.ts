@@ -17,7 +17,7 @@ import {
   type EnrichRowOutcome,
 } from "./enrich-row";
 import { isImageFinderRun } from "@/lib/enrich/image-finder/agent";
-import { resolveEnrichmentModel } from "@/types";
+import { PRODUCT_MODE_COLUMN_IDS } from "@/types";
 import { rowsNeedingRecheck, SheetDomainLearner } from "@/lib/enrich/image-finder/sheet-learning";
 import { runJobWithFailureGuard } from "./guard";
 import { notifyJobEvent } from "./notify";
@@ -214,12 +214,11 @@ async function runCatalogWork(
   const shouldHalt = () => stopObserved || superseded || pausedNoCredits || providerUnavailable || fatalError !== null;
 
   // Image Finder: websites that verified this sheet's products guide later
-  // rows. The final re-check of Not-found rows is a second full billed
-  // attempt per row, so it only runs on the Premium tier — Standard trades
-  // that extra recall for a lower guaranteed cost (see agent.ts).
+  // rows. The final re-check of Not-found rows runs Premium alone (it is the
+  // tier that uses those learned websites), billed under its own `:recheck`
+  // key, and runs for every Image Finder run (see image-finder/pipeline.ts).
   const imageFinder = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns);
-  const imageFinderRecheckEnabled =
-    imageFinder && resolveEnrichmentModel(settings.enrichmentModel) === "premium";
+  const imageFinderRecheckEnabled = imageFinder;
   const learner = imageFinder
     ? SheetDomainLearner.fromRows(project.rows.filter((row) => row.status === "done"))
     : null;
@@ -288,6 +287,7 @@ async function runCatalogWork(
           cost: usage.cost,
           tokens: usage.tokens,
           billedAttempts: usage.billedAttempts,
+          details: usage.details,
           settings,
           recheck,
           ...(outcome.ok ? {} : { unfinished: true }),
@@ -396,7 +396,7 @@ async function runCatalogWork(
         }
         if (!outcome.ok) {
           // AI work already billed was charged above; the customer is out of credits.
-          if (charged && !charged.ok && charged.noCredits) {
+          if ((charged && !charged.ok && charged.noCredits) || (charged?.ok && charged.outOfCredits)) {
             pausedNoCredits = true;
             stopObserved = true;
           }
@@ -432,6 +432,13 @@ async function runCatalogWork(
             processed.add(outcome.rowId);
           }
           return [outcome.rowId];
+        }
+        // Image Finder ran out of credits on this row: what was left of the
+        // balance was taken and the finished result is kept below; the run
+        // pauses so the remaining rows wait for a top-up.
+        if (charged?.ok && charged.outOfCredits) {
+          pausedNoCredits = true;
+          stopObserved = true;
         }
         processed.add(outcome.rowId);
         const split = splitEnriched(outcome.data);
@@ -494,7 +501,9 @@ async function runCatalogWork(
         const outcome = await runRow(rowId, { learnedDomains, recheck: true });
         const charged = await chargeRow(outcome, true);
         if (superseded) return;
-        if (charged && !charged.ok && charged.noCredits) pausedNoCredits = true;
+        if ((charged && !charged.ok && charged.noCredits) || (charged?.ok && charged.outOfCredits)) {
+          pausedNoCredits = true;
+        }
         if (!outcome.ok) {
           // A failed re-check keeps the first pass's Not-found result.
           if (outcome.cancelled) stopObserved = true;
@@ -502,6 +511,10 @@ async function runCatalogWork(
           continue;
         }
         if (charged && !charged.ok) continue;
+        // A re-check that still found nothing keeps the first pass's Not-found
+        // note, which lists what every tier tried; it is charged either way.
+        const recheckImages = outcome.data[PRODUCT_MODE_COLUMN_IDS.images];
+        if (!Array.isArray(recheckImages) || recheckImages.length === 0) continue;
         await commitOrFail(() => {
           const row = byId.get(rowId);
           if (!row) return [];

@@ -48,9 +48,12 @@ export const ENRICH_ROW_TIMEOUT_SECONDS = 600;
  */
 export const GALLERY_ROW_TIMEOUT_SECONDS = 1_500;
 /**
- * Image Finder rows run a multi-step research loop: up to JOB_ROW_ATTEMPTS
- * attempts of IMAGE_FINDER_ATTEMPT_BUDGET_MS (540s) each, plus image checks.
+ * An Image Finder row runs the automatic Standard → Exact → Premium chain
+ * once. The chain stops starting tiers when 2100s of its own row deadline
+ * (IMAGE_FINDER_CHAIN_BUDGET_MS) have passed and each tier has its own worst
+ * case budget inside that, so this is the hard backstop above it, leaving
+ * room for the image checks and the charge.
  */
-export const IMAGE_FINDER_ROW_TIMEOUT_SECONDS = 1_500;
+export const IMAGE_FINDER_ROW_TIMEOUT_SECONDS = 2_400;
 export const SESSION_TIMEOUT_SECONDS = 86_400;
 export const JOB_TASK_PLAN = "flex" as const;

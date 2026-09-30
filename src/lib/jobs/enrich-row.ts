@@ -39,6 +39,8 @@ export type EnrichRowOutcome =
       tokens: number;
       /** OpenAI calls billed for this row, including failed attempts before the success. */
       billedAttempts: number;
+      /** Provider breakdown recorded with the charge (see usageDetails). */
+      details?: Record<string, unknown>;
     }
   | {
       ok: false;
@@ -58,6 +60,26 @@ export interface BilledUsage {
   cost: number;
   tokens: number;
   billedAttempts: number;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * What one row's charge is made of, per provider, recorded with the charge so
+ * it can be reconciled against each provider's own dashboard.
+ */
+export function usageDetails(
+  costs: AiCallCost[],
+  meta?: { tiersRun: string[]; foundBy?: string }
+): Record<string, unknown> {
+  const summed = sumCosts(costs);
+  return {
+    ...(meta ? { tiersRun: meta.tiersRun, foundBy: meta.foundBy ?? "" } : {}),
+    openAiCost: summed.totalCost - summed.breakdown.searchApiCost,
+    openAiTokens: summed.totalTokens,
+    webSearchCalls: summed.breakdown.webSearchCalls,
+    searchApiCalls: summed.breakdown.searchApiCalls,
+    searchApiCost: summed.breakdown.searchApiCost,
+  };
 }
 
 /** Usage OpenAI billed, or undefined when nothing was billed. */
@@ -70,6 +92,7 @@ function billedUsage(costs: AiCallCost[]): BilledUsage | undefined {
     cost: summed.totalCost,
     tokens: summed.totalTokens,
     billedAttempts: costs.length,
+    details: usageDetails(costs),
   };
 }
 
@@ -157,7 +180,12 @@ export async function processCatalogRow(params: {
   // success includes earlier failed attempts, and a failed or stopped row is
   // charged for what was billed before it ended.
   const failedAttemptCosts: AiCallCost[] = [];
-  for (let attempt = 1; attempt <= JOB_ROW_ATTEMPTS; attempt += 1) {
+  // Image Finder already runs three tiers per row, so a second whole-row
+  // attempt would re-pay every provider; a failed row is simply run again.
+  const rowAttempts = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns)
+    ? 1
+    : JOB_ROW_ATTEMPTS;
+  for (let attempt = 1; attempt <= rowAttempts; attempt += 1) {
     try {
       const enriched = await enrichRow({
         productData,
@@ -199,6 +227,7 @@ export async function processCatalogRow(params: {
         cost: costs.totalCost,
         tokens: costs.totalTokens,
         billedAttempts: billed.length,
+        details: usageDetails(billed, enriched.meta),
       };
     } catch (error) {
       // Stop and an out-of-quota account end the row at once — no retry.
@@ -222,7 +251,7 @@ export async function processCatalogRow(params: {
       }
       failedAttemptCosts.push(...billedCostsOf(error));
       lastError = error instanceof Error ? error.message : "Enrichment failed";
-      if (attempt < JOB_ROW_ATTEMPTS) {
+      if (attempt < rowAttempts) {
         // Stop never starts a fresh attempt: the row stays pending for a
         // later run and is charged only for what OpenAI already billed.
         if (params.shouldCancel && (await params.shouldCancel().catch(() => false))) {
@@ -255,39 +284,80 @@ export async function chargeCatalogRow(params: {
   recheck?: boolean;
   /** The row failed or was stopped; this charges only the AI calls already billed. */
   unfinished?: boolean;
-}): Promise<{ ok: true; remaining?: number } | { ok: false; noCredits: boolean; error: string }> {
+  /** Per-provider breakdown stored with the charge (see usageDetails). */
+  details?: Record<string, unknown>;
+}): Promise<
+  | {
+      ok: true;
+      remaining?: number;
+      /** The balance ran out: only `chargedCredits` of `fullCredits` could be taken. The run must pause. */
+      outOfCredits?: { fullCredits: number; chargedCredits: number };
+    }
+  | { ok: false; noCredits: boolean; error: string }
+> {
   if (params.credits <= 0) return { ok: true };
-  const result = await deductCreditsIdempotent({
-    ownerUserId: params.settings.ownerUserId,
-    workspaceId: params.workspaceId,
-    actorUserId: params.settings.actorUserId,
-    amount: params.credits,
-    operation: "catalog_intelligence",
-    entityType: params.settings.kind === "plp" ? "catalog_plp_row" : "catalog_row",
-    entityId: params.rowId,
-    idempotencyKey: catalogCreditIdempotencyKey(params.runId, params.rowId, params.recheck),
-    details: {
-      sessionId: params.sessionId,
-      rowIndex: params.rowIndex,
-      enrichmentModel: params.settings.enrichmentModel,
-      model: isImageFinderRun(params.settings.kind ?? "product", params.settings.enabledColumns)
-        ? IMAGE_FINDER_OPENAI_MODEL
-        : resolveEnrichOpenAiModel(params.settings.enrichmentModel),
-      ...(params.recheck ? { recheck: true } : {}),
-      ...(params.unfinished ? { unfinished: true } : {}),
-      billedAttempts: params.billedAttempts ?? 1,
-      totalCost: params.cost,
-      totalTokens: params.tokens,
-    },
-  });
-  if (!result.success) {
-    return {
-      ok: false,
-      noCredits: isInsufficientCredits(result.error),
-      error: result.error || "Credit deduction failed",
-    };
+  const imageFinder = isImageFinderRun(params.settings.kind ?? "product", params.settings.enabledColumns);
+  const deduct = (amount: number, partial: boolean) =>
+    deductCreditsIdempotent({
+      ownerUserId: params.settings.ownerUserId,
+      workspaceId: params.workspaceId,
+      actorUserId: params.settings.actorUserId,
+      amount,
+      operation: "catalog_intelligence",
+      entityType: params.settings.kind === "plp" ? "catalog_plp_row" : "catalog_row",
+      entityId: params.rowId,
+      idempotencyKey: catalogCreditIdempotencyKey(params.runId, params.rowId, params.recheck),
+      details: {
+        sessionId: params.sessionId,
+        rowIndex: params.rowIndex,
+        enrichmentModel: params.settings.enrichmentModel,
+        model: imageFinder
+          ? IMAGE_FINDER_OPENAI_MODEL
+          : resolveEnrichOpenAiModel(params.settings.enrichmentModel),
+        ...(params.recheck ? { recheck: true } : {}),
+        ...(params.unfinished ? { unfinished: true } : {}),
+        billedAttempts: params.billedAttempts ?? 1,
+        totalCost: params.cost,
+        totalTokens: params.tokens,
+        ...(params.details ?? {}),
+        fullCredits: params.credits,
+        chargedCredits: amount,
+        ...(partial ? { partial: true } : {}),
+      },
+    });
+
+  const result = await deduct(params.credits, false);
+  if (result.success) return { ok: true, remaining: result.remaining };
+
+  const noCredits = isInsufficientCredits(result.error);
+  // Image Finder: the AI work (up to three tiers) is already done and billed
+  // to us. Take whatever balance is left under the same idempotency key (a
+  // retry after a crash finds it and does not charge twice), keep the
+  // result, and let the run pause.
+  if (imageFinder && noCredits && /insufficient credits|insufficient_credits/i.test(result.error ?? "")) {
+    const available = Math.floor(Math.max(0, result.remaining ?? 0) * 1000) / 1000;
+    if (available > 0) {
+      const partial = await deduct(available, true);
+      if (partial.success) {
+        return {
+          ok: true,
+          remaining: 0,
+          outOfCredits: { fullCredits: params.credits, chargedCredits: available },
+        };
+      }
+    } else {
+      return {
+        ok: true,
+        remaining: 0,
+        outOfCredits: { fullCredits: params.credits, chargedCredits: 0 },
+      };
+    }
   }
-  return { ok: true, remaining: result.remaining };
+  return {
+    ok: false,
+    noCredits,
+    error: result.error || "Credit deduction failed",
+  };
 }
 
 export type CatalogRowTaskInput = {

@@ -10,7 +10,12 @@ import type {
   SessionKind,
   ColumnLayout,
 } from "@/types";
-import { DEFAULT_ENRICHMENT_COLUMNS, DEFAULT_ENRICHMENT_SETTINGS, resolveEnrichmentModel } from "@/types";
+import {
+  DEFAULT_ENRICHMENT_COLUMNS,
+  DEFAULT_ENRICHMENT_SETTINGS,
+  ensureImageSourcesColumn,
+  resolveEnrichmentModel,
+} from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
 import { expandToGroupMemberIds, visibleCatalogRows } from "@/lib/catalog/product-groups";
 import { moveColumn, toggleColumnHidden } from "@/lib/sheet/column-layout";
@@ -714,7 +719,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         })),
         originalColumns: session.originalColumns,
         sourceColumns: session.sourceColumns,
-        enrichmentColumns: session.enrichmentColumns,
+        enrichmentColumns: ensureImageSourcesColumn(session.enrichmentColumns, get().sessionKind),
         enrichmentSettings: normalizeEnrichmentSettings(session.enrichmentSettings),
         columnVisibility: session.columnVisibility || {},
         selectedRowIds: new Set(session.rows.map((r) => r.id)),
@@ -741,7 +746,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       originalColumns: columns,
       rows: rows.map((r) => ({ ...r, selected: false })),
       sourceColumns,
-      enrichmentColumns,
+      enrichmentColumns: ensureImageSourcesColumn(enrichmentColumns, sessionKind ?? "product"),
       enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
       columnVisibility,
       columnLayout: columnLayout ?? { order: [], hidden: [] },
@@ -797,10 +802,13 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         const orphanCustom = state.enrichmentColumns.filter(
           (c) => c.isCustom && !presetIds.has(c.id)
         );
-        next.enrichmentColumns = [
-          ...enrichmentColumns.map((col) => ({ ...col })),
-          ...orphanCustom.map((col) => ({ ...col, enabled: false })),
-        ];
+        next.enrichmentColumns = ensureImageSourcesColumn(
+          [
+            ...enrichmentColumns.map((col) => ({ ...col })),
+            ...orphanCustom.map((col) => ({ ...col, enabled: false })),
+          ],
+          state.sessionKind
+        );
       }
 
       if (sourceColumns) {

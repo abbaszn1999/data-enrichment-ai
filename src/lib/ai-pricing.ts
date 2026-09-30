@@ -241,6 +241,10 @@ export interface AiCallCost {
   /** SearchApi.io (Google AI Mode) cost — Image Finder "Exact Match" link lookups. */
   searchApiCost: number;
   totalCost: number;
+  /** Hosted web-search calls this entry billed (record keeping; the cost is in searchCost). */
+  webSearchCalls?: number;
+  /** SearchApi.io calls this entry billed (record keeping; the cost is in searchApiCost). */
+  searchApiCalls?: number;
 }
 
 function readUsageNumber(
@@ -381,6 +385,7 @@ export function calculateGroundedCallCost(
     serpApiCost: 0,
     searchApiCost: 0,
     totalCost,
+    webSearchCalls: queries,
   };
 }
 
@@ -402,8 +407,35 @@ export function calculateOpenAiWebSearchCost(
             typeof source.input_tokens_details === "object"
               ? (source.input_tokens_details as Record<string, unknown>)
               : {};
+          const outputDetails =
+            source.output_tokens_details &&
+            typeof source.output_tokens_details === "object"
+              ? (source.output_tokens_details as Record<string, unknown>)
+              : {};
+          // OpenAI's output_tokens already include reasoning tokens. Split them
+          // out for the breakdown only: candidates + thoughts stays equal to
+          // output_tokens, so the price is unchanged.
+          const outputTokens = typeof source.output_tokens === "number" ? source.output_tokens : null;
+          const reasoning =
+            typeof outputDetails.reasoning_tokens === "number" ? outputDetails.reasoning_tokens : 0;
+          const splitReasoning =
+            outputTokens !== null &&
+            reasoning > 0 &&
+            reasoning <= outputTokens &&
+            typeof source.thought_tokens !== "number" &&
+            typeof source.total_thought_tokens !== "number";
           return {
             ...source,
+            ...(splitReasoning
+              ? {
+                  output_tokens: outputTokens - reasoning,
+                  thought_tokens: reasoning,
+                  total_tokens:
+                    typeof source.total_tokens === "number"
+                      ? source.total_tokens
+                      : (typeof source.input_tokens === "number" ? source.input_tokens : 0) + outputTokens,
+                }
+              : {}),
             cached_tokens:
               typeof source.cached_tokens === "number"
                 ? source.cached_tokens
@@ -572,6 +604,7 @@ export function createSearchApiCost(searchCount: number = 1): AiCallCost {
     serpApiCost: 0,
     searchApiCost: cost,
     totalCost: cost,
+    searchApiCalls: Math.max(0, searchCount),
   };
 }
 
@@ -607,8 +640,12 @@ export function sumCosts(costs: AiCallCost[]): {
     serperCost: number;
     serpApiCost: number;
     searchApiCost: number;
+    webSearchCalls: number;
+    searchApiCalls: number;
   };
 } {
+  let webSearchCalls = 0;
+  let searchApiCalls = 0;
   let totalTokens = 0;
   let inputCost = 0;
   let cachedInputCost = 0;
@@ -629,6 +666,8 @@ export function sumCosts(costs: AiCallCost[]): {
     serperCost += c.serperCost;
     serpApiCost += c.serpApiCost ?? 0;
     searchApiCost += c.searchApiCost ?? 0;
+    webSearchCalls += c.webSearchCalls ?? 0;
+    searchApiCalls += c.searchApiCalls ?? 0;
   }
 
   const totalCost =
@@ -654,6 +693,8 @@ export function sumCosts(costs: AiCallCost[]): {
       serperCost,
       serpApiCost,
       searchApiCost,
+      webSearchCalls,
+      searchApiCalls,
     },
   };
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { enrichRow } = await import("../../agent");
+// The Exact tier on its own; the automatic chain around it is covered by pipeline.test.ts.
+const { findProductImagesExact: enrichRow } = await import("./agent");
 const { OPENAI_RESPONSES_URL } = await import("../../openai");
 const { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } = await import("../not-found");
 const { IMAGE_FINDER_EXACT_IMAGES_SKILL } = await import("./images-skill");

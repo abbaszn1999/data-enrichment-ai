@@ -18,7 +18,7 @@
  * when attempt 1 produced no usable link, and asks for DIFFERENT search
  * angles instead of repeating the obvious ones.
  */
-import { extractJsonObject } from "./json-extract";
+import { extractJsonValues } from "./json-extract";
 
 /** Agent 1 returns at most this many exact-match links, best first. */
 export const EXACT_LINKS_MAX = 10;
@@ -235,32 +235,102 @@ function stringField(record: Record<string, unknown>, ...keys: string[]): string
   return undefined;
 }
 
-/** Like parseExactLinksResult, but also says whether the answer was readable at all (so "unreadable" can be told apart from "none found"). */
-export function parseExactLinksAnswer(text: string): ExactLinksParse {
-  const parsed = extractJsonObject(text);
-  if (!parsed) return { result: "NO_EXACT_MATCH", matches: [], readable: false };
+const MATCH_ARRAY_KEYS = ["matches", "results", "links", "urls", "pages", "products"];
+const URL_KEYS = ["url", "link", "href", "uri"];
 
-  const rawMatches = Array.isArray(parsed.matches) ? parsed.matches : [];
-  const matches: ExactLinkCandidate[] = [];
-  for (const item of rawMatches) {
-    if (!item || typeof item !== "object") continue;
-    const record = item as Record<string, unknown>;
-    const url = String(record.url ?? "").trim();
-    if (!url) continue;
-    matches.push({
-      url,
-      site: stringField(record, "site"),
-      matchedOn: stringField(record, "matchedOn", "matched_on"),
-      evidence: stringField(record, "evidence"),
-      differences: stringField(record, "differences"),
-    });
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function matchArrayOf(record: Record<string, unknown>): unknown[] | null {
+  for (const key of MATCH_ARRAY_KEYS) {
+    if (Array.isArray(record[key])) return record[key] as unknown[];
   }
+  return null;
+}
 
+function looksLikeMatchList(value: unknown): value is unknown[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === "string" || (isRecord(item) && URL_KEYS.some((key) => key in item)))
+  );
+}
+
+/** Whether a parsed JSON value is (or contains) the answer we asked for. */
+function isAnswerShape(value: unknown): boolean {
+  if (isRecord(value)) return "result" in value || matchArrayOf(value) !== null;
+  return looksLikeMatchList(value);
+}
+
+function toCandidate(item: unknown): ExactLinkCandidate | null {
+  if (typeof item === "string") {
+    const url = item.trim();
+    return /^https?:\/\//i.test(url) ? { url } : null;
+  }
+  if (!isRecord(item)) return null;
+  const url = String(stringField(item, ...URL_KEYS) ?? "").trim();
+  if (!url) return null;
   return {
-    result: parsed.result === "MATCHES_FOUND" ? "MATCHES_FOUND" : "NO_EXACT_MATCH",
+    url,
+    site: stringField(item, "site"),
+    matchedOn: stringField(item, "matchedOn", "matched_on"),
+    evidence: stringField(item, "evidence"),
+    differences: stringField(item, "differences"),
+  };
+}
+
+/**
+ * Like parseExactLinksResult, but also says whether the answer was readable
+ * at all (so "unreadable" can be told apart from "none found"). Looks at
+ * every JSON value in the text and takes the one shaped like the answer (an
+ * object with `matches`/`result`, or a bare list of links), preferring one
+ * that actually lists links. Whenever links are listed the answer counts as
+ * MATCHES_FOUND, whatever the `result` field says.
+ */
+export function parseExactLinksAnswer(text: string): ExactLinksParse {
+  const shaped = extractJsonValues(text, isAnswerShape).filter(isAnswerShape);
+  if (shaped.length === 0) return { result: "NO_EXACT_MATCH", matches: [], readable: false };
+
+  let best: ExactLinkCandidate[] | null = null;
+  for (const value of shaped) {
+    const items = isRecord(value) ? (matchArrayOf(value) ?? []) : (value as unknown[]);
+    const candidates = items.map(toCandidate).filter((c): c is ExactLinkCandidate => c !== null);
+    if (best === null || (best.length === 0 && candidates.length > 0)) best = candidates;
+    if (best.length > 0) break;
+  }
+  const matches = best ?? [];
+  return {
+    result: matches.length > 0 ? "MATCHES_FOUND" : "NO_EXACT_MATCH",
     matches,
     readable: true,
   };
+}
+
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'`\]\[(){}|\\^]+/gi;
+
+/**
+ * Last resort for an answer with no readable JSON: pick the https links out of
+ * the answer text and the pages Google AI Mode cited. They are unverified
+ * leads (`matchedOn` is left unstated), so they still go through the link
+ * checks and Agent 2 opens and confirms each one before any image is kept.
+ * Only used when the answer was unreadable — never to second-guess an answer
+ * that plainly said there is no exact match.
+ */
+export function harvestLinkCandidates(text: string, referenceLinks: string[] = []): ExactLinkCandidate[] {
+  const seen = new Set<string>();
+  const out: ExactLinkCandidate[] = [];
+  const add = (raw: string) => {
+    const url = raw.replace(/[.,;:!?)\]]+$/, "").trim();
+    if (!/^https:\/\//i.test(url)) return;
+    const key = url.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ url, matchedOn: "unstated" });
+  };
+  for (const found of text.match(URL_IN_TEXT) ?? []) add(found);
+  for (const link of referenceLinks) add(link);
+  return out;
 }
 
 /** Tolerant of the casing the model actually used (camelCase asked for; snake_case sometimes returned). */

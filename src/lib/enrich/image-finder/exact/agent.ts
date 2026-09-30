@@ -14,7 +14,7 @@ import { collectOpenedPages, looksLikeDirectImageUrl } from "../../tool-results"
 import type { EnrichAgentParams, EnrichAgentResult } from "../../types";
 import { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } from "../not-found";
 import { extractRowIdentifiers } from "../tools/identifiers";
-import { verifyImageUrls } from "../verify-images";
+import { keepLoadableImages, unverifiedImagesNote } from "../verify-images";
 import { buildExactImagesPrompt, IMAGE_FINDER_EXACT_IMAGES_SKILL } from "./images-skill";
 import type { CheckedExactLink } from "./links-checks";
 import { EXACT_LINKS_MAX } from "./links-skill";
@@ -24,7 +24,7 @@ const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
 export const EXACT_MATCH_BASIS = "exact";
 export const EXACT_MATCH_NOTE =
-  "Exact match — Google AI Mode found the product link; GPT-6 Sol confirmed it and pulled the images.";
+  "Exact match â€” Google AI Mode found the product link; GPT-6 Sol confirmed it and pulled the images.";
 
 /** Agent 2 has no function tools (matches Standard's one-shot design): a single OpenAI call. */
 export const IMAGE_FINDER_EXACT_BUDGET_MS = 300_000;
@@ -67,22 +67,6 @@ function exactImagesSchema(imageCount: number): Record<string, unknown> {
   };
 }
 
-/**
- * `%XX`-encoded characters can break an otherwise-real image URL (seen on a
- * CDN that serves `filters%3Aformat%28avif%29` as a path segment while the
- * plain `filters:format(avif)` form of the same URL loads); try the decoded
- * form too before giving up on a candidate.
- */
-function decodedVariant(url: string): string | null {
-  if (!/%[0-9A-Fa-f]{2}/.test(url)) return null;
-  try {
-    const decoded = decodeURIComponent(url);
-    return decoded !== url ? decoded : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Host without `www.` plus path without trailing slash; query and hash dropped. */
 function pageKey(raw: string): string {
   try {
@@ -100,7 +84,7 @@ function pageKey(raw: string): string {
  * searches for more exact pages of the same item, and returns up to 7
  * images. If the first search yields no usable link, Agent 1 automatically
  * searches once more with different angles (links-search.ts). Still no
- * links → Not found with a note saying what each search returned, and
+ * links â†’ Not found with a note saying what each search returned, and
  * Agent 2 never runs, so the SearchApi calls are the only cost for that row.
  */
 export async function findProductImagesExact(
@@ -144,6 +128,7 @@ export async function findProductImagesExact(
     allowedDomains: domainRules.allowedDomains,
     blockedDomains: domainRules.blockedDomains,
     rowIdentifiers: identifierValues,
+    learnedDomains: params.learnedDomains,
     knownPages: checkedLinks,
   });
 
@@ -157,7 +142,7 @@ export async function findProductImagesExact(
       const record = (item ?? {}) as { url?: unknown; pageUrl?: unknown };
       const imageUrl = String(record.url ?? "").trim();
       const pageUrl = String(record.pageUrl ?? "").trim();
-      // Agent 2 must have opened the page itself in this call — a known page
+      // Agent 2 must have opened the page itself in this call â€” a known page
       // from Agent 1 is a lead, not proof, until Agent 2 confirms it here.
       if (!looksLikeDirectImageUrl(imageUrl) || !opened.has(pageKey(pageUrl))) continue;
       const key = imageUrl.toLowerCase();
@@ -167,24 +152,7 @@ export async function findProductImagesExact(
     }
     const withinRules = filterImagesByDomainRules(candidates, domainRules);
 
-    const variantsByUrl = new Map<string, string[]>();
-    const toVerify: string[] = [];
-    for (const candidate of withinRules) {
-      const variants = [candidate.imageUrl];
-      const decoded = decodedVariant(candidate.imageUrl);
-      if (decoded) variants.push(decoded);
-      variantsByUrl.set(candidate.imageUrl, variants);
-      toVerify.push(...variants);
-    }
-    const loadable = await verifyImageUrls(toVerify);
-    const images: ImageUrl[] = [];
-    for (const candidate of withinRules) {
-      if (images.length >= brief.imageCount) break;
-      const variants = variantsByUrl.get(candidate.imageUrl) ?? [candidate.imageUrl];
-      const working = variants.find((variant) => loadable.has(variant.toLowerCase()));
-      if (!working) continue;
-      images.push({ ...candidate, imageUrl: working });
-    }
+    const { images, unverified } = await keepLoadableImages(withinRules, brief.imageCount);
 
     let reason = "";
     if (images.length === 0) {
@@ -198,7 +166,9 @@ export async function findProductImagesExact(
       [IMAGE_COLUMN_ID]: images,
       [imageFinderNotFoundKey(IMAGE_COLUMN_ID)]: reason,
       [imageFinderMatchBasisKey(IMAGE_COLUMN_ID)]: matched ? EXACT_MATCH_BASIS : "",
-      [imageFinderMatchNoteKey(IMAGE_COLUMN_ID)]: matched ? EXACT_MATCH_NOTE : "",
+      [imageFinderMatchNoteKey(IMAGE_COLUMN_ID)]: matched
+        ? [EXACT_MATCH_NOTE, unverifiedImagesNote(unverified)].filter(Boolean).join(" ")
+        : "",
     };
   };
 
@@ -227,7 +197,7 @@ export async function findProductImagesExact(
   } catch (error) {
     // SearchApi already billed this row (Agent 1 ran) even when Agent 2's
     // OpenAI call fails outright, so its cost must ride along on every
-    // error path — including a plain Error with zero OpenAI cost billed.
+    // error path â€” including a plain Error with zero OpenAI cost billed.
     const extraCosts = [...linksSearch.costs, ...billedCostsOf(error)];
     const message = error instanceof Error ? error.message : String(error);
     if (error instanceof EnrichCancelledError) throw new EnrichCancelledError(message, extraCosts);

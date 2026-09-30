@@ -24,6 +24,11 @@ export function imageFinderMatchNoteKey(columnId: string): string {
   return `${columnId}__matchNote`;
 }
 
+/** Sibling key holding which tier found the images: standard, exact or premium. */
+export function imageFinderFoundByKey(columnId: string): string {
+  return `${columnId}__foundBy`;
+}
+
 /** Match types that are not an exact code match, so the sheet labels them. */
 export function isApproximateImageMatch(matchBasis: unknown): boolean {
   return (

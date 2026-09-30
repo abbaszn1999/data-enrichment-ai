@@ -160,6 +160,32 @@ describe("runEnrichSession charges exactly what OpenAI billed, whatever the outc
       expect.objectContaining({ onlyIfActive: true })
     );
   });
+
+  it("keeps and saves a finished row whose charge could only be paid in part, then pauses the job", async () => {
+    project.current = { rows: [makeRow("r1", 1)], columns: ["Code"] };
+    chargeCatalogRow.mockResolvedValueOnce({
+      ok: true,
+      remaining: 0,
+      outOfCredits: { fullCredits: 1.25, chargedCredits: 0.4 },
+    } as never);
+    await run({
+      ok: true,
+      rowId: "r1",
+      data: { imageUrls: [{ imageUrl: "https://cdn.test/a.jpg", pageUrl: "https://shop.test/p", title: "t" }] },
+      originalPatches: {},
+      ...billed,
+    });
+
+    const row = project.current!.rows[0]!;
+    expect(row.status).toBe("done");
+    expect(row.enrichedData.imageUrls).toHaveLength(1);
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.objectContaining({ status: "paused_no_credits" }),
+      expect.objectContaining({ onlyIfActive: true })
+    );
+  });
 });
 
 describe("runEnrichSession lifecycle guarantees", () => {
@@ -308,7 +334,7 @@ describe("runEnrichSession lifecycle guarantees", () => {
   });
 });
 
-describe("Image Finder recheck pass respects the tier", () => {
+describe("Image Finder final re-check pass", () => {
   const notFoundKey = "imageUrls__notFoundReason";
   const found = (rowId: string, host: string) => ({
     ok: true as const,
@@ -367,10 +393,9 @@ describe("Image Finder recheck pass respects the tier", () => {
     expect(recheckCalls[0]![1].learnedDomains).toEqual(["store.test"]);
   });
 
-  it("never spends the second billed attempt on Standard", async () => {
+  it("runs it for every Image Finder run, whatever tier setting was saved (there is no tier to pick)", async () => {
     const processRow = await runWithTier("standard");
-    // Still processed once as the first pass, just never rechecked.
-    expect(processRow.mock.calls.filter(([id]) => id === "r3")).toHaveLength(1);
-    expect(processRow.mock.calls.some(([, context]) => context.recheck === true)).toBe(false);
+    const recheckCalls = processRow.mock.calls.filter(([, context]) => context.recheck === true);
+    expect(recheckCalls.map(([id]) => id)).toEqual(["r3"]);
   });
 });

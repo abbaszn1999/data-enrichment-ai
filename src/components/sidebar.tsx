@@ -61,11 +61,11 @@ import { FunctionsPanel } from "@/components/functions-panel";
 import {
   LANGUAGE_OPTIONS,
   MODEL_OPTIONS,
-  IMAGE_FINDER_EXACT_MODEL_OPTION,
   TONE_OPTIONS,
   getDefaultEnrichmentColumns,
   resolveEnrichmentModel,
   PRODUCT_MODE_COLUMN_IDS,
+  IMAGE_SOURCES_COLUMN_ID,
   isProductModeColumn,
   catalogModeForRunColumns,
   type CatalogSidebarMode,
@@ -566,11 +566,21 @@ export function Sidebar() {
 
   const handleEnrich = useCallback(async () => {
     const isNewTab = mode !== "enrich" || enrichOutputTab === "new";
+    // Image Finder always writes two columns: the images and the pages they came from.
+    const imageSourcesColumn =
+      mode === "images"
+        ? (enrichmentColumns.find((col) => col.id === IMAGE_SOURCES_COLUMN_ID) ??
+          getDefaultEnrichmentColumns("product").find((col) => col.id === IMAGE_SOURCES_COLUMN_ID) ??
+          null)
+        : null;
     const runColumns =
       mode === "enrich"
         ? enrichListColumns.filter((c) => c.enabled)
         : modeColumn
-          ? [{ ...modeColumn, enabled: true }]
+          ? [
+              { ...modeColumn, enabled: true },
+              ...(imageSourcesColumn ? [{ ...imageSourcesColumn, enabled: true }] : []),
+            ]
           : [];
     const runColumnIds = runColumns.map((c) => c.id);
     if (useSheetStore.getState().isStoppingEnrich) return;
@@ -578,6 +588,10 @@ export function Sidebar() {
     // Mode columns start hidden in the grid; show them once they are generated.
     if (modeColumn && !modeColumn.enabled) {
       updateEnrichmentColumnConfig(modeColumn.id, { enabled: true });
+    }
+    // Sessions load with the column present (see ensureImageSourcesColumn in the store).
+    if (imageSourcesColumn && enrichmentColumns.some((col) => col.id === imageSourcesColumn.id && !col.enabled)) {
+      updateEnrichmentColumnConfig(imageSourcesColumn.id, { enabled: true });
     }
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (!workspaceId || !projectId) {
@@ -1892,13 +1906,25 @@ export function Sidebar() {
                 </div>
                 )}
 
+                {/* Image Finder has no model to pick: every row runs Standard, then Exact, then Premium. */}
+                {mode === "images" && (
+                  <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
+                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">Automatic search</p>
+                    <p className="text-[10px] text-muted-foreground/70">
+                      Each row tries a fast search first, then an exact-match search, then a deep search. The first
+                      to find verified images is used, and the row is charged once for everything that ran.
+                    </p>
+                  </div>
+                )}
+
                 {/* Enrichment Model */}
+                {mode !== "images" && (
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                     Enrichment Model
                   </label>
                   <div className="space-y-1">
-                    {(mode === "images" ? [...MODEL_OPTIONS, IMAGE_FINDER_EXACT_MODEL_OPTION] : MODEL_OPTIONS).map((opt) => {
+                    {MODEL_OPTIONS.map((opt) => {
                       const isSelected = enrichmentSettings.enrichmentModel === opt.value;
                       return (
                         <div
@@ -1928,6 +1954,7 @@ export function Sidebar() {
                     })}
                   </div>
                 </div>
+                )}
 
               </div>
             )}

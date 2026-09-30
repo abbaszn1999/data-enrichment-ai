@@ -111,6 +111,14 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     customInstruction: "Find high-quality product images, preferably on white background",
   },
   {
+    id: "imageSourceUrls",
+    label: "Image sources",
+    description: "The product pages the found images came from. Filled by Image Finder.",
+    type: "sourceUrls",
+    enabled: false,
+    sourceCount: 10,
+  },
+  {
     id: "sourceUrls",
     label: "Source URLs",
     description: "Web sources used to research this product.",
@@ -272,6 +280,14 @@ export const PRODUCT_MODE_COLUMN_IDS = {
   images: "imageUrls",
 } as const;
 
+/**
+ * Image Finder always writes a second column next to Image URLs: the product
+ * pages the images came from (clickable links). It is filled by the Image
+ * Finder run itself, never selected in the Enrichment list, and its id is
+ * distinct from the Enrichment-mode `sourceUrls` column.
+ */
+export const IMAGE_SOURCES_COLUMN_ID = "imageSourceUrls";
+
 export type CatalogSidebarMode = "enrich" | keyof typeof PRODUCT_MODE_COLUMN_IDS;
 
 export function isProductModeColumn(
@@ -280,8 +296,27 @@ export function isProductModeColumn(
 ): boolean {
   return (
     kind !== "plp" &&
-    (id === PRODUCT_MODE_COLUMN_IDS.categories || id === PRODUCT_MODE_COLUMN_IDS.images)
+    (id === PRODUCT_MODE_COLUMN_IDS.categories ||
+      id === PRODUCT_MODE_COLUMN_IDS.images ||
+      id === IMAGE_SOURCES_COLUMN_ID)
   );
+}
+
+/**
+ * Sessions saved before the Image sources column existed (and presets that
+ * predate it) lack it. Adds it right after Image URLs so Image Finder always
+ * has a place to write; leaves PLP sessions and columns already present alone.
+ */
+export function ensureImageSourcesColumn(
+  columns: EnrichmentColumn[],
+  kind: SessionKind | null | undefined
+): EnrichmentColumn[] {
+  if (kind === "plp" || columns.some((col) => col.id === IMAGE_SOURCES_COLUMN_ID)) return columns;
+  const template = DEFAULT_ENRICHMENT_COLUMNS.find((col) => col.id === IMAGE_SOURCES_COLUMN_ID);
+  if (!template) return columns;
+  const at = columns.findIndex((col) => col.id === PRODUCT_MODE_COLUMN_IDS.images);
+  if (at < 0) return columns;
+  return [...columns.slice(0, at + 1), { ...template }, ...columns.slice(at + 1)];
 }
 
 /** Which sidebar mode a run belongs to, from the column ids it generates. */
@@ -289,9 +324,15 @@ export function catalogModeForRunColumns(
   tab: "existing" | "new" | null,
   columnIds: string[]
 ): CatalogSidebarMode {
-  if (tab === "new" && columnIds.length === 1) {
-    if (columnIds[0] === PRODUCT_MODE_COLUMN_IDS.categories) return "categories";
-    if (columnIds[0] === PRODUCT_MODE_COLUMN_IDS.images) return "images";
+  if (tab === "new" && columnIds.length === 1 && columnIds[0] === PRODUCT_MODE_COLUMN_IDS.categories) {
+    return "categories";
+  }
+  if (
+    tab === "new" &&
+    columnIds.includes(PRODUCT_MODE_COLUMN_IDS.images) &&
+    columnIds.every((id) => id === PRODUCT_MODE_COLUMN_IDS.images || id === IMAGE_SOURCES_COLUMN_ID)
+  ) {
+    return "images";
   }
   return "enrich";
 }
@@ -309,22 +350,23 @@ export interface EnrichmentEvent {
 export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turkish" | "German" | "Chinese" | "Japanese" | "custom";
 
 /**
- * UI tier: Standard is balanced; Premium reasons and searches deeper.
- * "exact" is Image-Finder-only: Google AI Mode finds exact-match product
- * links, then GPT-6 Sol pulls images from them (see image-finder/exact/).
- * Catalog AI enrichment (enrich/agent.ts) never sees "exact" — only Image
- * Finder's isImageFinderRun path dispatches on it.
+ * Tier label. Catalog AI enrichment uses Standard / Premium from the user's
+ * setting. "exact" is an Image-Finder-internal label (Google AI Mode finds
+ * exact-match product links, then GPT-6 Sol pulls images from them, see
+ * image-finder/exact/): Image Finder no longer has a tier setting, it runs
+ * Standard, then Exact, then Premium automatically per row (see
+ * image-finder/pipeline.ts), so a saved setting never resolves to "exact".
  */
 export type EnrichmentModel = "standard" | "premium" | "exact";
 
 /**
  * Map legacy Gemini / OpenAI ids saved in presets to current tiers.
- * Pro / Sol → premium; Fast / Terra / unknown → standard; exact passes through.
+ * Pro / Sol → premium; Fast / Terra / unknown (including a leftover "exact"
+ * from before Image Finder became automatic) → standard.
  */
 export function resolveEnrichmentModel(
   model: string | null | undefined
 ): EnrichmentModel {
-  if (model === "exact") return "exact";
   if (
     model === "premium" ||
     model === "gemini-3.1-pro-preview" ||
@@ -390,14 +432,6 @@ export const MODEL_OPTIONS: { value: EnrichmentModel; label: string; description
   { value: "standard", label: "Standard", description: "Balanced quality and cost", icon: "⚡" },
   { value: "premium", label: "Premium", description: "Highest quality, deeper search", icon: "✨" },
 ];
-
-/** Image-Finder-only tier, appended after MODEL_OPTIONS so other callers (Catalog AI enrichment) never see it. */
-export const IMAGE_FINDER_EXACT_MODEL_OPTION: { value: EnrichmentModel; label: string; description: string; icon: string } = {
-  value: "exact",
-  label: "Exact Match",
-  description: "Exact-match product links, then images pulled from them",
-  icon: "🎯",
-};
 
 export const TONE_OPTIONS: { value: WritingTone; label: string; description: string }[] = [
   { value: "professional", label: "Professional", description: "Formal and business-like" },

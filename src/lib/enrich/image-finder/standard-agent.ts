@@ -9,7 +9,7 @@ import { buildImageFinderBrief } from "./brief";
 import { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } from "./not-found";
 import { IMAGE_FINDER_STANDARD_SKILL } from "./standard-skill";
 import { extractRowIdentifiers } from "./tools/identifiers";
-import { verifyImageUrls } from "./verify-images";
+import { keepLoadableImages, unverifiedImagesNote } from "./verify-images";
 
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
@@ -17,7 +17,7 @@ const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 export const IMAGE_FINDER_STANDARD_BUDGET_MS = 300_000;
 
 export const STANDARD_MATCH_BASIS = "standard";
-export const STANDARD_MATCH_NOTE = "Fast match from web search — not independently page-verified.";
+export const STANDARD_MATCH_NOTE = "Fast match from web search â€” not independently page-verified.";
 
 function standardSchema(imageCount: number): Record<string, unknown> {
   return {
@@ -61,7 +61,7 @@ function pageKey(raw: string): string {
 
 /**
  * Standard-tier Image Finder: one Responses call with the hosted web_search
- * tool only — no function tools, so openai.ts sends exactly one request and
+ * tool only â€” no function tools, so openai.ts sends exactly one request and
  * never enters its round loop. An image is kept only when its page was
  * really opened by web_search in that same call, the link is a direct image
  * that actually loads, and it passes the website rules. The page content is
@@ -109,10 +109,7 @@ export async function findProductImagesStandard(params: EnrichAgentParams): Prom
       candidates.push({ imageUrl, pageUrl, title: `${STANDARD_MATCH_NOTE} Product image` });
     }
     const withinRules = filterImagesByDomainRules(candidates, domainRules);
-    const loadable = await verifyImageUrls(withinRules.map((image) => image.imageUrl));
-    const images = withinRules
-      .filter((image) => loadable.has(image.imageUrl.toLowerCase()))
-      .slice(0, brief.imageCount);
+    const { images, unverified } = await keepLoadableImages(withinRules, brief.imageCount);
 
     let reason = "";
     if (images.length === 0) {
@@ -125,7 +122,9 @@ export async function findProductImagesStandard(params: EnrichAgentParams): Prom
       [IMAGE_COLUMN_ID]: images,
       [imageFinderNotFoundKey(IMAGE_COLUMN_ID)]: reason,
       [imageFinderMatchBasisKey(IMAGE_COLUMN_ID)]: matched ? STANDARD_MATCH_BASIS : "",
-      [imageFinderMatchNoteKey(IMAGE_COLUMN_ID)]: matched ? STANDARD_MATCH_NOTE : "",
+      [imageFinderMatchNoteKey(IMAGE_COLUMN_ID)]: matched
+        ? [STANDARD_MATCH_NOTE, unverifiedImagesNote(unverified)].filter(Boolean).join(" ")
+        : "",
     };
   };
 

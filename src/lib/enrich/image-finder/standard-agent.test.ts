@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { enrichRow } = await import("../agent");
+// The Standard tier on its own; the automatic chain around it is covered by pipeline.test.ts.
+const { findProductImagesStandard: enrichRow } = await import("./standard-agent");
 const { OPENAI_RESPONSES_URL } = await import("../openai");
 const { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } = await import("./not-found");
 const { IMAGE_FINDER_STANDARD_SKILL } = await import("./standard-skill");

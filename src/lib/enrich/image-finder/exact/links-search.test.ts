@@ -1,18 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { callGoogleAiMode } = vi.hoisted(() => ({ callGoogleAiMode: vi.fn() }));
-vi.mock("./searchapi", () => ({ callGoogleAiMode }));
+vi.mock("./searchapi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./searchapi")>()),
+  callGoogleAiMode,
+}));
 
-const { searchExactLinks } = await import("./links-search");
+const { searchExactLinks, parseBestAnswer } = await import("./links-search");
+const { SearchApiCallError } = await import("./searchapi");
 
 const input = {
   rowData: { Brand: "Haier", Code: "HRF-570WH" },
   rowIdentifiers: ["HRF-570WH"],
 };
 
+function call(texts: string[], referenceLinks: Array<{ link: string }> = []) {
+  return { text: texts[0] ?? "", texts, referenceLinks, httpStatus: 200, elapsedMs: 5 };
+}
 const found = (url: string) =>
-  ({ text: JSON.stringify({ result: "MATCHES_FOUND", matches: [{ url, evidence: "HRF-570WH" }] }), referenceLinks: [] });
-const none = () => ({ text: JSON.stringify({ result: "NO_EXACT_MATCH", matches: [] }), referenceLinks: [] });
+  call([JSON.stringify({ result: "MATCHES_FOUND", matches: [{ url, evidence: "HRF-570WH" }] })]);
+const none = () => call([JSON.stringify({ result: "NO_EXACT_MATCH", matches: [] })]);
 
 afterEach(() => callGoogleAiMode.mockReset());
 
@@ -42,7 +49,7 @@ describe("searchExactLinks", () => {
 
   it("retries when the first answer could not be read, and when every link was rejected", async () => {
     callGoogleAiMode
-      .mockResolvedValueOnce({ text: "Sorry, I cannot help.", referenceLinks: [] })
+      .mockResolvedValueOnce(call(["Sorry, I cannot help."]))
       .mockResolvedValueOnce(found("https://shop.test/p/3"));
     expect((await searchExactLinks(input)).attempts).toBe(2);
 
@@ -55,7 +62,7 @@ describe("searchExactLinks", () => {
 
   it("explains both searches when neither finds a link", async () => {
     callGoogleAiMode
-      .mockResolvedValueOnce({ text: "no json", referenceLinks: [] })
+      .mockResolvedValueOnce(call(["no json"]))
       .mockResolvedValueOnce(found("https://bare-domain.test"));
     const result = await searchExactLinks(input);
 
@@ -69,9 +76,17 @@ describe("searchExactLinks", () => {
   });
 
   it("does not retry when the first call fails (nothing was billed)", async () => {
-    callGoogleAiMode.mockRejectedValueOnce(new Error("SearchApi Google AI Mode failed (401)"));
+    callGoogleAiMode.mockRejectedValueOnce(new SearchApiCallError("SearchApi Google AI Mode failed (401)", false));
     await expect(searchExactLinks(input)).rejects.toThrow("failed (401)");
     expect(callGoogleAiMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges a first call that failed after SearchApi billed it", async () => {
+    callGoogleAiMode.mockRejectedValueOnce(new SearchApiCallError("billed but broken", true));
+    await expect(searchExactLinks(input)).rejects.toMatchObject({
+      name: "EnrichBilledAttemptError",
+      costs: [expect.objectContaining({ searchApiCost: expect.any(Number) })],
+    });
   });
 
   it("stays Not found (not an error) when the second call fails, keeping the first call's cost", async () => {
@@ -84,6 +99,12 @@ describe("searchExactLinks", () => {
     expect(result.notFoundReason).toContain("search 2 failed: network down");
   });
 
+  it("keeps the cost of a second call that failed after it was billed", async () => {
+    callGoogleAiMode.mockResolvedValueOnce(none()).mockRejectedValueOnce(new SearchApiCallError("billed", true));
+    const result = await searchExactLinks(input);
+    expect(result.costs).toHaveLength(2);
+  });
+
   it("does not run the second search when the job was cancelled", async () => {
     callGoogleAiMode.mockResolvedValueOnce(none());
     await expect(searchExactLinks({ ...input, shouldCancel: async () => true })).rejects.toMatchObject({
@@ -91,5 +112,46 @@ describe("searchExactLinks", () => {
       costs: [expect.objectContaining({ searchApiCost: expect.any(Number) })],
     });
     expect(callGoogleAiMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the links Google cited when the answer has no readable JSON, and still bills the call", async () => {
+    callGoogleAiMode.mockResolvedValueOnce(
+      call(["Here you go: https://shop.test/haier-hrf-570wh."], [{ link: "https://other.test/p/hrf-570wh" }])
+    );
+    const result = await searchExactLinks(input);
+
+    expect(callGoogleAiMode).toHaveBeenCalledTimes(1);
+    expect(result.links.map((l) => l.url)).toEqual(["https://shop.test/haier-hrf-570wh", "https://other.test/p/hrf-570wh"]);
+    expect(result.links[0].matchedOn).toBe("unstated");
+    expect(result.costs).toHaveLength(1);
+  });
+
+  it("does not turn an explicit 'no exact match' answer into links from its citations", async () => {
+    callGoogleAiMode
+      .mockResolvedValueOnce(call([JSON.stringify({ result: "NO_EXACT_MATCH", matches: [] })], [{ link: "https://shop.test/p/x" }]))
+      .mockResolvedValueOnce(none());
+    const result = await searchExactLinks(input);
+    expect(result.links).toEqual([]);
+  });
+});
+
+describe("parseBestAnswer", () => {
+  it("reads the rendering that has the links when the other has none", () => {
+    const parsed = parseBestAnswer([
+      "The result is below.",
+      '```json\n{"result":"MATCHES_FOUND","matches":[{"url":"https://shop.test/p"}]}\n```',
+    ]);
+    expect(parsed.matches.map((m) => m.url)).toEqual(["https://shop.test/p"]);
+  });
+
+  it("prefers a readable 'none' over an unreadable text", () => {
+    const parsed = parseBestAnswer(["prose", '{"result":"NO_EXACT_MATCH","matches":[]}']);
+    expect(parsed.readable).toBe(true);
+    expect(parsed.matches).toEqual([]);
+  });
+
+  it("is unreadable when no rendering has JSON", () => {
+    expect(parseBestAnswer(["a", "b"]).readable).toBe(false);
+    expect(parseBestAnswer([]).readable).toBe(false);
   });
 });

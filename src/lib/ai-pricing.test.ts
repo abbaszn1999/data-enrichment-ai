@@ -110,3 +110,36 @@ describe("costToCredits", () => {
     expect(createSearchApiCost(0).totalCost).toBe(0);
   });
 });
+
+describe("reasoning tokens and call counts", () => {
+  it("splitting reasoning tokens out for the breakdown does not change the price", () => {
+    const plain = calculateOpenAiWebSearchCost("gpt-6-sol", { input_tokens: 5_000, output_tokens: 4_000 }, 2);
+    const split = calculateOpenAiWebSearchCost(
+      "gpt-6-sol",
+      { input_tokens: 5_000, output_tokens: 4_000, output_tokens_details: { reasoning_tokens: 3_000 } },
+      2
+    );
+    expect(split.totalCost).toBeCloseTo(plain.totalCost, 12);
+    expect(split.usage.thoughtsTokens).toBe(3_000);
+    expect(split.usage.candidatesTokens).toBe(1_000);
+    expect(split.usage.totalTokens).toBe(plain.usage.totalTokens);
+  });
+
+  it("ignores impossible reasoning counts instead of guessing", () => {
+    const cost = calculateOpenAiWebSearchCost(
+      "gpt-6-sol",
+      { input_tokens: 100, output_tokens: 50, output_tokens_details: { reasoning_tokens: 500 } },
+      0
+    );
+    expect(cost.usage.thoughtsTokens).toBe(0);
+  });
+
+  it("records web-search and SearchApi call counts and sums them across tiers", () => {
+    const openAi = calculateOpenAiWebSearchCost("gpt-6-sol", { input_tokens: 100, output_tokens: 50 }, 3);
+    expect(openAi.webSearchCalls).toBe(3);
+    const summed = sumCosts([openAi, createSearchApiCost(1), createSearchApiCost(2), openAi]);
+    expect(summed.breakdown.webSearchCalls).toBe(6);
+    expect(summed.breakdown.searchApiCalls).toBe(3);
+    expect(summed.totalCost).toBeCloseTo(openAi.totalCost * 2 + SEARCHAPI_COST_PER_SEARCH * 3, 10);
+  });
+});

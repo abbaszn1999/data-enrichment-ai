@@ -4,7 +4,9 @@ vi.mock("node:dns/promises", () => ({
   lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
 }));
 
-const { enrichRow } = await import("../agent");
+// The Premium tier on its own; the automatic chain around it is covered by pipeline.test.ts.
+const { findProductImagesPremium: enrichRow } = await import("./premium-agent");
+const { enrichRow: enrichGeneric } = await import("../agent");
 const { OPENAI_RESPONSES_URL } = await import("../openai");
 const { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } = await import("./not-found");
 const { IMAGE_FINDER_SKILL } = await import("./skill");
@@ -289,7 +291,7 @@ describe("Image Finder agent v2 (Premium)", () => {
       [finalAnswer({ imageUrls: [], enhancedTitle: "Widget", notes: "" })],
       {}
     );
-    await enrichRow({ ...params, enabledColumns: ["imageUrls", "enhancedTitle"] });
+    await enrichGeneric({ ...params, enabledColumns: ["imageUrls", "enhancedTitle"] });
     const request = openAiRequests(fetchMock)[0];
     expect(request.instructions).toBeUndefined();
     expect(request.text.format.name).not.toBe("catalog_image_finder");
