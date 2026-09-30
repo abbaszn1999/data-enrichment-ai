@@ -9,7 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { getImportSession, type ImportSession } from "@/lib/supabase";
 import { loadProjectJson } from "@/lib/storage-helpers";
 import { useWorkspaceContext } from "../../workspace-context";
-import { useSheetStore } from "@/store/sheet-store";
+import { flushProjectSave, useSheetStore } from "@/store/sheet-store";
 import type { MatchingRule } from "@/lib/matching";
 import { applyMatchTypes, resolveTargetCategoryNames } from "@/lib/import-matching";
 import { shouldRecomputeMatchTypes } from "@/lib/catalog/session-rows";
@@ -35,6 +35,27 @@ export default function EnrichPage() {
   const loadedRef = useRef(false);
 
   const { loadProject, rows, fileName, productGroupColumn } = useSheetStore();
+
+  // Edits are autosaved a few seconds after the last change; leaving the page
+  // or hiding the tab stores them at once so nothing pending is lost.
+  useEffect(() => {
+    const flush = () => void flushProjectSave();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
+
+  const backToProjects = async () => {
+    await flushProjectSave();
+    router.push(`/w/${slug}/catalog-intelligence`);
+  };
 
   useEffect(() => {
     if (!sessionId || !workspace || loadedRef.current) return;
@@ -166,7 +187,7 @@ export default function EnrichPage() {
             variant="ghost"
             size="sm"
             className="h-8 w-8 rounded-lg p-0"
-            onClick={() => router.push(`/w/${slug}/catalog-intelligence`)}
+            onClick={() => void backToProjects()}
             aria-label="Back to Catalog Intelligence"
           >
             <ArrowLeft className="h-4 w-4" />

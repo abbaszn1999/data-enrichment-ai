@@ -202,7 +202,9 @@ async function generateSynchronously(request: NextRequest) {
       { status: 400, headers: auth.headers }
     );
   }
-  worksheet = normalizeGalleryWorksheet(body.worksheetSnapshot);
+  // Rows always come from the stored worksheet: the browser copy may be behind a
+  // run that just finished, and saving it back would erase generated results.
+  worksheet = normalizeGalleryWorksheet(loadedWorksheet);
 
   let runtimeSettings: GalleryProjectSettings;
   try {

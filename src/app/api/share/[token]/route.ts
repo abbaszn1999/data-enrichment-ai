@@ -8,8 +8,26 @@ import { loadGalleryWorksheetAdmin } from "@/lib/gallery/storage-admin";
 import { signGalleryWorksheetImages } from "@/lib/gallery/signed-urls";
 import { loadVisualizerWorksheetAdmin, signVisualizerWorksheetImages } from "@/lib/visualizer/storage-admin";
 import { resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
+import { parseGalleryProjectSettings } from "@/lib/gallery/settings-schema";
+import { applyGalleryProjectSettings } from "@/lib/gallery/types";
+import { parseVisualizerProjectSettings } from "@/lib/visualizer/settings-schema";
+import { applyVisualizerProjectSettings } from "@/lib/visualizer/types";
 
 type Ctx = { params: Promise<{ token: string }> };
+
+function withStoredSettings<W, S>(
+  worksheet: W,
+  raw: unknown,
+  parse: (raw: unknown) => S,
+  apply: (worksheet: W, settings: S) => W
+): W {
+  if (!raw || typeof raw !== "object" || Object.keys(raw).length === 0) return worksheet;
+  try {
+    return apply(worksheet, parse(raw));
+  } catch {
+    return worksheet;
+  }
+}
 
 /**
  * Public, unauthenticated read-only sheet data for a live share link. Never
@@ -80,14 +98,16 @@ export async function GET(request: NextRequest, context: Ctx) {
     if (link.resource_type === "gallery") {
       const { data: session } = await admin
         .from("gallery_sessions")
-        .select("name")
+        .select("name, settings")
         .eq("id", link.resource_id)
         .eq("workspace_id", link.workspace_id)
         .maybeSingle();
-      const worksheet = await loadGalleryWorksheetAdmin(link.workspace_id, link.resource_id);
-      if (!worksheet) {
+      const stored = await loadGalleryWorksheetAdmin(link.workspace_id, link.resource_id);
+      if (!stored) {
         return NextResponse.json({ error: "This project no longer exists" }, { status: 404 });
       }
+      // Settings autosave into the session row, so they are fresher than the worksheet file.
+      const worksheet = withStoredSettings(stored, session?.settings, parseGalleryProjectSettings, applyGalleryProjectSettings);
       const signedUrls = await signGalleryWorksheetImages(worksheet);
       return NextResponse.json({
         resourceType: "gallery",
@@ -105,14 +125,15 @@ export async function GET(request: NextRequest, context: Ctx) {
     if (link.resource_type === "visualizer") {
       const { data: session } = await admin
         .from("visualizer_sessions")
-        .select("name")
+        .select("name, settings")
         .eq("id", link.resource_id)
         .eq("workspace_id", link.workspace_id)
         .maybeSingle();
-      const worksheet = await loadVisualizerWorksheetAdmin(link.workspace_id, link.resource_id);
-      if (!worksheet) {
+      const stored = await loadVisualizerWorksheetAdmin(link.workspace_id, link.resource_id);
+      if (!stored) {
         return NextResponse.json({ error: "This project no longer exists" }, { status: 404 });
       }
+      const worksheet = withStoredSettings(stored, session?.settings, parseVisualizerProjectSettings, applyVisualizerProjectSettings);
       const signedUrls = await signVisualizerWorksheetImages(worksheet);
       const rows = worksheet.rows.map((row) => ({
         ...row,

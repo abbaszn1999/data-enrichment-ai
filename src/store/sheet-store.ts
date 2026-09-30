@@ -739,34 +739,39 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   // Supabase project
   loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped, productGroupColumn, columnLayout, view) => {
     const groupColumn = productGroupColumn ?? null;
-    set({
-      workspaceId,
-      projectId,
-      sessionKind: sessionKind ?? "product",
-      matchingSkipped: matchingSkipped ?? false,
-      productGroupColumn: groupColumn,
-      fileName,
-      originalColumns: columns,
-      rows: rows.map((r) => ({ ...r, selected: false })),
-      sourceColumns,
-      enrichmentColumns: ensureImageSourcesColumn(enrichmentColumns, sessionKind ?? "product"),
-      enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
-      columnVisibility,
-      columnLayout: columnLayout ?? { order: [], hidden: [] },
-      // Reopen on the tool and sheet tab the user left (product sheets only have the modes).
-      sidebarMode: (sessionKind ?? "product") === "plp" ? "enrich" : (view?.sidebarMode ?? "enrich"),
-      activeSheet: view?.activeSheet === "existing" ? "existing" : "new",
-      selectedRowIds: new Set<string>(),
-      isEnriching: false,
-      isPaused: false,
-      isStoppingEnrich: false,
-      enrichProgress: 0,
-      totalToEnrich: 0,
-      completedEnrich: 0,
-      errorCount: 0,
-      saveStatus: "saved",
-      lastSavedAt: Date.now(),
-    });
+    applyingStoredState = true;
+    try {
+      set({
+        workspaceId,
+        projectId,
+        sessionKind: sessionKind ?? "product",
+        matchingSkipped: matchingSkipped ?? false,
+        productGroupColumn: groupColumn,
+        fileName,
+        originalColumns: columns,
+        rows: rows.map((r) => ({ ...r, selected: false })),
+        sourceColumns,
+        enrichmentColumns: ensureImageSourcesColumn(enrichmentColumns, sessionKind ?? "product"),
+        enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
+        columnVisibility,
+        columnLayout: columnLayout ?? { order: [], hidden: [] },
+        // Reopen on the tool and sheet tab the user left (product sheets only have the modes).
+        sidebarMode: (sessionKind ?? "product") === "plp" ? "enrich" : (view?.sidebarMode ?? "enrich"),
+        activeSheet: view?.activeSheet === "existing" ? "existing" : "new",
+        selectedRowIds: new Set<string>(),
+        isEnriching: false,
+        isPaused: false,
+        isStoppingEnrich: false,
+        enrichProgress: 0,
+        totalToEnrich: 0,
+        completedEnrich: 0,
+        errorCount: 0,
+        saveStatus: "saved",
+        lastSavedAt: Date.now(),
+      });
+    } finally {
+      applyingStoredState = false;
+    }
     // A cross-session module-level "last saved" fingerprint would otherwise
     // read as changed the instant a *different* project's data replaces it,
     // scheduling a phantom autosave a few seconds after every page open —
@@ -779,17 +784,22 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     const errorCount = progress?.errors ?? rows.filter((r) => r.status === "error").length;
     const completed = progress?.completed ?? rows.filter((r) => r.status === "done").length;
     const total = progress?.total ?? get().totalToEnrich;
-    set({
-      rows: rows.map((r) => ({ ...r, selected: r.selected !== false })),
-      completedEnrich: completed,
-      errorCount,
-      enrichProgress: total > 0 ? Math.round((completed / total) * 100) : 0,
-      totalToEnrich: total || get().totalToEnrich,
-      saveStatus: "saved",
-      lastSavedAt: Date.now(),
-    });
+    applyingStoredState = true;
+    try {
+      set({
+        rows: rows.map((r) => ({ ...r, selected: r.selected !== false })),
+        completedEnrich: completed,
+        errorCount,
+        enrichProgress: total > 0 ? Math.round((completed / total) * 100) : 0,
+        totalToEnrich: total || get().totalToEnrich,
+        lastSavedAt: Date.now(),
+      });
+    } finally {
+      applyingStoredState = false;
+    }
     // Rows that came from the server are already stored: they are the new baseline for delta saves.
     snapshotSavedRows(get().rows);
+    reconcileSaveStatus();
   },
 
   setProjectId: (id) => set({ projectId: id }),
@@ -883,18 +893,24 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 }));
 
 // ─── Optimized Auto-save ─────────────────────────────────────────────────────
-// Instead of JSON.stringify-ing ALL rows on every state change, we use a
-// lightweight version counter that only increments on data-changing actions.
-// During enrichment we batch saves (every 5 completed rows) to avoid excessive
-// uploads. The debounce is 8 s for normal edits and enrichment-aware.
+// Instead of JSON.stringify-ing ALL rows on every state change, rows are
+// compared by reference against the copy last stored, and settings by a small
+// config hash. "Unsaved" therefore always means "differs from what is stored":
+// results written by a background run and applied from the server read as
+// saved, and undoing an edit reads as saved again. Edits save 8 s after the last
+// change; leaving the page flushes them at once (flushProjectSave).
 
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
-let lastSavedVersion = -1;
 let lastSavedConfigHash = "";
 // The row objects as last stored, to find what changed without stringifying rows.
 let lastSavedRows = new Map<string, ProductRow>();
+/** True while the store applies state that is already stored (project load, server rows). */
+let applyingStoredState = false;
+/** Saves run one at a time so an older snapshot can never land after a newer one. */
+let saveChain: Promise<void> = Promise.resolve();
 /** Above this many changed rows a delta is not worth it; save everything. */
 const MAX_DELTA_ROWS = 2000;
+const SAVE_DEBOUNCE_MS = 8000;
 
 function snapshotSavedRows(rows: ProductRow[]): void {
   lastSavedRows = new Map(rows.map((r) => [r.id, r]));
@@ -929,6 +945,11 @@ function changedRowsSinceSave(rows: ProductRow[]): ProductRow[] | null {
   return changed;
 }
 
+function rowsDifferFromSaved(rows: ProductRow[]): boolean {
+  const changed = changedRowsSinceSave(rows);
+  return changed === null || changed.length > 0;
+}
+
 function toStoredRow(r: ProductRow) {
   return {
     id: r.id,
@@ -956,18 +977,64 @@ function configHash(state: SheetState): string {
   });
 }
 
+function hasUnsavedProjectChanges(state: SheetState): boolean {
+  return configHash(state) !== lastSavedConfigHash || rowsDifferFromSaved(state.rows);
+}
+
+function clearScheduledSave(): void {
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = null;
+}
+
+function scheduleSave(): void {
+  clearScheduledSave();
+  saveTimeout = setTimeout(() => {
+    saveTimeout = null;
+    void persistProject();
+  }, SAVE_DEBOUNCE_MS);
+}
+
+/**
+ * Sets the badge from the real difference with the stored copy and keeps a
+ * save scheduled only while there is something to store.
+ */
+function reconcileSaveStatus(): void {
+  const state = useSheetStore.getState();
+  if (!state.workspaceId || !state.projectId || !state.fileName) return;
+  if (state.saveStatus === "saving") return;
+  // A running job owns the stored rows: its results arrive through
+  // applyProjectRows, so only settings can be unsaved while it runs.
+  const running = state.isEnriching || state.isStoppingEnrich;
+  const unsaved = running
+    ? configHash(state) !== lastSavedConfigHash
+    : hasUnsavedProjectChanges(state);
+  if (!unsaved) {
+    clearScheduledSave();
+    if (state.saveStatus !== "saved") useSheetStore.setState({ saveStatus: "saved" });
+    return;
+  }
+  if (state.saveStatus === "saved") useSheetStore.setState({ saveStatus: "unsaved" });
+  if (running) return;
+  scheduleSave();
+}
+
 /** Re-baseline the "last saved" fingerprint against whatever is in the store
  * right now (e.g. right after loading a project from Storage). Without this,
  * opening/switching projects immediately looks "changed" against the
  * previous project's fingerprint and schedules a save a few seconds later. */
 function markProjectSnapshotAsSaved(): void {
-  lastSavedVersion = useSheetStore.getState().undoVersion;
+  clearScheduledSave();
   lastSavedConfigHash = configHash(useSheetStore.getState());
   snapshotSavedRows(useSheetStore.getState().rows);
 }
 
-// The actual persist function (extracted so it can be called from multiple places)
-async function persistProject() {
+function persistProject(): Promise<void> {
+  const run = saveChain.then(persistProjectNow, persistProjectNow);
+  saveChain = run.catch(() => undefined);
+  return run;
+}
+
+async function persistProjectNow() {
   const s = useSheetStore.getState();
   if (!s.workspaceId || !s.projectId || !s.fileName) return;
   // Re-check at execution time, not just at scheduling time: a debounce timer
@@ -975,6 +1042,16 @@ async function persistProject() {
   // not fire mid-run or right after it finishes and blindly overwrite the
   // background job's freshly saved results with this stale row snapshot.
   if (s.isEnriching || s.isStoppingEnrich) return;
+
+  // Everything the save compares against is read now, before any await, so a
+  // project opened meanwhile cannot mix its baseline into this save.
+  const savedConfig = configHash(s);
+  const settingsChanged = savedConfig !== lastSavedConfigHash;
+  const changed = changedRowsSinceSave(s.rows);
+  if (!settingsChanged && changed !== null && changed.length === 0) {
+    useSheetStore.setState({ saveStatus: "saved" });
+    return;
+  }
 
   useSheetStore.setState({ saveStatus: "saving" });
 
@@ -999,10 +1076,8 @@ async function persistProject() {
     // Cell edits only send the rows that changed (and the settings when they
     // changed); structural edits (rows added / removed) and big changes send
     // the whole sheet. The server can also ask for a full save.
-    const changed = changedRowsSinceSave(s.rows);
     let savedAsDelta = false;
     if (changed) {
-      const settingsChanged = configHash(s) !== lastSavedConfigHash;
       const result = await saveProjectDelta(s.workspaceId, s.projectId, {
         rows: changed.map(toStoredRow),
         rowCount: s.rows.length,
@@ -1013,72 +1088,53 @@ async function persistProject() {
     if (!savedAsDelta) {
       await saveProjectJson(s.workspaceId, s.projectId, { ...meta, rows: s.rows.map(toStoredRow) });
     }
-    snapshotSavedRows(s.rows);
 
     // Update session metadata in DB (enriched count only)
     const enrichedCount = s.rows.filter((r) => r.status === "done").length;
-    await updateImportSession(s.projectId, {
-      enriched_count: enrichedCount,
-    } as any);
+    await updateImportSession(s.projectId, { enriched_count: enrichedCount });
 
-    lastSavedVersion = s.undoVersion;
-    lastSavedConfigHash = configHash(s);
+    // Another project was opened while this one saved: its own baseline stands.
+    if (useSheetStore.getState().projectId !== s.projectId) return;
+    snapshotSavedRows(s.rows);
+    lastSavedConfigHash = savedConfig;
     useSheetStore.setState({ saveStatus: "saved", lastSavedAt: Date.now() });
+    // Edits made while the request was out are still pending.
+    reconcileSaveStatus();
   } catch (err) {
     console.error("Auto-save failed:", err);
-    useSheetStore.setState({ saveStatus: "error" });
+    if (useSheetStore.getState().projectId === s.projectId) {
+      useSheetStore.setState({ saveStatus: "error" });
+    }
   }
 }
 
-// Track enrichment completions for batching
-let enrichedSinceLastSave = 0;
-const ENRICHMENT_BATCH_SIZE = 5; // save every N enriched rows
-const NORMAL_DEBOUNCE_MS = 8000;
-const ENRICHMENT_DEBOUNCE_MS = 3000; // faster during enrichment for safety
-
-useSheetStore.subscribe((state, prevState) => {
+/**
+ * Stores pending changes right away (leaving the page, hiding the tab).
+ * Resolves once the store matches what is saved, or the save has failed.
+ */
+export async function flushProjectSave(): Promise<void> {
+  const state = useSheetStore.getState();
   if (!state.workspaceId || !state.projectId || !state.fileName) return;
-
-  // ── Quick change detection (no JSON.stringify of rows) ──
-  const versionChanged = state.undoVersion !== prevState.undoVersion;
-  const configChanged = configHash(state) !== lastSavedConfigHash;
-  const rowCountChanged = state.rows.length !== prevState.rows.length;
-
-  // Detect enrichment progress (rows transitioning to done)
-  const prevDone = prevState.rows.filter((r) => r.status === "done").length;
-  const currDone = state.rows.filter((r) => r.status === "done").length;
-  const newlyEnriched = currDone - prevDone;
-  if (newlyEnriched > 0) enrichedSinceLastSave += newlyEnriched;
-
-  // Detect row data changes not covered by undoVersion (enrichedData, status)
-  const enrichDataChanged = newlyEnriched > 0 || state.rows.some((r, i) => {
-    const prev = prevState.rows[i];
-    if (!prev || prev.id !== r.id) return true;
-    return r.status !== prev.status || r.enrichedData !== prev.enrichedData;
-  });
-
-  const hasChanges = versionChanged || configChanged || rowCountChanged || enrichDataChanged;
-  if (!hasChanges) return;
   if (state.isEnriching || state.isStoppingEnrich) return;
-
-  // Mark as unsaved
-  if (state.saveStatus === "saved") {
-    useSheetStore.setState({ saveStatus: "unsaved" });
-  }
-
-  // ── Determine debounce timing ──
-  const isEnriching = state.isEnriching;
-  const debounceMs = isEnriching ? ENRICHMENT_DEBOUNCE_MS : NORMAL_DEBOUNCE_MS;
-
-  // During enrichment: batch saves to every N rows
-  if (isEnriching && enrichedSinceLastSave < ENRICHMENT_BATCH_SIZE && !configChanged && !versionChanged) {
-    // Not enough enriched rows yet — skip scheduling a save
+  if (!saveTimeout && !hasUnsavedProjectChanges(state)) {
+    await saveChain;
     return;
   }
+  clearScheduledSave();
+  await persistProject();
+}
 
-  if (saveTimeout) clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(async () => {
-    enrichedSinceLastSave = 0;
-    await persistProject();
-  }, debounceMs);
+useSheetStore.subscribe((state, prevState) => {
+  if (applyingStoredState) return;
+  if (!state.workspaceId || !state.projectId || !state.fileName) return;
+
+  // Quick change detection: row arrays and the undo counter by reference,
+  // settings by their small hash. Anything else (selection, UI) is ignored.
+  const touched =
+    state.rows !== prevState.rows ||
+    state.undoVersion !== prevState.undoVersion ||
+    configHash(state) !== configHash(prevState);
+  if (!touched) return;
+
+  reconcileSaveStatus();
 });

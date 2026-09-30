@@ -194,7 +194,9 @@ async function generateSynchronously(request: NextRequest) {
     );
   }
 
-  let worksheet = normalizeVisualizerWorksheet(body.worksheetSnapshot);
+  // Rows always come from the stored worksheet: the browser copy may be behind a
+  // run that just finished, and saving it back would erase generated results.
+  let worksheet = normalizeVisualizerWorksheet(loadedWorksheet);
   let runtimeSettings: VisualizerProjectSettings;
   try {
     runtimeSettings = parseVisualizerProjectSettings(body.settingsSnapshot);

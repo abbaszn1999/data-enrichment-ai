@@ -149,7 +149,10 @@ export async function PUT(request: NextRequest, context: Ctx) {
     }
     if (nextRevision === null || nextRevision === undefined) {
       return NextResponse.json(
-        { error: "Project changed in another tab. Reload and try again." },
+        {
+          error: "Project changed in another tab. Reload and try again.",
+          currentRevision: Number(current.settings_revision ?? 0),
+        },
         { status: 409, headers: auth.headers }
       );
     }

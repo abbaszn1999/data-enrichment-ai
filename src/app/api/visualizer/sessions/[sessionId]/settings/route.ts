@@ -6,6 +6,8 @@ import {
   loadVisualizerWorksheetMatchingRevisionAdmin,
   saveVisualizerWorksheetAdmin,
 } from "@/lib/visualizer/storage-admin";
+import { visualizerRowStoreEnabled } from "@/lib/catalog/flag";
+import type { createAdminClient } from "@/lib/supabase-admin";
 import {
   applyVisualizerProjectSettings,
   type VisualizerProjectSettings,
@@ -14,6 +16,30 @@ import {
 } from "@/lib/visualizer/types";
 
 type Ctx = { params: Promise<{ sessionId: string }> };
+
+/**
+ * Column names of a session without downloading the worksheet: every row
+ * carries all columns, so one row of the row store is enough.
+ */
+async function loadSessionColumns(
+  admin: ReturnType<typeof createAdminClient>,
+  workspaceId: string,
+  sessionId: string
+): Promise<string[] | null> {
+  if (visualizerRowStoreEnabled()) {
+    const { data } = await admin
+      .from("visualizer_session_rows")
+      .select("data")
+      .eq("session_id", sessionId)
+      .order("row_index", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    const original = (data?.data as { originalData?: Record<string, unknown> } | null)?.originalData;
+    if (original && typeof original === "object") return Object.keys(original);
+  }
+  const worksheet = await loadVisualizerWorksheetAdmin(workspaceId, sessionId);
+  return worksheet ? worksheet.columns : null;
+}
 
 function settingsColumnsExist(
   settings: VisualizerProjectSettings,
@@ -47,12 +73,13 @@ export async function PUT(request: NextRequest, context: Ctx) {
   const workspaceId = String(body?.workspaceId || "");
   const expectedRevision = Number(body?.expectedRevision);
   const expectedWorksheetRevision = Number(body?.expectedWorksheetRevision);
+  const settingsOnly = !body?.worksheet;
   if (
     !workspaceId ||
     !Number.isInteger(expectedRevision) ||
     expectedRevision < 0 ||
-    !Number.isInteger(expectedWorksheetRevision) ||
-    expectedWorksheetRevision < 0
+    (!settingsOnly &&
+      (!Number.isInteger(expectedWorksheetRevision) || expectedWorksheetRevision < 0))
   ) {
     return NextResponse.json(
       { error: "workspaceId and valid revisions are required" },
@@ -70,6 +97,71 @@ export async function PUT(request: NextRequest, context: Ctx) {
     return NextResponse.json(
       { error: "Invalid visualizer settings" },
       { status: 400, headers: auth.headers }
+    );
+  }
+
+  if (!body?.worksheet) {
+    // Autosave path: only visualizer_sessions.settings changes. Rows are never
+    // re-uploaded, so this is safe during a run (runs use frozen settings).
+    const columns = await loadSessionColumns(auth.admin, workspaceId, sessionId);
+    if (!columns) {
+      return NextResponse.json(
+        { error: "Worksheet not found" },
+        { status: 404, headers: auth.headers }
+      );
+    }
+    if (!settingsColumnsExist(settings, columns)) {
+      return NextResponse.json(
+        { error: "One or more selected columns are invalid" },
+        { status: 400, headers: auth.headers }
+      );
+    }
+    const { data: current, error: currentError } = await auth.admin
+      .from("visualizer_sessions")
+      .select("*")
+      .eq("id", sessionId)
+      .eq("workspace_id", workspaceId)
+      .single();
+    if (currentError || !current) {
+      return NextResponse.json(
+        { error: "Not found" },
+        { status: 404, headers: auth.headers }
+      );
+    }
+    const { data: nextRevision, error: saveError } = await auth.admin.rpc(
+      "save_visualizer_session_settings",
+      {
+        p_session_id: sessionId,
+        p_workspace_id: workspaceId,
+        p_expected_revision: expectedRevision,
+        p_settings: settings,
+      }
+    );
+    if (saveError) {
+      return NextResponse.json(
+        { error: saveError.message },
+        { status: 500, headers: auth.headers }
+      );
+    }
+    if (nextRevision === null || nextRevision === undefined) {
+      return NextResponse.json(
+        {
+          error: "Settings changed in another tab",
+          currentRevision: Number(current.settings_revision ?? 0),
+        },
+        { status: 409, headers: auth.headers }
+      );
+    }
+    return NextResponse.json(
+      {
+        session: {
+          ...(current as VisualizerSession),
+          settings,
+          settings_revision: Number(nextRevision),
+        },
+        settings,
+      },
+      { headers: auth.headers }
     );
   }
 

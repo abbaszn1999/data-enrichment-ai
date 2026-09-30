@@ -143,6 +143,11 @@ const STATUS_LABEL: Record<VisualizerSessionStatus, string> = {
   failed: "Failed",
 };
 
+type SavedVisualizerSettings = {
+  session: VisualizerSession;
+  settings: VisualizerProjectSettings;
+};
+
 const RESULT_DESCRIPTION = "\u0000visualizer:description";
 const RESULT_IMAGES = "\u0000visualizer:images";
 const SELECT_COLUMN = "\u0000visualizer:select";
@@ -363,6 +368,10 @@ export default function ProductsVisualizerPage() {
   const worksheetRef = useRef(worksheet);
   const stopRequestedRef = useRef(false);
   const stopSavedToastRef = useRef(false);
+  /** JSON of the settings as last stored; the page is "saved" when the live settings match it. */
+  const lastSavedSettingsSignatureRef = useRef<string | null>(null);
+  const settingsSaveRef = useRef<Promise<SavedVisualizerSettings | null> | null>(null);
+  const [showLeaveDialog, setShowLeaveDialog] = useState(false);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -440,9 +449,12 @@ export default function ProductsVisualizerPage() {
       const result = await getVisualizerSession(workspace.id, projectId, {
         includeSignedUrls: true,
       });
+      const loadedSettings = result.session.settings || DEFAULT_VISUALIZER_SETTINGS;
       setSession(result.session);
       setWorksheet(result.worksheet);
-      setSettings(result.session.settings || DEFAULT_VISUALIZER_SETTINGS);
+      setSettings(loadedSettings);
+      settingsRef.current = loadedSettings;
+      lastSavedSettingsSignatureRef.current = JSON.stringify(loadedSettings);
       setSignedUrls(result.signedUrls || {});
       settingsRevisionRef.current = Number(
         result.session.settings_revision ?? 0
@@ -846,7 +858,6 @@ export default function ProductsVisualizerPage() {
       description: { ...current.description, tier },
       images: { ...current.images, tier },
     }));
-    setSaveStatus("dirty");
   };
 
   const updateDescriptionField = <
@@ -859,7 +870,6 @@ export default function ProductsVisualizerPage() {
       ...current,
       description: { ...current.description, [key]: value },
     }));
-    setSaveStatus("dirty");
   };
 
   const updateImagesField = <K extends keyof VisualizerProjectSettings["images"]>(
@@ -878,7 +888,6 @@ export default function ProductsVisualizerPage() {
           : current.brand;
       return { ...current, images, brand };
     });
-    setSaveStatus("dirty");
   };
 
   const selectedColumnSet = useMemo(
@@ -930,7 +939,6 @@ export default function ProductsVisualizerPage() {
         selectedColumns: productColumns.filter((item) => next.has(item)),
       };
     });
-    setSaveStatus("dirty");
   };
 
   const toggleAllColumns = () => {
@@ -945,7 +953,6 @@ export default function ProductsVisualizerPage() {
         selectedColumns: allSelected ? [] : [...productColumns],
       };
     });
-    setSaveStatus("dirty");
   };
 
   const sampleForColumn = (column: string) => {
@@ -969,50 +976,28 @@ export default function ProductsVisualizerPage() {
     setAssetBusy(kind);
     try {
       // Send the current UI settings with the upload so layout/branding are not
-      // overwritten by a stale DB copy. Keep the UI on the same local settings.
-      const uiSettings = {
-        ...settingsRef.current,
-        images: {
-          ...settingsRef.current.images,
-          brandingEnabled: true,
-        },
-      };
+      // overwritten by a stale DB copy.
+      const sent = settingsRef.current;
       const result = await uploadVisualizerAsset({
         workspaceId: workspace.id,
         sessionId: session.id,
         kind,
         file,
-        settings: uiSettings,
+        settings: {
+          ...sent,
+          images: { ...sent.images, brandingEnabled: true },
+        },
       });
       const pathKey = kind === "logo" ? "logoPath" : "brandGuidePath";
-      setSettings((current) => {
-        const next = {
-          ...current,
-          images: {
-            ...current.images,
-            brandingEnabled: true,
-            [pathKey]: result.path,
-          },
-        };
-        settingsRef.current = next;
-        return next;
-      });
-      setSession((current) =>
-        current
-          ? {
-              ...current,
-              settings_revision: Number(
-                result.session.settings_revision ?? current.settings_revision
-              ),
-            }
-          : current
-      );
-      settingsRevisionRef.current = Number(
-        result.session.settings_revision ?? settingsRevisionRef.current
-      );
+      adoptSavedSettings(session.id, sent, result, (current) => ({
+        ...current,
+        images: {
+          ...current.images,
+          brandingEnabled: true,
+          [pathKey]: result.path,
+        },
+      }));
       setSignedUrls((current) => ({ ...current, ...result.signedUrls }));
-      // Settings (layout, etc.) were synced with the asset write.
-      setSaveStatus("saved");
       toast.success("Reference image uploaded");
     } catch (error) {
       toast.error(
@@ -1031,38 +1016,18 @@ export default function ProductsVisualizerPage() {
     if (!workspace || !session || !canEdit) return;
     setAssetBusy(kind);
     try {
+      const sent = settingsRef.current;
       const result = await deleteVisualizerAsset({
         workspaceId: workspace.id,
         sessionId: session.id,
         kind,
-        settings: settingsRef.current,
+        settings: sent,
       });
       const pathKey = kind === "logo" ? "logoPath" : "brandGuidePath";
-      setSettings((current) => {
-        const next = {
-          ...current,
-          images: {
-            ...current.images,
-            [pathKey]: null,
-          },
-        };
-        settingsRef.current = next;
-        return next;
-      });
-      setSession((current) =>
-        current
-          ? {
-              ...current,
-              settings_revision: Number(
-                result.session.settings_revision ?? current.settings_revision
-              ),
-            }
-          : current
-      );
-      settingsRevisionRef.current = Number(
-        result.session.settings_revision ?? settingsRevisionRef.current
-      );
-      setSaveStatus("saved");
+      adoptSavedSettings(session.id, sent, result, (current) => ({
+        ...current,
+        images: { ...current.images, [pathKey]: null },
+      }));
       toast.success("Reference image removed");
     } catch (error) {
       toast.error(
@@ -1077,121 +1042,173 @@ export default function ProductsVisualizerPage() {
     }
   };
 
-  const persistSettings = async (options?: { silent?: boolean }) => {
-    if (!workspace || !sessionRef.current || !worksheetRef.current || !canEdit) {
-      return null;
-    }
-    if (generating || generationRun) {
-      if (!options?.silent) {
-        toast.message("Wait until generation finishes before saving.");
+  /**
+   * Records settings the server stored. The UI takes the stored copy unless the
+   * user changed something while the request was out; then `patch` applies
+   * the server-side change (e.g. a new logo path) and autosave sends the rest.
+   */
+  const adoptSavedSettings = useCallback(
+    (
+      sessionId: string,
+      sent: VisualizerProjectSettings,
+      saved: SavedVisualizerSettings,
+      patch?: (current: VisualizerProjectSettings) => VisualizerProjectSettings
+    ) => {
+      if (sessionRef.current?.id !== sessionId) return;
+      const revision = Number(
+        saved.session.settings_revision ?? settingsRevisionRef.current
+      );
+      settingsRevisionRef.current = revision;
+      lastSavedSettingsSignatureRef.current = JSON.stringify(saved.settings);
+      const nextSession = {
+        ...sessionRef.current,
+        settings: saved.settings,
+        settings_revision: revision,
+      };
+      sessionRef.current = nextSession;
+      setSession(nextSession);
+      if (settingsRef.current === sent) {
+        settingsRef.current = saved.settings;
+        setSettings(saved.settings);
+      } else if (patch) {
+        setSettings((current) => {
+          const next = patch(current);
+          settingsRef.current = next;
+          return next;
+        });
       }
-      return null;
-    }
-    setSaveStatus("saving");
-    const attemptSave = async () => {
-      const activeSession = sessionRef.current!;
-      const activeWorksheet = worksheetRef.current!;
-      const activeSettings = settingsRef.current;
-      return saveVisualizerSettings({
-        workspaceId: workspace.id,
-        sessionId: activeSession.id,
-        expectedRevision: settingsRevisionRef.current,
-        expectedWorksheetRevision: worksheetRevisionRef.current,
-        settings: activeSettings,
-        worksheet: {
-          ...activeWorksheet,
-          settings: activeSettings,
-        },
-      });
-    };
+      setSaveStatus(
+        JSON.stringify(settingsRef.current) === lastSavedSettingsSignatureRef.current
+          ? "saved"
+          : "dirty"
+      );
+    },
+    []
+  );
 
-    try {
-      let result;
-      try {
-        result = await attemptSave();
-      } catch (error) {
-        // Revision / sync mismatch: refresh session and retry once with current UI settings.
-        const message =
-          error instanceof VisualizerApiError ? error.message : "";
-        if (
-          error instanceof VisualizerApiError &&
-          error.status === 409 &&
-          /synchroniz|changed|reload/i.test(message)
-        ) {
-          const fresh = await getVisualizerSession(
-            workspace.id,
-            sessionRef.current!.id,
-            {
-              includeSignedUrls: false,
-            }
-          );
-          settingsRevisionRef.current = Number(
-            fresh.session.settings_revision ?? 0
-          );
-          worksheetRevisionRef.current = Number(
-            fresh.session.worksheet_revision ?? 0
-          );
-          setSession((current) =>
-            current
-              ? {
-                  ...current,
-                  settings_revision: settingsRevisionRef.current,
-                  worksheet_revision: worksheetRevisionRef.current,
-                }
-              : fresh.session
-          );
-          if (fresh.worksheet) {
-            const syncedWorksheet: VisualizerWorksheetJson = {
-              ...fresh.worksheet,
-              settings: settingsRef.current,
-            };
-            setWorksheet((current) =>
-              current
-                ? {
-                    ...current,
-                    revision: syncedWorksheet.revision,
-                    rows: syncedWorksheet.rows,
-                    columns: syncedWorksheet.columns,
-                    // Keep the user's current settings in the worksheet object.
-                    settings: settingsRef.current,
-                  }
-                : syncedWorksheet
-            );
-            worksheetRef.current = syncedWorksheet;
+  /** Settings-only save. Safe during a run: rows are never sent, and runs use frozen settings. */
+  const persistSettings = useCallback(
+    async (options?: {
+      silent?: boolean;
+      keepalive?: boolean;
+    }): Promise<SavedVisualizerSettings | null> => {
+      const activeSession = sessionRef.current;
+      if (!workspace || !activeSession || !canEdit) return null;
+      if (settingsSaveRef.current) await settingsSaveRef.current;
+      const sent = settingsRef.current;
+      if (JSON.stringify(sent) === lastSavedSettingsSignatureRef.current) {
+        setSaveStatus("saved");
+        return { session: sessionRef.current ?? activeSession, settings: sent };
+      }
+      setSaveStatus("saving");
+      const run = (async (): Promise<SavedVisualizerSettings | null> => {
+        const attempt = () =>
+          saveVisualizerSettings({
+            workspaceId: workspace.id,
+            sessionId: activeSession.id,
+            expectedRevision: settingsRevisionRef.current,
+            settings: sent,
+            keepalive: options?.keepalive,
+          });
+        try {
+          let saved: SavedVisualizerSettings;
+          try {
+            saved = await attempt();
+          } catch (error) {
+            const currentRevision =
+              error instanceof VisualizerApiError && error.status === 409
+                ? Number(
+                    (error.payload as { currentRevision?: unknown } | null)
+                      ?.currentRevision
+                  )
+                : Number.NaN;
+            if (!Number.isInteger(currentRevision)) throw error;
+            // Another tab or an upload saved first; these are the settings the user chose last.
+            settingsRevisionRef.current = currentRevision;
+            saved = await attempt();
           }
-          // Brief pause when storage is still catching up.
-          if (/synchroniz/i.test(message)) {
-            await new Promise((resolve) => setTimeout(resolve, 600));
-          }
-          result = await attemptSave();
-        } else {
-          throw error;
+          adoptSavedSettings(activeSession.id, sent, saved);
+          if (!options?.silent) toast.success("Settings saved");
+          return saved;
+        } catch (error) {
+          if (sessionRef.current?.id === activeSession.id) setSaveStatus("error");
+          toast.error(
+            error instanceof VisualizerApiError
+              ? `Settings not saved: ${error.message}`
+              : "Settings not saved"
+          );
+          return null;
         }
+      })();
+      settingsSaveRef.current = run;
+      try {
+        return await run;
+      } finally {
+        if (settingsSaveRef.current === run) settingsSaveRef.current = null;
       }
+    },
+    [adoptSavedSettings, canEdit, workspace]
+  );
 
-      setSession(result.session);
-      setWorksheet(result.worksheet);
-      // Prefer the settings we just saved (already parsed on server).
-      setSettings(result.settings);
-      settingsRef.current = result.settings;
-      worksheetRef.current = result.worksheet;
-      sessionRef.current = result.session;
-      settingsRevisionRef.current = Number(
-        result.session.settings_revision ?? 0
-      );
-      worksheetRevisionRef.current = Number(
-        result.session.worksheet_revision ?? 0
-      );
-      setSaveStatus("saved");
-      if (!options?.silent) toast.success("Settings saved");
-      return result;
-    } catch (error) {
-      setSaveStatus("error");
-      toast.error(
-        error instanceof VisualizerApiError ? error.message : "Save failed"
-      );
-      return null;
+  // The badge follows the real difference from the stored settings, so undoing
+  // a change (or a finished save) reads as "Saved" without a manual step.
+  useEffect(() => {
+    if (lastSavedSettingsSignatureRef.current === null) return;
+    const unsaved =
+      JSON.stringify(settings) !== lastSavedSettingsSignatureRef.current;
+    setSaveStatus((current) =>
+      current === "saving" ? current : unsaved ? "dirty" : "saved"
+    );
+  }, [settings]);
+
+  // Autosave about 800ms after the last change.
+  useEffect(() => {
+    if (saveStatus !== "dirty" || !canEdit || !session?.id) return;
+    const timer = setTimeout(() => {
+      void persistSettings({ silent: true });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [canEdit, persistSettings, saveStatus, session?.id, settings]);
+
+  // Send a pending change when the tab is hidden or closed, or the page unmounts.
+  const persistSettingsRef = useRef(persistSettings);
+  useEffect(() => {
+    persistSettingsRef.current = persistSettings;
+  }, [persistSettings]);
+  useEffect(() => {
+    const flush = () => {
+      const saved = lastSavedSettingsSignatureRef.current;
+      if (saved === null || JSON.stringify(settingsRef.current) === saved) return;
+      void persistSettingsRef.current({ silent: true, keepalive: true });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flush();
+    };
+  }, []);
+
+  /** Back to the project list: saves a pending change first and only asks when that fails. */
+  const leaveProject = async () => {
+    const saved = lastSavedSettingsSignatureRef.current;
+    if (
+      canEdit &&
+      saved !== null &&
+      JSON.stringify(settingsRef.current) !== saved
+    ) {
+      const result = await persistSettings({ silent: true });
+      if (!result) {
+        setShowLeaveDialog(true);
+        return;
+      }
     }
+    lastSavedSettingsSignatureRef.current = null;
+    closeProject();
   };
 
   const settingsReady =
@@ -1508,20 +1525,17 @@ export default function ProductsVisualizerPage() {
 
   const prepareRunSession = async () => {
     if (!workspace || !session || !worksheet) return null;
-    let activeSession = session;
-    let activeWorksheet = { ...worksheet, settings: settingsRef.current };
-    let activeSettings = settingsRef.current;
-    if (saveStatus === "dirty" || saveStatus === "error") {
-      const saved = await persistSettings({ silent: true });
-      if (!saved) return null;
-      activeSession = saved.session;
-      activeWorksheet = saved.worksheet;
-      activeSettings = saved.settings;
-    }
+    // Always store the settings the run starts with (a no-op when already saved).
+    const saved = await persistSettings({ silent: true });
+    if (!saved) return null;
+    const activeSession = { ...session, ...saved.session };
     return {
       activeSession,
-      activeWorksheet,
-      activeSettings,
+      activeWorksheet: {
+        ...(worksheetRef.current ?? worksheet),
+        settings: saved.settings,
+      },
+      activeSettings: saved.settings,
     };
   };
 
@@ -1649,7 +1663,6 @@ export default function ProductsVisualizerPage() {
       if (result.signedUrls) {
         setSignedUrls((current) => ({ ...current, ...result.signedUrls }));
       }
-      setSaveStatus("saved");
 
       if (result.status === "running") {
         if (visualizerRunIsActive(worksheetRef.current)) {
@@ -1779,7 +1792,7 @@ export default function ProductsVisualizerPage() {
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0"
-              onClick={closeProject}
+              onClick={() => void leaveProject()}
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
@@ -1798,9 +1811,6 @@ export default function ProductsVisualizerPage() {
               variant={saveStatus === "dirty" ? "default" : "outline"}
               disabled={
                 !canEdit ||
-                generating ||
-                stopping ||
-                !!generationRun ||
                 saveStatus === "saving" ||
                 saveStatus === "saved"
               }
@@ -1847,7 +1857,6 @@ export default function ProductsVisualizerPage() {
                       (column) => column !== nextImage
                     ),
                   }));
-                  setSaveStatus("dirty");
                 }}
                 options={[
                   { value: "none", label: "Not selected" },
@@ -2290,14 +2299,12 @@ export default function ProductsVisualizerPage() {
                               ...current,
                               columnLayout: toggleColumnHidden(current.columnLayout, naturalDisplayColumns, key),
                             }));
-                            setSaveStatus("dirty");
                           }}
                           onMove={(fromKey, toKey) => {
                             setSettings((current) => ({
                               ...current,
                               columnLayout: moveColumn(current.columnLayout, naturalDisplayColumns, fromKey, toKey),
                             }));
-                            setSaveStatus("dirty");
                           }}
                         />
                       </div>
@@ -2421,7 +2428,6 @@ export default function ProductsVisualizerPage() {
                                 ...current,
                                 columnLayout: moveColumn(current.columnLayout, naturalDisplayColumns, dragColKeyRef.current!, column),
                               }));
-                              setSaveStatus("dirty");
                             }
                             dragColKeyRef.current = null;
                           } : undefined}
@@ -3100,6 +3106,54 @@ export default function ProductsVisualizerPage() {
               );
             })()}
 
+            <Dialog open={showLeaveDialog} onOpenChange={setShowLeaveDialog}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Settings could not be saved</DialogTitle>
+                  <DialogDescription>
+                    Your latest settings changes did not reach the server.
+                    Generated descriptions and images are already saved and are
+                    not affected.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    disabled={saveStatus === "saving"}
+                    onClick={() => {
+                      void (async () => {
+                        if (await persistSettings({ silent: true })) {
+                          setShowLeaveDialog(false);
+                          lastSavedSettingsSignatureRef.current = null;
+                          closeProject();
+                        }
+                      })();
+                    }}
+                    className="gap-1.5"
+                  >
+                    {saveStatus === "saving" ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Cloud className="h-3.5 w-3.5" />
+                    )}
+                    Try again
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={saveStatus === "saving"}
+                    onClick={() => {
+                      setShowLeaveDialog(false);
+                      lastSavedSettingsSignatureRef.current = null;
+                      closeProject();
+                    }}
+                  >
+                    Leave without these changes
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             <DescriptionLayoutDialog
               open={layoutDialogOpen}
               onOpenChange={setLayoutDialogOpen}
@@ -3116,7 +3170,6 @@ export default function ProductsVisualizerPage() {
                     maxPlaceholders: imageCount,
                   },
                 }));
-                setSaveStatus("dirty");
               }}
             />
 

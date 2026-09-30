@@ -762,15 +762,32 @@ export default function ProductsGalleryPage() {
     try {
       // Settings-only save: the worksheet is never re-uploaded, so this stays
       // fast on large sheets and never touches the worksheet revision.
-      const result = await enqueueMutation(() =>
-        saveGallerySettings({
-          workspaceId: workspace.id,
-          sessionId: projectId,
-          expectedRevision: settingsRevisionRef.current,
-          expectedWorksheetRevision: worksheetRevisionRef.current,
-          settings,
-        })
-      );
+      const attempt = () =>
+        enqueueMutation(() =>
+          saveGallerySettings({
+            workspaceId: workspace.id,
+            sessionId: projectId,
+            expectedRevision: settingsRevisionRef.current,
+            expectedWorksheetRevision: worksheetRevisionRef.current,
+            settings,
+          })
+        );
+      let result: Awaited<ReturnType<typeof attempt>>;
+      try {
+        result = await attempt();
+      } catch (error) {
+        const currentRevision =
+          error instanceof GalleryApiError && error.status === 409
+            ? Number(
+                (error.payload as { currentRevision?: unknown } | null)
+                  ?.currentRevision
+              )
+            : Number.NaN;
+        if (!Number.isInteger(currentRevision)) throw error;
+        // Another tab or an upload saved first; these are the settings the user chose last.
+        settingsRevisionRef.current = currentRevision;
+        result = await attempt();
+      }
       settingsRevisionRef.current = Number(result.session.settings_revision);
       lastSavedSettingsSignatureRef.current = signature;
       setActiveSession(result.session);

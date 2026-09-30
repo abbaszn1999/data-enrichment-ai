@@ -111,32 +111,30 @@ export async function getVisualizerRowsDelta(
   }>(res);
 }
 
+/** Saves project settings only; rows are never sent, so results a run wrote stay intact. */
 export async function saveVisualizerSettings(params: {
   workspaceId: string;
   sessionId: string;
   expectedRevision: number;
-  expectedWorksheetRevision: number;
   settings: VisualizerProjectSettings;
-  worksheet: VisualizerWorksheetJson;
+  keepalive?: boolean;
 }) {
   const res = await fetch(
     `/api/visualizer/sessions/${params.sessionId}/settings`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
+      keepalive: params.keepalive,
       body: JSON.stringify({
         workspaceId: params.workspaceId,
         expectedRevision: params.expectedRevision,
-        expectedWorksheetRevision: params.expectedWorksheetRevision,
         settings: params.settings,
-        worksheet: params.worksheet,
       }),
     }
   );
   return parseJson<{
     session: VisualizerSession;
     settings: VisualizerProjectSettings;
-    worksheet: VisualizerWorksheetJson;
   }>(res);
 }
 
