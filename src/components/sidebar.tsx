@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { toast } from "sonner";
+import { billingBlockReason, showBillingBlockedToast } from "@/lib/billing/billing-toast";
 import {
   Sparkles,
   Play,
@@ -503,8 +504,8 @@ export function Sidebar() {
       invalidateCredits();
       if (shouldToast && data.run?.status === "paused_no_credits") {
         setLastError("NO_CREDITS");
-        toast.error("No credits remaining", {
-          description: "Enrichment paused. Add credits and resume from this session.",
+        showBillingBlockedToast("no_credits", workspace?.slug, {
+          context: "Enrichment",
         });
       } else if (shouldToast && data.run?.status === "failed") {
         toast.error("Enrichment failed", data.run.last_error ? { description: data.run.last_error } : undefined);
@@ -537,6 +538,7 @@ export function Sidebar() {
     return true;
   }, [
     workspace?.id,
+    workspace?.slug,
     sheetWorkspaceId,
     projectId,
     applyStatusPayload,
@@ -752,10 +754,9 @@ export function Sidebar() {
           if (typeof errorBody?.error === "string") errorCode = errorBody.error;
         } catch {}
         setLastError(errorCode);
-        toast.error(
-          errorCode === "INACTIVE_SUBSCRIPTION"
-            ? "Subscription inactive"
-            : "No credits remaining"
+        showBillingBlockedToast(
+          billingBlockReason(402, errorCode) ?? "no_credits",
+          workspace?.slug
         );
         return;
       }

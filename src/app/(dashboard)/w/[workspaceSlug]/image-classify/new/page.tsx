@@ -24,6 +24,7 @@ import {
 } from "@/components/media/analyzing-products-card";
 import { useWorkspaceContext } from "../../workspace-context";
 import { useRole } from "@/hooks/use-role";
+import { billingBlockReason, showBillingBlockedToast } from "@/lib/billing/billing-toast";
 import {
   createImageClassificationSession,
   updateImageClassificationSession,
@@ -238,6 +239,15 @@ export default function NewImageClassifyPage() {
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
+        const blocked = billingBlockReason(res.status, j.error);
+        if (blocked) {
+          showBillingBlockedToast(blocked, slug);
+          throw new Error(
+            blocked === "no_subscription"
+              ? "An active subscription is required to classify images."
+              : "Not enough credits to classify images. Buy more credits or upgrade your plan."
+          );
+        }
         throw new Error(j.error || `Classification failed (${res.status})`);
       }
 

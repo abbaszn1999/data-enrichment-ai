@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { showBillingBlockedToast, toastIfBillingBlocked } from "@/lib/billing/billing-toast";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "../workspace-context";
 import { useRole } from "@/hooks/use-role";
@@ -538,9 +539,11 @@ export default function ProductsVisualizerPage() {
 
   const shouldPollGeneration = generating || generationRun !== null;
   const lastCreditsProgressRef = useRef(0);
+  const lastJobStatusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!shouldPollGeneration) {
       lastCreditsProgressRef.current = 0;
+      lastJobStatusRef.current = null;
     }
   }, [shouldPollGeneration]);
   useEffect(() => {
@@ -625,6 +628,13 @@ export default function ProductsVisualizerPage() {
           progress.jobStatus === "running" ||
           progress.jobStatus === "queued" ||
           progress.status === "processing";
+        if (
+          progress.jobStatus === "paused_no_credits" &&
+          (lastJobStatusRef.current === "running" || lastJobStatusRef.current === "queued")
+        ) {
+          showBillingBlockedToast("no_credits", workspace.slug, { context: "Generation" });
+        }
+        lastJobStatusRef.current = progress.jobStatus;
         const localWorksheet = worksheetRef.current;
         const localBusy = (localWorksheet?.rows ?? []).some(visualizerRowIsBusy);
         const localRunActive = visualizerRunIsActive(localWorksheet);
@@ -739,6 +749,7 @@ export default function ProductsVisualizerPage() {
     shouldPollGeneration,
     toastStopSavedIfNeeded,
     workspace?.id,
+    workspace?.slug,
   ]);
 
   const projectStats = useMemo(
@@ -1540,6 +1551,10 @@ export default function ProductsVisualizerPage() {
   };
 
   const handleGenerateError = async (error: unknown, fallback: string) => {
+    if (toastIfBillingBlocked(error, workspace?.slug)) {
+      await loadProject();
+      return;
+    }
     const payload =
       error instanceof VisualizerApiError ? error.payload : null;
     const required =

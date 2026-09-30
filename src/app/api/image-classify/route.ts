@@ -8,8 +8,8 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import {
   getWorkspaceContext,
   isContextSubscriptionActive,
-  updateCachedCredits,
 } from "@/lib/workspace-context";
+import { deductCreditsIdempotent } from "@/lib/jobs/credits";
 import { calculateCallCost, costToCredits } from "@/lib/ai-pricing";
 import { sanitizeSku } from "@/lib/image-classify/sku";
 import {
@@ -246,38 +246,28 @@ async function deductCreditsStrict(params: {
   thinkingLevel?: string;
 }) {
   if (params.credits <= 0) return;
-  const admin = createAdminClient();
-  const { data: deductResult, error: deductError } = await admin.rpc(
-    "deduct_user_credits",
-    {
-      p_user_id: params.ownerUserId,
-      p_amount: params.credits,
-      p_workspace_id: params.workspaceId,
-      p_operation: "image_classification",
-      p_uid: params.userId || params.ownerUserId,
-      p_entity_type: "image_classification_session",
-      p_entity_id: params.sessionId,
-      p_details: {
-        model: MODEL,
-        imageCount: params.imageCount,
-        groupCount: params.groupCount,
-        totalCost: params.totalCost,
-        totalTokens: params.totalTokens,
-        thinkingLevel: params.thinkingLevel || "medium",
-      },
-    }
-  );
-  if (deductError) {
-    throw new Error(`Credit deduction failed: ${deductError.message}`);
-  }
-  if (!deductResult?.success) {
+  const deductResult = await deductCreditsIdempotent({
+    ownerUserId: params.ownerUserId,
+    workspaceId: params.workspaceId,
+    actorUserId: params.userId || params.ownerUserId,
+    amount: params.credits,
+    operation: "image_classification",
+    entityType: "image_classification_session",
+    entityId: params.sessionId,
+    idempotencyKey: `image_classification:${params.sessionId}:${crypto.randomUUID()}`,
+    details: {
+      model: MODEL,
+      imageCount: params.imageCount,
+      groupCount: params.groupCount,
+      totalCost: params.totalCost,
+      totalTokens: params.totalTokens,
+      thinkingLevel: params.thinkingLevel || "medium",
+    },
+  });
+  if (!deductResult.success) {
     throw new Error(
-      `Credit deduction rejected: ${deductResult?.error || "Insufficient credits"}`
+      `Credit deduction rejected: ${deductResult.error || "Insufficient credits"}`
     );
-  }
-  const remaining = Number(deductResult.remaining);
-  if (Number.isFinite(remaining)) {
-    updateCachedCredits(params.workspaceId, remaining);
   }
   console.log(
     `[image-classify] Deducted ${params.credits} credits. Remaining: ${deductResult.remaining}`

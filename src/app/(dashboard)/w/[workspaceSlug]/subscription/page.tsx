@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { motion } from "motion/react";
+import { toast } from "sonner";
 import {
   Building2,
   Check,
@@ -54,8 +55,55 @@ export default function SubscriptionPage() {
   const { workspace } = useWorkspaceContext();
   const {
     subscription, plan: currentPlan, availablePlans,
-    credits, isActive, isLoading, welcomeGift,
+    credits, isActive, isLoading, welcomeGift, refresh,
   } = useSubscription(workspace?.id ?? null);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const checkoutResultHandled = useRef(false);
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  });
+  const refreshTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => refreshTimers.current.forEach(clearTimeout), []);
+
+  // Stripe returns here after checkout; the webhook applies the purchase a
+  // moment later, so refresh a few times until it lands.
+  useEffect(() => {
+    if (checkoutResultHandled.current) return;
+    const success = searchParams.get("success") === "true";
+    const cancelled = searchParams.get("cancelled") === "true";
+    if (!success && !cancelled) return;
+    checkoutResultHandled.current = true;
+    if (success) {
+      toast.success(
+        searchParams.get("topup") === "credits" ? "Payment received" : "Billing updated",
+        {
+          description:
+            searchParams.get("topup") === "credits"
+              ? "Your extra credits will appear in a few seconds."
+              : "Your plan and credits will update in a few seconds.",
+        }
+      );
+    } else {
+      toast.message("Checkout cancelled", { description: "You have not been charged." });
+    }
+    router.replace(pathname);
+    if (!success) return;
+    refreshTimers.current = [2_000, 6_000, 15_000].map((ms) =>
+      setTimeout(() => void refreshRef.current(), ms)
+    );
+  }, [pathname, router, searchParams]);
+
+  const followCheckoutResponse = async (res: Response) => {
+    const data = await res.json().catch(() => ({}));
+    if (data.url) {
+      window.location.assign(data.url);
+      return;
+    }
+    toast.error(data.error || "Could not open checkout. Please try again.");
+  };
 
   const [billing, setBilling] = useState<"monthly" | "yearly">("monthly");
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -81,9 +129,10 @@ export default function SubscriptionPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "subscription", planId: plan.id, billingCycle: billing, workspaceSlug: slug }),
       });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch { /* ignore */ }
+      await followCheckoutResponse(res);
+    } catch {
+      toast.error("Could not open checkout. Please try again.");
+    }
     setLoadingAction(null);
   };
 
@@ -96,9 +145,10 @@ export default function SubscriptionPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "credit_topup", credits: topupCreditsNum, workspaceSlug: slug }),
       });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch { /* ignore */ }
+      await followCheckoutResponse(res);
+    } catch {
+      toast.error("Could not open checkout. Please try again.");
+    }
     setLoadingAction(null);
   };
 
@@ -110,9 +160,10 @@ export default function SubscriptionPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceSlug: slug }),
       });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch { /* ignore */ }
+      await followCheckoutResponse(res);
+    } catch {
+      toast.error("Could not open the billing portal. Please try again.");
+    }
     setLoadingAction(null);
   };
 
@@ -123,6 +174,9 @@ export default function SubscriptionPage() {
   const currentPlanName = currentPlan?.name;
   const isTrialing = isTrialPlanName(currentPlanName) && subscription?.status === "trialing" && isActive;
   const trialDaysLeft = isTrialing ? trialDaysRemaining(subscription?.trialEnd) : 0;
+  const periodEndLabel = subscription?.currentPeriodEnd
+    ? new Date(subscription.currentPeriodEnd).toLocaleDateString()
+    : null;
 
   return (
     <div className="autommerce-dashboard flex-1 overflow-auto bg-background [font-family:var(--brand-font)]">
@@ -171,8 +225,11 @@ export default function SubscriptionPage() {
                 {credits ? `${formatCredits(credits.total)} credits remaining` : "No credits"}
                 {credits?.bonus ? ` (incl. ${formatCredits(credits.bonus)} bonus)` : ""}
                 {isTrialing && ` · ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} left`}
-                {subscription.status === "past_due" && " · Payment failed"}
-                {subscription.cancelAtPeriodEnd && " · Cancels at period end"}
+                {subscription.status === "past_due" && " · Payment failed, update your card in Manage Billing"}
+                {isActive && !isTrialing && periodEndLabel &&
+                  (subscription.cancelAtPeriodEnd
+                    ? ` · Ends ${periodEndLabel}`
+                    : ` · Renews ${periodEndLabel}`)}
               </div>
             </div>
           </div>
@@ -312,7 +369,7 @@ export default function SubscriptionPage() {
                 ) : isContact ? (
                   <><ExternalLink className="h-3.5 w-3.5" /> Contact Us to get a quote</>
                 ) : (
-                  <><ArrowRight className="h-3.5 w-3.5" /> {subscription && !isTrialing ? "Switch to" : "Subscribe to"} {plan.display_name}</>
+                  <><ArrowRight className="h-3.5 w-3.5" /> {subscription && isActive && !isTrialing ? "Switch to" : "Subscribe to"} {plan.display_name}</>
                 )}
               </Button>
 

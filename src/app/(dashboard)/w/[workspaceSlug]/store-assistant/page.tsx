@@ -1816,12 +1816,12 @@ export default function SyncPage() {
             <DialogDescription>
               {chatBlockedReason === "NO_SUBSCRIPTION"
                 ? "You need an active subscription to keep using Sync AI. Renew or subscribe to continue chat requests."
-                : "Your AI credits have run out. Upgrade your plan or wait for the monthly reset to continue using Sync AI."}
+                : "Your AI credits have run out. Buy extra credits, upgrade your plan, or wait for your next billing period to continue using Sync AI."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter showCloseButton>
             <Button onClick={() => router.push(`${basePath}/subscription`)}>
-              {chatBlockedReason === "NO_SUBSCRIPTION" ? "View plans" : "Manage subscription"}
+              {chatBlockedReason === "NO_SUBSCRIPTION" ? "View plans" : "Buy credits"}
             </Button>
           </DialogFooter>
         </DialogContent>

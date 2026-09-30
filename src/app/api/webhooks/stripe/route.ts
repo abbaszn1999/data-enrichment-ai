@@ -5,6 +5,12 @@ import { stampFirstPaidAtIfNull } from "@/lib/billing/welcome-gift-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { creditWorkspaceWallet } from "@/lib/wallet/server";
 import { creditFaWallet } from "@/lib/free-assessment/wallet-server";
+import { clearWorkspaceContextCache } from "@/lib/workspace-context";
+import {
+  invoiceSubscriptionId,
+  shouldResetForPaidPeriod,
+  toStoredStatus,
+} from "@/lib/billing/stripe-sync";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 
@@ -20,22 +26,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Webhook secret is not set" }, { status: 500 });
     }
     event = Stripe.webhooks.constructEvent(body, signature, webhookSecret);
-  } catch (err: any) {
-    console.error("[Stripe Webhook] Signature failed:", err.message);
+  } catch (err) {
+    console.error("[Stripe Webhook] Signature failed:", (err as Error).message);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
   const admin = createAdminClient();
 
-  // Idempotency check
+  // Claim the event. A duplicate insert means another delivery already handled
+  // (or is handling) it; the claim is released on failure so Stripe's retry
+  // processes the event instead of being dropped as a duplicate.
   const { data: existing } = await admin.from("webhook_events").select("id").eq("id", event.id).maybeSingle();
   if (existing) return NextResponse.json({ received: true, duplicate: true });
-
-  await admin.from("webhook_events").insert({ id: event.id, type: event.type, payload: event.data.object as any });
+  const { error: claimError } = await admin
+    .from("webhook_events")
+    .insert({ id: event.id, type: event.type, payload: event.data.object as unknown as Record<string, unknown> });
+  if (claimError) {
+    if (claimError.code === "23505") return NextResponse.json({ received: true, duplicate: true });
+    console.error(`[Webhook] Could not record ${event.type}:`, claimError.message);
+    return NextResponse.json({ error: "Could not record event" }, { status: 500 });
+  }
 
   try {
     switch (event.type) {
       case "checkout.session.completed":
+      case "checkout.session.async_payment_succeeded":
         await handleCheckout(event.data.object as Stripe.Checkout.Session, admin);
         break;
       case "invoice.paid":
@@ -45,25 +60,34 @@ export async function POST(request: NextRequest) {
         await handlePaymentFailed(event.data.object as Stripe.Invoice, admin);
         break;
       case "customer.subscription.updated":
-        await handleSubUpdated(event.data.object as Stripe.Subscription, admin);
+        await syncSubscription(admin, (event.data.object as Stripe.Subscription).id);
         break;
       case "customer.subscription.deleted":
         await handleSubDeleted(event.data.object as Stripe.Subscription, admin);
         break;
     }
-    // Clear subscription cache after any subscription-related change
     invalidateSubscriptionCache();
-  } catch (err: any) {
-    console.error(`[Webhook] Error ${event.type}:`, err.message);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    clearWorkspaceContextCache();
+  } catch (err) {
+    const message = (err as Error).message;
+    console.error(`[Webhook] Error ${event.type}:`, message);
+    await admin.from("webhook_events").delete().eq("id", event.id);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   return NextResponse.json({ received: true });
 }
 
-async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
+function toIso(seconds: number | null | undefined): string | null {
+  return seconds ? new Date(seconds * 1000).toISOString() : null;
+}
+
+async function handleCheckout(session: Stripe.Checkout.Session, admin: SupabaseClient) {
   const userId = session.metadata?.userId;
   if (!userId) return;
+  // One-off payments are credited only once the money has cleared; delayed
+  // methods complete later via checkout.session.async_payment_succeeded.
+  if (session.mode === "payment" && session.payment_status !== "paid") return;
 
   if (session.metadata?.faWalletTopup === "1") {
     await handleFaWalletTopup(session, userId, admin);
@@ -79,7 +103,7 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
     const subId = session.subscription as string;
     const customerId = session.customer as string;
     const planId = session.metadata?.planId;
-    if (!planId) return;
+    if (!planId || !subId) return;
 
     const { data: purchasedPlan } = await admin
       .from("subscription_plans")
@@ -94,38 +118,39 @@ async function handleCheckout(session: Stripe.Checkout.Session, admin: any) {
     const stripeSub = await stripe.subscriptions.retrieve(subId);
     const item = stripeSub.items.data[0];
     const cycle = item?.price?.recurring?.interval === "year" ? "yearly" : "monthly";
-    const periodStart = item?.current_period_start;
-    const periodEnd = item?.current_period_end;
+    const status = toStoredStatus(stripeSub.status);
 
-    await admin.from("user_subscriptions").upsert({
-      user_id: userId, plan_id: planId, billing_cycle: cycle, status: "active",
+    const { error } = await admin.from("user_subscriptions").upsert({
+      user_id: userId, plan_id: planId, billing_cycle: cycle, status,
       stripe_customer_id: customerId, stripe_subscription_id: subId,
-      current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
-      current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
-      cancel_at_period_end: false, credits_used: 0,
+      current_period_start: toIso(item?.current_period_start) ?? new Date().toISOString(),
+      current_period_end: toIso(item?.current_period_end),
+      cancel_at_period_end: stripeSub.cancel_at_period_end ?? false, credits_used: 0,
       trial_end: null, has_used_trial: true,
       credits_reset_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     }, { onConflict: "user_id" });
-    await stampFirstPaidAtIfNull(admin, { userId });
+    if (error) throw new Error(`Subscription activation failed: ${error.message}`);
+    if (status === "active") await stampFirstPaidAtIfNull(admin, { userId });
 
   } else if (session.mode === "payment") {
     const credits = parseInt(session.metadata?.credits || "0", 10);
-    if (!credits) return;
+    if (!Number.isFinite(credits) || credits <= 0) return;
 
-    const { data: sub } = await admin.from("user_subscriptions").select("bonus_credits").eq("user_id", userId).single();
-    if (sub) {
-      await admin.from("user_subscriptions").update({
-        bonus_credits: (sub.bonus_credits || 0) + credits, updated_at: new Date().toISOString(),
-      }).eq("user_id", userId);
-    }
-
-    await admin.from("credit_purchases").insert({
-      user_id: userId, credits,
-      amount_paid: (session.amount_total || 0) / 100,
-      stripe_checkout_session_id: session.id,
-      stripe_payment_intent_id: (session.payment_intent as string) || null,
-      status: "completed",
+    const { data, error } = await admin.rpc("grant_purchased_credits", {
+      p_user_id: userId,
+      p_credits: credits,
+      p_amount_paid: (session.amount_total || 0) / 100,
+      p_checkout_session_id: session.id,
+      p_payment_intent_id: (session.payment_intent as string) || null,
     });
+    if (error) throw new Error(`Credit top-up failed: ${error.message}`);
+    if (!data?.success) {
+      // Not retryable: the buyer has no subscription row to hold the credits.
+      console.error(
+        `[Stripe Webhook] Credit top-up for session ${session.id} needs manual review:`,
+        data?.error
+      );
+    }
   }
 }
 
@@ -163,10 +188,7 @@ async function handleWalletTopup(
     },
   });
   if (!credited.ok) {
-    console.error(
-      `[Stripe Webhook] Wallet top-up credit failed for session ${session.id}:`,
-      credited.message
-    );
+    throw new Error(`Wallet top-up credit failed for session ${session.id}: ${credited.message}`);
   }
 }
 
@@ -200,75 +222,69 @@ async function handleFaWalletTopup(
     },
   });
   if (!credited.ok) {
-    console.error(
-      `[Stripe Webhook] Free Assessment wallet top-up failed for session ${session.id}:`,
-      credited.message
-    );
+    throw new Error(`Free Assessment wallet top-up failed for session ${session.id}: ${credited.message}`);
   }
 }
 
-async function handleInvoicePaid(invoice: Stripe.Invoice, admin: any) {
-  const subId = (invoice as any).subscription as string;
+async function handleInvoicePaid(invoice: Stripe.Invoice, admin: SupabaseClient) {
+  const subId = invoiceSubscriptionId(invoice);
   if (!subId || invoice.billing_reason === "subscription_create") return;
-
-  await admin.from("user_subscriptions").update({
-    status: "active", 
-    credits_used: 0, 
-    credits_reset_at: new Date().toISOString(),
-    current_period_start: invoice.period_start ? new Date(invoice.period_start * 1000).toISOString() : new Date().toISOString(),
-    current_period_end: invoice.period_end ? new Date(invoice.period_end * 1000).toISOString() : null,
-    cancel_at_period_end: false, updated_at: new Date().toISOString(),
-  }).eq("stripe_subscription_id", subId);
+  await syncSubscription(admin, subId, { paidPeriod: true });
 }
 
-async function handlePaymentFailed(invoice: Stripe.Invoice, admin: any) {
-  const subId = (invoice as any).subscription as string;
+async function handlePaymentFailed(invoice: Stripe.Invoice, admin: SupabaseClient) {
+  const subId = invoiceSubscriptionId(invoice);
   if (!subId) return;
-  await admin.from("user_subscriptions").update({
-    status: "past_due",
-    credits_used: 0,
-    updated_at: new Date().toISOString(),
-  }).eq("stripe_subscription_id", subId);
+  await syncSubscription(admin, subId);
 }
 
-async function handleSubUpdated(sub: Stripe.Subscription, admin: any) {
-  const priceId = sub.items.data[0]?.price?.id;
-  const cycle = sub.items.data[0]?.price?.recurring?.interval === "year" ? "yearly" : "monthly";
+/**
+ * Mirrors the subscription's current state from Stripe (never the event
+ * payload, which may be stale or delivered out of order). Included credits
+ * reset once per paid billing period; spending is blocked by status otherwise.
+ */
+async function syncSubscription(admin: SupabaseClient, subId: string, opts: { paidPeriod?: boolean } = {}) {
+  const sub = await stripe.subscriptions.retrieve(subId);
+  const item = sub.items.data[0];
+  const { data: row, error: rowError } = await admin
+    .from("user_subscriptions")
+    .select("credits_reset_at")
+    .eq("stripe_subscription_id", sub.id)
+    .maybeSingle();
+  if (rowError) throw new Error(rowError.message);
+  if (!row) return;
 
-  let planUpdate: any = {};
-  if (priceId) {
-    const plan = await findPlanByStripePriceId(priceId);
-    if (plan) planUpdate.plan_id = plan.id;
-  }
+  const plan = item?.price?.id ? await findPlanByStripePriceId(item.price.id) : null;
+  const status = toStoredStatus(sub.status);
+  const periodStart = toIso(item?.current_period_start);
+  const resetForNewPeriod =
+    !!opts.paidPeriod &&
+    shouldResetForPaidPeriod({ status, periodStartIso: periodStart, creditsResetAt: row.credits_reset_at });
+  const now = new Date().toISOString();
 
-  const statusMap: Record<string, string> = {
-    active: "active", trialing: "trialing", past_due: "past_due",
-    canceled: "cancelled", incomplete: "incomplete", incomplete_expired: "expired",
-  };
-
-  const subItem = sub.items.data[0];
-  const periodStart = subItem?.current_period_start;
-  const periodEnd = subItem?.current_period_end;
-  const normalizedStatus = statusMap[sub.status] || sub.status;
-  const shouldResetIncludedCredits = normalizedStatus !== "active" && normalizedStatus !== "trialing";
-
-  await admin.from("user_subscriptions").update({
-    ...planUpdate, billing_cycle: cycle, status: normalizedStatus,
+  const { error } = await admin.from("user_subscriptions").update({
+    ...(plan ? { plan_id: plan.id } : {}),
+    billing_cycle: item?.price?.recurring?.interval === "year" ? "yearly" : "monthly",
+    status,
     cancel_at_period_end: sub.cancel_at_period_end,
-    current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
-    current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
-    ...(shouldResetIncludedCredits ? { credits_used: 0 } : {}),
-    ...(normalizedStatus === "active" ? { trial_end: null, has_used_trial: true } : {}),
-    updated_at: new Date().toISOString(),
+    current_period_start: periodStart ?? now,
+    current_period_end: toIso(item?.current_period_end),
+    ...(resetForNewPeriod ? { credits_used: 0, credits_reset_at: now } : {}),
+    ...(status === "cancelled" ? { cancelled_at: now } : {}),
+    ...(status === "active" ? { trial_end: null, has_used_trial: true } : {}),
+    updated_at: now,
   }).eq("stripe_subscription_id", sub.id);
+  if (error) throw new Error(error.message);
 
-  if (normalizedStatus === "active") {
+  if (status === "active") {
     await stampFirstPaidAtIfNull(admin, { stripeSubscriptionId: sub.id });
   }
 }
 
-async function handleSubDeleted(sub: Stripe.Subscription, admin: any) {
-  await admin.from("user_subscriptions").update({
-    status: "cancelled", credits_used: 0, cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+async function handleSubDeleted(sub: Stripe.Subscription, admin: SupabaseClient) {
+  const { error } = await admin.from("user_subscriptions").update({
+    status: "cancelled", credits_used: 0, cancel_at_period_end: false,
+    cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   }).eq("stripe_subscription_id", sub.id);
+  if (error) throw new Error(error.message);
 }

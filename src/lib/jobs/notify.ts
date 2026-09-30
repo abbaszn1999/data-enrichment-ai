@@ -20,7 +20,7 @@ function messageFor(run: JobRunRecord, event: NotificationEvent): { title: strin
   if (event === "paused_no_credits") {
     return {
       title: `${tool} paused`,
-      body: `${session} ran out of credits. Open the session to resume.`,
+      body: `${session} ran out of credits. Buy more credits or upgrade your plan on the Subscription page, then open the session to resume.`,
     };
   }
   return {

@@ -44,6 +44,8 @@ import { Separator } from "@/components/ui/separator";
 import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { getBalance } from "@/lib/credits";
+import { subscriptionHref } from "@/lib/billing/billing-toast";
+import Link from "next/link";
 
 type FunctionCategory = "math" | "text" | "generate" | "clean" | "copy";
 type MathOp = "add_percent" | "sub_percent" | "add_fixed" | "sub_fixed" | "multiply" | "divide" | "round";
@@ -834,7 +836,15 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
         <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
           <AlertTriangle className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
           <div className="text-[10px] text-amber-700 dark:text-amber-400 leading-relaxed">
-            <span className="font-semibold">No AI credits remaining.</span> Upgrade your plan to continue using AI functions.
+            <span className="font-semibold">No AI credits remaining.</span> Buy more credits or upgrade your plan to continue using AI functions.
+            {workspace?.slug && (
+              <>
+                {" "}
+                <Link href={subscriptionHref(workspace.slug)} className="font-semibold underline underline-offset-2">
+                  Buy credits
+                </Link>
+              </>
+            )}
           </div>
         </div>
       )}

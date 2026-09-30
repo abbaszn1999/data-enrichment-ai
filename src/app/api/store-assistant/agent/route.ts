@@ -18,8 +18,8 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import {
   getWorkspaceContext,
   isContextSubscriptionActive,
-  updateCachedCredits,
 } from "@/lib/workspace-context";
+import { chargeCompletedCall } from "@/lib/jobs/credits";
 
 import type {
   AgentPlanV2,
@@ -607,21 +607,23 @@ export async function POST(request: NextRequest) {
     try {
       const creditsToDeduct = Math.max(0, billingTracker.totalCredits);
       if (creditsToDeduct > 0) {
-        await admin.rpc("deduct_user_credits", {
-          p_user_id: ctx.subscription.user_id,
-          p_amount: creditsToDeduct,
-          p_workspace_id: workspaceId,
-          p_operation: "store_assistant",
-          p_uid: user.id,
-          p_entity_type: "store_assistant",
-          p_entity_id: null,
-          p_details: { runId, mode, steps: executedToolNames },
+        const charge = await chargeCompletedCall({
+          admin,
+          ownerUserId: ctx.subscription.user_id,
+          workspaceId,
+          actorUserId: user.id,
+          amount: creditsToDeduct,
+          operation: "store_assistant",
+          entityType: "store_assistant",
+          idempotencyKey: `store_assistant:${runId}`,
+          details: { runId, mode, steps: executedToolNames },
         });
-        const remaining = Math.max(0, (ctx.credits?.total ?? 0) - creditsToDeduct);
-        updateCachedCredits(workspaceId, remaining);
+        if (!charge.success) {
+          console.error("[sync agent] credit deduction failed:", charge.error);
+        }
       }
     } catch (err) {
-      console.warn("[sync agent] credit deduction failed:", (err as Error).message);
+      console.error("[sync agent] credit deduction failed:", (err as Error).message);
     }
 
     await tracer.finalize();

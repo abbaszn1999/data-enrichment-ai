@@ -14,6 +14,12 @@ export async function POST(request: Request) {
     if (!workspaceId || !amount || !operation) {
       return NextResponse.json({ error: "workspaceId, amount, and operation are required" }, { status: 400 });
     }
+    if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
+      return NextResponse.json({ error: "amount must be a positive number" }, { status: 400 });
+    }
+    if (typeof operation !== "string" || operation.length > 64) {
+      return NextResponse.json({ error: "Invalid operation" }, { status: 400 });
+    }
 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -61,8 +67,9 @@ export async function POST(request: Request) {
       }, { status: 402, headers });
     }
 
-    // Update cache with remaining credits
-    updateCachedCredits(workspaceId, result.remaining ?? 0);
+    if (typeof result.remaining === "number") {
+      updateCachedCredits(workspaceId, result.remaining);
+    }
 
     return NextResponse.json({
       success: true,

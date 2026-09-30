@@ -44,6 +44,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { showBillingBlockedToast, toastIfBillingBlocked } from "@/lib/billing/billing-toast";
 import { PageLoader } from "@/components/brand/page-loader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1276,9 +1277,11 @@ export default function ProductsGalleryPage() {
 
   const shouldPollGeneration = isGenerating || generationRun !== null;
   const lastCreditsProgressRef = useRef(0);
+  const lastJobStatusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!shouldPollGeneration) {
       lastCreditsProgressRef.current = 0;
+      lastJobStatusRef.current = null;
     }
   }, [shouldPollGeneration]);
   useEffect(() => {
@@ -1367,6 +1370,13 @@ export default function ProductsGalleryPage() {
           progress.jobStatus === "running" ||
           progress.jobStatus === "queued" ||
           progress.status === "processing";
+        if (
+          progress.jobStatus === "paused_no_credits" &&
+          (lastJobStatusRef.current === "running" || lastJobStatusRef.current === "queued")
+        ) {
+          showBillingBlockedToast("no_credits", workspace.slug, { context: "Generation" });
+        }
+        lastJobStatusRef.current = progress.jobStatus;
         const localWorksheet = worksheetRef.current;
         const localBusy = (localWorksheet?.rows ?? []).some(galleryRowIsBusy);
         const localRunActive = galleryRunIsActive(localWorksheet);
@@ -1504,6 +1514,7 @@ export default function ProductsGalleryPage() {
     shouldPollGeneration,
     toastStopSavedIfNeeded,
     workspace?.id,
+    workspace?.slug,
   ]);
 
   const columnLabel = (column: string) => {
@@ -2093,7 +2104,9 @@ export default function ProductsGalleryPage() {
         );
       }
     } catch (err) {
-      toast.error((err as Error)?.message || "Generation failed");
+      if (!toastIfBillingBlocked(err, workspace.slug)) {
+        toast.error((err as Error)?.message || "Generation failed");
+      }
       // Refresh worksheet after failure
       try {
         const fresh = await getGallerySession(workspace.id, projectId);

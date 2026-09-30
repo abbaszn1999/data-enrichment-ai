@@ -63,6 +63,29 @@ export async function deductCreditsIdempotent(params: {
   };
 }
 
+/**
+ * Charges a call whose AI work has already been done and delivered. When the
+ * balance cannot cover the full amount, the rest of the balance is charged,
+ * so usage never continues past zero for free. `charged` is what was billed.
+ */
+export async function chargeCompletedCall(
+  params: Parameters<typeof deductCreditsIdempotent>[0]
+): Promise<Awaited<ReturnType<typeof deductCreditsIdempotent>> & { charged: number }> {
+  const full = await deductCreditsIdempotent(params);
+  if (full.success) return { ...full, charged: full.duplicate ? 0 : params.amount };
+  const rest = Number(full.remaining ?? 0);
+  if (!/insufficient credits/i.test(full.error ?? "") || !(rest > 0)) {
+    return { ...full, charged: 0 };
+  }
+  const partial = await deductCreditsIdempotent({
+    ...params,
+    amount: rest,
+    idempotencyKey: `${params.idempotencyKey}:balance`,
+    details: { ...(params.details ?? {}), requestedCredits: params.amount, partial: true },
+  });
+  return { ...partial, charged: partial.success && !partial.duplicate ? rest : 0 };
+}
+
 export function isInsufficientCredits(error?: string | null): boolean {
   if (!error) return false;
   return /insufficient credits|insufficient_credits|no_credits|no active subscription/i.test(

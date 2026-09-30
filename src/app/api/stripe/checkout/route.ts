@@ -5,6 +5,8 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { checkoutBlockedReason, isSelfServePlanName } from "@/lib/billing/plans";
 import { stripeCheckoutBlockedReason } from "@/lib/stripe-mode";
 
+const LIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing", "past_due", "unpaid", "paused"]);
+
 export async function POST(request: NextRequest) {
   try {
     const blocked = stripeCheckoutBlockedReason();
@@ -46,21 +48,25 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Stripe price not configured for this plan" }, { status: 400 });
       }
 
-      // Check if user already has an active Stripe subscription
-      const { data: existingSub } = await admin
-        .from("user_subscriptions")
-        .select("stripe_subscription_id")
-        .eq("user_id", user.id)
-        .single();
-
-      if (existingSub?.stripe_subscription_id) {
-        // Use Stripe billing portal for upgrades/downgrades
+      // A live Stripe subscription is changed in the billing portal; a
+      // cancelled or expired one needs a fresh checkout to resubscribe.
+      const live = await stripe.subscriptions.list({ customer: customerId, status: "all", limit: 10 });
+      if (live.data.some((s) => LIVE_SUBSCRIPTION_STATUSES.has(s.status))) {
         const portalSession = await stripe.billingPortal.sessions.create({
           customer: customerId,
           return_url: successUrl,
         });
         return NextResponse.json({ url: portalSession.url });
       }
+
+      // Only one subscription checkout may be open, so two tabs cannot both
+      // be paid and leave the customer billed for two subscriptions.
+      const open = await stripe.checkout.sessions.list({ customer: customerId, status: "open", limit: 20 });
+      await Promise.all(
+        open.data
+          .filter((s) => s.mode === "subscription")
+          .map((s) => stripe.checkout.sessions.expire(s.id).catch(() => undefined))
+      );
 
       // Create new checkout session for subscription
       const session = await stripe.checkout.sessions.create({
@@ -91,7 +97,7 @@ export async function POST(request: NextRequest) {
       }
 
       const creditsNum = Math.floor(Number(credits));
-      if (!Number.isFinite(creditsNum) || creditsNum < CREDIT_TOPUP_MIN_CREDITS) {
+      if (!Number.isFinite(creditsNum) || creditsNum < CREDIT_TOPUP_MIN_CREDITS || creditsNum > 1_000_000) {
         return NextResponse.json(
           { error: `Minimum top-up is ${CREDIT_TOPUP_MIN_CREDITS} credits` },
           { status: 400 }
@@ -116,9 +122,8 @@ export async function POST(request: NextRequest) {
             quantity: 1,
           },
         ],
-        success_url: successUrl,
+        success_url: `${successUrl}&topup=credits`,
         cancel_url: cancelUrl,
-        allow_promotion_codes: true,
         metadata: {
           userId: user.id,
           credits: creditsNum.toString(),

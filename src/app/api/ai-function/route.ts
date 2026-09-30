@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { calculateCallCost, costToCredits } from "@/lib/ai-pricing";
 import { createClient } from "@/lib/supabase-server";
-import { createAdminClient } from "@/lib/supabase-admin";
+import { chargeCompletedCall } from "@/lib/jobs/credits";
 import {
   getWorkspaceContext,
   isContextSubscriptionActive,
-  updateCachedCredits,
 } from "@/lib/workspace-context";
 
 async function getAI() {
@@ -29,7 +28,7 @@ export async function POST(request: NextRequest) {
   try {
     const { command, columns, sampleRows, totalRows, selectedRows, workspaceId } = await request.json();
 
-    if (!command || !columns || !sampleRows) {
+    if (!command || !columns || !sampleRows || typeof workspaceId !== "string" || !workspaceId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
@@ -37,28 +36,24 @@ export async function POST(request: NextRequest) {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
 
     // Check credits before calling AI (per-user model)
-    let ctxHeaders: Record<string, string> | undefined;
-    let ctx: Awaited<ReturnType<typeof getWorkspaceContext>> | null = null;
-    if (workspaceId) {
-      if (!user) {
-        return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-      }
-      ctx = await getWorkspaceContext({ workspaceId, userId: user.id });
-      ctxHeaders = {
-        "X-Context-Source": ctx.source,
-        "Server-Timing": `ctx;dur=${ctx.durationMs.toFixed(1)}`,
-      };
-      if (!ctx.membershipRole || ctx.membershipRole === "viewer") {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403, headers: ctxHeaders });
-      }
-      if (!ctx.subscription || !isContextSubscriptionActive(ctx)) {
-        return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402, headers: ctxHeaders });
-      }
-      if ((ctx.credits?.total ?? 0) <= 0) {
-        return NextResponse.json({ error: "NO_CREDITS" }, { status: 402, headers: ctxHeaders });
-      }
+    const ctx = await getWorkspaceContext({ workspaceId, userId: user.id });
+    const ctxHeaders: Record<string, string> = {
+      "X-Context-Source": ctx.source,
+      "Server-Timing": `ctx;dur=${ctx.durationMs.toFixed(1)}`,
+    };
+    if (!ctx.membershipRole || ctx.membershipRole === "viewer") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403, headers: ctxHeaders });
+    }
+    if (!ctx.subscription || !isContextSubscriptionActive(ctx)) {
+      return NextResponse.json({ error: "NO_SUBSCRIPTION" }, { status: 402, headers: ctxHeaders });
+    }
+    if ((ctx.credits?.total ?? 0) <= 0) {
+      return NextResponse.json({ error: "NO_CREDITS" }, { status: 402, headers: ctxHeaders });
     }
 
     const systemPrompt = `You are a data manipulation code generator. You receive column names + sample rows from a product spreadsheet and a user command in any language.
@@ -164,21 +159,19 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
 
     // Deduct credits (per-user model)
     const credits = costToCredits(cost.totalCost);
-    if (workspaceId && credits > 0 && user && ctx) {
-      try {
-        const admin = createAdminClient();
-        await admin.rpc("deduct_user_credits", {
-          p_user_id: ctx.subscription?.user_id ?? ctx.ownerId ?? user.id,
-          p_amount: credits,
-          p_workspace_id: workspaceId,
-          p_operation: "ai_function",
-          p_uid: user.id,
-          p_details: { command: command.slice(0, 200) },
-        });
-        const remaining = Math.max(0, (ctx.credits?.total ?? 0) - credits);
-        updateCachedCredits(workspaceId, remaining);
-      } catch (err: any) {
-        console.warn(`[AI Function] Credit deduction failed: ${err?.message}`);
+    if (credits > 0) {
+      const charge = await chargeCompletedCall({
+        ownerUserId: ctx.subscription.user_id,
+        workspaceId,
+        actorUserId: user.id,
+        amount: credits,
+        operation: "ai_function",
+        entityType: "ai_function",
+        idempotencyKey: `ai_function:${crypto.randomUUID()}`,
+        details: { command: String(command).slice(0, 200) },
+      });
+      if (!charge.success) {
+        console.error(`[AI Function] Credit deduction failed: ${charge.error}`);
       }
     }
 
