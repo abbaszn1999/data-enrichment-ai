@@ -1,5 +1,6 @@
 import type { Json } from "@/types/database";
 import type {
+  CategoryFormat,
   CategoryItem,
   ContentLength,
   EnrichmentColumnType,
@@ -47,6 +48,8 @@ export interface CatalogJobSettings extends JobRunSettings {
     imageCount?: number;
     sourceCount?: number;
     maxCategories?: number;
+    categoryFormat?: CategoryFormat;
+    useStoreCategories?: boolean;
     itemCount?: number;
     maxChars?: number;
     customInstruction?: string;

@@ -73,12 +73,17 @@ import {
   type EnrichmentModel,
   type WritingTone,
   type ContentLength,
-  type CategoryItem,
   type EnrichmentPreset,
   type EnrichmentColumn,
 } from "@/types";
 import type { EnrichSettings } from "@/lib/enrich";
 import { IMAGE_FINDER_MAX_IMAGES } from "@/lib/enrich/image-finder/brief";
+import {
+  categoryCountLabel,
+  categoryFormatsFor,
+  categoryStructureFor,
+  resolveCategoryFormat,
+} from "@/lib/categories/format";
 import type { ProjectJson } from "@/lib/storage-helpers";
 import { getEnrichmentPresets, saveEnrichmentPreset } from "@/lib/supabase";
 import type { ProductRow } from "@/types";
@@ -289,12 +294,26 @@ export function Sidebar() {
       : enrichmentColumns.find((col) => col.id === PRODUCT_MODE_COLUMN_IDS[mode]) ?? null;
   // Image Finder has no count to pick: it always gathers every distinct photo
   // of the exact item its sources show, up to IMAGE_FINDER_MAX_IMAGES.
+  const [storeCategoryCount, setStoreCategoryCount] = useState<number | null>(null);
+
+  // Categories mode: with even one category in the Categories tab the agent
+  // classifies into the store's list (unless the user turns that off);
+  // otherwise it suggests categories in the chosen format for the platform.
+  const cmsType = workspace?.cms_type || undefined;
+  const categoryFormats = categoryFormatsFor(cmsType);
+  const storeListAvailable = (storeCategoryCount ?? 0) > 0;
+  const usingStoreList = mode === "categories" && storeListAvailable && modeColumn?.useStoreCategories !== false;
+  const activeCategoryFormat = resolveCategoryFormat(cmsType, modeColumn?.categoryFormat);
   const modeCount =
     modeColumn && mode === "categories"
-      ? { label: "Max categories", key: "maxCategories" as const, value: modeColumn.maxCategories ?? 3, max: 5 }
+      ? {
+          label: categoryCountLabel(activeCategoryFormat, usingStoreList),
+          key: "maxCategories" as const,
+          value: modeColumn.maxCategories ?? 3,
+          max: 5,
+        }
       : null;
 
-  const [storeCategoryCount, setStoreCategoryCount] = useState<number | null>(null);
   useEffect(() => {
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (mode !== "categories" || !workspaceId) return;
@@ -578,7 +597,14 @@ export function Sidebar() {
         ? enrichListColumns.filter((c) => c.enabled)
         : modeColumn
           ? [
-              { ...modeColumn, enabled: true },
+              {
+                ...modeColumn,
+                enabled: true,
+                // The run records exactly what the panel showed (platform-valid format, store list on/off).
+                ...(mode === "categories"
+                  ? { categoryFormat: activeCategoryFormat, useStoreCategories: modeColumn.useStoreCategories !== false }
+                  : {}),
+              },
               ...(imageSourcesColumn ? [{ ...imageSourcesColumn, enabled: true }] : []),
             ]
           : [];
@@ -630,24 +656,6 @@ export function Sidebar() {
       outputLanguage: resolvedLanguage,
     };
 
-    let workspaceCategories: CategoryItem[] | undefined;
-    let categoriesRawRows: Record<string, string>[] | undefined;
-    const categoriesEnabled = runColumnIds.some((id) =>
-      ["categories", "parentCategory", "internalLinks"].includes(id)
-    );
-    if (categoriesEnabled && workspaceId) {
-      try {
-        const catRes = await fetch(`/api/categories?workspaceId=${workspaceId}`);
-        if (catRes.ok) {
-          const catData = await catRes.json();
-          workspaceCategories = catData.categories;
-          categoriesRawRows = catData.rawRows?.length ? catData.rawRows : undefined;
-        }
-      } catch (err: unknown) {
-        console.warn("[Sidebar] Failed to fetch categories:", (err as Error)?.message);
-      }
-    }
-
     const existingAsEnrichCols = !isNewTab
       ? existingColumnsToEnrich.map((col) => {
           const displayLabel = col.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col");
@@ -681,8 +689,6 @@ export function Sidebar() {
           kind: sessionKind,
           cmsType: workspace?.cms_type || undefined,
           sourceColumns,
-          workspaceCategories,
-          categoriesRawRows,
         }),
       });
 
@@ -746,6 +752,8 @@ export function Sidebar() {
     setEnrichingContext,
     setRowStatus,
     beginEnrichEpoch,
+    activeCategoryFormat,
+    enrichmentColumns,
   ]);
 
   // Opening (or returning to) the session picks up a run that kept going on
@@ -1641,14 +1649,68 @@ export function Sidebar() {
               {mode === "categories" && storeCategoryCount !== null && (
                 <div
                   className={`rounded-md border px-2.5 py-2 text-[10px] leading-relaxed ${
-                    storeCategoryCount > 0
+                    usingStoreList
                       ? "border-primary/15 bg-primary/[0.04] text-foreground"
                       : "border-amber-300/60 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-300"
                   }`}
                 >
-                  {storeCategoryCount > 0
-                    ? `${storeCategoryCount} store categories loaded. The AI picks only from this list.`
-                    : "No store categories found. The AI will suggest categories in your CMS format."}
+                  {usingStoreList
+                    ? `${storeCategoryCount} store ${
+                        categoryStructureFor(cmsType) === "flat" ? "collections" : "categories"
+                      } loaded. Each product is classified into this list and the AI never invents new ones.`
+                    : storeListAvailable
+                      ? "Store list is off. The AI will suggest categories in the format below."
+                      : "No categories in the Categories tab yet. The AI will suggest categories in the format below."}
+                </div>
+              )}
+
+              {mode === "categories" && storeListAvailable && (
+                <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
+                  <input
+                    type="checkbox"
+                    checked={modeColumn.useStoreCategories !== false}
+                    onChange={(e) =>
+                      updateEnrichmentColumnConfig(modeColumn.id, { useStoreCategories: e.target.checked })
+                    }
+                    disabled={isEnriching}
+                    className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                  />
+                  <span className="space-y-0.5">
+                    <span className="block text-[11px] font-semibold text-foreground">Use my store categories</span>
+                    <span className="block text-[10px] leading-relaxed text-muted-foreground">
+                      Classify products into the categories in your Categories tab. Turn off to let the AI suggest
+                      its own.
+                    </span>
+                  </span>
+                </label>
+              )}
+
+              {mode === "categories" && !usingStoreList && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-medium text-muted-foreground">
+                    {categoryFormats.length === 1 ? "Format" : "Categories format"}
+                  </label>
+                  <div className="space-y-1">
+                    {categoryFormats.map((option) => {
+                      const selected = option.id === activeCategoryFormat;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => updateEnrichmentColumnConfig(modeColumn.id, { categoryFormat: option.id })}
+                          disabled={isEnriching}
+                          className={`w-full rounded-md border p-2 text-left transition-colors disabled:opacity-50 ${
+                            selected
+                              ? "border-amber-500/40 bg-amber-500/10"
+                              : "border-transparent bg-muted/30 hover:border-border/40"
+                          }`}
+                        >
+                          <span className="block text-[11px] font-semibold">{option.label}</span>
+                          <span className="block font-mono text-[10px] text-muted-foreground">{option.example}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
@@ -1917,8 +1979,19 @@ export function Sidebar() {
                   </div>
                 )}
 
+                {/* Categories mode has one fixed model; nothing to pick. */}
+                {mode === "categories" && (
+                  <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
+                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6 Sol, no web search</p>
+                    <p className="text-[10px] text-muted-foreground/70">
+                      Each product is classified from its own data in one fast call. You are charged for the AI
+                      tokens used, per product.
+                    </p>
+                  </div>
+                )}
+
                 {/* Enrichment Model */}
-                {mode !== "images" && (
+                {mode !== "images" && mode !== "categories" && (
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                     Enrichment Model

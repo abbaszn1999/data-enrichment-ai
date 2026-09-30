@@ -39,6 +39,11 @@ import {
   assertSpreadsheetFile,
 } from "@/lib/upload-limits";
 import { CMS_CATEGORY_COLUMNS } from "@/types";
+import { parseSupportedCmsType } from "@/lib/cms-types";
+import { categoryStructureFor } from "@/lib/categories/format";
+import { buildIncomingCategories, slugifyCategory } from "@/lib/categories/import";
+import { changeWorkspacePlatform } from "@/lib/categories/platform-client";
+import { useWorkspaceStore } from "@/store/workspace-store";
 
 // Alias for compatibility with existing tree builder
 type Category = CategoryJson & { parent_id?: string | null; description?: string; sort_order?: number; attributes?: any[] };
@@ -47,7 +52,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   buildAncestorSets,
   buildCountedTree,
-  categoryPathKey,
   collectExpandableIds,
   flattenExpanded,
   isDescendantOf,
@@ -67,7 +71,7 @@ interface TreeNode extends Category {
 }
 
 function slugify(name: string): string {
-  return name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 48);
+  return slugifyCategory(name).slice(0, 48) || crypto.randomUUID().slice(0, 8);
 }
 
 function ColumnMapRow({
@@ -137,6 +141,17 @@ export default function CategoriesPage() {
   const { workspace, role } = useWorkspaceContext();
   const permissions = useRole(role);
   const [categories, setCategories] = useState<Category[]>([]);
+
+  // Platform decides the structure: Shopify = flat collections, WooCommerce = tree with parents.
+  const [cmsType, setCmsType] = useState<string>(() => parseSupportedCmsType(workspace?.cms_type));
+  const [switchingPlatform, setSwitchingPlatform] = useState(false);
+  const [platformError, setPlatformError] = useState("");
+  const [parentSearch, setParentSearch] = useState("");
+  useEffect(() => {
+    if (workspace) setCmsType(parseSupportedCmsType(workspace.cms_type));
+  }, [workspace]);
+  const flat = categoryStructureFor(cmsType) === "flat";
+  const noun = flat ? "collection" : "category";
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -183,6 +198,7 @@ export default function CategoriesPage() {
     imported: number;
     updated: number;
     skipped: number;
+    autoCreated: number;
   } | null>(null);
 
   // Helper to convert CategoryJson to Category (with parent_id alias)
@@ -325,6 +341,70 @@ export default function CategoriesPage() {
   }, [tree]);
   const rootCount = tree.length;
 
+  // Full "A > B > C" path per category, used by the parent picker.
+  const categoryPaths = useMemo(() => {
+    const byId = new Map(categories.map((c) => [c.id, c]));
+    const paths = new Map<string, string>();
+    for (const cat of categories) {
+      const names: string[] = [];
+      const seen = new Set<string>();
+      let cur: Category | undefined = cat;
+      while (cur && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        names.unshift(cur.name);
+        cur = cur.parent_id ? byId.get(cur.parent_id) : undefined;
+      }
+      paths.set(cat.id, names.join(" > "));
+    }
+    return paths;
+  }, [categories]);
+
+  // A category can never be moved under itself or one of its descendants.
+  const parentOptions = useMemo(() => {
+    const needle = parentSearch.trim().toLowerCase();
+    return categories
+      .filter((c) => {
+        if (editId && (c.id === editId || isDescendantOf(editId, c.id, ancestorSets))) return false;
+        if (!needle) return true;
+        return (categoryPaths.get(c.id) ?? c.name).toLowerCase().includes(needle);
+      })
+      .map((c) => ({ id: c.id, path: categoryPaths.get(c.id) ?? c.name }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }, [categories, editId, ancestorSets, categoryPaths, parentSearch]);
+
+  const hasLegacyParents = flat && categories.some((c) => c.parent_id);
+
+  const handleSwitchPlatform = async (next: string) => {
+    if (!workspace || next === cmsType || categories.length > 0 || switchingPlatform) return;
+    setSwitchingPlatform(true);
+    setPlatformError("");
+    try {
+      await changeWorkspacePlatform(workspace.id, next);
+      setCmsType(next);
+      const current = useWorkspaceStore.getState().workspace;
+      if (current && current.id === workspace.id) {
+        useWorkspaceStore.getState().setWorkspace({ ...current, cms_type: next });
+      }
+    } catch (err) {
+      setPlatformError(err instanceof Error ? err.message : "Failed to change the platform");
+    } finally {
+      setSwitchingPlatform(false);
+    }
+  };
+
+  // Legacy data from before collections were flat: drop the parents (and repeated names).
+  const handleFlatten = () => {
+    const seen = new Set<string>();
+    const flattened: Category[] = [];
+    for (const c of categories) {
+      const key = c.name.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      flattened.push({ ...c, parent_id: null, parentId: null });
+    }
+    updateCategories(flattened);
+  };
+
   const filteredTree = useMemo(() => {
     if (!search) return tree;
     const s = search.toLowerCase();
@@ -350,6 +430,7 @@ export default function CategoriesPage() {
 
   const openForm = (parentId?: string, edit?: Category) => {
     setFormError("");
+    setParentSearch("");
     if (edit) {
       setEditId(edit.id);
       setFormName(edit.name);
@@ -369,6 +450,26 @@ export default function CategoriesPage() {
       setFormError("Name is required");
       return;
     }
+    // Shopify collections have no parents; only WooCommerce categories do.
+    const parentId = flat ? null : formParent || null;
+    if (!flat && parentId && editId && (parentId === editId || isDescendantOf(editId, parentId, ancestorSets))) {
+      setFormError("A category cannot be moved under itself or one of its own subcategories.");
+      return;
+    }
+    const duplicate = categories.some(
+      (c) =>
+        c.id !== editId &&
+        (c.parent_id ?? null) === parentId &&
+        c.name.trim().toLowerCase() === formName.trim().toLowerCase()
+    );
+    if (duplicate) {
+      setFormError(
+        flat
+          ? "A collection with this name already exists."
+          : "A category with this name already exists under the same parent."
+      );
+      return;
+    }
     setFormLoading(true);
     setFormError("");
     try {
@@ -376,7 +477,7 @@ export default function CategoriesPage() {
       if (editId) {
         updated = categories.map((c) =>
           c.id === editId
-            ? { ...c, name: formName.trim(), slug: slugify(formName), description: formDesc.trim(), parent_id: formParent || null }
+            ? { ...c, name: formName.trim(), slug: slugify(formName), description: formDesc.trim(), parent_id: parentId, parentId }
             : c
         );
       } else {
@@ -385,8 +486,8 @@ export default function CategoriesPage() {
           name: formName.trim(),
           slug: slugify(formName),
           description: formDesc.trim(),
-          parent_id: formParent || null,
-          parentId: formParent || null,
+          parent_id: parentId,
+          parentId,
         };
         updated = [...categories, newCat];
       }
@@ -500,7 +601,7 @@ export default function CategoriesPage() {
     return (
       <div key={node.id}>
         <div
-          draggable={permissions.canAdmin}
+          draggable={permissions.canAdmin && !flat}
           onDragStart={(e) => handleDragStart(e, node.id)}
           onDragEnd={handleDragEnd}
           onDragOver={(e) => handleDragOver(e, node.id)}
@@ -511,7 +612,7 @@ export default function CategoriesPage() {
           } ${isDropTarget && canDrop ? "ring-2 ring-primary bg-primary/5" : ""}`}
         >
           {/* Drag handle */}
-          {permissions.canAdmin && (
+          {permissions.canAdmin && !flat && (
             <div className="shrink-0 cursor-grab active:cursor-grabbing px-0.5 text-muted-foreground/30 hover:text-muted-foreground/60">
               <GripVertical className="h-3 w-3" />
             </div>
@@ -589,12 +690,11 @@ export default function CategoriesPage() {
         });
         setParsedSheet({ columns, rows: rows.map((r) => r.originalData) });
         setPreviewRows(preview);
-        const cmsKey = (workspace?.cms_type || "shopify").toLowerCase();
         const cmsConfig =
-          CMS_CATEGORY_COLUMNS[cmsKey] ?? CMS_CATEGORY_COLUMNS.shopify;
+          CMS_CATEGORY_COLUMNS[cmsType] ?? CMS_CATEGORY_COLUMNS.shopify;
         const suggested = suggestCategoryColumnMap(columns, cmsConfig);
         setNameColumn(suggested.name);
-        setParentColumn(suggested.parent);
+        setParentColumn(flat ? "" : suggested.parent);
         setDescColumn(suggested.description);
         setIdColumn(suggested.id);
         setUploadStep(2);
@@ -612,65 +712,29 @@ export default function CategoriesPage() {
     setUploading(true);
     setUploadProgress(0);
     try {
-      const incomingCats: Category[] = [];
-      let skipped = 0;
       let updatedCount = 0;
-      const rowIdToNewId = new Map<string, string>();
-      const seenPaths = new Set<string>();
-      const pending: Array<Category & { _rawParent: string }> = [];
-
-      for (const row of parsedSheet.rows) {
-        const name = (row[nameColumn] || "").trim();
-        if (!name) { skipped++; continue; }
-
-        const newId = crypto.randomUUID();
-        const rawOriginalId = idColumn && row[idColumn] ? row[idColumn].trim() : null;
-        if (rawOriginalId) rowIdToNewId.set(rawOriginalId, newId);
-
-        const fromName = slugify(name);
-        const slug =
-          fromName ||
-          (rawOriginalId ? slugify(rawOriginalId) || rawOriginalId.slice(0, 48) : newId.slice(0, 8));
-        const desc = descColumn ? (row[descColumn] || "").trim() : "";
-        pending.push({
-          id: newId,
-          name,
-          slug,
-          description: desc || undefined,
-          parentId: null,
-          parent_id: null,
-          originalId: rawOriginalId,
-          _rawParent: parentColumn ? (row[parentColumn] || "").trim() : "",
-        } as Category & { _rawParent: string });
-      }
-
-      for (const cat of pending) {
-        const rawParent = cat._rawParent;
-        delete (cat as { _rawParent?: string })._rawParent;
-        if (!rawParent || rawParent === "0" || rawParent === "") {
-          incomingCats.push(cat);
-          continue;
-        }
-        const resolvedId = rowIdToNewId.get(rawParent)
-          ?? pending.find((c) => c.name.toLowerCase() === rawParent.toLowerCase())?.id
-          ?? null;
-        if (resolvedId) { cat.parent_id = resolvedId; cat.parentId = resolvedId; }
-        incomingCats.push(cat);
-      }
-
-      const incomingById = new Map(incomingCats.map((c) => [c.id, c]));
-      const uniqueIncoming: Category[] = [];
-      for (const cat of incomingCats) {
-        const key = categoryPathKey(
-          { id: cat.id, name: cat.name, parentId: cat.parent_id ?? null },
-          incomingById as Map<string, CategoryRef>
-        );
-        if (seenPaths.has(key)) { skipped++; continue; }
-        seenPaths.add(key);
-        uniqueIncoming.push(cat);
-      }
-      incomingCats.length = 0;
-      incomingCats.push(...uniqueIncoming);
+      // Flat platforms (Shopify) ignore parents; tree platforms accept a
+      // Parent column and/or "A > B > C" paths in the name column.
+      const built = buildIncomingCategories(
+        parsedSheet.rows as Array<Record<string, string>>,
+        {
+          name: nameColumn,
+          parent: flat ? "" : parentColumn,
+          description: descColumn,
+          id: idColumn,
+        },
+        categoryStructureFor(cmsType)
+      );
+      const skipped = built.skipped;
+      const incomingCats: Category[] = built.categories.map((c) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        description: c.description,
+        parentId: c.parentId,
+        parent_id: c.parentId,
+        originalId: c.originalId,
+      }));
       setUploadProgress(40);
 
       let finalCats: Category[];
@@ -750,7 +814,12 @@ export default function CategoriesPage() {
       await saveAll(finalCats);
       setUploadProgress(100);
 
-      setUploadResult({ imported: importedCount, updated: updatedCount, skipped });
+      setUploadResult({
+        imported: importedCount,
+        updated: updatedCount,
+        skipped,
+        autoCreated: built.autoCreated,
+      });
       setUploadStep(4);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Import failed");
@@ -804,6 +873,9 @@ export default function CategoriesPage() {
     return used;
   }, [descColumn, idColumn, nameColumn, parentColumn]);
   const canContinueMapping = Boolean(nameColumn) && mappedNameCount > 0;
+  const sampleHref = flat
+    ? "/samples/shopify-collections-sample.csv"
+    : "/samples/woocommerce-categories-sample.csv";
 
   if (loading) {
     return <PageLoader />;
@@ -838,8 +910,14 @@ export default function CategoriesPage() {
                 </span>
               </h1>
               <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
-                The shared category tree every Autommerce agent reads from. Build it by hand, drag
-                to reorganize, or upload a sheet to bootstrap it in seconds.
+                {flat
+                  ? "Your store's collections, the list every Autommerce agent reads from. Add them by hand or upload a sheet to bootstrap it in seconds."
+                  : "The shared category tree every Autommerce agent reads from. Build it by hand, drag to reorganize, or upload a sheet to bootstrap it in seconds."}
+              </p>
+              <p className="mt-1.5 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
+                When <span className="font-semibold text-foreground">Use my store categories</span> is on in
+                Catalog Intelligence, every product is classified into{" "}
+                {flat ? "these collections" : "these categories"} instead of getting AI-suggested ones.
               </p>
             </div>
 
@@ -870,6 +948,16 @@ export default function CategoriesPage() {
                   {saving ? "Saving..." : "Save"}
                 </Button>
               )}
+              <Button
+                asChild
+                size="sm"
+                variant="outline"
+                className="h-9 gap-1.5 rounded-xl border-border/60 bg-background/70 px-3 text-[10px] backdrop-blur"
+              >
+                <a href={sampleHref} download>
+                  <Download className="h-3.5 w-3.5" /> Sample sheet
+                </a>
+              </Button>
               {permissions.canAdmin && (
                 <Button
                   size="sm"
@@ -886,20 +974,20 @@ export default function CategoriesPage() {
                   className="h-9 gap-2 rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                   onClick={() => openForm()}
                 >
-                  <Plus className="h-3.5 w-3.5" /> New category
+                  <Plus className="h-3.5 w-3.5" /> New {noun}
                 </Button>
               )}
             </div>
           </motion.div>
 
           {/* Taxonomy pulse — real values, no invented health score. */}
-          <div className="mt-7 grid max-w-2xl grid-cols-2 overflow-hidden rounded-2xl border border-border/60 bg-background/70 shadow-sm backdrop-blur sm:grid-cols-4">
+          <div className={`mt-7 grid max-w-2xl grid-cols-2 overflow-hidden rounded-2xl border border-border/60 bg-background/70 shadow-sm backdrop-blur ${flat ? "" : "sm:grid-cols-4"}`}>
             {[
-              { label: "Categories", value: categories.length, icon: FolderTree },
-              { label: "Root", value: rootCount, icon: FolderOpen },
-              { label: "With products", value: 0, icon: Package },
-              { label: "Max depth", value: maxDepth, icon: BarChart3 },
-            ].map((metric, index) => (
+              { label: flat ? "Collections" : "Categories", value: categories.length, icon: FolderTree, treeOnly: false },
+              { label: "Root", value: rootCount, icon: FolderOpen, treeOnly: true },
+              { label: "With products", value: 0, icon: Package, treeOnly: false },
+              { label: "Max depth", value: maxDepth, icon: BarChart3, treeOnly: true },
+            ].filter((metric) => !(flat && metric.treeOnly)).map((metric, index) => (
               <motion.div
                 key={metric.label}
                 initial={{ opacity: 0, y: 8 }}
@@ -923,6 +1011,80 @@ export default function CategoriesPage() {
       </section>
 
       <main className="mx-auto max-w-[1500px] space-y-4 p-5 sm:p-7 lg:p-10">
+        {/* Platform bar: decides whether categories are flat collections or a tree */}
+        <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-sm font-black">
+              {flat ? "Shopify · collections (flat list)" : "WooCommerce · categories with parents"}
+            </h2>
+            <p className="text-[10px] text-muted-foreground">
+              {flat
+                ? "Shopify groups products into collections. There are no parent collections or ' > ' paths."
+                : "WooCommerce categories can have parents to any depth, written as Category > Sub > Sub sub."}
+            </p>
+            {categories.length > 0 && permissions.canAdmin ? (
+              <p className="mt-0.5 text-[10px] font-medium text-amber-600">
+                Platform is locked while {noun === "collection" ? "collections exist" : "categories exist"}. Delete all{" "}
+                {noun === "collection" ? "collections" : "categories"} to switch.
+              </p>
+            ) : null}
+            {platformError ? <p className="mt-0.5 text-[10px] text-destructive">{platformError}</p> : null}
+          </div>
+          <div
+            role="group"
+            aria-label="Platform"
+            className="flex shrink-0 items-center gap-1 rounded-xl bg-muted/60 p-1"
+          >
+            {[
+              { value: "shopify", label: "Shopify" },
+              { value: "woocommerce", label: "WooCommerce" },
+            ].map((option) => {
+              const active = cmsType === option.value;
+              const locked = !permissions.canAdmin || categories.length > 0 || switchingPlatform;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={locked && !active}
+                  aria-pressed={active}
+                  title={
+                    active
+                      ? undefined
+                      : categories.length > 0
+                        ? "Delete all categories to switch platform"
+                        : !permissions.canAdmin
+                          ? "Only admins can change the platform"
+                          : undefined
+                  }
+                  onClick={() => handleSwitchPlatform(option.value)}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                    active
+                      ? "bg-[#400095] text-white shadow-sm dark:bg-[#F76D01]"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {switchingPlatform && !active ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {hasLegacyParents ? (
+          <div className="flex flex-col gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
+              Shopify collections are flat, but some of these entries still have parents from before. Flatten the
+              list to remove the parents and any repeated names.
+            </p>
+            {permissions.canAdmin ? (
+              <Button size="sm" variant="outline" className="h-8 shrink-0 rounded-xl text-[10px]" onClick={handleFlatten}>
+                Flatten to collections
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* Search command bar */}
         <motion.div
           initial={{ opacity: 0, y: 12 }}
@@ -931,9 +1093,11 @@ export default function CategoriesPage() {
           className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
         >
           <div>
-            <h2 className="text-sm font-black">Category tree</h2>
+            <h2 className="text-sm font-black">{flat ? "Collections" : "Category tree"}</h2>
             <p className="text-[10px] text-muted-foreground">
-              Search, expand, drag to reorganize, and manage categories in one place.
+              {flat
+                ? "Search and manage your collections in one place."
+                : "Search, expand, drag to reorganize, and manage categories in one place."}
             </p>
           </div>
           <div className="relative min-w-[240px] sm:w-72">
@@ -993,13 +1157,15 @@ export default function CategoriesPage() {
                     </span>
                     <p className="text-sm font-black">
                       {search
-                        ? "No categories match your search"
-                        : "No categories yet"}
+                        ? `No ${noun === "collection" ? "collections" : "categories"} match your search`
+                        : `No ${noun === "collection" ? "collections" : "categories"} yet`}
                     </p>
                     <p className="max-w-sm text-[11px] leading-relaxed text-muted-foreground">
                       {search
                         ? "Try a different search term."
-                        : "Add a category or upload a sheet to build your tree."}
+                        : flat
+                          ? "Add a collection or upload a sheet. Until you do, Catalog Intelligence will suggest collections for you."
+                          : "Add a category or upload a sheet to build your tree. Until you do, Catalog Intelligence will suggest categories for you."}
                     </p>
                     {!search && permissions.canAdmin && (
                       <Button
@@ -1007,7 +1173,7 @@ export default function CategoriesPage() {
                         className="mt-3 gap-1.5 rounded-xl bg-[#400095] text-[10px] text-white dark:bg-[#F76D01]"
                         onClick={() => openForm()}
                       >
-                        <Plus className="h-3.5 w-3.5" /> New category
+                        <Plus className="h-3.5 w-3.5" /> New {noun}
                       </Button>
                     )}
                   </div>
@@ -1090,7 +1256,7 @@ export default function CategoriesPage() {
                           {counted.get(selectedCat.id)?.rollup ?? 0}
                         </span>
                       </div>
-                      <div className="flex justify-between gap-3">
+                      {!flat && <div className="flex justify-between gap-3">
                         <span className="text-muted-foreground">Subcategories</span>
                         <span className="font-bold">
                           {
@@ -1098,7 +1264,7 @@ export default function CategoriesPage() {
                               .length
                           }
                         </span>
-                      </div>
+                      </div>}
                     </div>
                     {permissions.canAdmin && (
                       <div className="flex gap-2 pt-1">
@@ -1161,7 +1327,9 @@ export default function CategoriesPage() {
           >
             <div className="h-1 bg-gradient-to-r from-[#F76D01] via-[#C40000] to-[#400095]" />
             <div className="space-y-4 p-5">
-            <h3 className="text-sm font-black">{editId ? "Edit Category" : "Add Category"}</h3>
+            <h3 className="text-sm font-black">
+              {editId ? `Edit ${flat ? "Collection" : "Category"}` : `Add ${flat ? "Collection" : "Category"}`}
+            </h3>
             {formError && (
               <div className="flex items-center gap-2 p-2 rounded-lg bg-destructive/10 text-destructive text-xs">
                 <AlertCircle className="h-3.5 w-3.5" /> {formError}
@@ -1171,19 +1339,36 @@ export default function CategoriesPage() {
               <Label className="text-xs">Name</Label>
               <Input value={formName} onChange={(e) => setFormName(e.target.value)} className="h-9 rounded-xl" autoFocus />
             </div>
-            <div className="space-y-2">
-              <Label className="text-xs">Parent Category</Label>
-              <select
-                value={formParent}
-                onChange={(e) => setFormParent(e.target.value)}
-                className="w-full h-9 px-2.5 text-xs rounded-xl border bg-background"
-              >
-                <option value="">None (root)</option>
-                {categories.filter((c) => c.id !== editId).map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
+            {!flat && (
+              <div className="space-y-2">
+                <Label className="text-xs">Parent Category</Label>
+                {categories.length > 8 && (
+                  <Input
+                    value={parentSearch}
+                    onChange={(e) => setParentSearch(e.target.value)}
+                    placeholder="Search parents…"
+                    className="h-8 rounded-xl text-xs"
+                  />
+                )}
+                <select
+                  value={formParent}
+                  onChange={(e) => setFormParent(e.target.value)}
+                  className="w-full h-9 px-2.5 text-xs rounded-xl border bg-background"
+                >
+                  <option value="">None (root)</option>
+                  {/* Keep the current parent visible even when the search hides it. */}
+                  {formParent && !parentOptions.some((o) => o.id === formParent) && categoryPaths.has(formParent) ? (
+                    <option value={formParent}>{categoryPaths.get(formParent)}</option>
+                  ) : null}
+                  {parentOptions.map((o) => (
+                    <option key={o.id} value={o.id}>{o.path}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-muted-foreground">
+                  Shown as full paths. A category cannot be placed under itself or its own subcategories.
+                </p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label className="text-xs">Description <span className="text-muted-foreground">(optional)</span></Label>
               <textarea
@@ -1276,7 +1461,15 @@ export default function CategoriesPage() {
                   <Upload className="h-10 w-10 text-muted-foreground" />
                   <div className="text-center">
                     <p className="text-sm font-medium">Drag & drop or click to browse</p>
-                    <p className="text-[10px] text-muted-foreground mt-1">.xlsx, .xls, .csv — {CMS_CATEGORY_COLUMNS[(workspace?.cms_type || "shopify").toLowerCase()]?.hint ?? CMS_CATEGORY_COLUMNS.shopify.hint}</p>
+                    <p className="text-[10px] text-muted-foreground mt-1 max-w-md">.xlsx, .xls, .csv — {(CMS_CATEGORY_COLUMNS[cmsType] ?? CMS_CATEGORY_COLUMNS.shopify).hint}</p>
+                    <a
+                      href={sampleHref}
+                      download
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-[#400095] underline-offset-2 hover:underline dark:text-[#F76D01]"
+                    >
+                      <Download className="h-3 w-3" /> Download the {flat ? "Shopify collections" : "WooCommerce categories"} sample
+                    </a>
                   </div>
                 </div>
               )}
@@ -1300,24 +1493,26 @@ export default function CategoriesPage() {
 
                   <div className="grid gap-2 sm:grid-cols-2">
                     <ColumnMapRow
-                      label="Category name"
+                      label={flat ? "Collection title" : "Category name or path"}
                       required
-                      hint="The label shown in the tree"
+                      hint={flat ? "The collection name" : "A name, or a full path like A > B > C (missing parents are created)"}
                       columns={parsedSheet.columns}
                       value={nameColumn}
                       onChange={setNameColumn}
                       blocked={mappingBlocked}
                       samples={columnSampleValues(parsedSheet.rows, nameColumn)}
                     />
-                    <ColumnMapRow
-                      label="Parent"
-                      hint="Parent name or ID in this sheet"
-                      columns={parsedSheet.columns}
-                      value={parentColumn}
-                      onChange={setParentColumn}
-                      blocked={mappingBlocked}
-                      samples={columnSampleValues(parsedSheet.rows, parentColumn)}
-                    />
+                    {!flat && (
+                      <ColumnMapRow
+                        label="Parent"
+                        hint="Parent name, slug, ID or full path. Leave empty if the name column holds full paths."
+                        columns={parsedSheet.columns}
+                        value={parentColumn}
+                        onChange={setParentColumn}
+                        blocked={mappingBlocked}
+                        samples={columnSampleValues(parsedSheet.rows, parentColumn)}
+                      />
+                    )}
                     <ColumnMapRow
                       label="Description"
                       columns={parsedSheet.columns}
@@ -1327,8 +1522,8 @@ export default function CategoriesPage() {
                       samples={columnSampleValues(parsedSheet.rows, descColumn)}
                     />
                     <ColumnMapRow
-                      label="ID / Handle"
-                      hint="Used to resolve parent rows"
+                      label={flat ? "Handle" : "ID / Slug"}
+                      hint={flat ? "The collection handle (optional)" : "Used to match a Parent value and as the slug"}
                       columns={parsedSheet.columns}
                       value={idColumn}
                       onChange={setIdColumn}
@@ -1452,7 +1647,7 @@ export default function CategoriesPage() {
                     <div className="flex justify-between"><span className="text-muted-foreground">File</span><span className="font-medium">{uploadFile?.name}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Total rows</span><span className="font-medium">{parsedSheet.rows.length}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Name column</span><span className="font-medium">{nameColumn}</span></div>
-                    {parentColumn && <div className="flex justify-between"><span className="text-muted-foreground">Parent column</span><span className="font-medium">{parentColumn}</span></div>}
+                    {!flat && parentColumn && <div className="flex justify-between"><span className="text-muted-foreground">Parent column</span><span className="font-medium">{parentColumn}</span></div>}
                     {descColumn && <div className="flex justify-between"><span className="text-muted-foreground">Description column</span><span className="font-medium">{descColumn}</span></div>}
                     {idColumn && <div className="flex justify-between"><span className="text-muted-foreground">ID / Handle</span><span className="font-medium">{idColumn}</span></div>}
                     <div className="flex justify-between"><span className="text-muted-foreground">Rows with a name</span><span className="font-medium">{mappedNameCount}</span></div>
@@ -1515,6 +1710,11 @@ export default function CategoriesPage() {
                       <div className="text-[10px] text-muted-foreground">Skipped</div>
                     </div>
                   </div>
+                  {uploadResult.autoCreated > 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {uploadResult.autoCreated} missing parent categor{uploadResult.autoCreated === 1 ? "y was" : "ies were"} created from your paths.
+                    </p>
+                  )}
                   <Button size="sm" className="text-xs" onClick={resetUpload}>Done</Button>
                 </div>
               )}

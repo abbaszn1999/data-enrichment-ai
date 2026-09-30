@@ -266,6 +266,12 @@ export async function runEnrichOpenAiResponse(params: {
   shouldCancel?: () => Promise<boolean>;
   /** Overrides the tier's model (agents with their own model choice). */
   modelOverride?: EnrichOpenAiModelId;
+  /**
+   * `false` sends no hosted web_search tool at all (no search charge, no
+   * `include`, no `tool_choice`). Used by Categories mode, which classifies
+   * from the row and the store's category list only.
+   */
+  webSearch?: boolean;
   /** Overrides the tier's web_search context size. */
   searchContextSizeOverride?: EnrichSearchContextSize | "low";
   /** Server-side functions the model may call; see EnrichFunctionTool. */
@@ -339,6 +345,7 @@ export async function runEnrichOpenAiResponse(params: {
     console.log(`[Enrich OpenAI] Starting row enrichment`, {
       model,
       reasoningEffort,
+      webSearch: params.webSearch !== false,
       searchContextSize,
       toolChoice: params.policy.toolChoice,
       columns: params.enabledColumns,
@@ -349,13 +356,14 @@ export async function runEnrichOpenAiResponse(params: {
     });
 
     const functionTools = params.functionTools ?? [];
+    const useWebSearch = params.webSearch !== false;
     const maxRounds = params.maxFunctionRounds ?? DEFAULT_MAX_FUNCTION_ROUNDS;
     const baseRequest = {
       model,
       ...(params.instructions ? { instructions: params.instructions } : {}),
       reasoning: { effort: reasoningEffort },
       tools: [
-        tool,
+        ...(useWebSearch ? [tool] : []),
         ...functionTools.map((t) => ({
           type: "function",
           name: t.name,
@@ -364,7 +372,7 @@ export async function runEnrichOpenAiResponse(params: {
           strict: true,
         })),
       ],
-      ...(include.length > 0 ? { include } : {}),
+      ...(useWebSearch && include.length > 0 ? { include } : {}),
       text: {
         format: {
           type: "json_schema",
@@ -460,7 +468,8 @@ export async function runEnrichOpenAiResponse(params: {
 
     let body = await send({
       ...baseRequest,
-      tool_choice: params.policy.toolChoice,
+      // With no tools at all the API rejects a tool_choice.
+      ...(useWebSearch || functionTools.length > 0 ? { tool_choice: params.policy.toolChoice } : {}),
       input: [{ role: "user", content }],
     });
     for (let round = 1; functionTools.length > 0; round += 1) {

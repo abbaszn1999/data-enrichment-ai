@@ -13,6 +13,7 @@ import { loadProjectJsonAdmin } from "@/lib/jobs/project-json";
 import { collapseToPrimaryRowIds, resolveProductGroupColumn } from "@/lib/catalog/product-groups";
 import type { CatalogJobSettings } from "@/lib/jobs/types";
 import type { SessionKind } from "@/types";
+import { loadCategorySnapshot, runUsesCategories } from "@/lib/categories/snapshot";
 
 export const maxDuration = 60;
 
@@ -26,8 +27,6 @@ type Body = {
   kind?: SessionKind;
   cmsType?: string;
   sourceColumns?: string[];
-  workspaceCategories?: CatalogJobSettings["workspaceCategories"];
-  categoriesRawRows?: Record<string, string>[];
 };
 
 export async function POST(request: NextRequest) {
@@ -108,7 +107,7 @@ export async function POST(request: NextRequest) {
 
   const { data: workspace } = await admin
     .from("workspaces")
-    .select("slug")
+    .select("slug, cms_type")
     .eq("id", workspaceId)
     .single();
 
@@ -131,6 +130,12 @@ export async function POST(request: NextRequest) {
   if (targetIds.length === 0) {
     return NextResponse.json({ error: "No rows to enrich" }, { status: 400, headers });
   }
+  // The platform and the Categories tab are read here, not trusted from the
+  // browser: the job classifies against exactly this list, also when resumed.
+  const cmsType = workspace?.cms_type || body.cmsType || undefined;
+  const workspaceCategories = runUsesCategories(body.enabledColumns)
+    ? await loadCategorySnapshot(workspaceId)
+    : undefined;
   const settings: CatalogJobSettings = {
     workspaceSlug: workspace?.slug,
     sessionName: session.name,
@@ -139,10 +144,9 @@ export async function POST(request: NextRequest) {
     enrichmentColumns: body.enrichmentColumns ?? [],
     enrichmentModel: body.settings?.enrichmentModel,
     outputLanguage: body.settings?.outputLanguage || "English",
-    cmsType: body.cmsType,
+    cmsType,
     sourceColumns: body.sourceColumns?.length ? body.sourceColumns : project.sourceColumns,
-    workspaceCategories: body.workspaceCategories,
-    categoriesRawRows: body.categoriesRawRows,
+    workspaceCategories,
     ownerUserId: ctx.subscription.user_id ?? ctx.ownerId ?? user.id,
     actorUserId: user.id,
   };

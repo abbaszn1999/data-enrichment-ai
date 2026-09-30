@@ -199,6 +199,8 @@ export async function processCatalogRow(params: {
           imageCount: c.imageCount,
           sourceCount: c.sourceCount,
           maxCategories: c.maxCategories,
+          categoryFormat: c.categoryFormat,
+          useStoreCategories: c.useStoreCategories,
           itemCount: c.itemCount,
           maxChars: c.maxChars,
           customInstruction: c.customInstruction,

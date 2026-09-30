@@ -54,6 +54,16 @@ export interface FaqItem {
   answer: string;
 }
 
+/**
+ * How the agent writes categories when it suggests them (no store list, or
+ * the user turned the store list off):
+ * - collections: flat names, "A, B" (Shopify collections)
+ * - flat: flat names, "A, B" (WooCommerce, no hierarchy)
+ * - depth2: "Category > Sub category", up to 2 levels
+ * - depth3: "Category > Sub > Sub sub", up to 3 levels
+ */
+export type CategoryFormat = "collections" | "flat" | "depth2" | "depth3";
+
 export interface EnrichmentColumn {
   id: string;
   label: string;
@@ -64,6 +74,8 @@ export interface EnrichmentColumn {
   imageCount?: number; // Number of images to fetch (1-10), only for imageUrls type
   sourceCount?: number; // Number of sources to fetch (1-10), only for sourceUrls type
   maxCategories?: number; // Max number of categories to assign (1-5), only for categories type
+  categoryFormat?: CategoryFormat; // Categories mode, agent-suggested output format (see categoryFormatsFor)
+  useStoreCategories?: boolean; // Categories mode: classify into the Categories tab list when it has entries (default true)
   itemCount?: number; // Number of items to return, for faq / internalLinks / keywords types
   maxChars?: number; // Hard character budget enforced server-side (SEO meta limits)
   customInstruction?: string; // Custom instruction for this column
@@ -467,9 +479,9 @@ export const CMS_CATEGORY_CONFIG: Record<string, CmsCategoryConfig> = {
     columnName: "Collection",
     hierarchySeparator: " > ",
     multiCategorySeparator: ", ",
-    supportsMultiple: false, // Shopify CSV supports only 1 collection per row
-    supportsHierarchy: true, // Product Category uses hierarchy
-    notes: "Shopify uses 'Collection' for grouping products. Only ONE collection per product row in CSV. Product Category uses Shopify Standard Taxonomy with ' > ' separator (e.g. 'Home & Garden > Kitchen').",
+    supportsMultiple: true, // A product can belong to many collections
+    supportsHierarchy: false, // Collections are a flat list; there are no parent collections
+    notes: "Shopify groups products into flat collections (no parents, no ' > ' paths). A product can be in several collections; write them as a comma-separated list of collection names.",
   },
   woocommerce: {
     columnName: "Categories",
@@ -564,17 +576,17 @@ export const CMS_CATEGORY_COLUMNS: Record<string, CmsCategoryColumns> = {
   },
   shopify: {
     nameColumns: ["title", "name", "collection"],
-    parentColumns: ["parent_id", "parent_collection", "parent"],
+    parentColumns: [], // Shopify collections are flat: there are no parents
     descColumns: ["body (html)", "body_html", "description"],
     idColumns: ["handle", "id"],
-    hint: "Shopify: title, body_html / description, handle",
+    hint: "Shopify collections, one per row: Title (required), Handle, Description. Collections are flat, so there is no parent column.",
   },
   woocommerce: {
-    nameColumns: ["name", "category_name"],
-    parentColumns: ["parent_id", "parent"],
+    nameColumns: ["name", "category_name", "path", "category path", "full path"],
+    parentColumns: ["parent", "parent_id", "parent category"],
     descColumns: ["description"],
-    idColumns: ["id", "category_id"],
-    hint: "WooCommerce: name, parent_id, description",
+    idColumns: ["id", "slug", "category_id"],
+    hint: "WooCommerce: either Name, Slug, Parent, Description (Parent can be a name, slug or full path like A > B) or a single Path column like A > B > C (missing parents are created).",
   },
   salla: {
     nameColumns: ["name", "الاسم", "اسم التصنيف"],

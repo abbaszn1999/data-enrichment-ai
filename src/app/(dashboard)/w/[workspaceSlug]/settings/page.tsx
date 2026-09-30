@@ -43,6 +43,7 @@ import {
 } from "@/lib/supabase";
 import { cmsTypeLabel, parseSupportedCmsType, DEFAULT_CMS_TYPE } from "@/lib/cms-types";
 import { CmsTypeSelect } from "@/components/cms-type-select";
+import { changeWorkspacePlatform, fetchCategoryPlatform } from "@/lib/categories/platform-client";
 
 type ConfigField = {
   key: string;
@@ -104,6 +105,20 @@ export default function SettingsPage() {
   const [integrationError, setIntegrationError] = useState("");
   const [integrationSuccess, setIntegrationSuccess] = useState("");
 
+  const [categoryCount, setCategoryCount] = useState(0);
+  useEffect(() => {
+    if (!workspace) return;
+    let cancelled = false;
+    fetchCategoryPlatform(workspace.id)
+      .then((state) => {
+        if (!cancelled) setCategoryCount(state.categoryCount);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace]);
+
   useEffect(() => {
     if (workspace) {
       setName(workspace.name);
@@ -146,10 +161,14 @@ export default function SettingsPage() {
     setError("");
     setSaving(true);
     try {
+      // The platform is changed through the server, which refuses while the
+      // Categories tab has entries (their structure depends on the platform).
+      if (cmsType !== parseSupportedCmsType(workspace.cms_type)) {
+        await changeWorkspacePlatform(workspace.id, cmsType);
+      }
       await updateWorkspace(workspace.id, {
         name: name.trim(),
         description: description.trim(),
-        cms_type: cmsType,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -426,8 +445,15 @@ export default function SettingsPage() {
                 <CmsTypeSelect
                   value={cmsType}
                   onChange={(value) => setCmsType(parseSupportedCmsType(value))}
-                  disabled={!permissions.canAdmin}
+                  disabled={!permissions.canAdmin || categoryCount > 0}
                 />
+                {categoryCount > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Locked while your Categories tab has {categoryCount} categor{categoryCount === 1 ? "y" : "ies"}.
+                    Shopify collections and WooCommerce categories are structured differently, so clear the
+                    categories first to switch.
+                  </p>
+                )}
               </div>
             </div>
 

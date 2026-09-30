@@ -25,6 +25,8 @@ export type EnrichColumnConfig = Pick<
   | "imageCount"
   | "sourceCount"
   | "maxCategories"
+  | "categoryFormat"
+  | "useStoreCategories"
   | "itemCount"
   | "maxChars"
   | "customInstruction"

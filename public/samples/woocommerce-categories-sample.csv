@@ -1,0 +1,10 @@
+Name,Slug,Parent,Description
+Electronics,electronics,,Phones and computers
+Phones,phones,Electronics,Mobile phones
+Smartphones,smartphones,Phones,Android and iOS phones
+Clothing,clothing,,Apparel for everyone
+Men,men,Clothing,Men's apparel
+Women,women,Clothing,Women's apparel
+Home > Kitchen > Cookware > Pots,,,4-level example: missing parents are created from the path
+Home > Kitchen > Cookware > Pans,,,Sibling of Pots under the same path
+Sale,sale,,Discounted products

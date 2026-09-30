@@ -17,6 +17,7 @@ import {
   type CategoryJson,
 } from "@/lib/storage-helpers";
 import type { CategoryItem } from "@/types";
+import { buildCategoryItems } from "@/lib/categories/items";
 function categoriesMetaPath(workspaceId: string) {
   return `${workspaceId}/categories.meta.json`;
 }
@@ -52,36 +53,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ categories: [], tree: [] });
     }
 
-    // Build a lookup map for parent names
-    const idMap = new Map<string, CategoryJson>();
-    for (const cat of rawCategories) {
-      idMap.set(cat.id, cat);
-    }
-
-    // Build full path for each category
-    function buildFullPath(cat: CategoryJson): string {
-      const parts: string[] = [cat.name];
-      let current = cat;
-      while (current.parentId && idMap.has(current.parentId)) {
-        current = idMap.get(current.parentId)!;
-        parts.unshift(current.name);
-      }
-      return parts.join(" > ");
-    }
-
-    // Convert to CategoryItem format
-    const categoryItems: CategoryItem[] = rawCategories.map((cat) => ({
-      id: cat.id,
-      name: cat.name,
-      slug: cat.slug,
-      parentId: cat.parentId ?? null,
-      originalId: cat.originalId ?? null,
-      parentName: cat.parentId ? idMap.get(cat.parentId)?.name : undefined,
-      fullPath: buildFullPath(cat),
-      description: cat.description,
-      sortOrder: cat.sortOrder,
-      attributes: cat.attributes,
-    }));
+    // Convert to CategoryItem format (with each category's full path)
+    const categoryItems: CategoryItem[] = buildCategoryItems(rawCategories);
 
     // Build a tree structure for UI
     const rootCategories: CategoryItem[] = [];
