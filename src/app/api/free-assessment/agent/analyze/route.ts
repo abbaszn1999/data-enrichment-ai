@@ -8,7 +8,7 @@ import {
   projectIdSchema,
 } from "@/lib/free-assessment/api-schema";
 import { loadProjectSliceAdmin, saveProjectSliceAdmin } from "@/lib/free-assessment/storage-admin";
-import { loadActiveJobForSession, loadJobRun } from "@/lib/jobs/repo";
+import { loadActiveJobForSession, loadJobRun, startOrReuseJobRun } from "@/lib/jobs/repo";
 import type { Stage1Checkpoint } from "@/lib/free-assessment/agent/stage1-niche-discovery";
 
 export const maxDuration = 300;
@@ -59,6 +59,7 @@ export async function GET(request: NextRequest) {
         pending: true,
         jobId: job.id,
         status: job.status,
+        rowCount: job.target_ids.length,
         progress: checkpoint?.tree ? Math.min(1, (checkpoint.offset ?? 0) / total) : 0.05,
       },
       { headers: auth.headers }
@@ -70,6 +71,9 @@ export async function GET(request: NextRequest) {
     const finished = await loadJobRun(auth.admin, latestId);
     if (finished?.status === "failed") {
       return jsonError(finished.last_error || "Sheet analysis failed", 500);
+    }
+    if (finished?.status === "cancelled") {
+      return jsonError("Sheet analysis was stopped", 409);
     }
   }
 
@@ -107,6 +111,19 @@ async function handlePost(request: NextRequest) {
   if (!auth.ok) return auth.response;
 
   try {
+    // Checked before saving the sheet: a read still running must keep the
+    // rows it started from.
+    const existing = await loadActiveJobForSession(auth.admin, {
+      kind: "fa_stage1",
+      sessionId: parsed.data.projectId,
+      workspaceId: parsed.data.workspaceId,
+    });
+    if (existing && !existing.cancel_requested) {
+      return NextResponse.json(
+        { pending: true, jobId: existing.id, rowCount: existing.target_ids.length },
+        { headers: auth.headers }
+      );
+    }
     await saveProjectSliceAdmin(
       auth.admin,
       parsed.data.workspaceId,
@@ -114,19 +131,7 @@ async function handlePost(request: NextRequest) {
       "catalog",
       { plpRows: parsed.data.plpRows }
     );
-    const existing = await loadActiveJobForSession(auth.admin, {
-      kind: "fa_stage1",
-      sessionId: parsed.data.projectId,
-      workspaceId: parsed.data.workspaceId,
-    });
-    if (existing) {
-      return NextResponse.json(
-        { pending: true, jobId: existing.id, rowCount: parsed.data.plpRows.length },
-        { headers: auth.headers }
-      );
-    }
 
-    const { insertJobRun } = await import("@/lib/jobs/repo");
     const { dispatchJob } = await import("@/lib/jobs/dispatch");
     const { removeProjectSliceAdmin } = await import("@/lib/free-assessment/storage-admin");
     // A new Analyze builds a new tree. The session also refuses a checkpoint
@@ -137,7 +142,7 @@ async function handlePost(request: NextRequest) {
       parsed.data.projectId,
       "stage1-job"
     ).catch((err) => console.error("[fa-analyze] Failed to clear Tab 1 checkpoint:", err));
-    const job = await insertJobRun(auth.admin, {
+    const { job, reused } = await startOrReuseJobRun(auth.admin, {
       workspaceId: parsed.data.workspaceId,
       kind: "fa_stage1",
       sessionId: parsed.data.projectId,
@@ -145,9 +150,9 @@ async function handlePost(request: NextRequest) {
       targetIds: parsed.data.plpRows.map((row) => row.name),
       settings: { projectId: parsed.data.projectId },
     });
-    await dispatchJob(job.id, "fa_stage1");
+    if (!reused) await dispatchJob(job.id, "fa_stage1");
     return NextResponse.json(
-      { pending: true, jobId: job.id, rowCount: parsed.data.plpRows.length },
+      { pending: true, jobId: job.id, rowCount: job.target_ids.length },
       { headers: auth.headers }
     );
   } catch (err) {

@@ -16,6 +16,7 @@ import {
 } from "@/lib/billing/ai-wallet-billing";
 import { runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
+import { isTerminalJobStatus } from "./types";
 import {
   finishJobRun,
   isJobCancelRequested,
@@ -35,7 +36,7 @@ export async function runMrStage1Session(runId: string): Promise<void> {
 async function runMrStage1SessionInner(runId: string): Promise<void> {
   const admin = createAdminClient();
   const job = await loadJobRun(admin, runId);
-  if (!job || job.kind !== "mr_stage1") return;
+  if (!job || job.kind !== "mr_stage1" || isTerminalJobStatus(job.status)) return;
   const projectId = String(job.settings.projectId || job.session_id);
   const workspaceId = job.workspace_id;
   await bindAiBillingOrThrow({ admin, workspaceId, userId: job.created_by });
@@ -84,6 +85,14 @@ async function runMrStage1SessionInner(runId: string): Promise<void> {
       });
       assertAiBudget();
       if (!step.done || !step.result) continue;
+      if (await isJobCancelRequested(admin, job.id)) {
+        await finishJobRun(admin, job.id, {
+          status: "cancelled",
+          completedCount: checkpoint.offset,
+          failedCount: 0,
+        });
+        return;
+      }
 
       const nichesPayload = {
         niches: step.result.niches,

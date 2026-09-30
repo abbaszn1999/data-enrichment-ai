@@ -7,6 +7,7 @@ import { claimStaleJobRuns, mapJobRun } from "@/lib/jobs/repo";
 import { isTerminalJobStatus } from "@/lib/jobs/types";
 import { CATALOG_WORKER_STALE_MS } from "@/lib/jobs/config";
 import { recoverStaleCatalogRun } from "@/lib/jobs/catalog-recovery";
+import { recoverStuckGrowthJobs } from "@/lib/jobs/growth-recovery";
 import { expireStaleHeldExtracts as expireStaleMrHeldExtracts } from "@/lib/market-research/extract-advance";
 import { expireStaleHeldExtracts as expireStaleFaHeldExtracts } from "@/lib/free-assessment/extract-advance";
 import { expireElapsedTrials } from "@/lib/trial-server";
@@ -81,6 +82,16 @@ export async function POST(request: NextRequest) {
     dispatched.push(run.id);
   }
 
+  let growthRecovered = { redispatched: 0, cancelled: 0 };
+  try {
+    growthRecovered = await recoverStuckGrowthJobs(admin);
+  } catch (error) {
+    console.error(
+      "[jobs/sweep] growth job recovery failed",
+      error instanceof Error ? error.message : error
+    );
+  }
+
   const { data: terminal } = await admin
     .from("job_runs")
     .select("*")
@@ -131,6 +142,8 @@ export async function POST(request: NextRequest) {
     catalogRecovered,
     dispatched: dispatched.length,
     ids: dispatched,
+    growthRedispatched: growthRecovered.redispatched,
+    growthCancelled: growthRecovered.cancelled,
     notified,
     expiredExtracts,
     expiredFaExtracts,

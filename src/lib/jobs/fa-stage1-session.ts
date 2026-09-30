@@ -17,6 +17,7 @@ import {
 } from "@/lib/billing/ai-wallet-billing";
 import { runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
+import { isTerminalJobStatus } from "./types";
 import {
   finishJobRun,
   isJobCancelRequested,
@@ -36,7 +37,7 @@ export async function runFaStage1Session(runId: string): Promise<void> {
 async function runFaStage1SessionInner(runId: string): Promise<void> {
   const admin = createAdminClient();
   const job = await loadJobRun(admin, runId);
-  if (!job || job.kind !== "fa_stage1") return;
+  if (!job || job.kind !== "fa_stage1" || isTerminalJobStatus(job.status)) return;
   const projectId = String(job.settings.projectId || job.session_id);
   const workspaceId = job.workspace_id;
   await bindAiBillingOrThrow({ admin, workspaceId, userId: job.created_by });

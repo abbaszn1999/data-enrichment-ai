@@ -293,9 +293,34 @@ export async function analyzeSheetApi(
     response
   );
   if (!started.pending || !projectId) return started;
+  return watchSheetAnalysisApi(workspaceId, projectId, started.jobId, started.rowCount);
+}
 
+type AnalyzeStatus = AgentAnalyzeResponse & { pending?: boolean; jobId?: string };
+
+/** The running Tab 1 job for this project, if any (e.g. after a refresh). */
+export async function activeSheetAnalysisApi(
+  workspaceId: string,
+  projectId: string
+): Promise<{ jobId: string; rowCount: number } | null> {
+  const params = new URLSearchParams({ workspaceId, projectId });
+  const status = await readJson<AnalyzeStatus>(
+    await fetch(`${FREE_ASSESSMENT_API}/agent/analyze?${params.toString()}`)
+  );
+  return status.pending && status.jobId
+    ? { jobId: status.jobId, rowCount: status.rowCount ?? 0 }
+    : null;
+}
+
+export async function watchSheetAnalysisApi(
+  workspaceId: string,
+  projectId: string,
+  startJobId: string | undefined,
+  rowCount: number | undefined
+): Promise<AgentAnalyzeResponse> {
   const deadline = Date.now() + 30 * 60 * 1000;
-  let jobId = started.jobId;
+  let jobId = startJobId;
+  let rows = rowCount ?? 0;
   for (;;) {
     if (Date.now() > deadline) {
       throw new Error("Sheet analysis is still running. Refresh to see the result.");
@@ -304,11 +329,10 @@ export async function analyzeSheetApi(
     const params = new URLSearchParams({ workspaceId, projectId });
     if (jobId) params.set("jobId", jobId);
     const statusRes = await fetch(`${FREE_ASSESSMENT_API}/agent/analyze?${params.toString()}`);
-    const status = await readJson<
-      AgentAnalyzeResponse & { pending?: boolean; jobId?: string }
-    >(statusRes);
+    const status = await readJson<AnalyzeStatus>(statusRes);
     if (status.jobId) jobId = status.jobId;
-    if (!status.pending) return status;
+    if (typeof status.rowCount === "number") rows = status.rowCount;
+    if (!status.pending) return { ...status, rowCount: rows };
   }
 }
 

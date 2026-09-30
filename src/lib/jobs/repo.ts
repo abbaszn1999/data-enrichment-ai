@@ -65,6 +65,45 @@ export async function insertJobRun(
   return mapRun(data as Record<string, unknown>);
 }
 
+/**
+ * Starts a job unless one is already active for this session. For the kinds
+ * covered by job_runs_one_active_per_session, a concurrent start loses the
+ * insert (unique violation) and gets the winner's run instead of a duplicate.
+ */
+export async function startOrReuseJobRun(
+  admin: Admin,
+  params: Parameters<typeof insertJobRun>[1]
+): Promise<{ job: JobRunRecord; reused: boolean }> {
+  const lookup = {
+    kind: params.kind,
+    sessionId: params.sessionId,
+    workspaceId: params.workspaceId,
+  };
+  const existing = await loadActiveJobForSession(admin, lookup);
+  if (existing && !existing.cancel_requested) return { job: existing, reused: true };
+  if (existing) {
+    // Stop was pressed and the worker has not wound down yet; a new start
+    // must not attach to the run that is about to end as cancelled.
+    await finishJobRun(
+      admin,
+      existing.id,
+      {
+        status: "cancelled",
+        completedCount: existing.completed_count,
+        failedCount: existing.failed_count,
+      },
+      { onlyIfActive: true }
+    );
+  }
+  try {
+    return { job: await insertJobRun(admin, params), reused: false };
+  } catch (error) {
+    const winner = await loadActiveJobForSession(admin, lookup);
+    if (winner) return { job: winner, reused: true };
+    throw error;
+  }
+}
+
 export async function loadJobRun(
   admin: Admin,
   id: string

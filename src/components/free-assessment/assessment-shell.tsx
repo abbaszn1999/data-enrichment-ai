@@ -63,6 +63,7 @@ import {
 } from "./workspace-data";
 import { InsufficientFundsDialog } from "./insufficient-funds-dialog";
 import {
+  activeSheetAnalysisApi,
   analyzeSheetApi,
   cancelExtractApi,
   chatAgentApi,
@@ -75,6 +76,7 @@ import {
   probeSeedsApi,
   saveFaStateApi,
   startExtractApi,
+  watchSheetAnalysisApi,
 } from "@/lib/free-assessment/client";
 import { previewBalance } from "@/lib/free-assessment/billing";
 import { actualExtractCostUsd, estimateProbeCostUsd } from "@/lib/free-assessment/cost";
@@ -202,6 +204,7 @@ export function FreeAssessmentShell() {
   const extractIdByProject = useRef<Record<string, string>>({});
   const extractIdRef = useRef("");
   const resumedExtract = useRef(new Set<string>());
+  const resumedJobs = useRef(new Set<string>());
   const probeGen = useRef(0);
   const extractGen = useRef(0);
   const analyzeGen = useRef(0);
@@ -598,8 +601,18 @@ export function FreeAssessmentShell() {
     const projectId = activeProject.id;
     setUploadBusy(true);
     setUploadError(null);
+    await finishSheetAnalysis(projectId, fileName, () =>
+      analyzeSheetApi(workspaceId, projectId, rows)
+    );
+  };
+
+  const finishSheetAnalysis = async (
+    projectId: string,
+    fileName: string,
+    run: () => ReturnType<typeof analyzeSheetApi>
+  ) => {
     try {
-      const result = await analyzeSheetApi(workspaceId, projectId, rows);
+      const result = await run();
       setNichesByProject((prev) => ({
         ...prev,
         [projectId]: result.niches as unknown as NicheReading[],
@@ -1317,6 +1330,7 @@ export function FreeAssessmentShell() {
     const gen = ++analyzeGen.current;
     setAnalyzeLoading(true);
     setAnalyzeProgress({ done: 0, total: currentKws.length });
+    let jobId: string;
     try {
       const started = await fetch("/api/free-assessment/agent/classify-job", {
         method: "POST",
@@ -1324,7 +1338,23 @@ export function FreeAssessmentShell() {
         body: JSON.stringify({ workspaceId, projectId }),
       });
       if (!started.ok) throw new Error("Could not start classification");
-      const { jobId } = (await started.json()) as { jobId: string };
+      ({ jobId } = (await started.json()) as { jobId: string });
+    } catch (err) {
+      if (analyzeGen.current !== gen) return;
+      console.error("[handleAnalyze] Error:", err);
+      toast.error("Classification error", {
+        description: "Could not classify keywords. Please try again.",
+      });
+      setAnalyzeLoading(false);
+      setAnalyzeProgress(null);
+      return;
+    }
+    await watchClassifyJob(projectId, jobId, gen);
+  };
+
+  const watchClassifyJob = async (projectId: string, jobId: string, gen: number) => {
+    if (!workspaceId) return;
+    try {
       const deadline = Date.now() + 45 * 60 * 1000;
       for (;;) {
         if (analyzeGen.current !== gen) return;
@@ -1406,7 +1436,7 @@ export function FreeAssessmentShell() {
       // Gemini had classified it.
     } catch (err) {
       if (analyzeGen.current !== gen) return;
-      console.error("[handleAnalyze] Error:", err);
+      console.error("[watchClassifyJob] Error:", err);
       toast.error("Classification error", {
         description: "Could not classify keywords. Please try again.",
       });
@@ -1417,6 +1447,63 @@ export function FreeAssessmentShell() {
       }
     }
   };
+
+  // Re-attach to a sheet read or classify job that is still running after a
+  // refresh or a return visit; the poll loops only live in memory.
+  useEffect(() => {
+    if (!hydrated || !workspaceId || !canEdit || !activeProject) return;
+    const projectId = activeProject.id;
+    const resumed = resumedJobs.current;
+    if (resumed.has(projectId)) return;
+    resumed.add(projectId);
+
+    let cancelled = false;
+    const activeClassify = async () => {
+      const params = new URLSearchParams({ workspaceId, projectId });
+      const res = await fetch(`/api/free-assessment/agent/classify-job?${params.toString()}`);
+      if (!res.ok) return null;
+      const status = (await res.json()) as {
+        jobId?: string;
+        pending: boolean;
+        phase?: string;
+        done?: number;
+        total?: number;
+      };
+      return status.pending && status.jobId ? { ...status, jobId: status.jobId } : null;
+    };
+    void (async () => {
+      const [sheet, classify] = await Promise.all([
+        activeSheetAnalysisApi(workspaceId, projectId).catch(() => null),
+        activeClassify().catch(() => null),
+      ]);
+      if (cancelled) return;
+      if (sheet) {
+        setUploadBusy(true);
+        setUploadError(null);
+        void finishSheetAnalysis(projectId, "your sheet", () =>
+          watchSheetAnalysisApi(workspaceId, projectId, sheet.jobId, sheet.rowCount)
+        );
+      }
+      if (classify) {
+        const gen = ++analyzeGen.current;
+        setAnalyzeLoading(true);
+        setAnalyzeProgress({
+          done: classify.done ?? 0,
+          total: Math.max(classify.total ?? 0, 1),
+          phase: classify.phase === "same-intent" ? "same-intent" : "classify",
+        });
+        void watchClassifyJob(projectId, classify.jobId, gen);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      resumed.delete(projectId);
+    };
+    // Runs once per active project after hydration; re-firing on every
+    // state change would restart the check mid-poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, workspaceId, canEdit, activeProject?.id]);
 
   const timelineSteps = useMemo<StageStep[]>(() => {
     const s1: StageStepStatus = stage1DoneForActive ? "done" : "pending";

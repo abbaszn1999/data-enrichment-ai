@@ -21,9 +21,11 @@ import { useRole } from "@/hooks/use-role";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { previewBalance } from "@/lib/market-research/billing";
 import {
+  activeStoreAnalysisApi,
   analyzeStoreApi,
   buildContentPlanApi,
   cancelExtractApi,
+  cancelStoreAnalysisApi,
   chatAgentApi,
   createMrProjectApi,
   deleteMrProjectApi,
@@ -45,6 +47,7 @@ import {
   startExtractApi,
   syncArticlesApi,
   syncSeoApi,
+  watchStoreAnalysisApi,
   writeArticleApi,
   type ArticleSyncResponse,
 } from "@/lib/market-research/client";
@@ -498,6 +501,7 @@ export function MarketResearchShell() {
   const extractIdRef = useRef("");
   const resumedExtract = useRef(new Set<string>());
   const resumedArticles = useRef(new Set<string>());
+  const resumedJobs = useRef(new Set<string>());
   const articleInFlight = useRef(new Set<string>());
   const generateArticlesRef = useRef<(ids: string[]) => Promise<void>>(
     async () => undefined
@@ -1459,7 +1463,7 @@ export function MarketResearchShell() {
   );
 
   const startAnalysis = useCallback(
-    (opts?: { freshChat?: boolean }) => {
+    (opts?: { freshChat?: boolean; resumeJobId?: string }) => {
       if (!canEdit || !activeProject) return;
       const projectId = activeProject.id;
       const storeLabel = activeProject.storeLabel;
@@ -1563,10 +1567,12 @@ export function MarketResearchShell() {
       setAnalyzing(true);
       setAnalysisProgress(0.1);
 
-      appendAgent(
-        projectId,
-        `Starting a first read of ${storeLabel}. Looking at what the website appears to sell across navigation and collections…`
-      );
+      if (!opts?.resumeJobId) {
+        appendAgent(
+          projectId,
+          `Starting a first read of ${storeLabel}. Looking at what the website appears to sell across navigation and collections…`
+        );
+      }
 
       if (!workspaceId) {
         // Mock fallback if no workspace
@@ -1579,7 +1585,9 @@ export function MarketResearchShell() {
 
       void (async () => {
         try {
-          const res = await analyzeStoreApi(workspaceId, projectId);
+          const res = opts?.resumeJobId
+            ? await watchStoreAnalysisApi(workspaceId, projectId, opts.resumeJobId)
+            : await analyzeStoreApi(workspaceId, projectId);
           if (analysisGen.current !== gen) return;
 
           setNichesByProject((prev) => ({ ...prev, [projectId]: res.niches }));
@@ -2677,6 +2685,7 @@ export function MarketResearchShell() {
     setAnalyzeLoading(true);
     setAnalyzeProgress({ done: 0, total: currentKws.length });
 
+    let jobId: string;
     try {
       const started = await fetch("/api/market-research/agent/classify-job", {
         method: "POST",
@@ -2684,7 +2693,23 @@ export function MarketResearchShell() {
         body: JSON.stringify({ workspaceId, projectId }),
       });
       if (!started.ok) throw new Error("Could not start classification");
-      const { jobId } = (await started.json()) as { jobId: string };
+      ({ jobId } = (await started.json()) as { jobId: string });
+    } catch (err) {
+      if (analyzeGen.current !== gen) return;
+      console.error("[handleAnalyze] Error:", err);
+      toast.error("Classification error", {
+        description: "Could not classify keywords. Please try again.",
+      });
+      setAnalyzeLoading(false);
+      setAnalyzeProgress(null);
+      return;
+    }
+    await watchClassifyJob(projectId, jobId, gen);
+  };
+
+  const watchClassifyJob = async (projectId: string, jobId: string, gen: number) => {
+    if (!workspaceId) return;
+    try {
       const deadline = Date.now() + 45 * 60 * 1000;
       for (;;) {
         if (analyzeGen.current !== gen) return;
@@ -2764,7 +2789,7 @@ export function MarketResearchShell() {
 
     } catch (err) {
       if (analyzeGen.current !== gen) return;
-      console.error("[handleAnalyze] Error:", err);
+      console.error("[watchClassifyJob] Error:", err);
       toast.error("Classification error", {
         description: "Could not classify keywords. Please try again.",
       });
@@ -2856,6 +2881,7 @@ export function MarketResearchShell() {
 
     // Stage 5 runs over the classified category archive after the Tab 4
     // Apply filters (volume / KD / query), not the unfiltered set.
+    let jobId: string;
     try {
       const started = await fetch("/api/market-research/agent/collections-job", {
         method: "POST",
@@ -2863,7 +2889,22 @@ export function MarketResearchShell() {
         body: JSON.stringify({ workspaceId, projectId, filters: categoryFilters }),
       });
       if (!started.ok) throw new Error("Could not start collection matching");
-      const { jobId } = (await started.json()) as { jobId: string };
+      ({ jobId } = (await started.json()) as { jobId: string });
+    } catch (err) {
+      if (clusterGen.current !== gen) return;
+      console.error("[handleNextCollections] Error:", err);
+      toast.error("Clustering failed", {
+        description: err instanceof Error ? err.message : "Please try again.",
+      });
+      setClustering(false);
+      return;
+    }
+    await watchCollectionsJob(projectId, jobId, gen);
+  };
+
+  const watchCollectionsJob = async (projectId: string, jobId: string, gen: number) => {
+    if (!workspaceId) return;
+    try {
       const deadline = Date.now() + 45 * 60 * 1000;
       for (;;) {
         if (clusterGen.current !== gen) return;
@@ -2926,7 +2967,7 @@ export function MarketResearchShell() {
       void hydrateProjectProducts(projectId, true);
     } catch (err) {
       if (clusterGen.current !== gen) return;
-      console.error("[handleNextCollections] Error:", err);
+      console.error("[watchCollectionsJob] Error:", err);
       toast.error("Clustering failed", {
         description: err instanceof Error ? err.message : "Please try again.",
       });
@@ -2936,6 +2977,68 @@ export function MarketResearchShell() {
       }
     }
   };
+
+  // Re-attach to a Tab 1, classify or collections job that is still running
+  // after a refresh or a return visit; the poll loops only live in memory.
+  useEffect(() => {
+    if (!hydrated || !workspaceId || !canEdit || !activeProject) return;
+    const projectId = activeProject.id;
+    const resumed = resumedJobs.current;
+    if (resumed.has(projectId)) return;
+    resumed.add(projectId);
+
+    let cancelled = false;
+    const activeJob = async (path: "classify-job" | "collections-job") => {
+      const params = new URLSearchParams({ workspaceId, projectId });
+      const res = await fetch(`/api/market-research/agent/${path}?${params.toString()}`);
+      if (!res.ok) return null;
+      const status = (await res.json()) as {
+        jobId?: string;
+        pending: boolean;
+        phase?: string;
+        done?: number;
+        total?: number;
+      };
+      return status.pending && status.jobId ? { ...status, jobId: status.jobId } : null;
+    };
+    void (async () => {
+      const [stage1JobId, classify, collections] = await Promise.all([
+        activeStoreAnalysisApi(workspaceId, projectId).catch(() => null),
+        activeJob("classify-job").catch(() => null),
+        activeJob("collections-job").catch(() => null),
+      ]);
+      if (cancelled) return;
+      if (stage1JobId) startAnalysis({ resumeJobId: stage1JobId });
+      if (classify) {
+        const gen = ++analyzeGen.current;
+        setAnalyzeLoading(true);
+        setAnalyzeProgress({
+          done: classify.done ?? 0,
+          total: Math.max(classify.total ?? 0, 1),
+          phase: classify.phase === "same-intent" ? "same-intent" : "classify",
+        });
+        void watchClassifyJob(projectId, classify.jobId, gen);
+      }
+      if (collections) {
+        const gen = ++clusterGen.current;
+        unlockWorkspaceTab(projectId, "collections");
+        setClustering(true);
+        setClusterProgress({
+          processed: collections.done ?? 0,
+          total: Math.max(collections.total ?? 0, 1),
+        });
+        void watchCollectionsJob(projectId, collections.jobId, gen);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      resumed.delete(projectId);
+    };
+    // Runs once per active project after hydration; re-firing on every
+    // state change would restart the check mid-poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, workspaceId, canEdit, activeProject?.id]);
 
   // Manual retry for collections stamped dedupeCheckStatus "unknown" (the
   // live catalog fetch or the Gemini comparison failed on the automatic
@@ -3897,6 +4000,11 @@ export function MarketResearchShell() {
 
   const cancelAnalysis = () => {
     if (!activeProject || !analyzing) return;
+    if (workspaceId) {
+      void cancelStoreAnalysisApi(workspaceId, activeProject.id).catch((error) =>
+        console.error("[cancelAnalysis] Could not stop the store read:", error)
+      );
+    }
     analysisGen.current += 1;
     setAnalyzing(false);
     setAnalysisProgress(0);

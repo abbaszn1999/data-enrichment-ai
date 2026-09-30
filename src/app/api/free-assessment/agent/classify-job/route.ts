@@ -6,7 +6,7 @@ import {
   workspaceIdSchema,
   projectIdSchema,
 } from "@/lib/free-assessment/api-schema";
-import { insertJobRun, loadActiveJobForSession, loadJobRun } from "@/lib/jobs/repo";
+import { loadActiveJobForSession, loadJobRun, startOrReuseJobRun } from "@/lib/jobs/repo";
 import { dispatchJob } from "@/lib/jobs/dispatch";
 
 export const maxDuration = 60;
@@ -32,11 +32,12 @@ export async function GET(request: NextRequest) {
         workspaceId: workspaceId.data,
       });
   if (!job) {
-    return NextResponse.json({ pending: false, status: "completed" }, { headers: auth.headers });
+    return NextResponse.json({ pending: false, status: "idle" }, { headers: auth.headers });
   }
   const total = Number(job.settings.total ?? 0);
   return NextResponse.json(
     {
+      jobId: job.id,
       pending: job.status === "queued" || job.status === "running",
       status: job.status,
       phase: job.settings.phase === "same-intent" ? "same-intent" : "classify",
@@ -63,15 +64,7 @@ async function handlePost(request: NextRequest) {
   }
   const auth = await requireFaWrite(workspaceId.data);
   if (!auth.ok) return auth.response;
-  const existing = await loadActiveJobForSession(auth.admin, {
-    kind: "fa_classify",
-    sessionId: projectId.data,
-    workspaceId: workspaceId.data,
-  });
-  if (existing) {
-    return NextResponse.json({ jobId: existing.id }, { headers: auth.headers });
-  }
-  const job = await insertJobRun(auth.admin, {
+  const { job, reused } = await startOrReuseJobRun(auth.admin, {
     workspaceId: workspaceId.data,
     kind: "fa_classify",
     sessionId: projectId.data,
@@ -79,7 +72,7 @@ async function handlePost(request: NextRequest) {
     targetIds: [],
     settings: { projectId: projectId.data, phase: "classify", total: 0 },
   });
-  await dispatchJob(job.id, "fa_classify");
+  if (!reused) await dispatchJob(job.id, "fa_classify");
   return NextResponse.json({ jobId: job.id }, { headers: auth.headers });
 }
 

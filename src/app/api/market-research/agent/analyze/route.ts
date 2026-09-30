@@ -10,7 +10,12 @@ import {
 import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { loadProjectSliceAdmin } from "@/lib/market-research/storage-admin";
 import type { Stage1Checkpoint } from "@/lib/market-research/agent/stage1-niche-discovery";
-import { loadActiveJobForSession, loadJobRun } from "@/lib/jobs/repo";
+import {
+  loadActiveJobForSession,
+  loadJobRun,
+  requestJobCancel,
+  startOrReuseJobRun,
+} from "@/lib/jobs/repo";
 
 export const maxDuration = 300;
 
@@ -73,6 +78,9 @@ export async function GET(request: NextRequest) {
     if (finished?.status === "failed") {
       return jsonError(finished.last_error || "Store analysis failed", 500);
     }
+    if (finished?.status === "cancelled") {
+      return jsonError("Store analysis was stopped", 409);
+    }
   }
 
   return NextResponse.json(
@@ -116,7 +124,7 @@ async function handlePost(request: NextRequest) {
       sessionId: parsed.data.projectId,
       workspaceId: parsed.data.workspaceId,
     });
-    if (existing) {
+    if (existing && !existing.cancel_requested) {
       return NextResponse.json(
         { pending: true, jobId: existing.id },
         { headers: auth.headers }
@@ -128,7 +136,6 @@ async function handlePost(request: NextRequest) {
       .select("slug")
       .eq("id", parsed.data.workspaceId)
       .maybeSingle();
-    const { insertJobRun } = await import("@/lib/jobs/repo");
     const { dispatchJob } = await import("@/lib/jobs/dispatch");
     const { removeProjectSliceAdmin } = await import("@/lib/market-research/storage-admin");
     // A new Analyze builds a new tree. The session also refuses a checkpoint
@@ -139,7 +146,7 @@ async function handlePost(request: NextRequest) {
       parsed.data.projectId,
       "stage1-job"
     ).catch((err) => console.error("[analyze] Failed to clear Tab 1 checkpoint:", err));
-    const job = await insertJobRun(auth.admin, {
+    const { job, reused } = await startOrReuseJobRun(auth.admin, {
       workspaceId: parsed.data.workspaceId,
       kind: "mr_stage1",
       sessionId: parsed.data.projectId,
@@ -150,7 +157,7 @@ async function handlePost(request: NextRequest) {
         workspaceSlug: workspace?.slug,
       },
     });
-    await dispatchJob(job.id, "mr_stage1");
+    if (!reused) await dispatchJob(job.id, "mr_stage1");
     return NextResponse.json(
       { pending: true, jobId: job.id },
       { headers: auth.headers }
@@ -164,3 +171,25 @@ async function handlePost(request: NextRequest) {
 }
 
 export const POST = withAiWalletBilling("market-research", "mr_analyze", handlePost);
+
+/** Stop: the job ends as cancelled at its next step, before the next AI call. */
+export async function DELETE(request: NextRequest) {
+  const workspaceId = workspaceIdSchema.safeParse(
+    request.nextUrl.searchParams.get("workspaceId")
+  );
+  const projectId = projectIdSchema.safeParse(
+    request.nextUrl.searchParams.get("projectId")
+  );
+  if (!workspaceId.success || !projectId.success) {
+    return jsonError("Invalid analyze cancel query", 400);
+  }
+  const auth = await requireMrWrite(workspaceId.data);
+  if (!auth.ok) return auth.response;
+  const job = await loadActiveJobForSession(auth.admin, {
+    kind: "mr_stage1",
+    sessionId: projectId.data,
+    workspaceId: workspaceId.data,
+  });
+  if (job) await requestJobCancel(auth.admin, job.id, workspaceId.data);
+  return NextResponse.json({ ok: true, cancelled: Boolean(job) }, { headers: auth.headers });
+}

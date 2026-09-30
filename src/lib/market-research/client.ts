@@ -405,9 +405,30 @@ export async function analyzeStoreApi(
     response
   );
   if (!started.pending || !projectId) return started;
+  return watchStoreAnalysisApi(workspaceId, projectId, started.jobId);
+}
 
+type AnalyzeStatus = AgentAnalyzeResponse & { pending?: boolean; jobId?: string };
+
+/** The running Tab 1 job for this project, if any (e.g. after a refresh). */
+export async function activeStoreAnalysisApi(
+  workspaceId: string,
+  projectId: string
+): Promise<string | null> {
+  const params = new URLSearchParams({ workspaceId, projectId });
+  const status = await readJson<AnalyzeStatus>(
+    await fetch(`/api/market-research/agent/analyze?${params.toString()}`)
+  );
+  return status.pending && status.jobId ? status.jobId : null;
+}
+
+export async function watchStoreAnalysisApi(
+  workspaceId: string,
+  projectId: string,
+  startJobId?: string
+): Promise<AgentAnalyzeResponse> {
   const deadline = Date.now() + 30 * 60 * 1000;
-  let jobId = started.jobId;
+  let jobId = startJobId;
   for (;;) {
     if (Date.now() > deadline) {
       throw new Error("Store analysis is still running. Refresh to see the result.");
@@ -416,12 +437,22 @@ export async function analyzeStoreApi(
     const params = new URLSearchParams({ workspaceId, projectId });
     if (jobId) params.set("jobId", jobId);
     const statusRes = await fetch(`/api/market-research/agent/analyze?${params.toString()}`);
-    const status = await readJson<
-      AgentAnalyzeResponse & { pending?: boolean; jobId?: string }
-    >(statusRes);
+    const status = await readJson<AnalyzeStatus>(statusRes);
     if (status.jobId) jobId = status.jobId;
     if (!status.pending) return status;
   }
+}
+
+export async function cancelStoreAnalysisApi(
+  workspaceId: string,
+  projectId: string
+): Promise<void> {
+  const params = new URLSearchParams({ workspaceId, projectId });
+  await readJson(
+    await fetch(`/api/market-research/agent/analyze?${params.toString()}`, {
+      method: "DELETE",
+    })
+  );
 }
 
 export type AgentChatResponse = {

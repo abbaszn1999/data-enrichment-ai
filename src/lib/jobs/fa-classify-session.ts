@@ -8,8 +8,9 @@ import {
   bindAiBillingOrThrow,
   runWithAiBilling,
 } from "@/lib/billing/ai-wallet-billing";
-import { runJobWithFailureGuard, withHeartbeat } from "./guard";
+import { JobCancelledError, runJobWithFailureGuard, withHeartbeat } from "./guard";
 import { notifyJobEvent } from "./notify";
+import { isTerminalJobStatus } from "./types";
 import {
   finishJobRun,
   isJobCancelRequested,
@@ -29,7 +30,7 @@ export async function runFaClassifySession(runId: string): Promise<void> {
 async function runFaClassifySessionInner(runId: string): Promise<void> {
   const admin = createAdminClient();
   const job = await loadJobRun(admin, runId);
-  if (!job || job.kind !== "fa_classify") return;
+  if (!job || job.kind !== "fa_classify" || isTerminalJobStatus(job.status)) return;
   const projectId = String(job.settings.projectId || job.session_id);
   const workspaceId = job.workspace_id;
   await bindAiBillingOrThrow({ admin, workspaceId, userId: job.created_by });
@@ -41,7 +42,7 @@ async function runFaClassifySessionInner(runId: string): Promise<void> {
       resume,
       onProgress: async (progress) => {
         if (await isJobCancelRequested(admin, job.id)) {
-          throw new Error("Classification cancelled");
+          throw new JobCancelledError("Classification cancelled");
         }
         await touchJobHeartbeat(admin, job.id, {
           completed: progress.done,

@@ -6,7 +6,7 @@ import {
   workspaceIdSchema,
   projectIdSchema,
 } from "@/lib/market-research/api-schema";
-import { insertJobRun, loadActiveJobForSession, loadJobRun } from "@/lib/jobs/repo";
+import { loadActiveJobForSession, loadJobRun, startOrReuseJobRun } from "@/lib/jobs/repo";
 import { dispatchJob } from "@/lib/jobs/dispatch";
 
 export const maxDuration = 60;
@@ -32,10 +32,11 @@ export async function GET(request: NextRequest) {
         workspaceId: workspaceId.data,
       });
   if (!job) {
-    return NextResponse.json({ pending: false, status: "completed" }, { headers: auth.headers });
+    return NextResponse.json({ pending: false, status: "idle" }, { headers: auth.headers });
   }
   return NextResponse.json(
     {
+      jobId: job.id,
       pending: job.status === "queued" || job.status === "running",
       status: job.status,
       phase: job.settings.phase === "duplicates" ? "duplicates" : "match",
@@ -62,15 +63,7 @@ async function handlePost(request: NextRequest) {
   }
   const auth = await requireMrWrite(workspaceId.data);
   if (!auth.ok) return auth.response;
-  const existing = await loadActiveJobForSession(auth.admin, {
-    kind: "mr_collections",
-    sessionId: projectId.data,
-    workspaceId: workspaceId.data,
-  });
-  if (existing) {
-    return NextResponse.json({ jobId: existing.id }, { headers: auth.headers });
-  }
-  const job = await insertJobRun(auth.admin, {
+  const { job, reused } = await startOrReuseJobRun(auth.admin, {
     workspaceId: workspaceId.data,
     kind: "mr_collections",
     sessionId: projectId.data,
@@ -78,7 +71,7 @@ async function handlePost(request: NextRequest) {
     targetIds: [],
     settings: { projectId: projectId.data, filters: body.filters ?? {}, total: 0 },
   });
-  await dispatchJob(job.id, "mr_collections");
+  if (!reused) await dispatchJob(job.id, "mr_collections");
   return NextResponse.json({ jobId: job.id }, { headers: auth.headers });
 }
 

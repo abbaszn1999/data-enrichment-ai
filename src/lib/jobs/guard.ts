@@ -27,6 +27,14 @@ export async function withHeartbeat<T>(
   }
 }
 
+/** Thrown by a job that saw Stop mid-step; the guard records it as cancelled. */
+export class JobCancelledError extends Error {
+  constructor(message = "Job cancelled") {
+    super(message);
+    this.name = "JobCancelledError";
+  }
+}
+
 export async function runJobWithFailureGuard(
   runId: string,
   fn: () => Promise<void>,
@@ -39,6 +47,27 @@ export async function runJobWithFailureGuard(
   try {
     await fn();
   } catch (error) {
+    if (error instanceof JobCancelledError) {
+      try {
+        const admin = createAdminClient();
+        const run = await loadJobRun(admin, runId);
+        if (run && !isTerminalJobStatus(run.status)) {
+          await finishJobRun(
+            admin,
+            run.id,
+            {
+              status: "cancelled",
+              completedCount: run.completed_count,
+              failedCount: run.failed_count,
+            },
+            { onlyIfActive: true }
+          );
+        }
+      } catch (finishError) {
+        console.error("[jobs] failed to record cancel", finishError);
+      }
+      return;
+    }
     const message =
       error instanceof Error ? error.message.slice(0, 500) : "Job failed";
     console.error("[jobs] orchestrator crashed", runId, message);
