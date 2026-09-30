@@ -14,11 +14,8 @@ import {
 import { chargeAiCostOnce, WalletExhaustedError } from "@/lib/billing/ai-wallet-billing";
 import { readWorkspaceWallet } from "@/lib/wallet/server";
 import { loadProjectSliceAdmin } from "@/lib/market-research/storage-admin";
-import { articleLinksPushedCollection } from "@/lib/market-research/push-coverage";
-import type {
-  ProposedCollection,
-  StrategyArticle,
-} from "@/components/market-research/workspace-data";
+import { isPushedCollection } from "@/lib/market-research/push-coverage";
+import type { ProposedCollection } from "@/components/market-research/workspace-data";
 
 export const maxDuration = 60;
 
@@ -90,21 +87,14 @@ export async function POST(request: NextRequest) {
       blogs: blogs ?? [],
     };
 
-    const [plan, collections] = await Promise.all([
-      loadProjectSliceAdmin<StrategyArticle[]>(auth.admin, workspaceId, projectId, "strategy").catch(
-        () => null
-      ),
-      loadProjectSliceAdmin<ProposedCollection[]>(
-        auth.admin,
-        workspaceId,
-        projectId,
-        "collections"
-      ).catch(() => null),
-    ]);
-    const covered = articleLinksPushedCollection(
-      Array.isArray(plan) ? plan.find((row) => row.id === article.id) : null,
-      Array.isArray(collections) ? collections : []
-    );
+    // Read from storage: only the push route writes store ids.
+    const collections = await loadProjectSliceAdmin<ProposedCollection[]>(
+      auth.admin,
+      workspaceId,
+      projectId,
+      "collections"
+    ).catch(() => null);
+    const covered = Array.isArray(collections) && collections.some(isPushedCollection);
 
     const jobs = await loadArticleJobs(auth.admin, workspaceId, projectId);
     let job = jobs[article.id];
