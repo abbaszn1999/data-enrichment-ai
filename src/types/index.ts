@@ -370,7 +370,7 @@ export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turk
 /**
  * Tier label. Catalog AI enrichment uses Standard / Premium from the user's
  * setting. "exact" is an Image-Finder-internal label (Google AI Mode finds
- * exact-match product links, then GPT-6 Sol pulls images from them, see
+ * exact-match product links, then GPT-6.1 Sol pulls images from them, see
  * image-finder/exact/): Image Finder no longer has a tier setting, it runs
  * Standard, then Exact, then Premium automatically per row (see
  * image-finder/pipeline.ts), so a saved setting never resolves to "exact".

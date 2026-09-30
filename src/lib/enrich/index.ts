@@ -1,5 +1,5 @@
 /**
- * Import AI enrichment — OpenAI Responses agent (GPT-6 Sol).
+ * Import AI enrichment — OpenAI Responses agent (GPT-6.1 Sol).
  * Public surface for `/api/catalog-intelligence` and related callers.
  */
 

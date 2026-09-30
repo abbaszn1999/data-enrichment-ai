@@ -8,6 +8,9 @@
 //   gpt-5.6-terra   $2.00  $0.20   $2.50         $12.00 | $4.00  $0.40   $5.00         $18.00
 // OpenAI GPT-6 Sol verified against developers.openai.com/api/docs/models/gpt-6-sol (2026-09-24):
 //   gpt-6-sol       $2.00  $0.20   $2.50         $10.00 | $4.00  $0.40   $5.00         $15.00
+// OpenAI GPT-6.1 Sol verified against developers.openai.com/api/docs/models/gpt-6.1-sol (2026-09-30):
+//   gpt-6.1-sol     $2.00  $0.10   $2.50         $10.00 | $4.00  $0.20   $5.00         $15.00
+//   (>272K input tokens: 2x input and cache rates, 1.5x output for the full request)
 // Hosted web search: $10 / 1k billable `search` actions (open_page / find_in_page are free);
 // retrieved search content is billed as input tokens and is already in `usage`.
 //
@@ -81,6 +84,17 @@ function openAiTieredPricing(params: {
 }
 
 export const MODEL_PRICING: Record<string, ModelPricing> = {
+  "gpt-6.1-sol": openAiTieredPricing({
+    input: 2.0,
+    cached: 0.1,
+    cacheWrite: 2.5,
+    output: 10.0,
+    longInput: 4.0,
+    longCached: 0.2,
+    longCacheWrite: 5.0,
+    longOutput: 15.0,
+  }),
+  // Kept so charges recorded against the previous model still reconcile.
   "gpt-6-sol": openAiTieredPricing({
     input: 2.0,
     cached: 0.2,

@@ -9,6 +9,35 @@ import {
 } from "./ai-pricing";
 import { ENRICHMENT_OPENAI_MODELS } from "./enrich/models";
 
+describe("gpt-6.1-sol pricing", () => {
+  it("has the same $2 / $10 rates as gpt-6-sol but half-price cached input", () => {
+    const usage = {
+      input_tokens: 10_000,
+      input_tokens_details: { cached_tokens: 4_000, cache_write_tokens: 1_000 },
+      output_tokens: 3_000,
+    };
+    const cost = calculateOpenAiWebSearchCost("gpt-6.1-sol", usage, 2);
+    expect(cost.inputCost).toBeCloseTo(0.01, 10); // 5,000 uncached x $2/M
+    expect(cost.cachedInputCost).toBeCloseTo(0.0004, 10); // 4,000 x $0.10/M
+    expect(cost.cacheWriteCost).toBeCloseTo(0.0025, 10); // 1,000 x $2.50/M
+    expect(cost.outputCost).toBeCloseTo(0.03, 10); // 3,000 x $10/M
+    expect(cost.searchCost).toBeCloseTo(0.02, 10); // 2 x $0.01
+    const previous = calculateOpenAiWebSearchCost("gpt-6-sol", usage, 2);
+    expect(previous.totalCost - cost.totalCost).toBeCloseTo(0.0004, 10);
+  });
+
+  it("uses 2x input / cache and 1.5x output for the whole request above 272K input tokens", () => {
+    const cost = calculateOpenAiWebSearchCost(
+      "gpt-6.1-sol",
+      { input_tokens: 300_000, input_tokens_details: { cached_tokens: 100_000 }, output_tokens: 10_000 },
+      0
+    );
+    expect(cost.inputCost).toBeCloseTo(0.8, 10); // 200,000 x $4/M
+    expect(cost.cachedInputCost).toBeCloseTo(0.02, 10); // 100,000 x $0.20/M
+    expect(cost.outputCost).toBeCloseTo(0.15, 10); // 10,000 x $15/M
+  });
+});
+
 describe("gpt-6-sol pricing", () => {
   it("prices a normal request with cache reads, cache writes, reasoning and searches", () => {
     const cost = calculateOpenAiWebSearchCost(

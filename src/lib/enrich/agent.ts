@@ -42,7 +42,7 @@ export async function enrichRow(
     return classifyProductCategories(params);
   }
 
-  // One fixed agent: GPT-6 Sol, medium reasoning, web search always required.
+  // One fixed agent: GPT-6.1 Sol, medium reasoning, web search always required.
   // The stored `enrichmentModel` (standard / premium) no longer changes anything.
   const basePolicy = buildEnrichToolPolicy(enabledColumns, enrichmentColumns, kind);
   const policy = { ...basePolicy, toolChoice: "required" as const };

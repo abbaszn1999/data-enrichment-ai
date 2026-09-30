@@ -110,7 +110,7 @@ describe("Image Finder Exact Match", () => {
     vi.unstubAllGlobals();
   });
 
-  it("does not call GPT-6 Sol when Google AI Mode finds no exact-match link", async () => {
+  it("does not call GPT-6.1 Sol when Google AI Mode finds no exact-match link", async () => {
     const fetchMock = stubFetch({ searchApi: noExactMatch });
     const result = await enrichRow(params);
 
@@ -128,7 +128,7 @@ describe("Image Finder Exact Match", () => {
     expect(result.costs.every((cost) => cost.searchApiCost > 0)).toBe(true);
   });
 
-  it("does not call GPT-6 Sol when every candidate link fails the checks (bare domain)", async () => {
+  it("does not call GPT-6.1 Sol when every candidate link fails the checks (bare domain)", async () => {
     const fetchMock = stubFetch({ searchApi: () => matchesFound([{ url: "footshop.test" }]) });
     const result = await enrichRow(params);
 
@@ -181,7 +181,7 @@ describe("Image Finder Exact Match", () => {
     expect(requests).toHaveLength(1);
     const [request] = requests;
     expect(request.instructions).toBe(IMAGE_FINDER_EXACT_IMAGES_SKILL);
-    expect(request.model).toBe("gpt-6-sol");
+    expect(request.model).toBe("gpt-6.1-sol");
     expect(request.reasoning).toEqual({ effort: "high" });
     expect(request.text.format.name).toBe("catalog_image_finder_exact");
 
@@ -208,7 +208,7 @@ describe("Image Finder Exact Match", () => {
     expect(imageUrlsOf(result.data)).toEqual([DECODED_IMAGE]);
   });
 
-  it("only keeps images whose page GPT-6 Sol actually opened in this call", async () => {
+  it("only keeps images whose page GPT-6.1 Sol actually opened in this call", async () => {
     stubFetch({
       searchApi: () => matchesFound([{ url: KNOWN_LINK }]),
       openAi: oneShotResponse(

@@ -24,7 +24,7 @@ const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
 export const EXACT_MATCH_BASIS = "exact";
 export const EXACT_MATCH_NOTE =
-  "Exact match â€” Google AI Mode found the product link; GPT-6 Sol confirmed it and pulled the images.";
+  "Exact match â€” Google AI Mode found the product link; GPT-6.1 Sol confirmed it and pulled the images.";
 
 /** Agent 2 has no function tools (matches Standard's one-shot design): a single OpenAI call. */
 export const IMAGE_FINDER_EXACT_BUDGET_MS = 300_000;
@@ -80,7 +80,7 @@ function pageKey(raw: string): string {
 /**
  * Exact Match Image Finder: Agent 1 (Google AI Mode via SearchApi) finds
  * exact-match product-page links; if any survive the code checks
- * (links-checks.ts), Agent 2 (GPT-6 Sol, hosted web_search) opens them,
+ * (links-checks.ts), Agent 2 (GPT-6.1 Sol, hosted web_search) opens them,
  * searches for more exact pages of the same item, and returns up to 7
  * images. If the first search yields no usable link, Agent 1 automatically
  * searches once more with different angles (links-search.ts). Still no

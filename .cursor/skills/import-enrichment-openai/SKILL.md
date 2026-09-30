@@ -1,7 +1,7 @@
 ---
 name: catalog-intelligence-openai
 description: >-
-  Catalog Intelligence AI-tab product enrichment via OpenAI Responses (one fixed agent: gpt-6-sol medium + web_search).
+  Catalog Intelligence AI-tab product enrichment via OpenAI Responses (one fixed agent: gpt-6.1-sol medium + web_search).
   Use when changing Catalog Intelligence enrich, /api/catalog-intelligence, src/lib/enrich,
   enrichment models, or replacing Gemini/Serper in the Catalog Intelligence AI path.
 ---
@@ -17,7 +17,7 @@ description: >-
 ## Contract
 
 - **One** `POST https://api.openai.com/v1/responses` per product row (a failed attempt is retried once by the job).
-- **One fixed agent** for Enrich mode: `gpt-6-sol`, `reasoning.effort: medium`, `search_context_size: medium`
+- **One fixed agent** for Enrich mode: `gpt-6.1-sol`, `reasoning.effort: medium`, `search_context_size: medium`
   (constants `ENRICH_MODEL`, `ENRICH_REASONING_EFFORT`, `ENRICH_MAX_OUTPUT_TOKENS` in `src/lib/enrich/models.ts`).
   The stored `enrichmentModel` (standard / premium) is ignored by the generic path; there is no model selector.
 - `max_output_tokens: 128000` (the model maximum) so many long columns never hit a small default.

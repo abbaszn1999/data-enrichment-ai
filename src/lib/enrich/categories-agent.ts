@@ -12,8 +12,8 @@ import {
 
 const CATEGORIES_COLUMN_ID = "categories";
 
-/** Categories mode has one fixed model: GPT-6 Sol, medium reasoning, no web search. */
-export const CATEGORIES_MODEL = "gpt-6-sol" as const;
+/** Categories mode has one fixed model: GPT-6.1 Sol, medium reasoning, no web search. */
+export const CATEGORIES_MODEL = "gpt-6.1-sol" as const;
 export const CATEGORIES_REASONING_EFFORT = "medium" as const;
 
 /** A Catalog Intelligence run whose only column is Categories (the Categories mode). */
@@ -35,7 +35,7 @@ function rowText(productData: Record<string, string>): string {
 }
 
 /**
- * Categories mode, one row: a single GPT-6 Sol call (medium reasoning, no web
+ * Categories mode, one row: a single GPT-6.1 Sol call (medium reasoning, no web
  * search) that either picks from the store's own categories or suggests them
  * in the chosen format. Costs are the call's tokens only.
  */

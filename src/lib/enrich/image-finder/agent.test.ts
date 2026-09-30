@@ -130,7 +130,7 @@ describe("Image Finder agent v2 (Premium)", () => {
     const result = await enrichRow(params);
 
     const [first, second] = openAiRequests(fetchMock);
-    expect(first.model).toBe("gpt-6-sol");
+    expect(first.model).toBe("gpt-6.1-sol");
     expect(first.reasoning).toEqual({ effort: "high" });
     expect(first.instructions).toBe(IMAGE_FINDER_SKILL);
     expect(first.tools.map((t: { type: string; name?: string }) => t.name ?? t.type)).toEqual([
@@ -295,7 +295,7 @@ describe("Image Finder agent v2 (Premium)", () => {
     const request = openAiRequests(fetchMock)[0];
     // Generic enrich: stable agent instructions + fixed model + max output.
     expect(request.instructions).toContain("Columns to fill (2):");
-    expect(request.model).toBe("gpt-6-sol");
+    expect(request.model).toBe("gpt-6.1-sol");
     expect(request.max_output_tokens).toBe(128000);
     expect(request.tool_choice).toBe("required");
     expect(request.text.format.name).not.toBe("catalog_image_finder");
@@ -339,7 +339,7 @@ describe("Image Finder agent v2 (Premium)", () => {
       const premiumRequests = openAiRequests(premiumFetch);
       expect(premiumRequests).toHaveLength(IMAGE_FINDER_MAX_ROUNDS + 1);
       expect(premiumRequests.at(-1).tool_choice).toBe("none");
-      expect(premiumRequests[0].model).toBe("gpt-6-sol");
+      expect(premiumRequests[0].model).toBe("gpt-6.1-sol");
       expect(premiumRequests[0].reasoning).toEqual({ effort: "high" });
     });
   });

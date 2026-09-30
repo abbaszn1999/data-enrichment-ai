@@ -1801,7 +1801,7 @@ export function Sidebar() {
                 {/* Categories mode has one fixed model; nothing to pick. */}
                 {mode === "categories" && (
                   <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
-                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6 Sol, no web search</p>
+                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6.1 Sol, no web search</p>
                     <p className="text-[10px] text-muted-foreground/70">
                       Each product is classified from its own data in one fast call. You are charged for the AI
                       tokens used, per product.
@@ -1812,7 +1812,7 @@ export function Sidebar() {
                 {/* Enrich mode is one fixed agent; nothing to pick. */}
                 {mode !== "images" && mode !== "categories" && (
                   <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
-                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6 Sol, web search on</p>
+                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6.1 Sol, web search on</p>
                     <p className="text-[10px] text-muted-foreground/70">
                       One AI agent fills every selected column. It searches the web for each product and follows the
                       custom instruction on each column. You are charged for the exact AI tokens and searches used,

@@ -1,5 +1,5 @@
 /**
- * Exact Match Agent 2 skill (GPT-6 Sol via hosted web_search), sent as the
+ * Exact Match Agent 2 skill (GPT-6.1 Sol via hosted web_search), sent as the
  * Responses `instructions` field. Independent from Standard's and Premium's
  * skills (standard-skill.ts / skill.ts): Agent 2 starts from links Agent 1
  * (Google AI Mode) already judged exact matches, must independently confirm

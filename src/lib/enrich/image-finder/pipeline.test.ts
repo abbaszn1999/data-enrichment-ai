@@ -14,7 +14,7 @@ import {
 } from "./pipeline";
 
 const openAi = (tokens = 1_000) =>
-  calculateOpenAiWebSearchCost("gpt-6-sol", { input_tokens: tokens, output_tokens: tokens / 2 }, 1);
+  calculateOpenAiWebSearchCost("gpt-6.1-sol", { input_tokens: tokens, output_tokens: tokens / 2 }, 1);
 const searchApi = () => createSearchApiCost(1);
 
 const image = (n: number) => ({ imageUrl: `https://cdn.test/${n}.jpg`, pageUrl: `https://shop.test/p/${n}`, title: "Product image" });

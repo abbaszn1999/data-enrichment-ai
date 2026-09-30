@@ -47,7 +47,7 @@ const settings: CatalogJobSettings = {
 };
 
 const billedCall = calculateOpenAiWebSearchCost(
-  "gpt-6-sol",
+  "gpt-6.1-sol",
   { input_tokens: 2_000, output_tokens: 500 },
   1
 );

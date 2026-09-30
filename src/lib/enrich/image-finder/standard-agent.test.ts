@@ -90,7 +90,7 @@ describe("Image Finder Standard (one-shot)", () => {
     expect(requests).toHaveLength(1);
     const [request] = requests;
     expect(request.instructions).toBe(IMAGE_FINDER_STANDARD_SKILL);
-    expect(request.model).toBe("gpt-6-sol");
+    expect(request.model).toBe("gpt-6.1-sol");
     expect(request.reasoning).toEqual({ effort: "high" });
     expect(request.tools).toHaveLength(1);
     expect(request.tools[0].type).toBe("web_search");

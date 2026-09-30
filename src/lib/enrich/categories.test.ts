@@ -215,7 +215,7 @@ describe("buildCategoryItems", () => {
   });
 });
 
-describe("Categories mode agent: one call, GPT-6 Sol medium, no web search", () => {
+describe("Categories mode agent: one call, GPT-6.1 Sol medium, no web search", () => {
   const usage = { input_tokens: 8_000, output_tokens: 300, input_tokens_details: { cached_tokens: 6_000 }, output_tokens_details: { reasoning_tokens: 200 } };
   const answer = (categories: string, reason = "") => ({
     status: "completed",
@@ -244,13 +244,13 @@ describe("Categories mode agent: one call, GPT-6 Sol medium, no web search", () 
     expect(isCategoriesModeRun("plp", ["categories"])).toBe(false);
   });
 
-  it("sends gpt-6-sol with medium reasoning and no tools at all, whatever tier was saved", async () => {
+  it("sends gpt-6.1-sol with medium reasoning and no tools at all, whatever tier was saved", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(answer("Clothing > Shirts > Polo Shirts")), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const result = await classifyProductCategories(params());
 
     const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(request.model).toBe("gpt-6-sol");
+    expect(request.model).toBe("gpt-6.1-sol");
     expect(request.reasoning).toEqual({ effort: "medium" });
     expect(request.tools).toEqual([]);
     expect(request.tool_choice).toBeUndefined();
@@ -266,7 +266,7 @@ describe("Categories mode agent: one call, GPT-6 Sol medium, no web search", () 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(answer("Clothing")), { status: 200 })));
     const result = await classifyProductCategories(params());
     expect(result.costs).toHaveLength(1);
-    const expected = calculateOpenAiWebSearchCost("gpt-6-sol", usage, 0);
+    const expected = calculateOpenAiWebSearchCost("gpt-6.1-sol", usage, 0);
     expect(result.costs[0].totalCost).toBeCloseTo(expected.totalCost, 12);
     expect(result.costs[0].webSearchCalls).toBe(0);
     expect(result.costs[0].searchCost).toBe(0);

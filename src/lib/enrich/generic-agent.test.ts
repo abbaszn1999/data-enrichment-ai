@@ -51,7 +51,7 @@ describe("Enrich default columns", () => {
 });
 
 describe("Enrich generic agent request", () => {
-  it("is one fixed agent: gpt-6-sol medium, web search required, 128k output, instructions + row input", async () => {
+  it("is one fixed agent: gpt-6.1-sol medium, web search required, 128k output, instructions + row input", async () => {
     const fetchMock = stubOpenAi({
       id: "r1",
       status: "completed",
@@ -78,7 +78,7 @@ describe("Enrich generic agent request", () => {
     // The stored tier no longer matters: premium must send the same request.
     await enrichRow({ ...params, settings: { enrichmentModel: "premium", outputLanguage: "English" } });
     const body = sent(fetchMock);
-    expect(body.model).toBe("gpt-6-sol");
+    expect(body.model).toBe("gpt-6.1-sol");
     expect(body.reasoning.effort).toBe("medium");
     expect(body.max_output_tokens).toBe(128_000);
     expect(body.tool_choice).toBe("required");
@@ -115,7 +115,7 @@ describe("Enrich generic agent request", () => {
       ],
     });
     const result = await enrichRow(params);
-    const expected = calculateOpenAiWebSearchCost("gpt-6-sol", usage, 2);
+    const expected = calculateOpenAiWebSearchCost("gpt-6.1-sol", usage, 2);
     expect(result.costs).toHaveLength(1);
     expect(result.costs[0].totalCost).toBeCloseTo(expected.totalCost, 10);
   });
@@ -132,7 +132,7 @@ describe("Enrich generic agent request", () => {
     expect(isEnrichOutputTruncatedError(error)).toBe(true);
     const billed = billedCostsOf(error);
     expect(billed).toHaveLength(1);
-    expect(billed[0].totalCost).toBeCloseTo(calculateOpenAiWebSearchCost("gpt-6-sol", usage, 1).totalCost, 10);
+    expect(billed[0].totalCost).toBeCloseTo(calculateOpenAiWebSearchCost("gpt-6.1-sol", usage, 1).totalCost, 10);
     expect((error as Error).message).toContain("Select fewer columns");
   });
 });
