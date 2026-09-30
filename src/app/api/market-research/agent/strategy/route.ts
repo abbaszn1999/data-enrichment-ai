@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { withAiWalletBilling } from "@/lib/billing/ai-wallet-billing";
 import {
   agentStrategyBodySchema,
+  billMrAiUnlessCovered,
   jsonError,
-  requireMrWrite,
+  requireMrWriteUnbilled,
 } from "@/lib/market-research/api-schema";
+import { isPushedCollection } from "@/lib/market-research/push-coverage";
 import {
   fetchStoreCatalog,
   type StoreCollectionItem,
@@ -36,7 +38,7 @@ async function handlePost(request: NextRequest) {
     return jsonError("Invalid strategy payload", 400);
   }
 
-  const auth = await requireMrWrite(parsed.data.workspaceId);
+  const auth = await requireMrWriteUnbilled(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {
@@ -65,6 +67,8 @@ async function handlePost(request: NextRequest) {
     let proposedCollections: ProposedCollection[] =
       (parsed.data.collections as ProposedCollection[] | undefined) ?? [];
     let productsById: Map<string, MarketResearchProduct> | undefined;
+    // Only stored collections count: the body's copies could claim a store id.
+    let hasPushedCollection = false;
 
     if (parsed.data.projectId) {
       const [storedCollections, products] = await Promise.all([
@@ -83,11 +87,19 @@ async function handlePost(request: NextRequest) {
 
       if (Array.isArray(storedCollections) && storedCollections.length > 0) {
         proposedCollections = storedCollections;
+        hasPushedCollection = storedCollections.some(isPushedCollection);
       }
       if (products.length > 0) {
         productsById = new Map(products.map((product) => [product.id, product]));
       }
     }
+
+    const walletEmpty = await billMrAiUnlessCovered(
+      auth,
+      parsed.data.workspaceId,
+      hasPushedCollection
+    );
+    if (walletEmpty) return walletEmpty;
 
     const result = await runStage7ContentPlan({
       keywords: parsed.data.keywords as ExtractedKeyword[],

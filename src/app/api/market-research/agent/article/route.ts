@@ -13,6 +13,12 @@ import {
 } from "@/lib/market-research/agent/article-jobs";
 import { chargeAiCostOnce, WalletExhaustedError } from "@/lib/billing/ai-wallet-billing";
 import { readWorkspaceWallet } from "@/lib/wallet/server";
+import { loadProjectSliceAdmin } from "@/lib/market-research/storage-admin";
+import { articleLinksPushedCollection } from "@/lib/market-research/push-coverage";
+import type {
+  ProposedCollection,
+  StrategyArticle,
+} from "@/components/market-research/workspace-data";
 
 export const maxDuration = 60;
 
@@ -84,9 +90,25 @@ export async function POST(request: NextRequest) {
       blogs: blogs ?? [],
     };
 
+    const [plan, collections] = await Promise.all([
+      loadProjectSliceAdmin<StrategyArticle[]>(auth.admin, workspaceId, projectId, "strategy").catch(
+        () => null
+      ),
+      loadProjectSliceAdmin<ProposedCollection[]>(
+        auth.admin,
+        workspaceId,
+        projectId,
+        "collections"
+      ).catch(() => null),
+    ]);
+    const covered = articleLinksPushedCollection(
+      Array.isArray(plan) ? plan.find((row) => row.id === article.id) : null,
+      Array.isArray(collections) ? collections : []
+    );
+
     const jobs = await loadArticleJobs(auth.admin, workspaceId, projectId);
     let job = jobs[article.id];
-    if (mode !== "poll") {
+    if (mode !== "poll" && !covered) {
       const wallet = await readWorkspaceWallet(auth.admin, workspaceId);
       if (!(wallet.balance > 0)) {
         return NextResponse.json(
@@ -117,13 +139,14 @@ export async function POST(request: NextRequest) {
     let result: Awaited<ReturnType<typeof finalizeArticleJob>>;
     try {
       const openaiResponseId = job.openaiResponseId;
-      result = await finalizeArticleJob(auth.admin, workspaceId, projectId, job, (cost) =>
-        chargeAiCostOnce(
+      result = await finalizeArticleJob(auth.admin, workspaceId, projectId, job, async (cost) => {
+        if (covered) return;
+        await chargeAiCostOnce(
           "market-research",
           { admin: auth.admin, workspaceId, userId: auth.user.id },
           { operation: "mr_article", amountUsd: cost, key: openaiResponseId }
-        )
-      );
+        );
+      });
     } catch (err) {
       // The response id is already stored. A flaky retrieve must not look like
       // a failed write — the client will poll and try again.

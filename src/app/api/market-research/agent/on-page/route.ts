@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { withAiWalletBilling } from "@/lib/billing/ai-wallet-billing";
 import {
   agentOnPageBodySchema,
+  billMrAiUnlessCovered,
   jsonError,
-  requireMrWrite,
+  requireMrWriteUnbilled,
 } from "@/lib/market-research/api-schema";
+import { isPushedCollection } from "@/lib/market-research/push-coverage";
 import {
   fetchStoreCatalog,
   type StoreCollectionItem,
@@ -49,7 +51,7 @@ async function handlePost(request: NextRequest) {
     return jsonError("Invalid on-page payload", 400);
   }
 
-  const auth = await requireMrWrite(parsed.data.workspaceId);
+  const auth = await requireMrWriteUnbilled(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {
@@ -94,6 +96,13 @@ async function handlePost(request: NextRequest) {
     const pageCollections = pageIds
       .map((id) => proposedById.get(id))
       .filter((c): c is ProposedCollection => Boolean(c));
+
+    const walletEmpty = await billMrAiUnlessCovered(
+      auth,
+      parsed.data.workspaceId,
+      pageCollections.every(isPushedCollection)
+    );
+    if (walletEmpty) return walletEmpty;
 
     // The link graph is normally already built in the background right after
     // the collections were pushed (see /api/market-research/agent/internal-links

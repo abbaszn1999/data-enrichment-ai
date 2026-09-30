@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { withAiWalletBilling } from "@/lib/billing/ai-wallet-billing";
 import {
   agentInternalLinksBodySchema,
+  billMrAiUnlessCovered,
   jsonError,
-  requireMrWrite,
+  requireMrWriteUnbilled,
 } from "@/lib/market-research/api-schema";
+import { isPushedCollection } from "@/lib/market-research/push-coverage";
 import {
   fetchStoreCatalog,
   type StoreCollectionItem,
@@ -52,7 +54,7 @@ async function handlePost(request: NextRequest) {
     return jsonError("Invalid internal-links payload", 400);
   }
 
-  const auth = await requireMrWrite(parsed.data.workspaceId);
+  const auth = await requireMrWriteUnbilled(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
   try {
@@ -89,6 +91,13 @@ async function handlePost(request: NextRequest) {
     const sourceCollections = pageIds
       .map((id) => proposedById.get(id))
       .filter((c): c is ProposedCollection => Boolean(c));
+
+    const walletEmpty = await billMrAiUnlessCovered(
+      auth,
+      parsed.data.workspaceId,
+      sourceCollections.every(isPushedCollection)
+    );
+    if (walletEmpty) return walletEmpty;
 
     let pageLinks: InternalLinkGraph = {};
     if (sourceCollections.length > 0) {

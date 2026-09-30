@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
-import { requireGalleryAuth } from "@/lib/gallery/auth";
+import { requireGalleryAuth, type GalleryAuthOk } from "@/lib/gallery/auth";
 import { aiBillingActive, bindAiBilling } from "@/lib/billing/ai-wallet-billing";
 
 export const workspaceIdSchema = z.string().uuid();
@@ -414,6 +414,29 @@ export async function requireMrWrite(workspaceId: string) {
       { status: 402, headers: auth.headers }
     ),
   };
+}
+
+/** Auth for AI routes the $5 push may already pay for; call billMrAiUnlessCovered once coverage is known. */
+export async function requireMrWriteUnbilled(workspaceId: string) {
+  return requireGalleryAuth({ workspaceId, requireWrite: true });
+}
+
+/**
+ * Covered work runs free. Otherwise the payer is bound as in requireMrWrite,
+ * returning the 402 response when the wallet is empty.
+ */
+export async function billMrAiUnlessCovered(
+  auth: GalleryAuthOk,
+  workspaceId: string,
+  covered: boolean
+): Promise<NextResponse | null> {
+  if (covered || !aiBillingActive()) return null;
+  const blocked = await bindAiBilling({ admin: auth.admin, workspaceId, userId: auth.user.id });
+  if (!blocked) return null;
+  return NextResponse.json(
+    { error: blocked, code: "WALLET_EMPTY" },
+    { status: 402, headers: auth.headers }
+  );
 }
 
 export async function requireMrAdmin(workspaceId: string) {
