@@ -187,17 +187,24 @@ export async function persistCompletedArticle(
   return generated;
 }
 
+/**
+ * `chargeCompleted` runs before the article is saved: a saved body is served
+ * without further billing, so a charge that could come after it might never
+ * happen.
+ */
 export async function finalizeArticleJob(
   admin: SupabaseClient,
   workspaceId: string,
   projectId: string,
-  job: ArticleWriteJob
+  job: ArticleWriteJob,
+  chargeCompleted: (costUsd: number) => Promise<void>
 ): Promise<ArticleFinalizeResult> {
   const body = await retrieveArticleResponse(job.openaiResponseId);
   const openaiStatus = body.status || "in_progress";
 
   if (openaiStatus === "completed") {
     const written = articleFromOpenAiResponse(job.input, body);
+    await chargeCompleted(written.cost?.totalCost ?? 0);
     const article = await persistCompletedArticle(
       admin,
       workspaceId,

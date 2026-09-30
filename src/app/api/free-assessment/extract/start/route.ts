@@ -14,7 +14,7 @@ import {
 import { getKeywordProvider } from "@/lib/free-assessment/providers";
 import { marketToSemrushDb } from "@/lib/free-assessment/providers/keyword-provider";
 import { getFaProject, loadProjectProbesAdmin } from "@/lib/free-assessment/server-persist";
-import { chargeAssessmentWallet, refundAssessmentWallet } from "@/lib/free-assessment/wallet-ops";
+import { chargeAssessmentWallet, settleExtractBilling } from "@/lib/free-assessment/wallet-ops";
 
 export const maxDuration = 60;
 
@@ -157,18 +157,24 @@ export async function POST(request: NextRequest) {
         provider.abortKeywordIdeas(row.runId).catch(() => undefined)
       )
     );
-    await refundAssessmentWallet(auth.admin, {
-      workspaceId: parsed.data.workspaceId,
+    // The normal settlement refunds the hold under the same key every later
+    // settle would use, and only closes the extract once the refund landed;
+    // a failed refund leaves it held for the sweep to settle.
+    await settleExtractBilling(auth.admin, {
+      extract: {
+        id: extractId,
+        workspace_id: parsed.data.workspaceId,
+        project_id: parsed.data.projectId,
+        held_usd: heldUsd,
+        actual_usd: 0,
+        rows_returned: 0,
+        billing_status: "held",
+        status: "running",
+      },
       userId: auth.user.id,
-      amountUsd: heldUsd,
-      description: "Keyword extract refund Â· start failed",
-      idempotencyKey: `fa_apify_keyword_extract:refund:${extractId}`,
-      details: { extractId, failed: true },
+      rowsReturned: 0,
+      status: "failed",
     });
-    await auth.admin
-      .from("fa_extracts")
-      .update({ status: "failed", billing_status: "refunded" })
-      .eq("id", extractId);
     // Never forward the raw provider error to the client â€” it can carry our
     // vendor's name, actor ids, or request paths in its message.
     console.error("[fa-extract] Failed to start extract:", error);

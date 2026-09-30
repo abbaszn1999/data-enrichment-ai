@@ -10,13 +10,11 @@ import { loadProjectSliceAdmin } from "@/lib/market-research/storage-admin";
 import {
   resolveCollectionByName,
   applyShopifyCollectionUpdates,
-  createShopifyCollection,
   publishCollectionToOnlineStore,
 } from "@/lib/sync/providers/shopify/collections";
 import {
-  fetchWooCommerceCategories,
+  resolveWooCategoryByName,
   updateWooCommerceCategories,
-  createWooCommerceCategory,
 } from "@/lib/sync/providers/woocommerce/categories";
 import type { IntegrationRecord } from "@/lib/sync/core/types";
 import type {
@@ -31,6 +29,8 @@ const syncSeoBodySchema = z.object({
 });
 
 export const maxDuration = 60;
+
+const NOT_ON_STORE = "Not on the store yet. Push this collection first.";
 
 export async function POST(request: NextRequest) {
   let json: unknown;
@@ -66,10 +66,13 @@ export async function POST(request: NextRequest) {
     const collections = Array.isArray(collectionsRes) ? collectionsRes : [];
     const contentById = contentRes && typeof contentRes === "object" ? contentRes : {};
 
+    // By default only collections already on the store; projects pushed
+    // before store ids were saved fall back to every collection.
+    const pushed = collections.filter((c) => c.storeHandle || c.storeCollectionId);
     const targetCollectionIds =
       parsed.data.collectionIds && parsed.data.collectionIds.length > 0
         ? parsed.data.collectionIds
-        : collections.map((c) => c.id);
+        : (pushed.length > 0 ? pushed : collections).map((c) => c.id);
 
     if (targetCollectionIds.length === 0) {
       return NextResponse.json({ ok: true, syncedCount: 0, message: "No collections to sync" });
@@ -174,46 +177,9 @@ export async function POST(request: NextRequest) {
               results.push({ collectionId: colId, ok: true });
             }
           } else {
-            // If not found on Shopify, create it
-            const rawProductIds = col?.matchedProductIds ?? [];
-            const shopifyProductIds = rawProductIds
-              .map((pid) =>
-                pid.startsWith("gid://shopify/Product/")
-                  ? pid
-                  : /^\d+$/.test(pid)
-                  ? `gid://shopify/Product/${pid}`
-                  : ""
-              )
-              .filter(Boolean);
-
-            const createRes = await createShopifyCollection({
-              integration,
-              input: {
-                title: storeTitle,
-                type: "manual",
-                descriptionHtml: content.collectionDescription,
-                productIds: shopifyProductIds,
-              },
-            });
-
-            // Update SEO for the newly created collection
-            await applyShopifyCollectionUpdates({
-              integration,
-              updates: [
-                {
-                  row: {
-                    id: createRes.id,
-                    title: storeTitle,
-                    description: content.collectionDescription,
-                    seo_title: content.seoTitle,
-                    seo_description: content.seoDescription,
-                  },
-                  changedColumns: ["seo_title", "seo_description"],
-                },
-              ],
-            });
-            syncedCount += 1;
-            results.push({ collectionId: colId, ok: true });
+            // Creating collections is the paid push step, never a side effect
+            // of syncing copy.
+            results.push({ collectionId: colId, ok: false, error: NOT_ON_STORE });
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Shopify sync error";
@@ -222,9 +188,6 @@ export async function POST(request: NextRequest) {
         }
       }
     } else if (provider === "woocommerce" || provider === "wordpress") {
-      const wooSheet = await fetchWooCommerceCategories({ integration, limit: 100 });
-      const wooRows = wooSheet.rows;
-
       for (const colId of targetCollectionIds) {
         const col = collections.find((c) => c.id === colId);
         const colName = col?.name || colId;
@@ -241,9 +204,18 @@ export async function POST(request: NextRequest) {
         }
 
         try {
-          const matched = wooRows.find(
-            (r) => String(r.name).toLowerCase() === storeTitle.toLowerCase()
-          );
+          // The id saved at push time, else an exact name match found by
+          // search, so stores with many categories still resolve correctly.
+          let matched: { id: string } | null = col?.storeCollectionId
+            ? { id: String(col.storeCollectionId) }
+            : null;
+          if (!matched) {
+            const found = await resolveWooCategoryByName({ integration, name: storeTitle });
+            matched =
+              found && (found.title ?? "").toLowerCase() === storeTitle.toLowerCase()
+                ? { id: found.id }
+                : null;
+          }
 
           if (matched && matched.id) {
             const updateRes = await updateWooCommerceCategories({
@@ -271,15 +243,7 @@ export async function POST(request: NextRequest) {
               results.push({ collectionId: colId, ok: true });
             }
           } else {
-            await createWooCommerceCategory({
-              integration,
-              category: {
-                name: storeTitle,
-                description: content.collectionDescription,
-              },
-            });
-            syncedCount += 1;
-            results.push({ collectionId: colId, ok: true });
+            results.push({ collectionId: colId, ok: false, error: NOT_ON_STORE });
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "WooCommerce sync error";

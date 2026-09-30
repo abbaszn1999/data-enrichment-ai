@@ -193,13 +193,36 @@ export async function runWithAiBilling<T>(
   }
 }
 
-/** Wraps a route handler so its AI spend is charged to the tool's wallet. */
+function walletEmptyResponse(wallet: AiWallet): Response {
+  return Response.json(
+    { error: new WalletExhaustedError(wallet).message, code: "WALLET_EMPTY" },
+    { status: 402 }
+  );
+}
+
+/**
+ * Wraps a route handler so its AI spend is charged to the tool's wallet.
+ * A wallet that runs dry mid-request answers 402 WALLET_EMPTY, whether the
+ * handler let the error escape or turned it into a generic 5xx.
+ */
 export function withAiWalletBilling<A extends unknown[], R>(
   wallet: AiWallet,
   operation: string,
   handler: (...args: A) => Promise<R>
 ): (...args: A) => Promise<R> {
-  return (...args: A) => runWithAiBilling({ wallet, operation }, () => handler(...args));
+  return (...args: A) =>
+    runWithAiBilling({ wallet, operation }, async () => {
+      try {
+        const result = await handler(...args);
+        if (result instanceof Response && result.status >= 500 && storage.getStore()?.exhausted) {
+          return walletEmptyResponse(wallet) as R;
+        }
+        return result;
+      } catch (error) {
+        if (isWalletExhaustedError(error)) return walletEmptyResponse(wallet) as R;
+        throw error;
+      }
+    });
 }
 
 /** Charges a one-off AI cost outside a scope, idempotent on `key`. */

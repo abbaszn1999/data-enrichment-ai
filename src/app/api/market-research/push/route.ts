@@ -4,17 +4,23 @@ import {
   pushBodySchema,
   requireMrWrite,
 } from "@/lib/market-research/api-schema";
-import { collectionPushCostUsd } from "@/lib/market-research/cost";
+import { COLLECTION_PUSH_USD, collectionPushCostUsd, roundUsd } from "@/lib/market-research/cost";
 import { getMrProject } from "@/lib/market-research/server-persist";
 import { chargeMrWallet, refundMrWallet } from "@/lib/market-research/wallet-ops";
 import {
   loadProjectSliceAdmin,
   saveProjectSliceAdmin,
 } from "@/lib/market-research/storage-admin";
-import { createShopifyCollection } from "@/lib/sync/providers/shopify/collections";
+import { readWorkspaceWallet } from "@/lib/wallet/server";
+import {
+  createShopifyCollection,
+  resolveCollectionByName,
+} from "@/lib/sync/providers/shopify/collections";
 import {
   assignProductsToWooCategory,
   createWooCommerceCategory,
+  deleteWooCategories,
+  resolveWooCategoryByName,
 } from "@/lib/sync/providers/woocommerce/categories";
 import type { IntegrationRecord } from "@/lib/sync/core/types";
 import type {
@@ -23,6 +29,46 @@ import type {
 } from "@/components/market-research/workspace-data";
 
 const SUPPORTED_PROVIDERS = new Set(["shopify", "woocommerce", "wordpress"]);
+
+/**
+ * Store ids of collections created on the store, written right after each
+ * create. If the request dies mid-push, the next push still knows what is
+ * already live and neither creates a second copy nor charges again.
+ */
+type PushLedger = Record<string, { handle?: string; storeCollectionId?: string }>;
+
+type StoreResult = {
+  id: string;
+  name: string;
+  storeTitle?: string;
+  handle?: string;
+  storeCollectionId?: string;
+  success: boolean;
+  error?: string;
+};
+
+/**
+ * A collection with this exact title is already on the store: made by a
+ * concurrent push, or by an earlier one that died before recording it. It is
+ * adopted without a charge instead of being created a second time. A failed
+ * lookup never blocks the push.
+ */
+async function findOnStore(
+  provider: string,
+  integration: IntegrationRecord,
+  storeTitle: string
+): Promise<{ handle?: string; storeCollectionId: string } | null> {
+  try {
+    const found =
+      provider === "shopify"
+        ? await resolveCollectionByName({ integration, name: storeTitle })
+        : await resolveWooCategoryByName({ integration, name: storeTitle });
+    if (!found?.id || (found.title ?? "").toLowerCase() !== storeTitle.toLowerCase()) return null;
+    return { storeCollectionId: String(found.id), ...(found.handle ? { handle: found.handle } : {}) };
+  } catch {
+    return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   let json: unknown;
@@ -38,11 +84,8 @@ export async function POST(request: NextRequest) {
   const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
-  const project = await getMrProject(
-    auth.admin,
-    parsed.data.workspaceId,
-    parsed.data.projectId
-  );
+  const { workspaceId, projectId } = parsed.data;
+  const project = await getMrProject(auth.admin, workspaceId, projectId);
   if (!project) return jsonError("Project not found", 404);
 
   const ids = [...parsed.data.collectionIds].sort();
@@ -54,8 +97,8 @@ export async function POST(request: NextRequest) {
   try {
     const loadedCols = await loadProjectSliceAdmin<ProposedCollection[]>(
       auth.admin,
-      parsed.data.workspaceId,
-      parsed.data.projectId,
+      workspaceId,
+      projectId,
       "collections"
     );
     if (Array.isArray(loadedCols)) {
@@ -94,7 +137,7 @@ export async function POST(request: NextRequest) {
   try {
     const loadedContent = await loadProjectSliceAdmin<
       Record<string, CollectionContent>
-    >(auth.admin, parsed.data.workspaceId, parsed.data.projectId, "content");
+    >(auth.admin, workspaceId, projectId, "content");
     if (loadedContent && typeof loadedContent === "object") {
       contentById = loadedContent;
     }
@@ -102,17 +145,25 @@ export async function POST(request: NextRequest) {
     // Content might not have been generated yet if pushed in Stage 5
   }
 
+  const ledger: PushLedger =
+    (await loadProjectSliceAdmin<PushLedger>(
+      auth.admin,
+      workspaceId,
+      projectId,
+      "push-ledger"
+    ).catch(() => null)) ?? {};
+
   // Fetch active store integration and workspace prefix for this workspace
   const [integrationResult, wsResult] = await Promise.all([
     auth.admin
       .from("workspace_integrations")
       .select("provider, integration_name, base_url, config")
-      .eq("workspace_id", parsed.data.workspaceId)
+      .eq("workspace_id", workspaceId)
       .maybeSingle(),
     auth.admin
       .from("workspaces")
       .select("collection_prefix")
-      .eq("id", parsed.data.workspaceId)
+      .eq("id", workspaceId)
       .maybeSingle(),
   ]);
 
@@ -135,10 +186,39 @@ export async function POST(request: NextRequest) {
   // Creating it again would put a second copy on the store and charge again.
   const alreadyPushedIds = ids.filter((id) => {
     const col = collectionById.get(id);
-    return Boolean(col?.storeHandle || col?.storeCollectionId);
+    return Boolean(
+      col?.storeHandle || col?.storeCollectionId || ledger[id]?.storeCollectionId
+    );
   });
   const toPush = ids.filter((id) => !alreadyPushedIds.includes(id));
+
+  const persistHandles = async () => {
+    const entries = Object.entries(ledger).filter(([id]) => collectionById.has(id));
+    if (entries.length === 0) return;
+    const byId = new Map(entries);
+    const nextCollections = collections.map((col) => {
+      const update = byId.get(col.id);
+      if (!update) return col;
+      return {
+        ...col,
+        ...(update.handle ? { storeHandle: update.handle } : {}),
+        ...(update.storeCollectionId ? { storeCollectionId: update.storeCollectionId } : {}),
+      };
+    });
+    try {
+      await saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "collections", nextCollections);
+      const rest = Object.fromEntries(
+        Object.entries(ledger).filter(([id]) => !byId.has(id))
+      );
+      await saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "push-ledger", rest);
+    } catch (err) {
+      // The ledger keeps the ids, so the next push still skips them.
+      console.error("[push] Failed to persist store handles:", err);
+    }
+  };
+
   if (toPush.length === 0) {
+    await persistHandles();
     return NextResponse.json(
       {
         ok: true,
@@ -156,47 +236,97 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Validation passed — hold the full amount. Any failed creates below are
-  // refunded once we know the real outcome, so the customer is only ever
-  // charged for collections that actually landed on their store.
+  // Refuse up front when the wallet can't cover the whole push, so a
+  // merchant is never left with half a batch published.
   const amountUsd = collectionPushCostUsd(toPush.length);
-  const charged = await chargeMrWallet(auth.admin, {
-    workspaceId: parsed.data.workspaceId,
-    userId: auth.user.id,
-    amountUsd,
-    description: `Push ${toPush.length} collection${toPush.length === 1 ? "" : "s"}`,
-    idempotencyKey: `collection_push:hold:${parsed.data.projectId}:${toPush.join(",")}`,
-    details: { projectId: parsed.data.projectId, collectionIds: toPush },
-  });
-
-  if (!charged.ok) {
-    const status = charged.reason === "insufficient_funds" ? 402 : 500;
+  const wallet = await readWorkspaceWallet(auth.admin, workspaceId);
+  if (wallet.balance < amountUsd) {
     return NextResponse.json(
-      { error: charged.message || "Not enough wallet balance" },
-      { status, headers: auth.headers }
+      { error: "Not enough wallet balance" },
+      { status: 402, headers: auth.headers }
     );
   }
 
-  const createdStoreResults: Array<{
-    id: string;
-    name: string;
-    storeTitle?: string;
-    handle?: string;
-    storeCollectionId?: string;
-    success: boolean;
-    error?: string;
-  }> = [];
+  // Each collection is charged right before it is created and refunded if the
+  // create fails, under keys unique to this push: a crash can cost at most
+  // one collection, and a retry after a refund is charged again.
+  const attemptId = crypto.randomUUID();
+  let chargedUsd = 0;
+  let refundedUsd = 0;
+  let remaining: number | undefined = wallet.balance;
+  const createdStoreResults: StoreResult[] = [];
 
+  const refundOne = async (colId: string) => {
+    const refunded = await refundMrWallet(auth.admin, {
+      workspaceId,
+      userId: auth.user.id,
+      amountUsd: COLLECTION_PUSH_USD,
+      description: "Push refund · collection failed to create",
+      idempotencyKey: `collection_push:refund:${attemptId}:${colId}`,
+      details: { projectId, collectionId: colId },
+    });
+    if (refunded.ok) {
+      refundedUsd = roundUsd(refundedUsd + COLLECTION_PUSH_USD);
+      remaining = refunded.remaining;
+    } else {
+      console.error("[push] Failed to refund a failed collection create:", refunded.message);
+    }
+  };
+
+  let walletEmpty = false;
   for (let i = 0; i < toPush.length; i += 1) {
     const colId = toPush[i]!;
-    if (i > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
     const col = collectionById.get(colId);
     const colName = col?.name || colId;
     const storeTitle = `${prefix} - ${colName}`;
+    if (walletEmpty) {
+      createdStoreResults.push({
+        id: colId,
+        name: colName,
+        storeTitle,
+        success: false,
+        error: "Wallet balance ran out",
+      });
+      continue;
+    }
+    if (i > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
     const content = contentById[colId];
 
+    const existing = await findOnStore(provider, integration, storeTitle);
+    if (existing) {
+      createdStoreResults.push({ id: colId, name: colName, storeTitle, ...existing, success: true });
+      ledger[colId] = existing;
+      await saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "push-ledger", ledger).catch(
+        (err) => console.error("[push] Failed to record a pushed collection:", err)
+      );
+      continue;
+    }
+
+    const paid = await chargeMrWallet(auth.admin, {
+      workspaceId,
+      userId: auth.user.id,
+      amountUsd: COLLECTION_PUSH_USD,
+      description: `Push collection · ${colName}`,
+      idempotencyKey: `collection_push:${attemptId}:${colId}`,
+      details: { projectId, collectionId: colId },
+    });
+    if (!paid.ok) {
+      walletEmpty = paid.reason === "insufficient_funds";
+      createdStoreResults.push({
+        id: colId,
+        name: colName,
+        storeTitle,
+        success: false,
+        error: walletEmpty ? "Wallet balance ran out" : "Could not charge the wallet",
+      });
+      continue;
+    }
+    chargedUsd = roundUsd(chargedUsd + COLLECTION_PUSH_USD);
+    remaining = paid.remaining;
+
+    let created: StoreResult;
     if (provider === "shopify") {
       const rawProductIds = col?.matchedProductIds ?? [];
       const shopifyProductIds = rawProductIds
@@ -219,26 +349,20 @@ export async function POST(request: NextRequest) {
             productIds: shopifyProductIds,
           },
         });
-        createdStoreResults.push({
+        created = {
           id: colId,
           name: colName,
           storeTitle,
           handle: res.handle,
           storeCollectionId: res.id,
           success: true,
-        });
+        };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Shopify creation error";
         console.error(`[push] Failed to create Shopify collection "${storeTitle}":`, msg);
-        createdStoreResults.push({
-          id: colId,
-          name: colName,
-          storeTitle,
-          success: false,
-          error: msg,
-        });
+        created = { id: colId, name: colName, storeTitle, success: false, error: msg };
       }
-    } else if (provider === "woocommerce" || provider === "wordpress") {
+    } else {
       const wooProductIds = (col?.matchedProductIds ?? []).filter((pid) =>
         /^\d+$/.test(pid)
       );
@@ -251,6 +375,14 @@ export async function POST(request: NextRequest) {
             description: content?.collectionDescription || undefined,
           },
         });
+        created = {
+          id: colId,
+          name: colName,
+          storeTitle,
+          handle: res.slug ? String(res.slug) : undefined,
+          storeCollectionId: String(res.id),
+          success: true,
+        };
         if (wooProductIds.length > 0 && res.id) {
           try {
             await assignProductsToWooCategory({
@@ -260,105 +392,68 @@ export async function POST(request: NextRequest) {
             });
           } catch (assignErr) {
             // A category with none of its products is not a delivered
-            // collection: report it failed so it is refunded, not charged.
+            // collection: remove it and refund, so a retry starts clean
+            // instead of leaving an empty copy on the store.
             const msg =
               assignErr instanceof Error ? assignErr.message : "Product assignment failed";
             console.error(
               `[push] WooCommerce category "${storeTitle}" created but product assignment failed:`,
               assignErr
             );
-            createdStoreResults.push({
+            const removed = await deleteWooCategories({
+              integration,
+              ids: [String(res.id)],
+            }).catch(() => ({ deletedIds: [] as string[] }));
+            if (removed.deletedIds.length === 0) {
+              // Still on the store: keep its id so a retry does not create
+              // (and charge for) a second copy.
+              ledger[colId] = { storeCollectionId: String(res.id) };
+              await saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "push-ledger", ledger).catch(
+                () => undefined
+              );
+            }
+            created = {
               id: colId,
               name: colName,
               storeTitle,
               success: false,
               error: `Category created without products: ${msg}`,
-            });
-            continue;
+            };
           }
         }
-        createdStoreResults.push({
-          id: colId,
-          name: colName,
-          storeTitle,
-          handle: res.slug ? String(res.slug) : undefined,
-          storeCollectionId: String(res.id),
-          success: true,
-        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "WooCommerce creation error";
         console.error(`[push] Failed to create WooCommerce category "${storeTitle}":`, msg);
-        createdStoreResults.push({
-          id: colId,
-          name: colName,
-          storeTitle,
-          success: false,
-          error: msg,
-        });
+        created = { id: colId, name: colName, storeTitle, success: false, error: msg };
       }
+    }
+
+    createdStoreResults.push(created);
+    if (created.success) {
+      ledger[colId] = {
+        ...(created.handle ? { handle: created.handle } : {}),
+        ...(created.storeCollectionId ? { storeCollectionId: created.storeCollectionId } : {}),
+      };
+      await saveProjectSliceAdmin(auth.admin, workspaceId, projectId, "push-ledger", ledger).catch(
+        (err) => console.error("[push] Failed to record a pushed collection:", err)
+      );
+    } else {
+      await refundOne(colId);
     }
   }
 
   const successResults = createdStoreResults.filter((r) => r.success);
   const failedResults = createdStoreResults.filter((r) => !r.success);
 
-  // Refund exactly the failed collections. Successful ones keep their hold.
-  let remaining = charged.remaining;
-  let refundedUsd = 0;
-  if (failedResults.length > 0) {
-    const failedIds = failedResults.map((r) => r.id).sort();
-    refundedUsd = collectionPushCostUsd(failedIds.length);
-    const refunded = await refundMrWallet(auth.admin, {
-      workspaceId: parsed.data.workspaceId,
-      userId: auth.user.id,
-      amountUsd: refundedUsd,
-      description: `Push refund · ${failedIds.length} collection${failedIds.length === 1 ? "" : "s"} failed to create`,
-      idempotencyKey: `collection_push:refund:${parsed.data.projectId}:${failedIds.join(",")}`,
-      details: { projectId: parsed.data.projectId, collectionIds: failedIds },
-    });
-    if (refunded.ok) {
-      remaining = refunded.remaining;
-    } else {
-      console.error("[push] Failed to refund failed collection creates:", refunded.message);
-    }
-  }
-
-  // Persist the real store handles back into the collections slice. The widget
-  // embed API matches on these exact handles, so without them it cannot tell
-  // an AI collection page apart from a pre-existing store collection page.
-  const handleUpdates = successResults.filter((r) => r.handle || r.storeCollectionId);
-  if (handleUpdates.length > 0 && collections.length > 0) {
-    const byId = new Map(handleUpdates.map((r) => [r.id, r]));
-    const nextCollections = collections.map((col) => {
-      const update = byId.get(col.id);
-      if (!update) return col;
-      return {
-        ...col,
-        ...(update.handle ? { storeHandle: update.handle } : {}),
-        ...(update.storeCollectionId
-          ? { storeCollectionId: update.storeCollectionId }
-          : {}),
-      };
-    });
-
-    try {
-      await saveProjectSliceAdmin(
-        auth.admin,
-        parsed.data.workspaceId,
-        parsed.data.projectId,
-        "collections",
-        nextCollections
-      );
-    } catch (err) {
-      console.error("[push] Failed to persist store handles:", err);
-    }
-  }
+  // The widget embed API matches on these exact handles, so without them it
+  // cannot tell an AI collection page apart from a pre-existing store page.
+  await persistHandles();
 
   return NextResponse.json(
     {
       ok: failedResults.length === 0,
       duplicate: false,
-      chargedUsd: amountUsd - refundedUsd,
+      chargedUsd: roundUsd(chargedUsd - refundedUsd),
       refundedUsd,
       remaining,
       pushedCount: successResults.length,

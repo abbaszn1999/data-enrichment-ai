@@ -4,6 +4,7 @@ import type { MarketResearchPersisted } from "@/components/free-assessment/persi
 import type { MarketResearchProject } from "@/components/free-assessment/mock-data";
 import type { ProposedCollection } from "@/components/free-assessment/workspace-data";
 import type { AssessmentPlpRow } from "@/components/free-assessment/assessment-csv";
+import { useWorkspaceStore } from "@/store/workspace-store";
 
 /**
  * Free-assessment API prefix. Wallet lives here so it never hits /api/wallet
@@ -64,7 +65,19 @@ export type ExtractPollSeed = {
   rowsReturned?: number;
 };
 
+let walletRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Most calls here can charge the wallet, so the balance shown is refreshed at most every few seconds. */
+function scheduleWalletRefresh() {
+  if (walletRefreshTimer || typeof window === "undefined") return;
+  walletRefreshTimer = setTimeout(() => {
+    walletRefreshTimer = null;
+    useWorkspaceStore.getState().invalidateFaWallet();
+  }, 4000);
+}
+
 async function readJson<T>(response: Response): Promise<T> {
+  scheduleWalletRefresh();
   const data = (await response.json().catch(() => ({}))) as T & { error?: string };
   if (!response.ok) {
     throw new Error(data.error || `Request failed (${response.status})`);
@@ -86,10 +99,12 @@ export async function saveFaStateApi(
   workspaceId: string,
   state: MarketResearchPersisted
 ): Promise<void> {
+  // The server owns keywords (extract + classify) and ignores them here; a
+  // large project's rows would push the body past the request size limit.
   const response = await fetch(`${FREE_ASSESSMENT_API}/state`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, state }),
+    body: JSON.stringify({ workspaceId, state: { ...state, keywordsByProject: {} } }),
   });
   await readJson(response);
 }

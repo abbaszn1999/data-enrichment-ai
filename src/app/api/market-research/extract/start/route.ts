@@ -14,7 +14,7 @@ import {
 import { getKeywordProvider } from "@/lib/market-research/providers";
 import { marketToSemrushDb } from "@/lib/market-research/providers/keyword-provider";
 import { getMrProject, loadProjectProbesAdmin } from "@/lib/market-research/server-persist";
-import { chargeMrWallet, refundMrWallet } from "@/lib/market-research/wallet-ops";
+import { chargeMrWallet, settleExtractBilling } from "@/lib/market-research/wallet-ops";
 
 export const maxDuration = 60;
 
@@ -157,18 +157,24 @@ export async function POST(request: NextRequest) {
         provider.abortKeywordIdeas(row.runId).catch(() => undefined)
       )
     );
-    await refundMrWallet(auth.admin, {
-      workspaceId: parsed.data.workspaceId,
+    // The normal settlement refunds the hold under the same key every later
+    // settle would use, and only closes the extract once the refund landed;
+    // a failed refund leaves it held for the sweep to settle.
+    await settleExtractBilling(auth.admin, {
+      extract: {
+        id: extractId,
+        workspace_id: parsed.data.workspaceId,
+        project_id: parsed.data.projectId,
+        held_usd: heldUsd,
+        actual_usd: 0,
+        rows_returned: 0,
+        billing_status: "held",
+        status: "running",
+      },
       userId: auth.user.id,
-      amountUsd: heldUsd,
-      description: "Keyword extract refund · start failed",
-      idempotencyKey: `apify_keyword_extract:refund:${extractId}`,
-      details: { extractId, failed: true },
+      rowsReturned: 0,
+      status: "failed",
     });
-    await auth.admin
-      .from("mr_extracts")
-      .update({ status: "failed", billing_status: "refunded" })
-      .eq("id", extractId);
     // Never forward the raw provider error to the client — it can carry our
     // vendor's name, actor ids, or request paths in its message.
     console.error("[mr-extract] Failed to start extract:", error);

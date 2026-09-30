@@ -19,6 +19,7 @@ export type MrSliceName =
   | "articles"
   | "article-jobs"
   | "internal-links"
+  | "push-ledger"
   | "stage1-job";
 
 /**

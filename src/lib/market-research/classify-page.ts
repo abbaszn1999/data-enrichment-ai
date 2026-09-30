@@ -15,6 +15,7 @@ import { MAX_DISPLAY_ROWS, toExtractedKeyword } from "@/lib/market-research/map-
 import { overlayAndPersistKeywordClassifications } from "@/lib/market-research/extract-advance";
 
 const PAGE_SIZE = 500;
+const OVERLAY_INTERVAL_MS = 60_000;
 
 /** Saved in `job_runs.settings.checkpoint` after every page so a restart resumes. */
 export type ClassifyCheckpoint = {
@@ -87,6 +88,7 @@ export async function runMrClassifyThenClean(
       .map((row, index) => toExtractedKeyword(row, row.seedId || row.seed || "seed", index));
   }
 
+  let lastOverlayAt = Date.now();
   while (offset < total) {
     const batchRows = archive.slice(offset, offset + PAGE_SIZE);
     const nextOffset = offset + batchRows.length;
@@ -106,15 +108,21 @@ export async function runMrClassifyThenClean(
     await appendClassifiedShardAdmin(admin, workspaceId, projectId, items, {
       done: nextOffset >= total,
     });
-    classified = [...classified, ...items];
+    classified.push(...items);
     offset = nextOffset;
-    sample = await overlayAndPersistKeywordClassifications(
-      admin,
-      workspaceId,
-      projectId,
-      sample,
-      { classified, drops: [] }
-    );
+    // The sample is up to 50k rows; rewriting it every page is gigabytes of
+    // uploads on big projects. Loads re-apply the shards, so this only keeps
+    // the live view fresh.
+    if (Date.now() - lastOverlayAt >= OVERLAY_INTERVAL_MS) {
+      sample = await overlayAndPersistKeywordClassifications(
+        admin,
+        workspaceId,
+        projectId,
+        sample,
+        { classified, drops: [] }
+      );
+      lastOverlayAt = Date.now();
+    }
     await opts.onProgress?.({
       phase: "classify",
       done: offset,

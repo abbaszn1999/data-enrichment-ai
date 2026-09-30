@@ -26,7 +26,8 @@ import {
 } from "@/lib/free-assessment/map-keywords";
 import { settleExtractBilling } from "@/lib/free-assessment/wallet-ops";
 
-export const EXTRACT_LEASE_MS = 25_000;
+/** Released when each advance ends; must outlast the slowest advance (large settles build the sample). */
+export const EXTRACT_LEASE_MS = 120_000;
 export const EXTRACT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type Admin = SupabaseClient;

@@ -11,6 +11,7 @@ import type {
   StoreBlog,
   StrategyArticle,
 } from "@/components/market-research/workspace-data";
+import { useWorkspaceStore } from "@/store/workspace-store";
 
 export type ProbeSeedInput = { id: string; term: string };
 
@@ -65,7 +66,19 @@ export type ExtractPollSeed = {
   rowsReturned?: number;
 };
 
+let walletRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Most calls here can charge the wallet, so the balance shown is refreshed at most every few seconds. */
+function scheduleWalletRefresh() {
+  if (walletRefreshTimer || typeof window === "undefined") return;
+  walletRefreshTimer = setTimeout(() => {
+    walletRefreshTimer = null;
+    useWorkspaceStore.getState().invalidateWallet();
+  }, 4000);
+}
+
 async function readJson<T>(response: Response): Promise<T> {
+  scheduleWalletRefresh();
   const data = (await response.json().catch(() => ({}))) as T & { error?: string };
   if (!response.ok) {
     throw new Error(data.error || `Request failed (${response.status})`);
@@ -87,10 +100,12 @@ export async function saveMrStateApi(
   workspaceId: string,
   state: MarketResearchPersisted
 ): Promise<void> {
+  // The server owns keywords (extract + classify) and ignores them here; a
+  // large project's rows would push the body past the request size limit.
   const response = await fetch("/api/market-research/state", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, state }),
+    body: JSON.stringify({ workspaceId, state: { ...state, keywordsByProject: {} } }),
   });
   await readJson(response);
 }

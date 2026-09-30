@@ -36,6 +36,7 @@ import {
   recordAiSpend,
   runWithAiBilling,
   WalletExhaustedError,
+  withAiWalletBilling,
 } from "./ai-wallet-billing";
 
 const binding = { admin: {} as never, workspaceId: "w1", userId: "u1" };
@@ -87,5 +88,52 @@ describe("AI wallet billing scope", () => {
     await ensureAiBudget();
     expect(await bindAiBilling(binding)).toBeNull();
     expect(wallet.charges).toEqual([]);
+  });
+});
+
+describe("withAiWalletBilling", () => {
+  async function drainThenRespond(respond: () => Response) {
+    await bindAiBilling(binding);
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        await ensureAiBudget();
+        recordAiSpend(AI_SETTLE_THRESHOLD_USD);
+      }
+    } catch {
+      return respond();
+    }
+    return Response.json({ ok: true });
+  }
+
+  it("answers 402 when the wallet runs dry and the error escapes", async () => {
+    wallet.balance = 0.3;
+    const handler = withAiWalletBilling("market-research", "mr_seeds", async () => {
+      await bindAiBilling(binding);
+      for (let i = 0; i < 10; i += 1) {
+        await ensureAiBudget();
+        recordAiSpend(AI_SETTLE_THRESHOLD_USD);
+      }
+      return Response.json({ ok: true });
+    });
+    const res = await handler();
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: "WALLET_EMPTY" });
+  });
+
+  it("turns a generic 500 into 402 once the wallet ran dry", async () => {
+    wallet.balance = 0.3;
+    const handler = withAiWalletBilling("free-assessment", "fa_seeds", () =>
+      drainThenRespond(() => Response.json({ error: "boom" }, { status: 500 }))
+    );
+    const res = await handler();
+    expect(res.status).toBe(402);
+  });
+
+  it("keeps a real 500 when the wallet can still pay", async () => {
+    const handler = withAiWalletBilling("market-research", "mr_chat", async () =>
+      Response.json({ error: "boom" }, { status: 500 })
+    );
+    const res = await handler();
+    expect(res.status).toBe(500);
   });
 });

@@ -116,11 +116,13 @@ export async function POST(request: NextRequest) {
 
     let result: Awaited<ReturnType<typeof finalizeArticleJob>>;
     try {
-      result = await finalizeArticleJob(
-        auth.admin,
-        workspaceId,
-        projectId,
-        job
+      const openaiResponseId = job.openaiResponseId;
+      result = await finalizeArticleJob(auth.admin, workspaceId, projectId, job, (cost) =>
+        chargeAiCostOnce(
+          "market-research",
+          { admin: auth.admin, workspaceId, userId: auth.user.id },
+          { operation: "mr_article", amountUsd: cost, key: openaiResponseId }
+        )
       );
     } catch (err) {
       // The response id is already stored. A flaky retrieve must not look like
@@ -133,11 +135,6 @@ export async function POST(request: NextRequest) {
     }
 
     if (result.status === "ready") {
-      await chargeAiCostOnce(
-        "market-research",
-        { admin: auth.admin, workspaceId, userId: auth.user.id },
-        { operation: "mr_article", amountUsd: result.cost, key: job.openaiResponseId }
-      );
       return NextResponse.json(
         { article: result.article, cost: result.cost, pending: false },
         { headers: auth.headers }
