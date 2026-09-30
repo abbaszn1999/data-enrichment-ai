@@ -1,17 +1,14 @@
-/**
- * Model for the AI-generation planner (Products Gallery "AI generate" mode).
- * Scraping mode no longer has tiers - it always runs GPT-6.1 Sol (see
- * gallery-research-agent.ts). The planner keeps its own choice unchanged.
- */
-export type GalleryPlannerModelId = "gpt-5.6-terra" | "gpt-5.6-sol";
+import { GALLERY_PLANNER_OPENAI_MODEL } from "@/lib/enrich/models";
 
-export const GALLERY_PLANNER_MODELS = {
-  standard: "gpt-5.6-terra",
-  premium: "gpt-5.6-sol",
-} as const satisfies Record<"standard" | "premium", GalleryPlannerModelId>;
+/**
+ * Model for the generate-mode prompt planner. It is the same for every tier:
+ * the tier (Standard / Premium) only picks the image model.
+ */
+export type GalleryPlannerModelId = typeof GALLERY_PLANNER_OPENAI_MODEL;
 
 export function resolveGalleryPlannerModel(
-  tier: "standard" | "premium" | undefined
+  ...args: Array<"standard" | "premium" | undefined>
 ): GalleryPlannerModelId {
-  return tier === "premium" ? GALLERY_PLANNER_MODELS.premium : GALLERY_PLANNER_MODELS.standard;
+  void args;
+  return GALLERY_PLANNER_OPENAI_MODEL;
 }

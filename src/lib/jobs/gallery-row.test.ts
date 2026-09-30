@@ -74,16 +74,35 @@ describe("loadGalleryRowContext", () => {
     expect(context).toBeNull();
   });
 
-  it("never uses the shortcut for AI runs", async () => {
-    const { admin } = adminReturning({ data: null, error: null });
+  it("loads only the row for AI runs too, with the run's frozen AI settings", async () => {
+    const aiRuntime = {
+      ...(runtimeSettings as object),
+      provider: "ai",
+      ai: { tier: "premium", imagesPerRow: 3, instructions: "model wears it", sceneReferencePath: "w1/s1/scene.jpg" },
+    } as unknown as GalleryJobSettings["runtimeSettings"];
+    const { admin, calls } = adminReturning({
+      error: null,
+      data: {
+        row_id: "r9",
+        row_index: 8,
+        status: "generating",
+        data: {
+          originalData: { Title: "Linen dress", Image: "https://cdn.shop.com/dress.jpg" },
+          galleryImagePaths: [],
+        },
+      },
+    });
     const context = await loadGalleryRowContext({
       admin,
       workspaceId: "w1",
       sessionId: "s1",
-      rowId: "r7",
-      jobSettings: { ...jobSettings, provider: "ai" } as GalleryJobSettings,
+      rowId: "r9",
+      jobSettings: { provider: "ai", runtimeSettings: aiRuntime } as unknown as GalleryJobSettings,
     });
-    expect(context).toBeNull();
-    expect((admin as unknown as { from: ReturnType<typeof vi.fn> }).from).not.toHaveBeenCalled();
+    expect(calls).toEqual(["session_id=s1", "row_id=r9"]);
+    expect(context?.worksheet.rows).toHaveLength(1);
+    expect(context?.worksheet.settings.ai.tier).toBe("premium");
+    expect(context?.worksheet.settings.ai.sceneReferencePath).toBe("w1/s1/scene.jpg");
+    expect(context?.worksheet.originalImageColumn).toBe("Image");
   });
 });

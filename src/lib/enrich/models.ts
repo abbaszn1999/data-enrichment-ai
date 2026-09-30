@@ -49,6 +49,14 @@ export type EnrichSearchContextSize = "medium" | "high";
 export const GALLERY_SCRAPING_OPENAI_MODEL: EnrichOpenAiModelId = "gpt-6.1-sol";
 export const GALLERY_SCRAPING_REASONING_EFFORT: EnrichReasoningEffort = "medium";
 
+/**
+ * Products Gallery generate mode: the prompt planner is ONE fixed agent too
+ * (GPT-6.1 Sol, medium reasoning) for both image tiers. The tier only chooses
+ * the image model (Nano Banana 2 or Nano Banana Pro).
+ */
+export const GALLERY_PLANNER_OPENAI_MODEL: EnrichOpenAiModelId = "gpt-6.1-sol";
+export const GALLERY_PLANNER_REASONING_EFFORT: EnrichReasoningEffort = "medium";
+
 export function resolveEnrichOpenAiModel(
   tier: EnrichmentModel | string | null | undefined
 ): EnrichOpenAiModelId {

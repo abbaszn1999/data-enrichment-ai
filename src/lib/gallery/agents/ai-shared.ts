@@ -5,7 +5,13 @@ import type { GalleryAiSettings, GalleryRow, GalleryWorksheetJson } from "@/lib/
  * Docs: either inline `data`+`mime_type`, or public `uri`+`mime_type`
  * (https://ai.google.dev/gemini-api/docs/image-understanding).
  */
+export type AiReferenceRole = "product" | "model" | "logo" | "brandGuide";
+
 export type AiReferenceImage = {
+  /** What the image is for. Roles drive selection and wording; labels are display text only. */
+  role: AiReferenceRole;
+  /** Stable identity (storage path or source URL); part of the plan fingerprint. */
+  key?: string;
   label: string;
   contentType: string;
   /** Inline bytes (preferred for generated / private storage assets). */
@@ -152,27 +158,66 @@ export function buildProductDescription(
 
 export function referenceFlags(references: AiReferenceImage[]) {
   return {
-    hasSceneReference: references.some((reference) =>
-      /scene or model reference/i.test(reference.label)
-    ),
-    hasLogo: references.some((reference) =>
-      /brand logo|official brand logo/i.test(reference.label)
-    ),
-    hasBrandGuide: references.some((reference) =>
-      /brand guide|art-direction/i.test(reference.label)
-    ),
+    hasSceneReference: references.some((reference) => reference.role === "model"),
+    hasLogo: references.some((reference) => reference.role === "logo"),
+    hasBrandGuide: references.some((reference) => reference.role === "brandGuide"),
     referenceList: references
-      .map((reference, index) => `Reference image ${index + 1}: ${reference.label}.`)
+      .map((reference, index) => `Image ${index + 1}: ${reference.label}.`)
       .join("\n"),
   };
 }
 
-/** Image output "schema" for Gemini Interactions image responses. */
-export function buildAiImageResponseFormat(settings: GalleryAiSettings) {
+/** Aspect ratios the Gemini image models accept. */
+export const GEMINI_ASPECT_RATIOS = [
+  "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9",
+] as const;
+
+/**
+ * API `image_size` value. Sizes are "512", "1K", "2K", "4K" (uppercase K; 0.5K is
+ * written "512"). Only Nano Banana 2 has 512, so Nano Banana Pro falls back to 1K.
+ */
+export function geminiImageSize(resolution: string, model: AiImageModel): "512" | "1K" | "2K" | "4K" {
+  const value = resolution.trim().toUpperCase();
+  if (value === "4K") return "4K";
+  if (value === "2K") return "2K";
+  if (value === "0.5K" || value === "512") return model === "gemini-3.1-flash-image" ? "512" : "1K";
+  return "1K";
+}
+
+/**
+ * Image output format for the Interactions API. `mime_type` only accepts
+ * "image/jpeg", so it is sent for JPEG and omitted otherwise; the stored bytes
+ * are converted to the chosen format afterwards (see convertImageFormat).
+ */
+export function buildAiImageResponseFormat(
+  settings: Pick<GalleryAiSettings, "aspectRatio" | "resolution" | "outputFormat">,
+  model: AiImageModel
+) {
+  const aspectRatio = (GEMINI_ASPECT_RATIOS as readonly string[]).includes(settings.aspectRatio)
+    ? settings.aspectRatio
+    : "1:1";
   return {
     type: "image" as const,
-    mime_type: normalizeMimeType(settings.outputFormat),
-    aspect_ratio: settings.aspectRatio,
-    image_size: settings.resolution,
+    aspect_ratio: aspectRatio,
+    image_size: geminiImageSize(settings.resolution, model),
+    ...(settings.outputFormat === "image/png" ? {} : { mime_type: "image/jpeg" as const }),
   };
+}
+
+/** Convert returned image bytes to the format chosen in settings so stored files always match. */
+export async function convertImageFormat(
+  buffer: Buffer,
+  fromType: string,
+  targetType: "image/jpeg" | "image/png"
+): Promise<{ buffer: Buffer; contentType: "image/jpeg" | "image/png" }> {
+  if (normalizeMimeType(fromType) === targetType) {
+    return { buffer, contentType: targetType };
+  }
+  const { default: sharp } = await import("sharp");
+  const pipeline = sharp(buffer);
+  const out =
+    targetType === "image/png"
+      ? await pipeline.png().toBuffer()
+      : await pipeline.jpeg({ quality: 92, mozjpeg: true }).toBuffer();
+  return { buffer: out, contentType: targetType };
 }

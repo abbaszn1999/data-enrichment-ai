@@ -2,50 +2,26 @@
 id: image
 order: 2
 thinking: low
-output: "One generated product image that executes this slot's brief while locking identity to the attached product/Main"
+output: "One generated product image that executes the planner's prompt and keeps the attached product identical"
 triggers:
-  - "executing a planner visualBrief against the attached product or Main photo"
+  - "rendering one planner prompt with its reference images"
 not_for:
-  - "choosing which claim to prove (that is skill 01)"
-  - "inventing a different product than the attached photo"
+  - "planning the shot list (that is skill 01)"
 ---
 
-# Image — Commercial Photographer
+# Image - Identity Lock
 
-You are the photographer, not the strategist. Skill 01 already chose the
-story and wrote the brief. Your job is to shoot **exactly one** ecommerce
-still that executes that brief while keeping the real product.
+Shoot exactly one ecommerce image from the prompt above. These rules always
+apply and override anything that would break them:
 
-## Identity lock (non-negotiable)
-
-The attached product / Main photo is the **only** allowed product identity.
-Preserve shape, color, materials, markings, logos that are already on the
-product, and proportions. Do not swap in a lookalike, restyle the item, or
-invent hardware.
-
-If a logo or brand-guide image is also attached, use it only as branding
-reference (placement, palette, mood) — never as a replacement for the
-product.
-
-If a scene/model reference is attached, that person or setting must remain
-in the frame with the exact product. Never output a lone packshot on empty
-white when a person reference was provided.
-
-## Prove the claim
-
-The runtime prompt names a `specClaim` and a visual brief for this slot.
-The scene must make that claim visible to a scrolling shopper (waterproof →
-water on the product; UV → harsh sun on the surface; a use case → the
-product doing that job). Follow the brief's camera, light, and proof scene.
-Do not fall back to a canned three-quarter packshot unless the brief
-itself asks for a clean catalog frame.
-
-## Frame
-
-- Exactly one image. Product as hero. Commercially useful crop.
-- Realistic lighting and physically plausible geometry.
-- No watermarks, captions, UI chrome, or extra products.
-- No invented logos or brand lettering unless they are clearly visible on
-  the attached product or logo reference.
-- Do not add quality-spam styling or empty resolution tokens; shoot the scene
-  the brief describes.
+- The attached product photos are the only allowed product identity. Keep
+  shape, colour, material, markings, proportions and any logo already printed
+  on the product. Do not swap in a lookalike, restyle the item or invent
+  hardware.
+- A model or scene reference stays recognisable: the same person or setting
+  appears with the exact product.
+- A logo or brand guide image is a branding reference only, never a
+  replacement for the product.
+- One image, the product as hero, realistic lighting and plausible geometry.
+- No watermarks, captions, price tags, badges or UI. No invented brand
+  lettering; text appears only where it is already on the product or logo.

@@ -3135,7 +3135,8 @@ export default function ProductsGalleryPage() {
                         </InfoTip>
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        Powered by Standard or Premium image generation.
+                        Standard uses Nano Banana 2 and Premium uses Nano Banana Pro. GPT-6.1 Sol plans a
+                        separate prompt for every image from your product data, images and instructions.
                       </p>
                     </div>
                     <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
@@ -3148,7 +3149,10 @@ export default function ProductsGalleryPage() {
                             : "text-muted-foreground"
                         }`}
                       >
-                        Standard
+                        <span className="block">Standard</span>
+                        <span className="block text-[10px] font-normal text-muted-foreground">
+                          Nano Banana 2
+                        </span>
                       </button>
                       <button
                         type="button"
@@ -3160,7 +3164,10 @@ export default function ProductsGalleryPage() {
                           aiModel === "pro" ? "bg-background shadow-sm" : "text-muted-foreground"
                         }`}
                       >
-                        Premium
+                        <span className="block">Premium</span>
+                        <span className="block text-[10px] font-normal text-muted-foreground">
+                          Nano Banana Pro
+                        </span>
                       </button>
                     </div>
                     <ConfigSelect
@@ -3237,11 +3244,19 @@ export default function ProductsGalleryPage() {
                         className="min-h-28 w-full resize-none rounded-md border bg-background p-3 text-xs leading-relaxed outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
                         placeholder="Describe the visual direction, camera angle, background, product details, and anything the image must avoid..."
                       />
+                      <span className="block text-[11px] text-muted-foreground">
+                        For clothing, upload a model below and write, for example, &ldquo;the model wears
+                        the item in a different outfit and setting in each image&rdquo;.
+                      </span>
                     </label>
                     <div className="space-y-1.5">
                       <span className="text-[11px] font-medium text-muted-foreground">
                         Scene or model reference
                       </span>
+                      <p className="text-[11px] text-muted-foreground">
+                        Sent to the planner and to every image, so the same person or setting appears
+                        with each product.
+                      </p>
                       <div className="group relative">
                         <button
                           type="button"
@@ -3250,9 +3265,8 @@ export default function ProductsGalleryPage() {
                           className="relative flex min-h-24 w-full flex-col items-center justify-center gap-1.5 overflow-hidden rounded-md border border-dashed bg-muted/20 text-center transition-colors hover:bg-muted/40 disabled:opacity-60"
                         >
                           {sceneReference ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={sceneReference.previewUrl}
+                            <SheetImage
+                              url={sceneReference.previewUrl}
                               alt={sceneReference.name}
                               className="absolute inset-0 h-full w-full object-cover"
                             />
@@ -3334,6 +3348,9 @@ export default function ProductsGalleryPage() {
                             <span className="text-[11px] font-medium text-muted-foreground">
                               Brand logo
                             </span>
+                            <p className="text-[11px] text-muted-foreground">
+                              Used only in shots where it fits naturally.
+                            </p>
                             <div className="group relative">
                               <button
                                 type="button"
@@ -3342,9 +3359,8 @@ export default function ProductsGalleryPage() {
                                 className="relative flex min-h-16 w-full items-center justify-center overflow-hidden rounded-md border border-dashed bg-muted/20 text-xs hover:bg-muted/40 disabled:opacity-60"
                               >
                                 {brandLogo ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={brandLogo.previewUrl}
+                                  <SheetImage
+                                    url={brandLogo.previewUrl}
                                     alt={brandLogo.name}
                                     className="absolute inset-0 h-full w-full object-contain p-1"
                                   />
@@ -3420,9 +3436,8 @@ export default function ProductsGalleryPage() {
                                   className="relative flex min-h-16 w-full items-center justify-center overflow-hidden rounded-md border border-dashed bg-muted/20 text-xs hover:bg-muted/40 disabled:opacity-60"
                                 >
                                   {brandGuide ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img
-                                      src={brandGuide.previewUrl}
+                                    <SheetImage
+                                      url={brandGuide.previewUrl}
                                       alt={brandGuide.name}
                                       className="absolute inset-0 h-full w-full object-cover"
                                     />

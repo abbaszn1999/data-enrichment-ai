@@ -62,8 +62,10 @@ function isPrimarilyUrls(text: string, urls: string[]): boolean {
 
 export function classifyRowValues(
   rowData: Record<string, string>,
-  selectedColumns: string[]
+  selectedColumns: string[],
+  options?: { fieldChars?: number }
 ): ClassifiedRow {
+  const fieldChars = options?.fieldChars ?? FIELD_VALUE_CHARS;
   const columns = selectedColumns.length ? selectedColumns : Object.keys(rowData);
   const fields: ClassifiedRow["fields"] = [];
   const imageUrls: string[] = [];
@@ -83,7 +85,7 @@ export function classifyRowValues(
       continue;
     }
     const plain = toPlainText(raw);
-    if (plain) fields.push({ column, value: plain.slice(0, FIELD_VALUE_CHARS) });
+    if (plain) fields.push({ column, value: plain.slice(0, fieldChars) });
   }
   return { fields, imageUrls, sourceUrls };
 }

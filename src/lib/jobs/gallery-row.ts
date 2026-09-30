@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { galleryRowStoreEnabled } from "@/lib/catalog/flag";
 import { processAiRow } from "@/lib/gallery/agent/process-ai-row";
 import { processScrapingRow } from "@/lib/gallery/agent/process-row";
+import { upsertWorksheetRow } from "@/lib/worksheet-rows/store";
 import { galleryLog, galleryWarn } from "@/lib/gallery/log";
 import { loadGalleryWorksheetAdmin } from "@/lib/gallery/storage-admin";
 import {
@@ -88,8 +89,11 @@ export async function resolveGalleryRowWorksheet(params: {
   return hydrated;
 }
 
+/** Time a row task may use: the galleryRow task timeout (1500s) minus a margin for billing and cleanup. */
+export const GALLERY_ROW_DEADLINE_MS = 1_380_000;
+
 /**
- * A Scraping row task needs only its own row plus the run's frozen settings.
+ * A row task (Scraping or AI) needs only its own row plus the run's frozen settings.
  * Loading the whole worksheet (blob + every row of a 5,000-row sheet) for each
  * child task would multiply the reads by the row count, so the row comes
  * straight from the row store. Returns null when that is not possible (row
@@ -102,7 +106,7 @@ export async function loadGalleryRowContext(params: {
   rowId: string;
   jobSettings: GalleryJobSettings;
 }): Promise<{ worksheet: GalleryWorksheetJson; row: GalleryRow } | null> {
-  if (params.jobSettings.provider === "ai" || !galleryRowStoreEnabled()) return null;
+  if (!galleryRowStoreEnabled()) return null;
   const runtime =
     parseGalleryJobRuntimeSettings(params.jobSettings.runtimeSettings) ??
     (await loadGallerySessionSettings(params.admin, params.workspaceId, params.sessionId));
@@ -185,6 +189,15 @@ export async function executeGalleryRow(
 
   const runPhase: GalleryRunPhase =
     settings.targetPhases?.[input.rowId] ?? "full";
+  const startedAt = Date.now();
+  const rowState: GalleryRow = structuredClone(row);
+  // AI rows show their images as they are created: each checkpoint writes the
+  // row to the row store, so a client that left and came back sees them.
+  const storeCheckpoint = async (patch: Partial<GalleryRow>) => {
+    if (!galleryRowStoreEnabled()) return;
+    Object.assign(rowState, patch, { status: "generating" as const, generationTarget: runPhase });
+    await upsertWorksheetRow(admin, "gallery_session_rows", run.session_id, rowState);
+  };
   const shared = {
     workspaceId: run.workspace_id,
     sessionId: run.session_id,
@@ -194,7 +207,8 @@ export async function executeGalleryRow(
     actorUserId: settings.actorUserId,
     runId: settings.galleryRunId || run.id,
     runPhase,
-    onCheckpoint: async () => undefined,
+    deadlineAt: startedAt + GALLERY_ROW_DEADLINE_MS,
+    onCheckpoint: settings.provider === "ai" ? storeCheckpoint : async () => undefined,
     // Checked between research rounds: Stop ends the row within one round.
     shouldCancel: () =>
       isGalleryCancelled(admin, run.id, run.session_id, run.workspace_id),

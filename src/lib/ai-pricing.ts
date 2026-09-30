@@ -55,6 +55,8 @@ export interface ModelPricing {
   longCacheWritePerMillion?: number;
   searchPerQuery: number;
   freeSearchQuota: number;
+  /** Image-output token rate (Gemini image models), billed apart from text output. */
+  imageOutputPerMillion?: number;
 }
 
 function openAiTieredPricing(params: {
@@ -136,19 +138,23 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     longCacheWrite: 5.0,
     longOutput: 18.0,
   }),
+  // Nano Banana 2. Images: $60 / 1M output tokens (0.5K 747, 1K 1120, 2K 1680, 4K 2520 tokens).
   "gemini-3.1-flash-image": {
     inputPerMillion: 0.5,
     outputPerMillion: 3.0,
     cachedInputPerMillion: 0,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
+    imageOutputPerMillion: 60,
   },
+  // Nano Banana Pro. Images: $120 / 1M output tokens (1K/2K 1120, 4K 2000 tokens).
   "gemini-3-pro-image": {
     inputPerMillion: 2.0,
     outputPerMillion: 12.0,
     cachedInputPerMillion: 0,
     searchPerQuery: 0.014,
     freeSearchQuota: 5000,
+    imageOutputPerMillion: 120,
   },
   // Official paid-tier: $2/$12 up to 200k input tokens, $4/$18 above.
   "gemini-3.1-pro-preview": {
@@ -259,6 +265,10 @@ export interface AiCallCost {
   webSearchCalls?: number;
   /** SearchApi.io calls this entry billed (record keeping; the cost is in searchApiCost). */
   searchApiCalls?: number;
+  /** Image-output tokens measured from usage (Gemini image calls). */
+  imageOutputTokens?: number;
+  /** Where the image-output price came from: measured tokens, the per-image table, or no image returned. */
+  imageCostSource?: "usage" | "table" | "none";
 }
 
 function readUsageNumber(
@@ -484,26 +494,69 @@ const IMAGE_OUTPUT_COST_USD: Record<string, Record<string, number>> = {
   },
 };
 
+/** Smallest image-output token count that can be a real image (0.5K is 747). */
+const MIN_PLAUSIBLE_IMAGE_TOKENS = 256;
+
+/** Image-output tokens from an Interactions usage object (`output_tokens_by_modality`). */
+export function readImageOutputTokens(usageMetadata: unknown): number {
+  if (!usageMetadata || typeof usageMetadata !== "object") return 0;
+  const usage = usageMetadata as Record<string, unknown>;
+  const list = usage.output_tokens_by_modality ?? usage.candidatesTokensDetails;
+  if (!Array.isArray(list)) return 0;
+  let tokens = 0;
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    if (String(record.modality ?? "").toLowerCase() !== "image") continue;
+    const value = record.tokens ?? record.tokenCount;
+    if (typeof value === "number" && Number.isFinite(value)) tokens += value;
+  }
+  return tokens;
+}
+
 /**
- * Image output uses a separate token rate from text/thinking output. The
- * Interactions usage aggregate does not reliably separate image output tokens,
- * so use Google's published per-image equivalent and add measured input and
- * thinking costs without double-charging image tokens as text.
+ * Cost of one Gemini image call, priced from real usage:
+ * - input tokens at the input rate (text and reference images);
+ * - IMAGE output tokens at the image rate (`output_tokens_by_modality`);
+ * - remaining text output and thought tokens at the text rate;
+ * - grounding queries at the search rate.
+ * When the modality breakdown is missing and an image was returned, Google's
+ * published per-image price is used instead. A call that returned no image
+ * and reported no image tokens adds no image charge. Thinking and input are
+ * billed either way, so a failed call with usage still has a cost.
  */
 export function createImageGenerationCost(
   model: "gemini-3.1-flash-image" | "gemini-3-pro-image",
   resolution: string,
   usageMetadata: unknown,
-  googleSearchQueries: number | boolean = 0
+  googleSearchQueries: number | boolean = 0,
+  options?: { imageReturned?: boolean }
 ): AiCallCost {
+  const imageReturned = options?.imageReturned !== false;
   const measured = calculateCallCost(model, usageMetadata, false);
   const pricing = getModelPricing(model);
-  const fallbackResolution = model === "gemini-3-pro-image" ? "1K" : "1K";
-  const imageCost =
-    IMAGE_OUTPUT_COST_USD[model]?.[resolution] ??
-    IMAGE_OUTPUT_COST_USD[model][fallbackResolution];
-  const thinkingCost =
-    (measured.usage.thoughtsTokens / 1_000_000) * pricing.outputPerMillion;
+  const imageRate = pricing.imageOutputPerMillion ?? pricing.outputPerMillion;
+  const measuredImageTokens = readImageOutputTokens(usageMetadata);
+
+  let imageCost = 0;
+  let imageCostSource: "usage" | "table" | "none" = "none";
+  let textOutputTokens = measured.usage.candidatesTokens;
+  if (measuredImageTokens >= MIN_PLAUSIBLE_IMAGE_TOKENS) {
+    imageCost = (measuredImageTokens / 1_000_000) * imageRate;
+    imageCostSource = "usage";
+    // total_output_tokens covers every modality; the text part is what is left.
+    textOutputTokens = Math.max(0, measured.usage.candidatesTokens - measuredImageTokens);
+  } else if (imageReturned) {
+    imageCost =
+      IMAGE_OUTPUT_COST_USD[model]?.[resolution] ?? IMAGE_OUTPUT_COST_USD[model]["1K"];
+    imageCostSource = "table";
+    // Without a breakdown, output_tokens may already include the image: only
+    // thought tokens are priced as text so the image is not charged twice.
+    textOutputTokens = 0;
+  }
+  const textCost =
+    ((textOutputTokens + measured.usage.thoughtsTokens) / 1_000_000) * pricing.outputPerMillion;
+
   const searchQueryCount =
     typeof googleSearchQueries === "number"
       ? Math.max(0, googleSearchQueries)
@@ -514,14 +567,17 @@ export function createImageGenerationCost(
   return {
     ...measured,
     usedGoogleSearch: searchQueryCount > 0,
-    outputCost: imageCost + thinkingCost,
+    outputCost: imageCost + textCost,
     searchCost,
+    webSearchCalls: searchQueryCount,
+    imageOutputTokens: measuredImageTokens,
+    imageCostSource,
     totalCost:
       measured.inputCost +
       measured.cachedInputCost +
       measured.cacheWriteCost +
       imageCost +
-      thinkingCost +
+      textCost +
       searchCost,
   };
 }

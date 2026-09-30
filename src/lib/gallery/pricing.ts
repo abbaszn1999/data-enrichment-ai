@@ -103,21 +103,27 @@ export function estimateScrapingCredits(
   return estimateScrapingCreditRange({ rowCount, searchDepth }).max;
 }
 
-const PLANNER_ESTIMATE_INPUT_TOKENS = 4_500;
-const PLANNER_ESTIMATE_OUTPUT_TOKENS = 1_800;
+/** Skill + brief + row text, plus about three reference images at roughly 1,200 tokens each. */
+const PLANNER_ESTIMATE_INPUT_TOKENS = 7_500;
+/** Medium reasoning plus about 300 tokens of prompt per gallery image. */
+const PLANNER_ESTIMATE_BASE_OUTPUT_TOKENS = 2_500;
+const PLANNER_ESTIMATE_OUTPUT_TOKENS_PER_IMAGE = 300;
 
 export function estimatePlannerCredits(options: {
   rowCount: number;
   tier?: GalleryAiSettings["tier"];
+  galleryImages?: number;
 }): number {
   const rowCount = Math.max(0, options.rowCount);
+  const galleryImages = Math.min(8, Math.max(1, options.galleryImages ?? 4));
   if (rowCount === 0) return 0;
   const model = resolveGalleryPlannerModel(options.tier);
   const pricing = getModelPricing(model);
   const perRow =
     (PLANNER_ESTIMATE_INPUT_TOKENS / 1_000_000) * pricing.inputPerMillion +
-    (PLANNER_ESTIMATE_OUTPUT_TOKENS / 1_000_000) * pricing.outputPerMillion;
-  return Math.round(costToCredits(perRow * rowCount * 1.4) * 1000) / 1000;
+    ((PLANNER_ESTIMATE_BASE_OUTPUT_TOKENS + PLANNER_ESTIMATE_OUTPUT_TOKENS_PER_IMAGE * galleryImages) / 1_000_000) *
+      pricing.outputPerMillion;
+  return Math.round(costToCredits(perRow * rowCount * 1.25) * 1000) / 1000;
 }
 
 export function estimateGalleryCredits(
@@ -153,8 +159,9 @@ export function estimateGalleryCredits(
       getImageOutputCost(model, resolution) *
       (galleryImages * rowCount + mainImages);
     const imageCalls = galleryImages * rowCount + mainImages;
+    // Per image call: prompt and reference-image input tokens plus thinking tokens.
     const perCallOverhead =
-      (model === "gemini-3-pro-image" ? 0.012 : 0.004) +
+      (model === "gemini-3-pro-image" ? 0.024 : 0.006) +
       (settings?.groundWithSearch ? 0.014 : 0);
     const imageCredits =
       Math.ceil(
@@ -163,6 +170,7 @@ export function estimateGalleryCredits(
     const plannerCredits = estimatePlannerCredits({
       rowCount,
       tier: settings?.tier,
+      galleryImages,
     });
     return Math.round((imageCredits + plannerCredits) * 1000) / 1000;
   }
