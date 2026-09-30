@@ -4,7 +4,9 @@ import type { SpecContext } from "./columns/types";
 import type { EnrichColumnConfig, EnrichSettings } from "./types";
 import type { EnrichToolPolicy } from "./policy";
 import {
+  AGENT_SKILLS,
   GROUNDING_RULES,
+  HOW_TO_READ_INPUT,
   formatRowData,
   outputContract,
 } from "./prompts/shared";
@@ -21,19 +23,12 @@ import {
   PLP_SEARCH_RULES,
 } from "./prompts/plp";
 
-function kindPreamble(
-  kind: SessionKind,
-  needsSearch: boolean
-): { role: string; rules: string[]; dataHeading: string } {
+function kindPreamble(kind: SessionKind): { role: string; rules: string[]; dataHeading: string } {
   if (kind === "plp") {
     return {
       role: PLP_ROLE,
-      rules: [
-        ...PLP_ROLE_RULES,
-        "",
-        ...PLP_CONSTRAINT_RULES,
-        ...(needsSearch ? ["", ...PLP_SEARCH_RULES] : []),
-      ],
+      // Web search is always on for Enrich runs, so the search rules always apply.
+      rules: [...PLP_ROLE_RULES, "", ...PLP_CONSTRAINT_RULES, "", ...PLP_SEARCH_RULES],
       dataHeading: PLP_DATA_HEADING,
     };
   }
@@ -44,9 +39,27 @@ function kindPreamble(
   };
 }
 
+export interface EnrichPrompt {
+  /**
+   * Everything that is identical for every row of a run (role, skills,
+   * language, rules, the numbered columns with their custom instructions,
+   * reference material). Sent as the Responses `instructions` so OpenAI's
+   * prompt cache makes the repeated part cheap.
+   */
+  instructions: string;
+  /** The per-row part: heading + the row's fields. */
+  text: string;
+  /** Images to attach to the row: pasted data-URIs / image URLs found in fields plus `sourceImageUrls`. */
+  imageUrls: string[];
+}
+
+/** Max product images sent with one row. */
+export const MAX_ROW_IMAGES = 8;
+
 /**
- * Assemble the enrich prompt: shared contract, kind-specific framing, then one
- * section per enabled column contributed by that column's own spec.
+ * Assemble the enrich prompt: a stable `instructions` block (contract, kind
+ * framing, one section per enabled column contributed by that column's own
+ * spec) and a per-row `text`.
  */
 export function buildEnrichPrompt(params: {
   productData: Record<string, string>;
@@ -58,10 +71,12 @@ export function buildEnrichPrompt(params: {
   cmsType?: string;
   workspaceCategories?: CategoryItem[];
   categoriesRawRows?: Record<string, string>[];
-}): { text: string; imageUrls: string[] } {
+  /** Images from selected image columns (e.g. Image Finder output), attached as vision input. */
+  sourceImageUrls?: string[];
+}): EnrichPrompt {
   const kind: SessionKind = params.kind ?? "product";
   const language = params.settings?.outputLanguage || "English";
-  const { textBlock, imageUrls } = formatRowData(params.productData);
+  const { textBlock, imageUrls: inlineImages } = formatRowData(params.productData);
   const hasStoreAllowlist = (params.workspaceCategories?.length ?? 0) > 0;
 
   const makeContext = (col: EnrichColumnConfig): SpecContext => ({
@@ -75,11 +90,7 @@ export function buildEnrichPrompt(params: {
     rowData: params.productData,
   });
 
-  const resolved = resolveEnabledColumns(
-    kind,
-    params.enabledColumns,
-    params.enrichmentColumns
-  );
+  const resolved = resolveEnabledColumns(kind, params.enabledColumns, params.enrichmentColumns);
 
   const columnSections: string[] = [];
   const appendices: string[] = [];
@@ -92,27 +103,50 @@ export function buildEnrichPrompt(params: {
     if (appendix) appendices.push(appendix);
   }
 
-  const preamble = kindPreamble(kind, params.policy.toolChoice === "required");
+  const preamble = kindPreamble(kind);
 
-  const sections = [
+  const instructionSections = [
     [
       preamble.role,
+      ...AGENT_SKILLS,
+      "",
       ...outputContract(language),
+      "",
+      ...HOW_TO_READ_INPUT,
       "",
       ...preamble.rules,
       ...GROUNDING_RULES.map((r) => `- ${r}`),
     ].join("\n"),
     "",
-    "Columns to fill:",
+    `Columns to fill (${columnSections.length}):`,
     columnSections.join("\n"),
-    "",
-    preamble.dataHeading,
-    textBlock,
   ];
-
   for (const appendix of appendices) {
-    sections.push("", appendix);
+    instructionSections.push("", appendix);
   }
 
-  return { text: sections.join("\n"), imageUrls };
+  const imageUrls: string[] = [];
+  const seen = new Set<string>();
+  for (const url of [...inlineImages, ...(params.sourceImageUrls ?? [])]) {
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    imageUrls.push(url);
+    if (imageUrls.length >= MAX_ROW_IMAGES) break;
+  }
+
+  const rowSections = [preamble.dataHeading, textBlock];
+  if (imageUrls.length > 0) {
+    rowSections.push(
+      "",
+      `${imageUrls.length} product image${imageUrls.length === 1 ? " is" : "s are"} attached. Use ${
+        imageUrls.length === 1 ? "it" : "them"
+      } to identify the product and read its visible details.`
+    );
+  }
+
+  return {
+    instructions: instructionSections.join("\n"),
+    text: rowSections.join("\n"),
+    imageUrls,
+  };
 }

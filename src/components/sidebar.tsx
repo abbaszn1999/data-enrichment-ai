@@ -20,6 +20,8 @@ import {
   Plus,
   X,
   Lock,
+  Pencil,
+  Trash2,
   Search,
   FileEdit,
   FolderTree,
@@ -60,8 +62,7 @@ import {
 import { FunctionsPanel } from "@/components/functions-panel";
 import {
   LANGUAGE_OPTIONS,
-  MODEL_OPTIONS,
-  TONE_OPTIONS,
+  DEFAULT_ENRICHMENT_SETTINGS,
   getDefaultEnrichmentColumns,
   resolveEnrichmentModel,
   PRODUCT_MODE_COLUMN_IDS,
@@ -70,9 +71,6 @@ import {
   catalogModeForRunColumns,
   type CatalogSidebarMode,
   type OutputLanguage,
-  type EnrichmentModel,
-  type WritingTone,
-  type ContentLength,
   type EnrichmentPreset,
   type EnrichmentColumn,
 } from "@/types";
@@ -85,7 +83,12 @@ import {
   resolveCategoryFormat,
 } from "@/lib/categories/format";
 import type { ProjectJson } from "@/lib/storage-helpers";
-import { getEnrichmentPresets, saveEnrichmentPreset } from "@/lib/supabase";
+import {
+  deleteEnrichmentPreset,
+  getEnrichmentPresets,
+  renameEnrichmentPreset,
+  saveEnrichmentPreset,
+} from "@/lib/supabase";
 import type { ProductRow } from "@/types";
 import { visibleCatalogRows } from "@/lib/catalog/product-groups";
 import {
@@ -126,6 +129,9 @@ function projectJsonToProductRows(project: ProjectJson): ProductRow[] {
     matchType: r.matchType,
   }));
 }
+
+const ENRICH_INSTRUCTION_PLACEHOLDER =
+  "e.g. Write for busy parents, mention the warranty, keep it under 120 words, avoid superlatives.";
 
 export function Sidebar() {
   const { workspace, invalidateCredits, role } = useWorkspaceStore();
@@ -198,7 +204,9 @@ export function Sidebar() {
   const isPlp = sessionKind === "plp";
 
   const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
-  const [sidebarMode, setSidebarMode] = useState<CatalogSidebarMode>("enrich");
+  // Kept in the store (and saved with the sheet) so the sheet reopens on the tool it was left on.
+  const sidebarMode = useSheetStore((s) => s.sidebarMode);
+  const setSidebarMode = useSheetStore((s) => s.setSidebarMode);
 
   // Functions (Math, Generate, Clean, Copy & Fill) act on matched product
   // rows — PLP has none of that, so it only ever gets the AI tab.
@@ -220,8 +228,6 @@ export function Sidebar() {
   const [settingsSectionOpen, setSettingsSectionOpen] = useState(false);
   const [showAddColumn, setShowAddColumn] = useState(false);
   const [newColLabel, setNewColLabel] = useState("");
-  const [newColType, setNewColType] = useState<"text" | "list">("text");
-  const [newColPrompt, setNewColPrompt] = useState("");
   const [expandedColumns, setExpandedColumns] = useState<Set<string>>(new Set());
   const [enrichOutputTab, setEnrichOutputTab] = useState<"new" | "existing">("new");
   const [existingSearch, setExistingSearch] = useState("");
@@ -252,6 +258,10 @@ export function Sidebar() {
 
   const [pendingPreset, setPendingPreset] = useState<EnrichmentPreset | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<EnrichmentPreset | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<EnrichmentPreset | null>(null);
+  const [presetBusy, setPresetBusy] = useState(false);
   const [savePresetName, setSavePresetName] = useState("AI Setting");
   const [savingPreset, setSavingPreset] = useState(false);
 
@@ -259,8 +269,11 @@ export function Sidebar() {
     (presetId: string) => {
       if (presetId === "") {
         setSelectedPresetId("");
+        // "Default settings" resets the columns, the chosen sources and the language.
         applyEnrichmentPreset({
           enrichmentColumns: getDefaultEnrichmentColumns(sessionKind),
+          sourceColumns: [],
+          enrichmentSettings: { ...DEFAULT_ENRICHMENT_SETTINGS },
         });
         return;
       }
@@ -280,6 +293,43 @@ export function Sidebar() {
     toast.success("Setting applied", { description: pendingPreset.name });
     setPendingPreset(null);
   }, [pendingPreset, applyEnrichmentPreset]);
+
+  const confirmRenamePreset = useCallback(async () => {
+    if (!workspace?.id || !renameTarget || presetBusy) return;
+    const name = renameValue.trim();
+    if (!name) return;
+    setPresetBusy(true);
+    try {
+      await renameEnrichmentPreset(workspace.id, renameTarget.id, name);
+      await refreshPresets();
+      setRenameTarget(null);
+      toast.success("Setting renamed", { description: name });
+    } catch (error) {
+      toast.error("Failed to rename setting", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      setPresetBusy(false);
+    }
+  }, [workspace?.id, renameTarget, renameValue, presetBusy, refreshPresets]);
+
+  const confirmDeletePreset = useCallback(async () => {
+    if (!workspace?.id || !deleteTarget || presetBusy) return;
+    setPresetBusy(true);
+    try {
+      await deleteEnrichmentPreset(workspace.id, deleteTarget.id);
+      if (selectedPresetId === deleteTarget.id) setSelectedPresetId("");
+      await refreshPresets();
+      setDeleteTarget(null);
+      toast.success("Setting deleted", { description: deleteTarget.name });
+    } catch (error) {
+      toast.error("Failed to delete setting", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      setPresetBusy(false);
+    }
+  }, [workspace?.id, deleteTarget, presetBusy, selectedPresetId, refreshPresets]);
 
   const enrichListColumns = useMemo(
     () => enrichmentColumns.filter((col) => !isProductModeColumn(col.id, sessionKind)),
@@ -341,23 +391,24 @@ export function Sidebar() {
     (r) => r.status === "pending" || r.status === "error" || r.status === "done"
   );
 
-  // AI Generated source options: only columns that have data on the currently
-  // selected product(s). Empty on the selected row(s) → do not list the column.
+  // AI Generated source options: every AI column that has a value on any row
+  // of the active sheet, whichever tool (Enrich, Image Finder, Categories)
+  // produced it and whichever mode is open, so a column made in one tool is a
+  // source in all of them.
   const enrichedColumnsWithData = useMemo(() => {
-    if (selectedRowIds.size === 0) return [];
-    const selected = visibleCatalogRows(rows, {
+    const sheet = visibleCatalogRows(rows, {
       groupColumn: productGroupColumn,
       activeSheet,
-    }).filter((r) => selectedRowIds.has(r.id));
-    if (selected.length === 0) return [];
+    });
+    if (sheet.length === 0) return [];
     return enrichmentColumns.filter((col) =>
-      selected.some((r) => {
+      sheet.some((r) => {
         const val = r.enrichedData?.[col.id];
         if (Array.isArray(val)) return val.length > 0;
         return val !== undefined && val !== null && val !== "";
       })
     );
-  }, [activeSheet, enrichmentColumns, productGroupColumn, rows, selectedRowIds]);
+  }, [activeSheet, enrichmentColumns, productGroupColumn, rows]);
 
   const applyStatusPayload = useCallback(
     (payload: {
@@ -839,22 +890,21 @@ export function Sidebar() {
   const handleAddCustomColumn = useCallback(() => {
     if (!newColLabel.trim()) return;
     const label = newColLabel.trim();
-    const instruction = newColPrompt.trim();
+    // A new column is just a name; its instruction is set from the same
+    // "Custom instruction" button every other column uses.
     addCustomEnrichmentColumn({
       label,
-      description: instruction || `Generate ${label} for this product.`,
-      customInstruction: instruction,
-      type: newColType,
+      description: `Generate "${label}" for this product from the row data.`,
+      customInstruction: "",
+      type: "text",
     });
     const added = useSheetStore.getState().enrichmentColumns.at(-1);
     if (added?.isCustom) {
       setExpandedColumns((prev) => new Set(prev).add(added.id));
     }
     setNewColLabel("");
-    setNewColPrompt("");
-    setNewColType("text");
     setShowAddColumn(false);
-  }, [newColLabel, newColPrompt, newColType, addCustomEnrichmentColumn]);
+  }, [newColLabel, addCustomEnrichmentColumn]);
 
   if (!sidebarOpen && !hasModes) {
     return (
@@ -1013,6 +1063,31 @@ export function Sidebar() {
             >
               Save
             </button>
+            {selectedPresetId && kindPresets.some((p) => p.id === selectedPresetId) && (
+              <>
+                <button
+                  onClick={() => {
+                    const target = kindPresets.find((p) => p.id === selectedPresetId);
+                    if (!target) return;
+                    setRenameValue(target.name);
+                    setRenameTarget(target);
+                  }}
+                  disabled={isEnriching}
+                  title="Rename this saved setting"
+                  className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={() => setDeleteTarget(kindPresets.find((p) => p.id === selectedPresetId) ?? null)}
+                  disabled={isEnriching}
+                  title="Delete this saved setting"
+                  className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </>
+            )}
           </div>
           )}
 
@@ -1191,18 +1266,9 @@ export function Sidebar() {
                       return next;
                     });
                   };
-                  // Built-in free-text columns keep tone/length. Custom columns
-                  // are only a name + instruction — those controls would look
-                  // like the user's wording was replaced by defaults.
-                  const hasToneControls = col.type === "text" && !col.isCustom;
-                  const hasSettings =
-                    col.isCustom ||
-                    col.type === "sourceUrls" ||
-                    col.type === "categories" ||
-                    col.type === "faq" ||
-                    col.type === "internalLinks" ||
-                    col.type === "keywords" ||
-                    hasToneControls;
+                  // Every column, built-in or custom, expands to the same single
+                  // control: its custom instruction.
+                  const hasSettings = true;
 
                   return (
                     <div
@@ -1275,268 +1341,47 @@ export function Sidebar() {
                         </div>
                       </div>
 
-                      {/* Expandable Settings Panel */}
-                      {isExpanded && hasSettings && (
+                      {/* Expandable Settings Panel: a custom instruction, nothing else */}
+                      {isExpanded && (
                         <div
                           className="space-y-2.5 border-t border-border/50 px-2 pb-2.5 pt-2"
                           onClick={(e) => e.stopPropagation()}
                         >
                           {col.isCustom && (
-                            <>
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  Column name
-                                </label>
-                                <input
-                                  type="text"
-                                  value={col.label}
-                                  onChange={(e) =>
-                                    updateEnrichmentColumnConfig(col.id, {
-                                      label: e.target.value,
-                                    })
-                                  }
-                                  disabled={isEnriching}
-                                  placeholder="Column name"
-                                  className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 normal-case"
-                                />
-                              </div>
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  AI instruction
-                                </label>
-                                <textarea
-                                  value={col.customInstruction ?? col.description ?? ""}
-                                  onChange={(e) => {
-                                    const value = e.target.value;
-                                    updateEnrichmentColumnConfig(col.id, {
-                                      customInstruction: value,
-                                      description:
-                                        value.trim() ||
-                                        `Generate ${col.label} for this product.`,
-                                    });
-                                  }}
-                                  disabled={isEnriching}
-                                  rows={3}
-                                  placeholder="AI instruction for this column..."
-                                  className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 resize-none normal-case"
-                                />
-                              </div>
-                            </>
-                          )}
-
-                          {/* Writing Tone & length — built-in free-text columns only */}
-                          {hasToneControls && (
-                            <>
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  Writing Tone
-                                </label>
-                                <select
-                                  value={col.writingTone ?? "professional"}
-                                  onChange={(e) =>
-                                    updateEnrichmentColumnConfig(col.id, {
-                                      writingTone: e.target.value as WritingTone,
-                                    })
-                                  }
-                                  disabled={isEnriching}
-                                  className="w-full h-7 px-2 text-[10px] rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 cursor-pointer disabled:opacity-50"
-                                >
-                                  {TONE_OPTIONS.map((opt) => (
-                                    <option key={opt.value} value={opt.value}>
-                                      {opt.label} — {opt.description}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  Content Length
-                                </label>
-                                <div className="flex gap-1">
-                                  {([
-                                    { value: "short" as ContentLength, label: "Short", desc: "50-100" },
-                                    { value: "medium" as ContentLength, label: "Medium", desc: "150-300" },
-                                    { value: "long" as ContentLength, label: "Long", desc: "300-500" },
-                                  ]).map((opt) => {
-                                    const isSelected = (col.contentLength ?? "medium") === opt.value;
-                                    return (
-                                      <button
-                                        key={opt.value}
-                                        onClick={() =>
-                                          updateEnrichmentColumnConfig(col.id, {
-                                            contentLength: opt.value,
-                                          })
-                                        }
-                                        disabled={isEnriching}
-                                        className={`flex-1 text-center py-1 px-1 rounded-md border transition-all disabled:opacity-50 ${
-                                          isSelected
-                                            ? "bg-primary/10 border-primary/30 shadow-sm"
-                                            : "border-border/50 hover:border-border hover:bg-muted/50"
-                                        }`}
-                                      >
-                                        <span className={`text-[9px] font-medium block ${isSelected ? "text-primary" : "text-muted-foreground"}`}>
-                                          {opt.label}
-                                        </span>
-                                        <span className="text-[7px] text-muted-foreground/60 block">{opt.desc}</span>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            </>
-                          )}
-
-                          {/* Source Count — only for sourceUrls */}
-                          {col.type === "sourceUrls" && (
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  Number of sources
-                                </label>
-                                <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
-                                  {col.sourceCount ?? 3}
-                                </span>
-                              </div>
-                              <input
-                                type="range"
-                                min={1}
-                                max={10}
-                                value={col.sourceCount ?? 3}
-                                onChange={(e) =>
-                                  updateEnrichmentColumnConfig(col.id, {
-                                    sourceCount: parseInt(e.target.value),
-                                  })
-                                }
-                                disabled={isEnriching}
-                                className="w-full h-1.5 accent-primary disabled:opacity-50"
-                              />
-                              <div className="flex justify-between text-[8px] text-muted-foreground/50">
-                                <span>1</span>
-                                <span>5</span>
-                                <span>10</span>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Max Categories — only for categories */}
-                          {col.type === "categories" && (
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  Max categories
-                                </label>
-                                <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
-                                  {col.maxCategories ?? 3}
-                                </span>
-                              </div>
-                              <input
-                                type="range"
-                                min={1}
-                                max={5}
-                                value={col.maxCategories ?? 3}
-                                onChange={(e) =>
-                                  updateEnrichmentColumnConfig(col.id, {
-                                    maxCategories: parseInt(e.target.value),
-                                  })
-                                }
-                                disabled={isEnriching}
-                                className="w-full h-1.5 accent-primary disabled:opacity-50"
-                              />
-                              <div className="flex justify-between text-[8px] text-muted-foreground/50">
-                                <span>1</span>
-                                <span>3</span>
-                                <span>5</span>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Item count — faq / keywords / internal links */}
-                          {(col.type === "faq" ||
-                            col.type === "keywords" ||
-                            col.type === "internalLinks") && (
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  {col.type === "faq"
-                                    ? "Number of questions"
-                                    : col.type === "keywords"
-                                      ? "Number of keywords"
-                                      : "Number of links"}
-                                </label>
-                                <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
-                                  {col.itemCount ?? (col.type === "faq" ? 4 : 5)}
-                                </span>
-                              </div>
-                              <input
-                                type="range"
-                                min={1}
-                                max={10}
-                                value={col.itemCount ?? (col.type === "faq" ? 4 : 5)}
-                                onChange={(e) =>
-                                  updateEnrichmentColumnConfig(col.id, {
-                                    itemCount: parseInt(e.target.value),
-                                  })
-                                }
-                                disabled={isEnriching}
-                                className="w-full h-1.5 accent-primary disabled:opacity-50"
-                              />
-                              <div className="flex justify-between text-[8px] text-muted-foreground/50">
-                                <span>1</span>
-                                <span>5</span>
-                                <span>10</span>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Character budget — SEO fields with a hard limit */}
-                          {col.type === "text" && col.maxChars != null && (
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between">
-                                <label className="text-[10px] font-medium text-muted-foreground">
-                                  Character limit
-                                </label>
-                                <span className="text-[10px] font-mono font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded min-w-[20px] text-center">
-                                  {col.maxChars}
-                                </span>
-                              </div>
-                              <input
-                                type="number"
-                                min={10}
-                                max={2000}
-                                value={col.maxChars}
-                                onChange={(e) =>
-                                  updateEnrichmentColumnConfig(col.id, {
-                                    maxChars: Math.max(
-                                      10,
-                                      Math.min(2000, parseInt(e.target.value) || 10)
-                                    ),
-                                  })
-                                }
-                                disabled={isEnriching}
-                                className="w-full h-7 px-2 text-[10px] rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50"
-                              />
-                            </div>
-                          )}
-
-                          {!col.isCustom && (
                             <div className="space-y-1">
                               <label className="text-[10px] font-medium text-muted-foreground">
-                                Custom instruction
+                                Column name
                               </label>
                               <input
                                 type="text"
-                                value={col.customInstruction ?? ""}
+                                value={col.label}
                                 onChange={(e) =>
                                   updateEnrichmentColumnConfig(col.id, {
-                                    customInstruction: e.target.value,
+                                    label: e.target.value,
                                   })
                                 }
                                 disabled={isEnriching}
-                                placeholder="Add specific instructions for this column..."
-                                className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50"
+                                placeholder="Column name"
+                                className="w-full text-[10px] px-2 py-1.5 rounded-md border bg-background/80 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/40 disabled:opacity-50 normal-case"
                               />
                             </div>
                           )}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-medium text-muted-foreground">
+                              Custom instruction
+                            </label>
+                            <CustomInstructionButton
+                              value={col.customInstruction}
+                              onSave={(value) =>
+                                updateEnrichmentColumnConfig(col.id, {
+                                  customInstruction: value,
+                                })
+                              }
+                              disabled={isEnriching}
+                              placeholder={ENRICH_INSTRUCTION_PLACEHOLDER}
+                              helpText={`Tell the AI exactly how to write "${col.label}": angle, structure, wording, things to include or avoid. It is added to the built-in brief for this column and you can change it any time.`}
+                            />
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1568,40 +1413,13 @@ export function Sidebar() {
                     <input
                       autoFocus
                       placeholder="Column name (e.g. Target Audience)"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && newColLabel.trim()) handleAddCustomColumn();
+                      }}
                       value={newColLabel}
                       onChange={(e) => setNewColLabel(e.target.value)}
                       className="w-full h-8 px-2.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 normal-case"
                     />
-                    <textarea
-                      placeholder="AI instruction (e.g. Identify the target audience for this product)"
-                      value={newColPrompt}
-                      onChange={(e) => setNewColPrompt(e.target.value)}
-                      rows={2}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 resize-none normal-case"
-                    />
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-muted-foreground">Output type:</span>
-                      <button
-                        onClick={() => setNewColType("text")}
-                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                          newColType === "text"
-                            ? "bg-primary text-primary-foreground border-primary"
-                            : "border-border hover:border-primary/50"
-                        }`}
-                      >
-                        Text
-                      </button>
-                      <button
-                        onClick={() => setNewColType("list")}
-                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                          newColType === "list"
-                            ? "bg-primary text-primary-foreground border-primary"
-                            : "border-border hover:border-primary/50"
-                        }`}
-                      >
-                        List
-                      </button>
-                    </div>
                     <div className="flex gap-1.5">
                       <Button
                         variant="ghost"
@@ -1829,8 +1647,9 @@ export function Sidebar() {
               <div className="mt-3 space-y-1 pl-6">
                 <p className="text-[10px] text-muted-foreground mb-2 leading-tight">
                   Choose which columns are sent to the AI agent for context.
-                  AI Generated columns appear only for the selected product(s)
-                  that already have values.
+                  AI Generated columns (including images found in Image Finder
+                  and categories) appear once they have values on the sheet;
+                  image columns are sent to the AI as pictures.
                 </p>
                 {originalColumns.map((col) => {
                   const isSource = sourceColumns.includes(col);
@@ -1990,43 +1809,16 @@ export function Sidebar() {
                   </div>
                 )}
 
-                {/* Enrichment Model */}
+                {/* Enrich mode is one fixed agent; nothing to pick. */}
                 {mode !== "images" && mode !== "categories" && (
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    Enrichment Model
-                  </label>
-                  <div className="space-y-1">
-                    {MODEL_OPTIONS.map((opt) => {
-                      const isSelected = enrichmentSettings.enrichmentModel === opt.value;
-                      return (
-                        <div
-                          key={opt.value}
-                          onClick={() => !isEnriching && updateSettings({ enrichmentModel: opt.value as EnrichmentModel })}
-                          className={`w-full text-left p-2 rounded-lg border transition-all duration-200 cursor-pointer ${
-                            isSelected
-                              ? "bg-amber-500/10 border-amber-500/30 shadow-sm"
-                              : "bg-muted/30 border-transparent hover:border-border/40 hover:bg-muted/60"
-                          } ${isEnriching ? "opacity-50 pointer-events-none" : ""}`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className={`h-3 w-3 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                              isSelected ? "border-amber-500 bg-amber-500" : "border-muted-foreground/40"
-                            }`}>
-                              {isSelected && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
-                            </div>
-                            <span className={`text-xs font-semibold ${isSelected ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
-                              {opt.icon} {opt.label}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-muted-foreground/70 mt-0.5 pl-5">
-                            {opt.description}
-                          </p>
-                        </div>
-                      );
-                    })}
+                  <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
+                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6 Sol, web search on</p>
+                    <p className="text-[10px] text-muted-foreground/70">
+                      One AI agent fills every selected column. It searches the web for each product and follows the
+                      custom instruction on each column. You are charged for the exact AI tokens and searches used,
+                      per row.
+                    </p>
                   </div>
-                </div>
                 )}
 
               </div>
@@ -2175,9 +1967,11 @@ export function Sidebar() {
           <AlertDialogHeader>
             <AlertDialogTitle>Apply &quot;{pendingPreset?.name}&quot;?</AlertDialogTitle>
             <AlertDialogDescription>
-              This replaces your current AI column configuration. Enriched cells
-              are kept — columns you turn off keep their data and it reappears if
-              you re-enable them.
+              This replaces your AI columns, their custom instructions, the
+              source columns and the language with the saved ones. Values
+              already on the sheet are kept: columns that are not part of the
+              setting stay hidden with their data and reappear if you turn them
+              on again.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2197,6 +1991,69 @@ export function Sidebar() {
       </AlertDialog>
 
       <Dialog
+        open={!!renameTarget}
+        onOpenChange={(open) => {
+          if (presetBusy) return;
+          if (!open) setRenameTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename setting</DialogTitle>
+            <DialogDescription>Give this saved setting a new name.</DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void confirmRenamePreset();
+              }
+            }}
+            disabled={presetBusy}
+          />
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={presetBusy} onClick={() => setRenameTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={presetBusy || !renameValue.trim()}
+              onClick={() => void confirmRenamePreset()}
+            >
+              {presetBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && !presetBusy && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete &quot;{deleteTarget?.name}&quot;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The saved setting is removed for everyone in this workspace. Your sheets and their values are not
+              changed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={presetBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDeletePreset();
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog
         open={saveDialogOpen}
         onOpenChange={(open) => {
           if (savingPreset) return;
@@ -2207,8 +2064,9 @@ export function Sidebar() {
           <DialogHeader>
             <DialogTitle>Save setting</DialogTitle>
             <DialogDescription>
-              Name this AI column configuration so you can reuse it on later
-              projects of the same type.
+              Saves your AI columns with their custom instructions, the source
+              columns and the language under a name. Load it on any later sheet
+              in this workspace. Saving with an existing name replaces it.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">

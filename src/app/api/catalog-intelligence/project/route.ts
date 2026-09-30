@@ -4,9 +4,13 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { getWorkspaceContext } from "@/lib/workspace-context";
 import {
   loadProjectJsonAdmin,
+  saveProjectDeltaAdmin,
   saveProjectJsonAdmin,
 } from "@/lib/jobs/project-json";
-import type { ProjectJson } from "@/lib/storage-helpers";
+import type { ProjectJson, ProjectRow } from "@/lib/storage-helpers";
+
+/** Rows one delta save may carry; a bigger change is a full save. */
+const MAX_DELTA_ROWS = 2000;
 
 async function requireSessionMember(sessionId: string) {
   const supabase = await createClient();
@@ -87,6 +91,63 @@ export async function PUT(request: NextRequest) {
   try {
     await saveProjectJsonAdmin(workspaceId, sessionId, body.project, auth.admin);
     return NextResponse.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to save session";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+/**
+ * Delta autosave: only the rows that changed since the last save (plus the
+ * sheet settings when those changed). Answers 409 `FULL_SAVE_REQUIRED` when
+ * the change is structural, so the client falls back to the full PUT.
+ */
+export async function PATCH(request: NextRequest) {
+  let body: {
+    workspaceId?: string;
+    sessionId?: string;
+    rows?: ProjectRow[];
+    rowCount?: number;
+    meta?: Omit<ProjectJson, "rows">;
+  };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  const workspaceId = body.workspaceId?.trim();
+  const sessionId = body.sessionId?.trim();
+  if (!workspaceId || !sessionId || !Array.isArray(body.rows)) {
+    return NextResponse.json({ error: "workspaceId, sessionId, and rows are required" }, { status: 400 });
+  }
+  if (body.rows.length > MAX_DELTA_ROWS) {
+    return NextResponse.json({ code: "FULL_SAVE_REQUIRED", error: "Too many changed rows" }, { status: 409 });
+  }
+  const auth = await requireSessionMember(sessionId);
+  if ("error" in auth) return auth.error;
+  if (auth.ctx.membershipRole === "viewer") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (auth.session.workspace_id !== workspaceId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  const rows = body.rows.filter((row) => row && typeof row.id === "string" && row.id.length > 0);
+  if (rows.length !== body.rows.length) {
+    return NextResponse.json({ error: "Every row needs an id" }, { status: 400 });
+  }
+  try {
+    const result = await saveProjectDeltaAdmin({
+      workspaceId,
+      sessionId,
+      rows,
+      expectedRowCount: typeof body.rowCount === "number" ? body.rowCount : undefined,
+      meta: body.meta,
+      admin: auth.admin,
+    });
+    if (!result.ok) {
+      return NextResponse.json({ code: "FULL_SAVE_REQUIRED", error: result.reason }, { status: 409 });
+    }
+    return NextResponse.json({ ok: true, patched: result.patched });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to save session";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { SheetImage } from "@/components/sheet-image";
 import {
   useReactTable,
   getCoreRowModel,
@@ -292,7 +293,8 @@ function getImagePreviewUrls(value: string, column: string): string[] {
 }
 
 function SmartImageThumb({ url, alt }: { url: string; alt: string }) {
-  const [src, setSrc] = useState(url);
+  // Proxy first (cached for a week), then the original link, then the "Image link" fallback.
+  const [src, setSrc] = useState(proxyImgSrc(url));
   const [failed, setFailed] = useState(false);
 
   if (failed) {
@@ -324,9 +326,12 @@ function SmartImageThumb({ url, alt }: { url: string; alt: string }) {
             data-original-url={url}
             alt={alt}
             className="h-10 w-10 object-cover rounded border border-border/40 bg-white group-hover/img:ring-2 group-hover/img:ring-primary/40 transition-all"
+            loading="lazy"
+            decoding="async"
+            referrerPolicy="no-referrer"
             onError={() => {
-              if (src !== proxyImgSrc(url)) {
-                setSrc(proxyImgSrc(url));
+              if (src === proxyImgSrc(url) && src !== url) {
+                setSrc(url);
               } else {
                 setFailed(true);
               }
@@ -438,6 +443,7 @@ function SmartImageUrlCell({
                       src={url}
                       alt={`Image ${i + 1}`}
                       className="h-14 w-14 object-contain rounded border bg-white shrink-0"
+                      loading="lazy"
                       onError={(e) => {
                         const img = e.target as HTMLImageElement;
                         if (!img.src.includes("/api/image-proxy")) {
@@ -493,13 +499,14 @@ function SmartImageUrlCell({
                   rel="noopener noreferrer"
                   className="block rounded-lg border overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all group/card"
                 >
-                  <img
-                    src={url}
-                    data-original-url={url}
-                    alt={`Image ${i + 1}`}
-                    className="w-full h-40 object-contain bg-white p-2"
-                    onError={handleImgError}
-                  />
+                  <div className="h-40 w-full bg-white p-2">
+                    <SheetImage
+                      url={url}
+                      alt={`Image ${i + 1}`}
+                      className="h-full w-full object-contain"
+                      linkOnFail
+                    />
+                  </div>
                   <div className="p-2 bg-muted/30 border-t">
                     <p className="text-[11px] font-medium truncate">Image {i + 1}</p>
                   </div>
@@ -749,16 +756,6 @@ function proxyImgSrc(url: string): string {
   return `/api/image-proxy?url=${encodeURIComponent(url)}`;
 }
 
-function handleImgError(e: React.SyntheticEvent<HTMLImageElement>) {
-  const img = e.target as HTMLImageElement;
-  const originalUrl = img.dataset.originalUrl;
-  if (originalUrl && !img.src.includes("/api/image-proxy")) {
-    img.src = proxyImgSrc(originalUrl);
-  } else {
-    img.style.display = "none";
-  }
-}
-
 type EnrichImageItem = { imageUrl: string; pageUrl: string; title: string };
 
 function ImageUrlsCell({
@@ -929,12 +926,10 @@ function ImageUrlsCell({
                   title={img.title || "Product image"}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={img.imageUrl}
-                    data-original-url={img.imageUrl}
+                  <SheetImage
+                    url={img.imageUrl}
                     alt={img.title || "Product"}
                     className="h-full w-full object-cover transition-transform group-hover/image:scale-105"
-                    onError={handleImgError}
                   />
                 </button>
                 {isEditable && (
@@ -1047,12 +1042,12 @@ function ImageUrlsCell({
               ) : active ? (
                 <>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={active.imageUrl}
-                    data-original-url={active.imageUrl}
+                  <SheetImage
+                    url={active.imageUrl}
                     alt={active.title || "Product"}
                     className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
-                    onError={handleImgError}
+                    tileClassName="flex h-48 w-64 flex-col items-center justify-center gap-1 rounded-lg bg-muted/40 p-3 text-center text-xs text-muted-foreground"
+                    linkOnFail
                   />
                   {list.length > 1 ? (
                     <>
@@ -1194,12 +1189,10 @@ function ImageUrlsCell({
                       aria-label={`View image ${index + 1}`}
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={img.imageUrl}
-                        data-original-url={img.imageUrl}
+                      <SheetImage
+                        url={img.imageUrl}
                         alt={img.title || `Image ${index + 1}`}
                         className="h-full w-full object-cover"
-                        onError={handleImgError}
                       />
                     </button>
                     {isEditable && (

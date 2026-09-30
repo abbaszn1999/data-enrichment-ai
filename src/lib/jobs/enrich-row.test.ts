@@ -3,6 +3,7 @@ import { calculateOpenAiWebSearchCost, costToCredits, createSearchApiCost } from
 import {
   EnrichBilledAttemptError,
   EnrichCancelledError,
+  EnrichOutputTruncatedError,
   EnrichProviderUnavailableError,
 } from "@/lib/enrich/openai";
 import type { ProjectRow } from "@/lib/storage-helpers";
@@ -152,6 +153,46 @@ describe("processCatalogRow billing", () => {
     expect(outcome.billed?.billedAttempts).toBe(2);
     expect(outcome.billed?.cost).toBeCloseTo(billedCall.totalCost * 2, 10);
     expect(outcome.billed?.credits).toBe(costToCredits(billedCall.totalCost * 2));
+  });
+
+  it("does not retry a row that ran out of output space, but still charges the call and says how to fix it", async () => {
+    enrichRowMock.mockRejectedValue(new EnrichOutputTruncatedError([billedCall], 128_000));
+    const outcome = await runRetry();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(enrichRowMock).toHaveBeenCalledTimes(1);
+    expect(outcome.error).toContain("Select fewer columns");
+    expect(outcome.billed?.billedAttempts).toBe(1);
+    expect(outcome.billed?.cost).toBeCloseTo(billedCall.totalCost, 10);
+  });
+
+  it("charges an earlier billed failure plus the truncated call together", async () => {
+    enrichRowMock
+      .mockRejectedValueOnce(new EnrichBilledAttemptError("no parseable JSON", [billedCall]))
+      .mockRejectedValueOnce(new EnrichOutputTruncatedError([billedCall], 128_000));
+    const outcome = await runRetry();
+    if (outcome.ok) throw new Error("expected failure");
+    expect(enrichRowMock).toHaveBeenCalledTimes(2);
+    expect(outcome.billed?.billedAttempts).toBe(2);
+    expect(outcome.billed?.cost).toBeCloseTo(billedCall.totalCost * 2, 10);
+  });
+
+  it("sends image columns to the agent as images, not text", async () => {
+    enrichRowMock.mockResolvedValueOnce({ data: {}, costs: [billedCall] });
+    await processCatalogRow({
+      sessionId: "s",
+      workspaceId: "w",
+      row: {
+        ...row,
+        originalData: { Title: "Widget", "Image Src": "https://cdn.example.com/w.jpg" },
+        enrichedData: { imageUrls: [{ imageUrl: "https://cdn.example.com/found.jpg" }] },
+      } as unknown as ProjectRow,
+      settings: { ...retrySettings, sourceColumns: ["Title", "Image Src", "imageUrls"] },
+    });
+    const call = enrichRowMock.mock.calls[0][0];
+    expect(call.sourceImageUrls).toEqual(["https://cdn.example.com/w.jpg", "https://cdn.example.com/found.jpg"]);
+    expect(call.productData.Title).toBe("Widget");
+    expect(call.productData["Image Src"]).toBe("[1 image attached]");
   });
 
   it("charges nothing for failures OpenAI never billed", async () => {

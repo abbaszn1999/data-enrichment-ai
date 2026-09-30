@@ -188,31 +188,45 @@ export async function getWorkspaceById(id: string): Promise<Workspace | null> {
   return data;
 }
 
-export async function getEnrichmentPresets(workspaceId: string): Promise<EnrichmentPreset[]> {
-  const supabase = getClient();
-  const { data, error } = await supabase
-    .from("workspaces")
-    .select("enrichment_presets")
-    .eq("id", workspaceId)
-    .single();
-  if (error) throw error;
-  return Array.isArray(data?.enrichment_presets) ? data.enrichment_presets : [];
+async function presetsRequest<T>(input: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(input, init);
+  const body = (await res.json().catch(() => ({}))) as { error?: string } & T;
+  if (!res.ok) throw new Error(body.error || `Saved settings request failed (${res.status})`);
+  return body;
 }
 
-export async function saveEnrichmentPreset(workspaceId: string, preset: EnrichmentPreset): Promise<EnrichmentPreset[]> {
-  const supabase = getClient();
-  const existing = await getEnrichmentPresets(workspaceId);
-  const presetName = preset.name.trim().toLowerCase();
-  const next = [
-    preset,
-    ...existing.filter((item) => item.id !== preset.id && item.name.trim().toLowerCase() !== presetName),
-  ].slice(0, 30);
-  const { error } = await supabase
-    .from("workspaces")
-    .update({ enrichment_presets: next })
-    .eq("id", workspaceId);
-  if (error) throw error;
-  return next;
+/** Saved settings of a workspace (columns + custom instructions + sources + language), newest first. */
+export async function getEnrichmentPresets(workspaceId: string): Promise<EnrichmentPreset[]> {
+  const { presets } = await presetsRequest<{ presets: EnrichmentPreset[] }>(
+    `/api/catalog-intelligence/presets?workspaceId=${encodeURIComponent(workspaceId)}`
+  );
+  return presets;
+}
+
+/** Saves a setting; one with the same name (per workspace and kind) is overwritten. */
+export async function saveEnrichmentPreset(workspaceId: string, preset: EnrichmentPreset): Promise<EnrichmentPreset> {
+  const { preset: saved } = await presetsRequest<{ preset: EnrichmentPreset }>("/api/catalog-intelligence/presets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, name: preset.name, kind: preset.kind ?? "product", settings: preset.settings }),
+  });
+  return saved;
+}
+
+export async function renameEnrichmentPreset(workspaceId: string, id: string, name: string): Promise<EnrichmentPreset> {
+  const { preset } = await presetsRequest<{ preset: EnrichmentPreset }>("/api/catalog-intelligence/presets", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, id, name }),
+  });
+  return preset;
+}
+
+export async function deleteEnrichmentPreset(workspaceId: string, id: string): Promise<void> {
+  await presetsRequest<{ ok: boolean }>(
+    `/api/catalog-intelligence/presets?workspaceId=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(id)}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function createWorkspace(workspace: {

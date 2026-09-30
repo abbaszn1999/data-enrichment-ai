@@ -9,6 +9,7 @@ import { IMAGE_FINDER_OPENAI_MODEL } from "@/lib/enrich/models";
 import {
   billedCostsOf,
   isEnrichCancelledError,
+  isEnrichOutputTruncatedError,
   isEnrichProviderUnavailableError,
 } from "@/lib/enrich/openai";
 import {
@@ -25,8 +26,9 @@ import { loadProjectJsonAdmin } from "./project-json";
 import { isJobCancelRequested, loadJobRun } from "./repo";
 import type { CatalogJobSettings } from "./types";
 import type { ProjectRow } from "@/lib/storage-helpers";
+import { buildRowSources } from "./row-sources";
 
-const MAX_FIELD_CHARS = 800;
+export { buildRowSources } from "./row-sources";
 
 export type EnrichRowOutcome =
   | {
@@ -121,44 +123,6 @@ export function catalogPendingRowIds(
   return targetIds.filter((id) => known.has(id) && !processed.has(id));
 }
 
-export function buildRowSourceData(
-  row: ProjectRow,
-  sourceColumns: string[],
-  enrichmentColumnIds: Set<string>
-): Record<string, string> {
-  const filtered: Record<string, string> = {};
-  for (const col of sourceColumns) {
-    if (enrichmentColumnIds.has(col)) {
-      const val = row.enrichedData?.[col];
-      if (val !== undefined && val !== null && val !== "") {
-        if (Array.isArray(val)) {
-          filtered[col] = val
-            .map((item) =>
-              typeof item === "object" && item !== null
-                ? String(
-                    (item as { uri?: string; imageUrl?: string; pageUrl?: string; title?: string }).uri ||
-                      (item as { imageUrl?: string }).imageUrl ||
-                      (item as { pageUrl?: string }).pageUrl ||
-                      (item as { title?: string }).title ||
-                      JSON.stringify(item)
-                  )
-                : String(item)
-            )
-            .join(", ");
-        } else {
-          filtered[col] = String(val);
-        }
-      }
-    } else if (row.originalData[col] !== undefined) {
-      filtered[col] = row.originalData[col];
-    }
-    if (filtered[col] && filtered[col].length > MAX_FIELD_CHARS) {
-      filtered[col] = filtered[col].slice(0, MAX_FIELD_CHARS);
-    }
-  }
-  return filtered;
-}
-
 export async function processCatalogRow(params: {
   sessionId: string;
   workspaceId: string;
@@ -173,7 +137,7 @@ export async function processCatalogRow(params: {
     outputLanguage: settings.outputLanguage || "English",
   };
   const enrichmentColumnIds = new Set(settings.enrichmentColumns.map((c) => c.id));
-  const productData = buildRowSourceData(row, settings.sourceColumns, enrichmentColumnIds);
+  const { productData, sourceImageUrls } = buildRowSources(row, settings.sourceColumns, enrichmentColumnIds);
 
   let lastError = "Enrichment failed";
   // Every call OpenAI bills is charged to the row, whatever the outcome: a
@@ -189,6 +153,7 @@ export async function processCatalogRow(params: {
     try {
       const enriched = await enrichRow({
         productData,
+        sourceImageUrls,
         enabledColumns: settings.enabledColumns,
         enrichmentColumns: settings.enrichmentColumns.map((c) => ({
           id: c.id,
@@ -253,6 +218,11 @@ export async function processCatalogRow(params: {
       }
       failedAttemptCosts.push(...billedCostsOf(error));
       lastError = error instanceof Error ? error.message : "Enrichment failed";
+      // The same request would run out of output space again: a retry would
+      // only pay twice for the same failure.
+      if (isEnrichOutputTruncatedError(error)) {
+        return { ok: false, rowId: row.id, error: lastError, billed: billedUsage(failedAttemptCosts) };
+      }
       if (attempt < rowAttempts) {
         // Stop never starts a fresh attempt: the row stays pending for a
         // later run and is charged only for what OpenAI already billed.

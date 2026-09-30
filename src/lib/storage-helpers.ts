@@ -99,6 +99,10 @@ export interface ProjectJson {
    * Absent means later steps may auto-detect.
    */
   productGroupColumn?: string | null;
+  /** Which sidebar tool was open (Enrich / Categories / Image Finder), so the sheet reopens as left. */
+  sidebarMode?: import("@/types").CatalogSidebarMode;
+  /** Which sheet tab was open (matched "existing" vs "new" products). */
+  activeSheet?: "existing" | "new";
 }
 
 export interface ProjectRow {
@@ -126,6 +130,29 @@ export async function saveProjectJson(workspaceId: string, sessionId: string, da
     throw new Error(payload.error || "Failed to save catalog session");
   }
   return getProjectStoragePath(workspaceId, sessionId);
+}
+
+export type ProjectDeltaResult = { ok: true } | { ok: false; fullSaveRequired: boolean };
+
+/**
+ * Autosave only what changed: the changed rows, and the sheet settings when
+ * those changed. `fullSaveRequired` means the server could not apply it as a
+ * delta (structural change, row store off) and the caller must do a full save.
+ */
+export async function saveProjectDelta(
+  workspaceId: string,
+  sessionId: string,
+  delta: { rows: ProjectRow[]; rowCount: number; meta?: Omit<ProjectJson, "rows"> }
+): Promise<ProjectDeltaResult> {
+  const res = await fetch("/api/catalog-intelligence/project", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, sessionId, ...delta }),
+  });
+  if (res.ok) return { ok: true };
+  const payload = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+  if (res.status === 409 && payload.code === "FULL_SAVE_REQUIRED") return { ok: false, fullSaveRequired: true };
+  throw new Error(payload.error || "Failed to save catalog session");
 }
 
 export async function loadProjectJson(workspaceId: string, sessionId: string): Promise<ProjectJson | null> {

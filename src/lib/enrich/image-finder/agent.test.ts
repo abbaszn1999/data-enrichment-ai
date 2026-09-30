@@ -293,7 +293,11 @@ describe("Image Finder agent v2 (Premium)", () => {
     );
     await enrichGeneric({ ...params, enabledColumns: ["imageUrls", "enhancedTitle"] });
     const request = openAiRequests(fetchMock)[0];
-    expect(request.instructions).toBeUndefined();
+    // Generic enrich: stable agent instructions + fixed model + max output.
+    expect(request.instructions).toContain("Columns to fill (2):");
+    expect(request.model).toBe("gpt-6-sol");
+    expect(request.max_output_tokens).toBe(128000);
+    expect(request.tool_choice).toBe("required");
     expect(request.text.format.name).not.toBe("catalog_image_finder");
   });
 

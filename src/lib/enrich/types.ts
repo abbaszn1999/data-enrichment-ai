@@ -59,6 +59,8 @@ export interface EnrichAgentParams {
   learnedDomains?: string[];
   /** Image Finder: final re-check of a row that ended Not found. */
   recheck?: boolean;
+  /** Images from selected image columns (Image Finder output, image URL columns), attached as vision input. */
+  sourceImageUrls?: string[];
 }
 
 export type OpenAiImageResult = {
@@ -102,6 +104,8 @@ export type OpenAiResponseItem = {
 export type OpenAiResponse = {
   id?: string;
   status?: string;
+  /** Present when `status` is "incomplete", e.g. `{ reason: "max_output_tokens" }`. */
+  incomplete_details?: { reason?: string } | null;
   output?: OpenAiResponseItem[];
   usage?: unknown;
   error?: { message?: string; code?: string | null; type?: string };

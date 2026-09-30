@@ -7,9 +7,11 @@ import {
 import { recordStorageWriteBytes } from "@/lib/observability/metrics";
 import { catalogRowStoreEnabled } from "@/lib/catalog/flag";
 import {
+  countCatalogSessionRows,
   hydrateProjectRows,
   patchCatalogSessionRows,
   replaceCatalogSessionRows,
+  updateExistingCatalogSessionRows,
 } from "@/lib/catalog/session-rows";
 
 const BUCKET = "workspace-files";
@@ -47,10 +49,11 @@ async function downloadFresh(path: string): Promise<string | null> {
   return response.text();
 }
 
-export async function loadProjectJsonAdmin(
+/** The stored blob exactly as written, without the row-store overlay. */
+async function loadProjectBlobAdmin(
   workspaceId: string,
   sessionId: string,
-  admin: Admin = createAdminClient()
+  admin: Admin
 ): Promise<ProjectJson | null> {
   const path = getProjectStoragePath(workspaceId, sessionId);
   const fresh = await downloadFresh(path);
@@ -67,9 +70,61 @@ export async function loadProjectJsonAdmin(
     if (!data) return null;
     project = JSON.parse(await data.text()) as ProjectJson;
   }
+  return project;
+}
+
+export async function loadProjectJsonAdmin(
+  workspaceId: string,
+  sessionId: string,
+  admin: Admin = createAdminClient()
+): Promise<ProjectJson | null> {
+  const project = await loadProjectBlobAdmin(workspaceId, sessionId, admin);
   if (!project) return null;
   if (!catalogRowStoreEnabled()) return project;
   return hydrateProjectRows(admin, sessionId, project);
+}
+
+/**
+ * Autosave of a sheet that only changed a few rows (and maybe its settings).
+ * Only the changed rows are written to the row store; the stored blob is
+ * rewritten only when `meta` is sent, and keeps its own rows (the row store
+ * overrides them when the sheet is opened). Returns `{ ok: false }` when a
+ * full save is needed instead (row store off, or rows the store does not know).
+ */
+export async function saveProjectDeltaAdmin(params: {
+  workspaceId: string;
+  sessionId: string;
+  rows: ProjectRow[];
+  expectedRowCount?: number;
+  meta?: Omit<ProjectJson, "rows">;
+  admin?: Admin;
+}): Promise<{ ok: true; patched: number } | { ok: false; reason: string }> {
+  const admin = params.admin ?? createAdminClient();
+  if (!catalogRowStoreEnabled()) return { ok: false, reason: "row store is off" };
+  if (params.expectedRowCount !== undefined) {
+    const stored = await countCatalogSessionRows(admin, params.sessionId);
+    if (stored !== params.expectedRowCount) return { ok: false, reason: "row count differs" };
+  }
+  const result = await updateExistingCatalogSessionRows(admin, params.sessionId, params.rows);
+  if (!result.ok) return { ok: false, reason: "unknown rows" };
+  if (params.meta) {
+    const blob = await loadProjectBlobAdmin(params.workspaceId, params.sessionId, admin);
+    if (!blob) return { ok: false, reason: "project blob missing" };
+    const path = getProjectStoragePath(params.workspaceId, params.sessionId);
+    const serialized = JSON.stringify({ ...blob, ...params.meta, rows: blob.rows });
+    const { error } = await admin.storage
+      .from(BUCKET)
+      .upload(path, new Blob([serialized], { type: "application/octet-stream" }), {
+        cacheControl: "0",
+        upsert: true,
+      });
+    if (error) throw error;
+    recordStorageWriteBytes(Buffer.byteLength(serialized, "utf8"), {
+      kind: "catalog",
+      workspaceId: params.workspaceId,
+    });
+  }
+  return { ok: true, patched: params.rows.length };
 }
 
 export async function saveProjectJsonAdmin(

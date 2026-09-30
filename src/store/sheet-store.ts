@@ -9,6 +9,7 @@ import type {
   EnrichmentSettings,
   SessionKind,
   ColumnLayout,
+  CatalogSidebarMode,
 } from "@/types";
 import {
   DEFAULT_ENRICHMENT_COLUMNS,
@@ -110,7 +111,7 @@ interface SheetActions {
   // Persistence
   restoreSession: () => Promise<boolean>;
   // Supabase project
-  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean, productGroupColumn?: string | null, columnLayout?: ColumnLayout) => void;
+  loadProject: (workspaceId: string, projectId: string, fileName: string, columns: string[], rows: ProductRow[], sourceColumns: string[], enrichmentColumns: EnrichmentColumn[], enrichmentSettings: EnrichmentSettings, columnVisibility: Record<string, boolean>, sessionKind?: SessionKind, matchingSkipped?: boolean, productGroupColumn?: string | null, columnLayout?: ColumnLayout, view?: { sidebarMode?: CatalogSidebarMode; activeSheet?: "existing" | "new" }) => void;
   moveColumnLayout: (fromKey: string, toKey: string) => void;
   toggleColumnLayoutHidden: (key: string) => void;
   applyProjectRows: (rows: ProductRow[], progress?: { completed: number; total: number; errors: number }) => void;
@@ -123,6 +124,7 @@ interface SheetActions {
   setSidebarOpen: (open: boolean) => void;
   // Sheet toggle
   setActiveSheet: (sheet: "existing" | "new") => void;
+  setSidebarMode: (mode: CatalogSidebarMode) => void;
   // Existing column enrichment
   toggleExistingColumnEnrich: (col: string) => void;
   clearExistingColumnEnrich: () => void;
@@ -156,6 +158,7 @@ const initialState: SheetState = {
   errorCount: 0,
   sidebarOpen: true,
   activeSheet: "new" as "existing" | "new",
+  sidebarMode: "enrich" as CatalogSidebarMode,
   existingColumnsToEnrich: [],
   existingColumnInstructions: {},
   enrichingTab: null,
@@ -734,7 +737,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   },
 
   // Supabase project
-  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped, productGroupColumn, columnLayout) => {
+  loadProject: (workspaceId, projectId, fileName, columns, rows, sourceColumns, enrichmentColumns, enrichmentSettings, columnVisibility, sessionKind, matchingSkipped, productGroupColumn, columnLayout, view) => {
     const groupColumn = productGroupColumn ?? null;
     set({
       workspaceId,
@@ -750,6 +753,9 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
       columnVisibility,
       columnLayout: columnLayout ?? { order: [], hidden: [] },
+      // Reopen on the tool and sheet tab the user left (product sheets only have the modes).
+      sidebarMode: (sessionKind ?? "product") === "plp" ? "enrich" : (view?.sidebarMode ?? "enrich"),
+      activeSheet: view?.activeSheet === "existing" ? "existing" : "new",
       selectedRowIds: new Set<string>(),
       isEnriching: false,
       isPaused: false,
@@ -782,6 +788,8 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       saveStatus: "saved",
       lastSavedAt: Date.now(),
     });
+    // Rows that came from the server are already stored: they are the new baseline for delta saves.
+    snapshotSavedRows(get().rows);
   },
 
   setProjectId: (id) => set({ projectId: id }),
@@ -796,11 +804,18 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       const next: Partial<SheetState> = {};
 
       if (enrichmentColumns) {
-        // Keep custom columns the preset does not mention, so a user's own
-        // columns are not silently dropped by loading a setting.
+        // The preset's list is the new list. Columns it does not mention are
+        // kept (switched off) only when they already hold data on the sheet,
+        // so loading a setting never hides generated values or leaves stray
+        // empty columns behind.
         const presetIds = new Set(enrichmentColumns.map((c) => c.id));
         const orphanCustom = state.enrichmentColumns.filter(
-          (c) => c.isCustom && !presetIds.has(c.id)
+          (c) =>
+            !presetIds.has(c.id) &&
+            state.rows.some((r) => {
+              const val = r.enrichedData?.[c.id];
+              return Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && val !== "";
+            })
         );
         next.enrichmentColumns = ensureImageSourcesColumn(
           [
@@ -840,6 +855,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
   // UI
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setActiveSheet: (sheet) => set({ activeSheet: sheet }),
+  setSidebarMode: (mode) => set({ sidebarMode: mode }),
 
   // Existing column enrichment
   toggleExistingColumnEnrich: (col) =>
@@ -875,6 +891,55 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 let lastSavedVersion = -1;
 let lastSavedConfigHash = "";
+// The row objects as last stored, to find what changed without stringifying rows.
+let lastSavedRows = new Map<string, ProductRow>();
+/** Above this many changed rows a delta is not worth it; save everything. */
+const MAX_DELTA_ROWS = 2000;
+
+function snapshotSavedRows(rows: ProductRow[]): void {
+  lastSavedRows = new Map(rows.map((r) => [r.id, r]));
+}
+
+function storedRowChanged(a: ProductRow, b: ProductRow): boolean {
+  return (
+    a.originalData !== b.originalData ||
+    a.enrichedData !== b.enrichedData ||
+    a.status !== b.status ||
+    a.errorMessage !== b.errorMessage ||
+    a.matchType !== b.matchType ||
+    a.rowIndex !== b.rowIndex
+  );
+}
+
+/**
+ * Rows that differ from the last stored copy, or null when the change is
+ * structural (rows added, removed or replaced) or too large for a delta.
+ */
+function changedRowsSinceSave(rows: ProductRow[]): ProductRow[] | null {
+  if (rows.length !== lastSavedRows.size) return null;
+  const changed: ProductRow[] = [];
+  for (const row of rows) {
+    const saved = lastSavedRows.get(row.id);
+    if (!saved) return null;
+    if (storedRowChanged(saved, row)) {
+      changed.push(row);
+      if (changed.length > MAX_DELTA_ROWS) return null;
+    }
+  }
+  return changed;
+}
+
+function toStoredRow(r: ProductRow) {
+  return {
+    id: r.id,
+    rowIndex: r.rowIndex,
+    status: r.status === "processing" ? ("pending" as const) : r.status,
+    errorMessage: r.errorMessage,
+    originalData: r.originalData,
+    enrichedData: r.enrichedData,
+    matchType: r.matchType,
+  };
+}
 
 // Lightweight config hash (settings/columns — small objects, safe to stringify)
 function configHash(state: SheetState): string {
@@ -886,6 +951,8 @@ function configHash(state: SheetState): string {
     cl: state.columnLayout,
     cols: state.originalColumns,
     pg: state.productGroupColumn,
+    sm: state.sidebarMode,
+    as: state.activeSheet,
   });
 }
 
@@ -896,6 +963,7 @@ function configHash(state: SheetState): string {
 function markProjectSnapshotAsSaved(): void {
   lastSavedVersion = useSheetStore.getState().undoVersion;
   lastSavedConfigHash = configHash(useSheetStore.getState());
+  snapshotSavedRows(useSheetStore.getState().rows);
 }
 
 // The actual persist function (extracted so it can be called from multiple places)
@@ -911,31 +979,41 @@ async function persistProject() {
   useSheetStore.setState({ saveStatus: "saving" });
 
   try {
-    const { saveProjectJson } = await import("@/lib/storage-helpers");
+    const { saveProjectJson, saveProjectDelta } = await import("@/lib/storage-helpers");
     const { updateImportSession } = await import("@/lib/supabase");
 
-    const projectJson = {
+    const meta = {
       kind: s.sessionKind,
       matchingSkipped: s.matchingSkipped,
       productGroupColumn: s.productGroupColumn,
       columns: s.originalColumns,
-      rows: s.rows.map((r) => ({
-        id: r.id,
-        rowIndex: r.rowIndex,
-        status: r.status === "processing" ? "pending" : r.status,
-        errorMessage: r.errorMessage,
-        originalData: r.originalData,
-        enrichedData: r.enrichedData,
-        matchType: r.matchType,
-      })),
       sourceColumns: s.sourceColumns,
       enrichmentColumns: s.enrichmentColumns,
       enrichmentSettings: s.enrichmentSettings,
       columnVisibility: s.columnVisibility,
       columnLayout: s.columnLayout,
+      sidebarMode: s.sidebarMode,
+      activeSheet: s.activeSheet,
     };
 
-    await saveProjectJson(s.workspaceId, s.projectId, projectJson);
+    // Cell edits only send the rows that changed (and the settings when they
+    // changed); structural edits (rows added / removed) and big changes send
+    // the whole sheet. The server can also ask for a full save.
+    const changed = changedRowsSinceSave(s.rows);
+    let savedAsDelta = false;
+    if (changed) {
+      const settingsChanged = configHash(s) !== lastSavedConfigHash;
+      const result = await saveProjectDelta(s.workspaceId, s.projectId, {
+        rows: changed.map(toStoredRow),
+        rowCount: s.rows.length,
+        ...(settingsChanged ? { meta } : {}),
+      });
+      savedAsDelta = result.ok;
+    }
+    if (!savedAsDelta) {
+      await saveProjectJson(s.workspaceId, s.projectId, { ...meta, rows: s.rows.map(toStoredRow) });
+    }
+    snapshotSavedRows(s.rows);
 
     // Update session metadata in DB (enriched count only)
     const enrichedCount = s.rows.filter((r) => r.status === "done").length;

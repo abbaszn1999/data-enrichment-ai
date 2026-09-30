@@ -86,23 +86,38 @@ export interface EnrichmentColumn {
 }
 
 export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
+  // The four Enrich defaults carry no tone / length / limit knobs: the only
+  // thing a user sets per column is a custom instruction. `description` is the
+  // built-in brief the agent always receives.
   {
-    id: "enhancedTitle",
-    label: "Enhanced Title",
-    description: "Write an SEO-optimized and compelling product title.",
+    id: "titleTag",
+    label: "Title tag",
+    description: "Write the SEO title tag (HTML <title>) for this product page.",
     type: "text",
     enabled: true,
-    writingTone: "professional",
-    contentLength: "short",
   },
   {
+    // Id kept from before the rename so existing sessions keep their data.
     id: "marketingDescription",
-    label: "Marketing Description",
-    description: "Write a full, engaging marketing description for this product.",
+    label: "Product description",
+    description: "Write a full, engaging product description for this product.",
     type: "text",
     enabled: true,
-    writingTone: "persuasive",
-    contentLength: "medium",
+  },
+  {
+    id: "productSpecifications",
+    label: "Product specifications",
+    description: "List the product's technical specifications as Attribute: Value pairs.",
+    type: "list",
+    enabled: true,
+  },
+  {
+    id: "faq",
+    label: "FAQ section",
+    description: "Write frequently asked questions with answers about this product.",
+    type: "faq",
+    enabled: true,
+    itemCount: 5,
   },
   {
     id: "categories",
@@ -129,15 +144,6 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     type: "sourceUrls",
     enabled: false,
     sourceCount: 10,
-  },
-  {
-    id: "sourceUrls",
-    label: "Source URLs",
-    description: "Web sources used to research this product.",
-    type: "sourceUrls",
-    enabled: true,
-    sourceCount: 3,
-    customInstruction: "Find authoritative product pages and reviews",
   },
 ];
 
@@ -671,6 +677,8 @@ export interface SheetState {
   errorCount: number;
   sidebarOpen: boolean;
   activeSheet: "existing" | "new";
+  /** Which sidebar tool is open; saved with the sheet so it reopens as left. */
+  sidebarMode: CatalogSidebarMode;
   existingColumnsToEnrich: string[];
   existingColumnInstructions: Record<string, string>;
   enrichingTab: "existing" | "new" | null;

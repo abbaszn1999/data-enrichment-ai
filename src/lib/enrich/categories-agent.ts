@@ -66,7 +66,7 @@ export async function classifyProductCategories(params: EnrichAgentParams): Prom
     webSearch: false,
     promptText: `Product data:\n${text}`,
     instructions: buildCategoryInstructions(plan, { language, customInstruction: column?.customInstruction }),
-    imageUrls: [],
+    imageUrls: params.sourceImageUrls ?? [],
     policy: buildEnrichToolPolicy([CATEGORIES_COLUMN_ID], params.enrichmentColumns, kind),
     schemaName: "product_categories",
     schema: buildCategoriesSchema(plan),

@@ -10,8 +10,11 @@ export function describeColumn(ctx: SpecContext, fallback: string): string {
 }
 
 /**
- * The generic "- id (Label) tone= length=: instruction" line every column
- * shows under "Columns to fill", optionally with extra rules indented under it.
+ * The generic "- id (Label): brief" line every column shows under "Columns to
+ * fill", optionally with extra rules indented under it. The user's custom
+ * instruction is always its own labelled line so the agent can tell it apart
+ * from the built-in brief. Tone / length settings are no longer exposed, so
+ * they are not sent even when an older saved column still carries them.
  */
 export function promptLine(
   ctx: SpecContext,
@@ -19,15 +22,13 @@ export function promptLine(
   extraRules: string[] = []
 ): string {
   const { col } = ctx;
-  const tone = col.writingTone ? ` tone=${col.writingTone}` : "";
-  const length = col.contentLength ? ` length=${col.contentLength}` : "";
   const description = col.description?.trim() || fallback;
   const extraText = col.customInstruction?.trim() || "";
   const custom =
     extraText && extraText !== description
-      ? `\n  Extra: ${extraText}`
+      ? `\n  Custom instruction from the user (follow it): ${extraText}`
       : "";
-  const head = `- ${col.id} (${col.label || col.id})${tone}${length}: ${description}${custom}`;
+  const head = `- ${col.id} (${col.label || col.id}): ${description}${custom}`;
   const rules = extraRules.filter(Boolean).map((r) => `\n  ${r}`);
   return head + rules.join("");
 }

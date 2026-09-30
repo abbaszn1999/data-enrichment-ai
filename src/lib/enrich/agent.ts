@@ -1,4 +1,10 @@
-import { resolveEnrichmentModel, type SessionKind } from "@/types";
+import type { SessionKind } from "@/types";
+import {
+  ENRICH_MAX_OUTPUT_TOKENS,
+  ENRICH_MODEL,
+  ENRICH_REASONING_EFFORT,
+  ENRICH_SEARCH_CONTEXT_SIZE,
+} from "./models";
 import type { EnrichAgentParams, EnrichAgentResult } from "./types";
 import { buildEnrichToolPolicy } from "./policy";
 import { buildEnrichJsonSchema } from "./schema";
@@ -36,8 +42,10 @@ export async function enrichRow(
     return classifyProductCategories(params);
   }
 
-  const tier = resolveEnrichmentModel(settings?.enrichmentModel);
-  const policy = buildEnrichToolPolicy(enabledColumns, enrichmentColumns, kind);
+  // One fixed agent: GPT-6 Sol, medium reasoning, web search always required.
+  // The stored `enrichmentModel` (standard / premium) no longer changes anything.
+  const basePolicy = buildEnrichToolPolicy(enabledColumns, enrichmentColumns, kind);
+  const policy = { ...basePolicy, toolChoice: "required" as const };
   const catCol = enrichmentColumns?.find(
     (c) => c.id === "categories" || c.id === "parentCategory"
   );
@@ -57,20 +65,26 @@ export async function enrichRow(
       language: outputLanguage,
     }
   );
-  const { text, imageUrls } = buildEnrichPrompt({
+  const { instructions, text, imageUrls } = buildEnrichPrompt({
     productData,
     enabledColumns,
     enrichmentColumns,
-    settings: { enrichmentModel: tier, outputLanguage },
+    settings: { enrichmentModel: "standard", outputLanguage },
     policy,
     kind,
     cmsType,
     workspaceCategories,
     categoriesRawRows,
+    sourceImageUrls: params.sourceImageUrls,
   });
 
   const result = await runEnrichOpenAiResponse({
-    tier,
+    tier: "standard",
+    modelOverride: ENRICH_MODEL,
+    reasoningEffortOverride: ENRICH_REASONING_EFFORT,
+    searchContextSizeOverride: ENRICH_SEARCH_CONTEXT_SIZE,
+    maxOutputTokens: ENRICH_MAX_OUTPUT_TOKENS,
+    instructions,
     promptText: text,
     imageUrls,
     policy,

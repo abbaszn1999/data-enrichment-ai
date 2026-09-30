@@ -119,7 +119,20 @@ export function ExportDialog() {
       ...originalColumns.map((name): ExportColumn => ({ key: name, label: name, source: "original" })),
       ...enrichmentColumns
         .filter((col) => col.enabled || scopeRows.some((row) => hasEnrichedValue(row, col.id)))
-        .map((col): ExportColumn => ({ key: col.id, label: col.label, source: "enriched" })),
+        .flatMap((col): ExportColumn[] => {
+          const out: ExportColumn[] = [{ key: col.id, label: col.label, source: "enriched" }];
+          // Rows where the AI found nothing keep the reason next to the cell;
+          // offer it as its own column so the export explains the blanks.
+          const reasonKey = `${col.id}__notFoundReason`;
+          const hasReason = scopeRows.some((row) => {
+            const reason = row.enrichedData?.[reasonKey];
+            return typeof reason === "string" && reason.trim() !== "";
+          });
+          if (hasReason) {
+            out.push({ key: reasonKey, label: `${col.label} - not found reason`, source: "enriched" });
+          }
+          return out;
+        }),
     ];
   };
 

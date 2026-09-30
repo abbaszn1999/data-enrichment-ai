@@ -1,14 +1,16 @@
 /**
  * Product-mode framing: the model is describing one specific SKU, so product
- * identity drives whether it must search before writing anything factual.
+ * identity drives what it may state as fact.
  */
 
-export const PRODUCT_ROLE = "You enrich ONE ecommerce product for Import AI.";
+export const PRODUCT_ROLE =
+  "You enrich ONE ecommerce product for the store's catalog, writing every requested column for it.";
 
 export const PRODUCT_IDENTITY_RULES: string[] = [
   "Identity / web search rules:",
-  "- If brand+model, clear title+type, barcode, or rich description clearly identify the product, you may skip web search for text/categories (images/sources still follow their own rules).",
-  "- If identity is weak (SKU-only, cryptic codes, conflicting fields), you MUST use web_search before writing factual fields.",
+  "- Web search is always available and every row must use it at least once to verify the product and its facts before you write.",
+  "- The row data and the attached images decide WHICH product this is. Search to confirm and to fill gaps, never to swap in a different product.",
+  "- If the identity is weak (SKU-only, cryptic codes, conflicting fields), search first and say so in `notes`; if it stays unclear, write only what the row supports.",
 ];
 
 export const PRODUCT_DATA_HEADING = "Product data:";

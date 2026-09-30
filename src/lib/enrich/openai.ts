@@ -23,8 +23,12 @@ import {
 
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
-/** Ceiling on a single OpenAI call. */
-export const ENRICH_CALL_TIMEOUT_MS = 240_000;
+/**
+ * Ceiling on a single OpenAI call. A row with several long columns (specs,
+ * FAQ, descriptions) writes a long answer after a required web search, so this
+ * is sized for that; two attempts must still fit ENRICH_ROW_TIMEOUT_SECONDS.
+ */
+export const ENRICH_CALL_TIMEOUT_MS = 420_000;
 
 /**
  * An attempt that OpenAI billed (the response carried `usage`) but whose
@@ -38,6 +42,27 @@ export class EnrichBilledAttemptError extends Error {
     this.name = "EnrichBilledAttemptError";
     this.costs = costs;
   }
+}
+
+/**
+ * The model ran out of output budget (`incomplete_details.reason ===
+ * "max_output_tokens"`). The call is billed, and the same request would run
+ * out again, so callers must not retry it.
+ */
+export class EnrichOutputTruncatedError extends EnrichBilledAttemptError {
+  constructor(costs: AiCallCost[], maxOutputTokens?: number) {
+    super(
+      `The AI ran out of output space${
+        maxOutputTokens ? ` (${maxOutputTokens.toLocaleString("en-US")} tokens)` : ""
+      } before finishing this row. Select fewer columns or shorten the custom instructions, then run the row again.`,
+      costs
+    );
+    this.name = "EnrichOutputTruncatedError";
+  }
+}
+
+export function isEnrichOutputTruncatedError(error: unknown): error is EnrichOutputTruncatedError {
+  return error instanceof EnrichOutputTruncatedError;
 }
 
 export function billedCostsOf(error: unknown): AiCallCost[] {
@@ -280,6 +305,8 @@ export async function runEnrichOpenAiResponse(params: {
   maxFunctionRounds?: number;
   /** Time budget shared by every round of one attempt. */
   attemptBudgetMs?: number;
+  /** Sent as `max_output_tokens` (reasoning + answer). Omitted when unset. */
+  maxOutputTokens?: number;
 }): Promise<{
   data: Record<string, unknown>;
   /** Every billed call for this result, including a failed first attempt. */
@@ -361,6 +388,7 @@ export async function runEnrichOpenAiResponse(params: {
     const baseRequest = {
       model,
       ...(params.instructions ? { instructions: params.instructions } : {}),
+      ...(params.maxOutputTokens ? { max_output_tokens: params.maxOutputTokens } : {}),
       reasoning: { effort: reasoningEffort },
       tools: [
         ...(useWebSearch ? [tool] : []),
@@ -459,6 +487,10 @@ export async function runEnrichOpenAiResponse(params: {
           throw new EnrichProviderUnavailableError(undefined, [...costs]);
         }
         fail(body.error?.message || `OpenAI enrich failed (${httpStatus})`);
+      }
+      if (body.status === "incomplete" && body.incomplete_details?.reason === "max_output_tokens") {
+        // Usage was recorded above, so the attempt is charged.
+        throw new EnrichOutputTruncatedError([...costs], params.maxOutputTokens);
       }
       if (body.status && body.status !== "completed") {
         fail(`OpenAI enrich ended with status ${body.status}`);
@@ -567,6 +599,9 @@ export async function runEnrichOpenAiResponse(params: {
       }
       const message = error instanceof Error ? error.message : String(error);
       priorCosts.push(...billedCostsOf(error));
+      if (isEnrichOutputTruncatedError(error)) {
+        throw new EnrichOutputTruncatedError(priorCosts, params.maxOutputTokens);
+      }
       // After Stop, no fallback attempt starts; the row stays pending and is
       // charged only for what was already billed.
       if (await stopRequested()) {

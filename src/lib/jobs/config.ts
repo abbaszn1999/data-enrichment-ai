@@ -7,10 +7,11 @@
  */
 export const JOB_BATCH_SIZE = 8;
 /**
- * 2, not 3: a single OpenAI call can now run up to ENRICH_CALL_TIMEOUT_MS
- * (240s, see src/lib/enrich/openai.ts) instead of the old fixed 180s, so 3
- * full attempts could exceed ENRICH_ROW_TIMEOUT_SECONDS below in the worst
- * case. 2 attempts x 240s stays safely inside the 600s row budget.
+ * 2, not 3: a single OpenAI call can run up to ENRICH_CALL_TIMEOUT_MS (420s,
+ * see src/lib/enrich/openai.ts; a row with many columns writes a long answer
+ * on top of a required web search), so 3 full attempts could exceed
+ * ENRICH_ROW_TIMEOUT_SECONDS below in the worst case. 2 attempts x 420s stays
+ * safely inside the 900s row budget.
  */
 export const JOB_ROW_ATTEMPTS = 2;
 export const JOB_HEARTBEAT_STALE_MINUTES = 10;
@@ -41,7 +42,7 @@ export const ENRICH_CHECKPOINT_ROWS = 50;
 export const ENRICH_CHECKPOINT_MS = 30_000;
 export const WORKSHEET_CHECKPOINT_ROWS = 20;
 export const WORKSHEET_CHECKPOINT_MS = 30_000;
-export const ENRICH_ROW_TIMEOUT_SECONDS = 600;
+export const ENRICH_ROW_TIMEOUT_SECONDS = 900;
 /**
  * Gallery AI Full = planner (≤180s) + 1 Main (≤90s) + up to 8 Gallery (≤90s
  * each) plus uploads. 600s would kill a slow Full row on Render.

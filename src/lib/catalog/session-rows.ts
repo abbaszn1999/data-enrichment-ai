@@ -112,6 +112,41 @@ export async function replaceCatalogSessionRows(
   if (pruneError) throw new Error(pruneError.message);
 }
 
+/**
+ * Writes whole rows (not a merge), so a cleared cell or a removed key really
+ * goes away. Only rows that already exist are written: adding or removing rows
+ * is a structural change that goes through a full save. Returns the ids that
+ * were not found; nothing is written when any id is missing.
+ */
+export async function updateExistingCatalogSessionRows(
+  admin: SupabaseClient,
+  sessionId: string,
+  rows: ProjectRow[]
+): Promise<{ ok: true } | { ok: false; missingIds: string[] }> {
+  if (rows.length === 0) return { ok: true };
+  const ids = rows.map((row) => row.id);
+  const known = new Set<string>();
+  for (let i = 0; i < ids.length; i += UPSERT_CHUNK) {
+    const { data, error } = await admin
+      .from("catalog_session_rows")
+      .select("row_id")
+      .eq("session_id", sessionId)
+      .in("row_id", ids.slice(i, i + UPSERT_CHUNK));
+    if (error) throw new Error(error.message);
+    for (const record of data ?? []) known.add(String(record.row_id));
+  }
+  const missingIds = ids.filter((id) => !known.has(id));
+  if (missingIds.length > 0) return { ok: false, missingIds };
+  for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
+    const chunk = rows.slice(i, i + UPSERT_CHUNK).map((row) => projectRowToRecord(sessionId, row));
+    const { error } = await admin.from("catalog_session_rows").upsert(chunk, {
+      onConflict: "session_id,row_id",
+    });
+    if (error) throw new Error(error.message);
+  }
+  return { ok: true };
+}
+
 export async function patchCatalogSessionRows(
   admin: SupabaseClient,
   sessionId: string,

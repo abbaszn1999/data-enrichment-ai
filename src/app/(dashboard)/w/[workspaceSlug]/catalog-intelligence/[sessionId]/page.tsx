@@ -123,6 +123,7 @@ export default function EnrichPage() {
           project.matchingSkipped ?? false,
           groupColumn,
           project.columnLayout,
+          { sidebarMode: project.sidebarMode, activeSheet: project.activeSheet },
         );
 
         setLoading(false);
