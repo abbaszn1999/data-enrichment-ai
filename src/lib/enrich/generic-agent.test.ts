@@ -10,9 +10,17 @@ const { enrichedValueToText } = await import("@/lib/export-values");
 
 const usage = { input_tokens: 4_000, input_tokens_details: { cached_tokens: 1_000 }, output_tokens: 9_000 };
 
-const columns = getDefaultEnrichmentColumns("product")
-  .filter((c) => c.enabled)
-  .map((c) => ({ ...c, customInstruction: c.id === "titleTag" ? "Always end with the brand" : undefined }));
+const defaultColumns = getDefaultEnrichmentColumns("product");
+
+// The four writing columns, switched on. Source URLs is answered by Google AI
+// Mode, not by this OpenAI call, so it is covered in source-urls/source-urls.test.ts.
+const columns = defaultColumns
+  .filter((c) => c.id !== "sourceUrls" && c.type !== "categories" && c.type !== "imageUrls" && c.id !== "imageSourceUrls")
+  .map((c) => ({
+    ...c,
+    enabled: true,
+    customInstruction: c.id === "titleTag" ? "Always end with the brand" : undefined,
+  }));
 
 const params = {
   productData: { Title: "Widget WX-1", Brand: "Acme" },
@@ -45,8 +53,24 @@ afterEach(() => {
 });
 
 describe("Enrich default columns", () => {
-  it("are exactly Title tag, Product description, Product specifications and FAQ section", () => {
-    expect(columns.map((c) => c.label)).toEqual(["Title tag", "Product description", "Product specifications", "FAQ section"]);
+  it("are Title tag, Product description, Product specifications, FAQ section and Source URLs", () => {
+    expect(defaultColumns.slice(0, 5).map((c) => c.label)).toEqual([
+      "Title tag",
+      "Product description",
+      "Product specifications",
+      "FAQ section",
+      "Source URLs",
+    ]);
+  });
+
+  it("start with only Source URLs switched on", () => {
+    expect(defaultColumns.filter((c) => c.enabled).map((c) => c.id)).toEqual(["sourceUrls"]);
+  });
+
+  it("each of the five ships with a starting custom instruction the user can read and edit", () => {
+    for (const column of defaultColumns.slice(0, 5)) {
+      expect(column.customInstruction?.trim().length, column.label).toBeGreaterThan(20);
+    }
   });
 });
 

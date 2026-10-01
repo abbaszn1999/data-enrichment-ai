@@ -86,15 +86,21 @@ export interface EnrichmentColumn {
 }
 
 export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
-  // The four Enrich defaults carry no tone / length / limit knobs: the only
+  // A new sheet starts with only Source URLs switched on; the rest are listed
+  // and ready to enable. The five Enrich defaults carry no tone / length / limit knobs: the only
   // thing a user sets per column is a custom instruction. `description` is the
-  // built-in brief the agent always receives.
+  // built-in brief the agent always receives. Each default also ships with a
+  // starting `customInstruction`, shown in the column's settings so the user
+  // can read it and change it. The wording stays consistent with the built-in
+  // rules in lib/enrich/columns, which still apply on top.
   {
     id: "titleTag",
     label: "Title tag",
     description: "Write the SEO title tag (HTML <title>) for this product page.",
     type: "text",
-    enabled: true,
+    enabled: false,
+    customInstruction:
+      "Write a clear SEO title of 50-60 characters. Start with the main product keyword, then the brand and model when they are known. Plain text, no quotes or HTML.",
   },
   {
     // Id kept from before the rename so existing sessions keep their data.
@@ -102,22 +108,40 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     label: "Product description",
     description: "Write a full, engaging product description for this product.",
     type: "text",
-    enabled: true,
+    enabled: false,
+    customInstruction:
+      "Write 2-3 short paragraphs (about 120-180 words). Say what the product is, its key features and benefits, and who it is for. Use only facts from the row data, the images or search results.",
   },
   {
     id: "productSpecifications",
     label: "Product specifications",
     description: "List the product's technical specifications as Attribute: Value pairs.",
     type: "list",
-    enabled: true,
+    enabled: false,
+    customInstruction:
+      "List the key technical specifications as Attribute: Value, most important first. Use the manufacturer's units and wording. Leave out anything you cannot confirm.",
   },
   {
     id: "faq",
     label: "FAQ section",
     description: "Write frequently asked questions with answers about this product.",
     type: "faq",
-    enabled: true,
+    enabled: false,
     itemCount: 5,
+    customInstruction:
+      "Write 5 questions a shopper would really ask about this product (fit, compatibility, materials, care, use, what is included). Answer each in 1-3 sentences. No prices, stock or delivery claims.",
+  },
+  {
+    id: "sourceUrls",
+    label: "Source URLs",
+    description: "The web pages for this exact product. Found with Google AI Mode.",
+    type: "sourceUrls",
+    // The only output column that is on for a new sheet; the other four are
+    // one click away. See lib/enrich/source-urls for how it is found.
+    enabled: true,
+    sourceCount: 3,
+    customInstruction:
+      "Return the manufacturer's own product page first, then trusted retailers that sell this exact item. Only real, working product pages.",
   },
   {
     id: "categories",
@@ -335,6 +359,32 @@ export function ensureImageSourcesColumn(
   const at = columns.findIndex((col) => col.id === PRODUCT_MODE_COLUMN_IDS.images);
   if (at < 0) return columns;
   return [...columns.slice(0, at + 1), { ...template }, ...columns.slice(at + 1)];
+}
+
+/**
+ * The Enrichment "Source URLs" column (found with Google AI Mode). Matched by
+ * this id, never by the `sourceUrls` type, which Image sources shares.
+ */
+export const SOURCE_URLS_COLUMN_ID = "sourceUrls";
+
+/**
+ * Sessions saved before Source URLs became an Enrichment default (and presets
+ * that predate it) lack the column. Adds it, switched OFF so nothing changes
+ * for that session, next to the other content columns; leaves PLP sessions and
+ * sheets that already have it alone.
+ */
+export function ensureSourceUrlsColumn(
+  columns: EnrichmentColumn[],
+  kind: SessionKind | null | undefined
+): EnrichmentColumn[] {
+  if (kind === "plp" || columns.some((col) => col.id === SOURCE_URLS_COLUMN_ID)) return columns;
+  const template = DEFAULT_ENRICHMENT_COLUMNS.find((col) => col.id === SOURCE_URLS_COLUMN_ID);
+  if (!template) return columns;
+  const after = columns.findIndex((col) => col.id === "faq");
+  const at = after >= 0 ? after + 1 : columns.findIndex((col) => col.id === PRODUCT_MODE_COLUMN_IDS.categories);
+  const entry = { ...template, enabled: false };
+  if (at < 0) return [...columns, entry];
+  return [...columns.slice(0, at), entry, ...columns.slice(at)];
 }
 
 /** Which sidebar mode a run belongs to, from the column ids it generates. */

@@ -15,6 +15,7 @@ import {
   DEFAULT_ENRICHMENT_COLUMNS,
   DEFAULT_ENRICHMENT_SETTINGS,
   ensureImageSourcesColumn,
+  ensureSourceUrlsColumn,
   resolveEnrichmentModel,
 } from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
@@ -63,6 +64,8 @@ interface SheetActions {
   setAllEnrichmentColumns: (enabled: boolean) => void;
   addCustomEnrichmentColumn: (col: Omit<EnrichmentColumn, "id" | "enabled" | "isCustom">) => void;
   removeCustomEnrichmentColumn: (id: string) => void;
+  /** Moves an AI output column to another column's position, in the sidebar list and in the sheet. */
+  reorderEnrichmentColumns: (fromId: string, toId: string) => void;
   updateEnrichmentColumnConfig: (id: string, config: Partial<EnrichmentColumn>) => void;
   // Source columns (which original columns to send to AI)
   toggleSourceColumn: (col: string) => void;
@@ -190,10 +193,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       sourceColumns: [...columns],
       rows: rows.map((r) => ({ ...r, selected: false })),
       selectedRowIds: new Set<string>(),
-      enrichmentColumns: DEFAULT_ENRICHMENT_COLUMNS.map((col) => ({
-        ...col,
-        enabled: true,
-      })),
+      enrichmentColumns: DEFAULT_ENRICHMENT_COLUMNS.map((col) => ({ ...col })),
     });
   },
 
@@ -247,6 +247,26 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
     set((state) => ({
       enrichmentColumns: state.enrichmentColumns.filter((col) => col.id !== id),
     })),
+
+  reorderEnrichmentColumns: (fromId, toId) =>
+    set((state) => {
+      const from = state.enrichmentColumns.findIndex((col) => col.id === fromId);
+      const to = state.enrichmentColumns.findIndex((col) => col.id === toId);
+      if (from < 0 || to < 0 || from === to) return {};
+      const next = [...state.enrichmentColumns];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved!);
+      return {
+        enrichmentColumns: next,
+        // The sheet shows the columns in this same order (its own layout wins over list order).
+        columnLayout: moveColumn(
+          state.columnLayout,
+          allColumnLayoutKeys(state),
+          `enrich:${fromId}`,
+          `enrich:${toId}`
+        ),
+      };
+    }),
 
   updateEnrichmentColumnConfig: (id, config) =>
     set((state) => ({
@@ -722,7 +742,10 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         })),
         originalColumns: session.originalColumns,
         sourceColumns: session.sourceColumns,
-        enrichmentColumns: ensureImageSourcesColumn(session.enrichmentColumns, get().sessionKind),
+        enrichmentColumns: ensureSourceUrlsColumn(
+          ensureImageSourcesColumn(session.enrichmentColumns, get().sessionKind),
+          get().sessionKind
+        ),
         enrichmentSettings: normalizeEnrichmentSettings(session.enrichmentSettings),
         columnVisibility: session.columnVisibility || {},
         selectedRowIds: new Set(session.rows.map((r) => r.id)),
@@ -751,7 +774,10 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         originalColumns: columns,
         rows: rows.map((r) => ({ ...r, selected: false })),
         sourceColumns,
-        enrichmentColumns: ensureImageSourcesColumn(enrichmentColumns, sessionKind ?? "product"),
+        enrichmentColumns: ensureSourceUrlsColumn(
+          ensureImageSourcesColumn(enrichmentColumns, sessionKind ?? "product"),
+          sessionKind ?? "product"
+        ),
         enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
         columnVisibility,
         columnLayout: columnLayout ?? { order: [], hidden: [] },
@@ -827,11 +853,14 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
               return Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && val !== "";
             })
         );
-        next.enrichmentColumns = ensureImageSourcesColumn(
-          [
-            ...enrichmentColumns.map((col) => ({ ...col })),
-            ...orphanCustom.map((col) => ({ ...col, enabled: false })),
-          ],
+        next.enrichmentColumns = ensureSourceUrlsColumn(
+          ensureImageSourcesColumn(
+            [
+              ...enrichmentColumns.map((col) => ({ ...col })),
+              ...orphanCustom.map((col) => ({ ...col, enabled: false })),
+            ],
+            state.sessionKind
+          ),
           state.sessionKind
         );
       }

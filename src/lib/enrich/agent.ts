@@ -9,9 +9,19 @@ import type { EnrichAgentParams, EnrichAgentResult } from "./types";
 import { buildEnrichToolPolicy } from "./policy";
 import { buildEnrichJsonSchema } from "./schema";
 import { buildEnrichPrompt } from "./prompt";
-import { runEnrichOpenAiResponse } from "./openai";
+import type { AiCallCost } from "@/lib/ai-pricing";
+import {
+  billedCostsOf,
+  EnrichBilledAttemptError,
+  EnrichCancelledError,
+  EnrichProviderUnavailableError,
+  runEnrichOpenAiResponse,
+} from "./openai";
 import { findProductImages, isImageFinderRun } from "./image-finder/agent";
+import { imageFinderNotFoundKey } from "./image-finder/not-found";
 import { classifyProductCategories, isCategoriesModeRun } from "./categories-agent";
+import { SOURCE_URLS_COLUMN_ID } from "@/types";
+import { findSourceUrls, usesGoogleSourceUrls } from "./source-urls/agent";
 
 /**
  * Enrich a single row with one OpenAI Responses call (hosted web_search +
@@ -21,15 +31,7 @@ import { classifyProductCategories, isCategoriesModeRun } from "./categories-age
 export async function enrichRow(
   params: EnrichAgentParams
 ): Promise<EnrichAgentResult> {
-  const {
-    productData,
-    enabledColumns,
-    enrichmentColumns,
-    settings,
-    cmsType,
-    workspaceCategories,
-    categoriesRawRows,
-  } = params;
+  const { enabledColumns } = params;
   const kind: SessionKind = params.kind ?? "product";
 
   if (!enabledColumns.length) {
@@ -41,6 +43,86 @@ export async function enrichRow(
   if (isCategoriesModeRun(kind, enabledColumns)) {
     return classifyProductCategories(params);
   }
+
+  // Source URLs is answered by Google AI Mode, not by the OpenAI call. Alone it
+  // needs no OpenAI call at all; next to other columns the two run side by
+  // side, so the row takes as long as the slower of the two.
+  if (usesGoogleSourceUrls(kind, enabledColumns)) {
+    const others = enabledColumns.filter((id) => id !== SOURCE_URLS_COLUMN_ID);
+    if (others.length === 0) return findSourceUrls(params);
+    return enrichWithGoogleSourceUrls(params, others);
+  }
+
+  return enrichWithOpenAi(params, enabledColumns);
+}
+
+/** Adds costs the OpenAI side billed (or Google billed) to an error so the row is still charged for them. */
+function withExtraCosts(error: unknown, extra: AiCallCost[]): unknown {
+  if (extra.length === 0) return error;
+  if (
+    error instanceof EnrichBilledAttemptError ||
+    error instanceof EnrichCancelledError ||
+    error instanceof EnrichProviderUnavailableError
+  ) {
+    error.costs.push(...extra);
+    return error;
+  }
+  return new EnrichBilledAttemptError(error instanceof Error ? error.message : String(error), extra);
+}
+
+async function enrichWithGoogleSourceUrls(
+  params: EnrichAgentParams,
+  otherColumns: string[]
+): Promise<EnrichAgentResult> {
+  const [openAi, sources] = await Promise.allSettled([
+    enrichWithOpenAi(params, otherColumns),
+    findSourceUrls(params),
+  ]);
+
+  if (openAi.status === "rejected") {
+    // The OpenAI work decides the row. Whatever Google billed is still charged.
+    const googleCosts = sources.status === "fulfilled" ? sources.value.costs : billedCostsOf(sources.reason);
+    throw withExtraCosts(openAi.reason, googleCosts);
+  }
+
+  if (sources.status === "rejected") {
+    // Stop was clicked: end the row like any other stopped row, charged for what both providers billed.
+    if (sources.reason instanceof EnrichCancelledError) {
+      throw withExtraCosts(sources.reason, openAi.value.costs);
+    }
+    // Any other Google failure must not throw away the columns OpenAI already
+    // wrote (and billed): they are kept, and the Source URLs cell says why it is empty.
+    const message = sources.reason instanceof Error ? sources.reason.message : String(sources.reason);
+    console.error("[Enrich] Source URLs search failed; the other columns were kept", { message: message.slice(0, 300) });
+    return {
+      data: {
+        ...openAi.value.data,
+        [SOURCE_URLS_COLUMN_ID]: [],
+        [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: `The Google AI Mode search failed, so no pages were found. Run this column again. (${message.slice(0, 200)})`,
+      },
+      costs: [...openAi.value.costs, ...billedCostsOf(sources.reason)],
+    };
+  }
+
+  return {
+    data: { ...openAi.value.data, ...sources.value.data },
+    costs: [...openAi.value.costs, ...sources.value.costs],
+  };
+}
+
+async function enrichWithOpenAi(
+  params: EnrichAgentParams,
+  enabledColumns: string[]
+): Promise<EnrichAgentResult> {
+  const {
+    productData,
+    enrichmentColumns,
+    settings,
+    cmsType,
+    workspaceCategories,
+    categoriesRawRows,
+  } = params;
+  const kind: SessionKind = params.kind ?? "product";
 
   // One fixed agent: GPT-6.1 Sol, medium reasoning, web search always required.
   // The stored `enrichmentModel` (standard / premium) no longer changes anything.

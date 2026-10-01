@@ -29,7 +29,14 @@ description: >-
   and attached images. Custom instructions outrank the built-in brief, never the grounding rules.
 - Structured output via `text.format` strict `json_schema` for **requested columns only**.
 - Columns are instruction-only: label + optional custom instruction (no tone/length settings). Defaults: Title tag,
-  Product description, Product specifications, FAQ section.
+  Product description, Product specifications, FAQ section, Source URLs — each with an editable starting custom
+  instruction; a new product sheet starts with only Source URLs switched on.
+- **Source URLs is not an OpenAI column on product sheets.** `enrichRow` routes the column with id `sourceUrls`
+  (by id, never by the `sourceUrls` type — Image sources `imageSourceUrls` shares the type) to
+  `src/lib/enrich/source-urls/` (one Google AI Mode search via SearchApi, fixed prompt template, one photo max,
+  code-side link checks, second search with new angles). Alone it makes no OpenAI call; next to other columns the
+  OpenAI call (without that column) and the Google call run in parallel and both costs go on the row's charge.
+  PLP sheets keep the OpenAI `sourceUrls` column.
 
 ## Sources
 

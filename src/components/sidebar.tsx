@@ -27,6 +27,7 @@ import {
   FileEdit,
   FolderTree,
   Image as ImageIcon,
+  GripVertical,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -68,6 +69,7 @@ import {
   resolveEnrichmentModel,
   PRODUCT_MODE_COLUMN_IDS,
   IMAGE_SOURCES_COLUMN_ID,
+  SOURCE_URLS_COLUMN_ID,
   isProductModeColumn,
   catalogModeForRunColumns,
   type CatalogSidebarMode,
@@ -156,6 +158,7 @@ export function Sidebar() {
     setAllEnrichmentColumns,
     addCustomEnrichmentColumn,
     removeCustomEnrichmentColumn,
+    reorderEnrichmentColumns,
     updateEnrichmentColumnConfig,
     toggleSourceColumn,
     setAllSourceColumns,
@@ -230,6 +233,9 @@ export function Sidebar() {
   const [showAddColumn, setShowAddColumn] = useState(false);
   const [newColLabel, setNewColLabel] = useState("");
   const [expandedColumns, setExpandedColumns] = useState<Set<string>>(new Set());
+  // Drag-to-reorder of the AI output columns: which one is being dragged, and which one it is over.
+  const dragColumnIdRef = useRef<string | null>(null);
+  const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null);
   const [enrichOutputTab, setEnrichOutputTab] = useState<"new" | "existing">("new");
   const [existingSearch, setExistingSearch] = useState("");
   const [expandedExistingCols, setExpandedExistingCols] = useState<Set<string>>(new Set());
@@ -1270,17 +1276,60 @@ export function Sidebar() {
                   // Every column, built-in or custom, expands to the same single
                   // control: its custom instruction.
                   const hasSettings = true;
+                  // Source URLs (found with Google AI Mode) stands out from the writing columns.
+                  const isSourceUrls = col.id === SOURCE_URLS_COLUMN_ID && sessionKind !== "plp";
+                  const isDragOver = dragOverColumnId === col.id;
+                  const canReorder = !isEnriching && !isViewer;
 
                   return (
                     <div
                       key={col.id}
+                      onDragOver={(e) => {
+                        if (!dragColumnIdRef.current) return;
+                        e.preventDefault();
+                        if (dragColumnIdRef.current !== col.id) setDragOverColumnId(col.id);
+                      }}
+                      onDragLeave={() => setDragOverColumnId((current) => (current === col.id ? null : current))}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const fromId = dragColumnIdRef.current;
+                        dragColumnIdRef.current = null;
+                        setDragOverColumnId(null);
+                        if (fromId && fromId !== col.id) reorderEnrichmentColumns(fromId, col.id);
+                      }}
                       className={`rounded-md border transition-colors ${
-                        col.enabled
-                          ? "border-primary/15 bg-primary/[0.04]"
-                          : "border-transparent hover:bg-muted/60"
-                      } ${isExpanded ? "border-primary/20 bg-primary/[0.04]" : ""}`}
+                        isDragOver
+                          ? "border-dashed border-primary/60 bg-primary/10"
+                          : isSourceUrls
+                            ? col.enabled
+                              ? "border-amber-500/50 bg-amber-500/[0.10]"
+                              : "border-amber-500/30 bg-amber-500/[0.05] hover:bg-amber-500/[0.08]"
+                            : col.enabled
+                              ? "border-primary/15 bg-primary/[0.04]"
+                              : "border-transparent hover:bg-muted/60"
+                      } ${isExpanded && !isSourceUrls && !isDragOver ? "border-primary/20 bg-primary/[0.04]" : ""}`}
                     >
-                      <div className="flex h-8 items-center gap-2 px-2">
+                      <div
+                        className="group/col flex h-8 items-center gap-1.5 px-1.5"
+                        draggable={canReorder}
+                        onDragStart={(e) => {
+                          dragColumnIdRef.current = col.id;
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", col.id);
+                        }}
+                        onDragEnd={() => {
+                          dragColumnIdRef.current = null;
+                          setDragOverColumnId(null);
+                        }}
+                      >
+                        <GripVertical
+                          className={`h-3 w-3 shrink-0 ${
+                            canReorder
+                              ? "cursor-grab text-muted-foreground/30 group-hover/col:text-muted-foreground/70"
+                              : "text-muted-foreground/10"
+                          }`}
+                          aria-label="Drag to reorder"
+                        />
                         <button
                           type="button"
                           className="shrink-0"
@@ -1288,9 +1337,13 @@ export function Sidebar() {
                           aria-label={col.enabled ? `Disable ${col.label}` : `Enable ${col.label}`}
                         >
                           {col.enabled ? (
-                            <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+                            <CheckCircle2 className={`h-3.5 w-3.5 ${isSourceUrls ? "text-amber-500" : "text-primary"}`} />
                           ) : (
-                            <div className="h-3.5 w-3.5 rounded-full border-[1.5px] border-muted-foreground/35" />
+                            <div
+                              className={`h-3.5 w-3.5 rounded-full border-[1.5px] ${
+                                isSourceUrls ? "border-amber-500/60" : "border-muted-foreground/35"
+                              }`}
+                            />
                           )}
                         </button>
                         <button
@@ -1300,12 +1353,21 @@ export function Sidebar() {
                         >
                           <span
                             className={
-                              col.enabled ? "text-foreground" : "text-muted-foreground"
+                              isSourceUrls
+                                ? "text-amber-700 dark:text-amber-400"
+                                : col.enabled
+                                  ? "text-foreground"
+                                  : "text-muted-foreground"
                             }
                           >
                             {col.label}
                           </span>
                         </button>
+                        {isSourceUrls && (
+                          <span className="shrink-0 rounded bg-amber-500/15 px-1 py-px text-[8px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                            Google
+                          </span>
+                        )}
                         <div className="flex shrink-0 items-center gap-0.5">
                           {col.isCustom && (
                             <>
@@ -1730,9 +1792,11 @@ export function Sidebar() {
             )}
           </div>
 
+          {/* Settings. Image Finder has nothing to configure here, so it is not shown. */}
+          {mode !== "images" && (
+          <>
           <Separator />
 
-          {/* Settings */}
           <div>
             <div className="flex items-center justify-between w-full group">
               <div
@@ -1747,19 +1811,16 @@ export function Sidebar() {
                 <Settings2 className="h-4 w-4 text-amber-500" />
                 <span className="text-xs font-semibold">Settings</span>
               </div>
-              {mode !== "images" && (
-                <Badge variant="secondary" className="text-[9px] px-1.5 py-0 font-mono">
-                  {enrichmentSettings.outputLanguage === "custom"
-                    ? enrichmentSettings.customLanguage || "Custom"
-                    : enrichmentSettings.outputLanguage}
-                </Badge>
-              )}
+              <Badge variant="secondary" className="text-[9px] px-1.5 py-0 font-mono">
+                {enrichmentSettings.outputLanguage === "custom"
+                  ? enrichmentSettings.customLanguage || "Custom"
+                  : enrichmentSettings.outputLanguage}
+              </Badge>
             </div>
 
             {settingsSectionOpen && (
               <div className="mt-3 space-y-4 pl-2">
                 {/* Output Language */}
-                {mode !== "images" && (
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                     Output Language
@@ -1786,18 +1847,6 @@ export function Sidebar() {
                     />
                   )}
                 </div>
-                )}
-
-                {/* Image Finder has no model to pick: every row runs Standard, then Exact, then Premium. */}
-                {mode === "images" && (
-                  <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
-                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">Automatic search</p>
-                    <p className="text-[10px] text-muted-foreground/70">
-                      Each row tries a fast search first, then an exact-match search, then a deep search. The first
-                      to find verified images is used, and the row is charged once for everything that ran.
-                    </p>
-                  </div>
-                )}
 
                 {/* Categories mode has one fixed model; nothing to pick. */}
                 {mode === "categories" && (
@@ -1811,7 +1860,7 @@ export function Sidebar() {
                 )}
 
                 {/* Enrich mode is one fixed agent; nothing to pick. */}
-                {mode !== "images" && mode !== "categories" && (
+                {mode !== "categories" && (
                   <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
                     <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6.1 Sol, web search on</p>
                     <p className="text-[10px] text-muted-foreground/70">
@@ -1825,6 +1874,8 @@ export function Sidebar() {
               </div>
             )}
           </div>
+          </>
+          )}
 
           <Separator />
 

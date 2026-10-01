@@ -109,13 +109,23 @@ export function answerTexts(data: Pick<GoogleAiModeApiResponse, "text_blocks" | 
  * even when the answer then turns out unusable. A call that throws was not
  * billed unless the error says so (SearchApiCallError.billed).
  */
-export async function callGoogleAiMode(query: string): Promise<GoogleAiModeResult> {
+export async function callGoogleAiMode(
+  query: string,
+  options: {
+    /**
+     * One public image URL for Google to look at alongside the query (SearchApi's
+     * `url` parameter). It takes a single image: a second `url` replaces the first.
+     */
+    imageUrl?: string;
+  } = {}
+): Promise<GoogleAiModeResult> {
   const apiKey = requireSearchApiKey();
   const params = new URLSearchParams({
     engine: "google_ai_mode",
     q: query,
     api_key: apiKey,
   });
+  if (options.imageUrl) params.set("url", options.imageUrl);
 
   const startedAt = Date.now();
   const controller = new AbortController();
