@@ -82,7 +82,6 @@ import { IMAGE_FINDER_MAX_IMAGES } from "@/lib/enrich/image-finder/brief";
 import {
   categoryCountLabel,
   categoryFormatsFor,
-  categoryStructureFor,
   resolveCategoryFormat,
 } from "@/lib/categories/format";
 import type { ProjectJson } from "@/lib/storage-helpers";
@@ -1540,24 +1539,6 @@ export function Sidebar() {
                   ? "Assigns each selected product to your store categories and writes them to the Categories column."
                   : `Finds the exact product on the web and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column.`}
               </p>
-
-              {mode === "categories" && storeCategoryCount !== null && (
-                <div
-                  className={`rounded-md border px-2.5 py-2 text-[10px] leading-relaxed ${
-                    usingStoreList
-                      ? "border-primary/15 bg-primary/[0.04] text-foreground"
-                      : "border-amber-300/60 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-300"
-                  }`}
-                >
-                  {usingStoreList
-                    ? `${storeCategoryCount} store ${
-                        categoryStructureFor(cmsType) === "flat" ? "collections" : "categories"
-                      } loaded. Each product is classified into this list and the AI never invents new ones.`
-                    : storeListAvailable
-                      ? "Store list is off. The AI will suggest categories in the format below."
-                      : "No categories in the Categories tab yet. The AI will suggest categories in the format below."}
-                </div>
-              )}
 
               {mode === "categories" && storeListAvailable && (
                 <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
