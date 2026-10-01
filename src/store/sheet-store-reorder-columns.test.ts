@@ -53,6 +53,37 @@ describe("reorderEnrichmentColumns", () => {
     expect(sheetKeys.map((key) => key.slice("enrich:".length))).toEqual(order);
   });
 
+  it("a saved preset brings back its columns, instructions, on/off flags and order, on the sheet too", () => {
+    useSheetStore.getState().updateEnrichmentColumnConfig("custom_target_audience", {
+      customInstruction: "Name the buyer in one line",
+    });
+    useSheetStore.getState().reorderEnrichmentColumns("custom_target_audience", "titleTag");
+    const saved = useSheetStore.getState().enrichmentColumns.map((c) => ({ ...c, enabled: c.id !== "faq" }));
+
+    // Another sheet, opened fresh with the defaults.
+    useSheetStore
+      .getState()
+      .loadProject("w1", "p2", "Other", ["Title"], [], ["Title"], getDefaultEnrichmentColumns("product"), {} as never, {}, "product");
+    // This sheet has its own column order before the preset is applied.
+    useSheetStore.getState().reorderEnrichmentColumns("sourceUrls", "titleTag");
+    useSheetStore.getState().applyEnrichmentPreset({ enrichmentColumns: saved, sourceColumns: ["Title"] });
+
+    const state = useSheetStore.getState();
+    expect(ids()).toEqual(saved.map((c) => c.id));
+    const custom = state.enrichmentColumns.find((c) => c.id === "custom_target_audience")!;
+    expect(custom.customInstruction).toBe("Name the buyer in one line");
+    expect(state.enrichmentColumns.find((c) => c.id === "faq")!.enabled).toBe(false);
+    const sheetKeys = applyColumnLayout(
+      ["orig:Title", ...state.enrichmentColumns.map((c) => `enrich:${c.id}`)],
+      state.columnLayout
+    ).filter((key) => key.startsWith("enrich:"));
+    expect(sheetKeys.map((key) => key.slice("enrich:".length))).toEqual(ids());
+
+    // Still editable after it is applied.
+    useSheetStore.getState().updateEnrichmentColumnConfig("custom_target_audience", { customInstruction: "Edited" });
+    expect(useSheetStore.getState().enrichmentColumns.find((c) => c.id === "custom_target_audience")!.customInstruction).toBe("Edited");
+  });
+
   it("ignores an unknown column or a drop on itself", () => {
     const before = ids();
     useSheetStore.getState().reorderEnrichmentColumns("nope", "titleTag");

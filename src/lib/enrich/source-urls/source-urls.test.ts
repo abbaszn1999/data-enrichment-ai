@@ -261,15 +261,39 @@ describe("searchSourceUrls", () => {
           : new Response("boom", { status: 503 });
       })
     );
-    const result = await searchSourceUrls(input);
+    const result = await searchSourceUrls({ ...input, retryDelayMs: 0 });
     expect(result.sources).toEqual([]);
     expect(result.costs).toHaveLength(1);
     expect(result.notFoundReason).toMatch(/search 2 failed/);
   });
 
-  it("throws when the first search fails (nothing was billed)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
-    await expect(searchSourceUrls(input)).rejects.toThrow(/failed \(500\)/);
+  it("throws when the first search fails, after one retry (nothing was billed)", async () => {
+    const fetchMock = vi.fn(async () => new Response("boom", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(searchSourceUrls({ ...input, retryDelayMs: 0 })).rejects.toThrow(/failed \(500\)/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("tries a rate-limited search once more and charges only the answered call", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("slow down", { status: 429 })
+        : new Response(aiModeBody(FOUND_ANSWER), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await searchSourceUrls({ ...input, retryDelayMs: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.sources).toHaveLength(2);
+    expect(result.costs).toHaveLength(1);
+  });
+
+  it("does not retry a request SearchApi rejects outright (4xx)", async () => {
+    const fetchMock = vi.fn(async () => new Response("bad request", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(searchSourceUrls({ ...input, retryDelayMs: 0 })).rejects.toThrow(/failed \(400\)/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("enforces the store owner's website rules on what it returns", async () => {
@@ -380,7 +404,7 @@ describe("Source URLs routing in enrichRow", () => {
   });
 
   it("keeps the OpenAI columns when the Google search fails, and says why the cell is empty", async () => {
-    stubBoth({ googleStatus: 500, googleBody: "boom" });
+    stubBoth({ googleStatus: 400, googleBody: "boom" });
     const result = await enrichRow({
       ...baseParams,
       enabledColumns: ["titleTag", "sourceUrls"],
@@ -393,10 +417,47 @@ describe("Source URLs routing in enrichRow", () => {
   });
 
   it("fails the row when Source URLs is the only column and Google fails", async () => {
-    stubBoth({ googleStatus: 500, googleBody: "boom" });
+    stubBoth({ googleStatus: 400, googleBody: "boom" });
     await expect(
       enrichRow({ ...baseParams, enabledColumns: ["sourceUrls"], enrichmentColumns: [sourceUrls] })
-    ).rejects.toThrow(/failed \(500\)/);
+    ).rejects.toThrow(/failed \(400\)/);
+  });
+
+  it("reuses the Google answer on the row's next attempt instead of paying for it twice", async () => {
+    const incomplete = {
+      id: "r1",
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      usage,
+      output: [{ type: "web_search_call", action: { type: "search", query: "a" } }],
+    };
+    let openAiCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === OPENAI_RESPONSES_URL) {
+        openAiCalls += 1;
+        return new Response(JSON.stringify(openAiCalls === 1 ? incomplete : openAiOk), { status: 200 });
+      }
+      return new Response(aiModeBody(FOUND_ANSWER), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const memo = {};
+    const params = {
+      ...baseParams,
+      enabledColumns: ["titleTag", "sourceUrls"],
+      enrichmentColumns: [titleTag, sourceUrls],
+      sourceUrlsMemo: memo,
+    };
+    const first = await enrichRow(params).catch((e: unknown) => e);
+    expect(first).toBeInstanceOf(Error);
+    expect(billedCostsOf(first).filter((c) => (c.searchApiCalls ?? 0) > 0)).toHaveLength(1);
+
+    const second = await enrichRow(params);
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).startsWith(SEARCHAPI_HOST))).toHaveLength(1);
+    expect(second.data.sourceUrls).toHaveLength(2);
+    expect(second.data.titleTag).toBe("Widget WX-1 by Acme");
+    // The retry is charged for OpenAI only; Google was charged with the first attempt.
+    expect(second.costs.filter((c) => (c.searchApiCalls ?? 0) > 0)).toHaveLength(0);
   });
 
   it("still charges what Google billed when the OpenAI call fails", async () => {

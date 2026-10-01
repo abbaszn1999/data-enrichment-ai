@@ -74,10 +74,16 @@ async function enrichWithGoogleSourceUrls(
   params: EnrichAgentParams,
   otherColumns: string[]
 ): Promise<EnrichAgentResult> {
-  const [openAi, sources] = await Promise.allSettled([
-    enrichWithOpenAi(params, otherColumns),
-    findSourceUrls(params),
-  ]);
+  const memo = params.sourceUrlsMemo;
+  const cached = memo?.result;
+  const googleTask: Promise<EnrichAgentResult> = cached
+    ? // Charged with the earlier attempt that produced it: never charge it twice.
+      Promise.resolve({ data: cached.data, costs: [] })
+    : findSourceUrls(params).then((result) => {
+        if (memo) memo.result = result;
+        return result;
+      });
+  const [openAi, sources] = await Promise.allSettled([enrichWithOpenAi(params, otherColumns), googleTask]);
 
   if (openAi.status === "rejected") {
     // The OpenAI work decides the row. Whatever Google billed is still charged.

@@ -286,6 +286,80 @@ describe("processCatalogRow billing", () => {
   });
 });
 
+describe("Source URLs rows (Google AI Mode)", () => {
+  const sourceUrlsColumn = { id: "sourceUrls", label: "Source URLs", description: "", type: "sourceUrls" };
+  const onlySourceUrls: CatalogJobSettings = {
+    ...settings,
+    enabledColumns: ["sourceUrls"],
+    enrichmentColumns: [sourceUrlsColumn],
+  };
+  const mixed: CatalogJobSettings = {
+    ...settings,
+    enabledColumns: ["enhancedTitle", "sourceUrls"],
+    enrichmentColumns: [{ id: "enhancedTitle", label: "Title", description: "", type: "text" }, sourceUrlsColumn],
+  };
+
+  beforeEach(() => {
+    enrichRowMock.mockReset();
+    vi.mocked(deductCreditsIdempotent).mockReset();
+    vi.mocked(deductCreditsIdempotent).mockResolvedValue({ success: true, remaining: 10 });
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => {
+      fn();
+      return 0;
+    }) as unknown as typeof setTimeout);
+  });
+
+  it("records which providers did the work with the charge", async () => {
+    const charge = (s: CatalogJobSettings) =>
+      chargeCatalogRow({ runId: "run", sessionId: "s", workspaceId: "w", rowId: "row-1", rowIndex: 0, credits: 0.04, cost: 0.004, tokens: 0, settings: s });
+    await charge(onlySourceUrls);
+    await charge(mixed);
+    await charge({ ...onlySourceUrls, kind: "plp" });
+    const models = vi.mocked(deductCreditsIdempotent).mock.calls.map(([args]) => (args.details as { model: string }).model);
+    expect(models[0]).toBe("searchapi-google-ai-mode");
+    expect(models[1]).toMatch(/^gpt-.+\+searchapi-google-ai-mode$/);
+    expect(models[2]).not.toContain("searchapi");
+  });
+
+  it("charges a row exactly its Google searches plus its OpenAI call, split per provider", async () => {
+    enrichRowMock.mockResolvedValueOnce({ data: {}, costs: [billedCall, createSearchApiCost(1), createSearchApiCost(1)] });
+    const outcome = await processCatalogRow({ sessionId: "s", workspaceId: "w", row, settings: mixed });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const expected = billedCall.totalCost + 2 * createSearchApiCost(1).totalCost;
+    expect(outcome.cost).toBeCloseTo(expected, 10);
+    expect(outcome.credits).toBe(costToCredits(expected));
+    expect(outcome.details).toMatchObject({ searchApiCalls: 2 });
+    expect((outcome.details as { openAiCost: number }).openAiCost).toBeCloseTo(billedCall.totalCost, 10);
+  });
+
+  it("hands every attempt of a row the same Source URLs memo", async () => {
+    enrichRowMock
+      .mockRejectedValueOnce(new EnrichBilledAttemptError("openai failed", [billedCall, createSearchApiCost(1)]))
+      .mockResolvedValueOnce({ data: {}, costs: [billedCall] });
+    const outcome = await processCatalogRow({ sessionId: "s", workspaceId: "w", row, settings: mixed });
+    const [first, second] = enrichRowMock.mock.calls.map(([params]) => params.sourceUrlsMemo);
+    expect(first).toBeDefined();
+    expect(second).toBe(first);
+    // Both OpenAI attempts and the one Google search, nothing more.
+    expect(outcome.ok && outcome.cost).toBeCloseTo(2 * billedCall.totalCost + createSearchApiCost(1).totalCost, 10);
+  });
+
+  it("passes AI source columns to the agent under their labels", async () => {
+    enrichRowMock.mockResolvedValueOnce({ data: {}, costs: [] });
+    await processCatalogRow({
+      sessionId: "s",
+      workspaceId: "w",
+      row: { ...row, enrichedData: { sourceUrls: [{ title: "Widget", uri: "https://acme.com/wx-1" }] } } as ProjectRow,
+      settings: { ...mixed, enabledColumns: ["enhancedTitle"], sourceColumns: ["Title", "sourceUrls"], sourceColumnLabels: { sourceUrls: "Source URLs" } },
+    });
+    expect(enrichRowMock.mock.calls[0]![0].productData).toEqual({
+      Title: "Widget WX-1",
+      "Source URLs": "Widget (https://acme.com/wx-1)",
+    });
+  });
+});
+
 describe("catalogCreditIdempotencyKey", () => {
   it("gives the final re-check its own key so it is charged once, separately from the first pass", () => {
     expect(catalogCreditIdempotencyKey("run", "row")).toBe("catalog_intelligence:run:row");

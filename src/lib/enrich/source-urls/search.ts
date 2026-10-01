@@ -21,7 +21,12 @@ import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
 import type { SourceUrl } from "@/types";
 import type { DomainRules } from "../domains";
 import { checkExactLinksDetailed, describeRejected } from "../image-finder/exact/links-checks";
-import { callGoogleAiMode, SearchApiCallError, type GoogleAiModeReferenceLink } from "../image-finder/exact/searchapi";
+import {
+  callGoogleAiMode,
+  isTransientSearchApiError,
+  SearchApiCallError,
+  type GoogleAiModeReferenceLink,
+} from "../image-finder/exact/searchapi";
 import { EnrichBilledAttemptError, EnrichCancelledError } from "../openai";
 import {
   buildSourceUrlsQuery,
@@ -43,7 +48,11 @@ export interface SearchSourceUrlsInput {
   imageUrl?: string;
   domainRules?: DomainRules;
   shouldCancel?: () => Promise<boolean>;
+  /** Wait before the one retry of a rate-limited or 5xx call (tests shorten it). */
+  retryDelayMs?: number;
 }
+
+const TRANSIENT_RETRY_DELAY_MS = 2_000;
 
 export interface SearchSourceUrlsResult {
   sources: SourceUrl[];
@@ -137,9 +146,10 @@ export function rankSources(
 async function askGoogle(
   buildQuery: (hasImage: boolean) => string,
   imageUrl: string | undefined,
-  costs: AiCallCost[]
+  costs: AiCallCost[],
+  retryDelayMs: number
 ): Promise<{ call: Awaited<ReturnType<typeof callGoogleAiMode>>; usedImage: boolean }> {
-  const run = async (query: string, image?: string) => {
+  const once = async (query: string, image?: string) => {
     try {
       const call = await callGoogleAiMode(query, image ? { imageUrl: image } : {});
       costs.push(createSearchApiCost(1));
@@ -148,6 +158,17 @@ async function askGoogle(
       // A billed failure keeps its charge even though there is no answer.
       if (error instanceof SearchApiCallError && error.billed) costs.push(createSearchApiCost(1));
       throw error;
+    }
+  };
+  // Many rows search at once; a rate limit or a brief SearchApi outage (never
+  // billed) gets one more try instead of failing the row or emptying the cell.
+  const run = async (query: string, image?: string) => {
+    try {
+      return await once(query, image);
+    } catch (error) {
+      if (!isTransientSearchApiError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      return once(query, image);
     }
   };
   if (imageUrl) {
@@ -181,7 +202,7 @@ async function runAttempt(
       attempt,
     });
 
-  const { call, usedImage } = await askGoogle(buildQuery, imageUrl, costs);
+  const { call, usedImage } = await askGoogle(buildQuery, imageUrl, costs, input.retryDelayMs ?? TRANSIENT_RETRY_DELAY_MS);
 
   let answer = parseBestSourceAnswer(call.texts);
   let harvested = false;

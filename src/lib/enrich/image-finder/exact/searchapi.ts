@@ -32,12 +32,25 @@ export function requireSearchApiKey(): string {
  */
 export class SearchApiCallError extends Error {
   readonly billed: boolean;
+  /** HTTP status of a non-200 answer; undefined for network errors, timeouts and error bodies. */
+  readonly status?: number;
 
-  constructor(message: string, billed: boolean) {
+  constructor(message: string, billed: boolean, status?: number) {
     super(message);
     this.name = "SearchApiCallError";
     this.billed = billed;
+    this.status = status;
   }
+}
+
+/** A busy or briefly failing SearchApi (rate limit, 5xx): worth one more try. Never billed. */
+export function isTransientSearchApiError(error: unknown): boolean {
+  return (
+    error instanceof SearchApiCallError &&
+    !error.billed &&
+    typeof error.status === "number" &&
+    (error.status === 429 || error.status >= 500)
+  );
 }
 
 export interface GoogleAiModeReferenceLink {
@@ -158,7 +171,8 @@ export async function callGoogleAiMode(
   if (!response.ok) {
     throw new SearchApiCallError(
       `SearchApi Google AI Mode failed (${response.status}): ${rawText.slice(0, 300)}`,
-      false
+      false,
+      response.status
     );
   }
 

@@ -3,9 +3,11 @@ import {
   enrichRow,
   isImageFinderRun,
   resolveEnrichOpenAiModel,
+  type EnrichAgentResult,
   type EnrichSettings,
 } from "@/lib/enrich";
 import { IMAGE_FINDER_OPENAI_MODEL } from "@/lib/enrich/models";
+import { usesGoogleSourceUrls } from "@/lib/enrich/source-urls/agent";
 import {
   billedCostsOf,
   isEnrichCancelledError,
@@ -14,6 +16,7 @@ import {
 } from "@/lib/enrich/openai";
 import {
   resolveEnrichmentModel,
+  SOURCE_URLS_COLUMN_ID,
   type CategoryItem,
   type ContentLength,
   type EnrichmentColumnType,
@@ -98,6 +101,8 @@ function billedUsage(costs: AiCallCost[]): BilledUsage | undefined {
   };
 }
 
+const GOOGLE_AI_MODE_MODEL = "searchapi-google-ai-mode";
+
 export const PROVIDER_UNAVAILABLE_JOB_ERROR =
   "AI service temporarily unavailable. Unfinished rows were charged only for AI work already done; run them again later.";
 
@@ -137,13 +142,23 @@ export async function processCatalogRow(params: {
     outputLanguage: settings.outputLanguage || "English",
   };
   const enrichmentColumnIds = new Set(settings.enrichmentColumns.map((c) => c.id));
-  const { productData, sourceImageUrls } = buildRowSources(row, settings.sourceColumns, enrichmentColumnIds);
+  const aiColumnLabels: Record<string, string> = { ...(settings.sourceColumnLabels ?? {}) };
+  for (const col of settings.enrichmentColumns) if (col.label) aiColumnLabels[col.id] ??= col.label;
+  const { productData, sourceImageUrls } = buildRowSources(
+    row,
+    settings.sourceColumns,
+    enrichmentColumnIds,
+    aiColumnLabels
+  );
 
   let lastError = "Enrichment failed";
   // Every call OpenAI bills is charged to the row, whatever the outcome: a
   // success includes earlier failed attempts, and a failed or stopped row is
   // charged for what was billed before it ended.
   const failedAttemptCosts: AiCallCost[] = [];
+  // A Google Source URLs answer from an attempt whose OpenAI half failed; the
+  // retry reuses it rather than paying for the same search again.
+  const sourceUrlsMemo: { result?: EnrichAgentResult } = {};
   // Image Finder already runs three tiers per row, so a second whole-row
   // attempt would re-pay every provider; a failed row is simply run again.
   const rowAttempts = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns)
@@ -182,6 +197,7 @@ export async function processCatalogRow(params: {
         shouldCancel: params.shouldCancel,
         learnedDomains: params.context?.learnedDomains,
         recheck: params.context?.recheck,
+        sourceUrlsMemo,
       });
       const billed = [...failedAttemptCosts, ...enriched.costs];
       const costs = sumCosts(billed);
@@ -242,6 +258,15 @@ export async function processCatalogRow(params: {
   return { ok: false, rowId: row.id, error: lastError, billed: billedUsage(failedAttemptCosts) };
 }
 
+/** Which providers did the row's work, as recorded with its charge. */
+export function catalogChargeModel(settings: CatalogJobSettings, imageFinder: boolean): string {
+  if (imageFinder) return IMAGE_FINDER_OPENAI_MODEL;
+  const openAi = resolveEnrichOpenAiModel(settings.enrichmentModel);
+  if (!usesGoogleSourceUrls(settings.kind ?? "product", settings.enabledColumns)) return openAi;
+  const onlySourceUrls = settings.enabledColumns.every((id) => id === SOURCE_URLS_COLUMN_ID);
+  return onlySourceUrls ? GOOGLE_AI_MODE_MODEL : `${openAi}+${GOOGLE_AI_MODE_MODEL}`;
+}
+
 export async function chargeCatalogRow(params: {
   runId: string;
   sessionId: string;
@@ -283,9 +308,7 @@ export async function chargeCatalogRow(params: {
         sessionId: params.sessionId,
         rowIndex: params.rowIndex,
         enrichmentModel: params.settings.enrichmentModel,
-        model: imageFinder
-          ? IMAGE_FINDER_OPENAI_MODEL
-          : resolveEnrichOpenAiModel(params.settings.enrichmentModel),
+        model: catalogChargeModel(params.settings, imageFinder),
         ...(params.recheck ? { recheck: true } : {}),
         ...(params.unfinished ? { unfinished: true } : {}),
         billedAttempts: params.billedAttempts ?? 1,

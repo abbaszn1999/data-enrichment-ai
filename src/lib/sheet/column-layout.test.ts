@@ -4,8 +4,29 @@ import {
   fullColumnOrder,
   isColumnHidden,
   moveColumn,
+  reorderKeysInPlace,
   toggleColumnHidden,
 } from "./column-layout";
+
+describe("reorderKeysInPlace", () => {
+  it("reorders one group inside the slots it already holds, leaving other columns put", () => {
+    const keys = ["orig:Code", "enrich:a", "orig:Brand", "enrich:b", "enrich:c"];
+    const layout = { order: ["enrich:a", "orig:Code", "enrich:b", "orig:Brand", "enrich:c"], hidden: ["enrich:b"] };
+    expect(reorderKeysInPlace(layout, keys, ["enrich:c", "enrich:a", "enrich:b"])).toEqual({
+      order: ["enrich:c", "orig:Code", "enrich:a", "orig:Brand", "enrich:b"],
+      hidden: ["enrich:b"],
+    });
+  });
+
+  it("ignores keys the sheet does not have", () => {
+    const keys = ["orig:Code", "enrich:a", "enrich:b"];
+    expect(reorderKeysInPlace(null, keys, ["enrich:zzz", "enrich:b", "enrich:a"]).order).toEqual([
+      "orig:Code",
+      "enrich:b",
+      "enrich:a",
+    ]);
+  });
+});
 
 const KEYS = ["orig:Code", "orig:Brand", "enrich:enhancedTitle", "enrich:imageUrls"];
 

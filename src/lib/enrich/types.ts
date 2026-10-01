@@ -61,6 +61,13 @@ export interface EnrichAgentParams {
   recheck?: boolean;
   /** Images from selected image columns (Image Finder output, image URL columns), attached as vision input. */
   sourceImageUrls?: string[];
+  /**
+   * Kept by the caller across the row's attempts. When Source URLs ran next to
+   * OpenAI columns and only the OpenAI call failed, the next attempt reuses this
+   * Google answer (already charged with the failed attempt) instead of paying
+   * for the same search again.
+   */
+  sourceUrlsMemo?: { result?: EnrichAgentResult };
 }
 
 export type OpenAiImageResult = {

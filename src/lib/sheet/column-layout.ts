@@ -65,6 +65,26 @@ export function moveColumn(layout: ColumnLayout | undefined | null, allKeys: str
   return { order: next, hidden: layout?.hidden ?? [] };
 }
 
+/**
+ * Rearranges the keys of one group into `orderedGroup`'s order, using only the
+ * slots those keys already hold in the full order: every other key stays put.
+ */
+export function reorderKeysInPlace(
+  layout: ColumnLayout | undefined | null,
+  allKeys: string[],
+  orderedGroup: string[]
+): ColumnLayout {
+  const order = fullColumnOrder(allKeys, layout);
+  const present = new Set(order);
+  const queue = [...new Set(orderedGroup)].filter((key) => present.has(key));
+  const inGroup = new Set(queue);
+  let next = 0;
+  return {
+    order: order.map((key) => (inGroup.has(key) ? queue[next++]! : key)),
+    hidden: layout?.hidden ?? [],
+  };
+}
+
 export function toggleColumnHidden(layout: ColumnLayout | undefined | null, allKeys: string[], key: string): ColumnLayout {
   const order = fullColumnOrder(allKeys, layout);
   const hiddenSet = new Set(layout?.hidden ?? []);

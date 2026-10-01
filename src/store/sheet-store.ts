@@ -20,7 +20,7 @@ import {
 } from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
 import { expandToGroupMemberIds, visibleCatalogRows } from "@/lib/catalog/product-groups";
-import { moveColumn, toggleColumnHidden } from "@/lib/sheet/column-layout";
+import { moveColumn, reorderKeysInPlace, toggleColumnHidden } from "@/lib/sheet/column-layout";
 
 function normalizeEnrichmentSettings(
   settings: EnrichmentSettings | Partial<EnrichmentSettings> | null | undefined
@@ -862,6 +862,13 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
             state.sessionKind
           ),
           state.sessionKind
+        );
+        // The sheet follows the preset's column order too, the same way a drag
+        // in the list moves the sheet column (source columns keep their slots).
+        next.columnLayout = reorderKeysInPlace(
+          state.columnLayout,
+          allColumnLayoutKeys({ originalColumns: state.originalColumns, enrichmentColumns: next.enrichmentColumns }),
+          next.enrichmentColumns.map((col) => `enrich:${col.id}`)
         );
       }
 

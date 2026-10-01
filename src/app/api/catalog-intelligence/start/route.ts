@@ -27,7 +27,22 @@ type Body = {
   kind?: SessionKind;
   cmsType?: string;
   sourceColumns?: string[];
+  sourceColumnLabels?: Record<string, unknown>;
 };
+
+/** Labels for the run's AI source columns; anything else the browser sent is dropped. */
+function sanitizeSourceColumnLabels(
+  labels: Record<string, unknown> | undefined,
+  sourceColumns: string[]
+): Record<string, string> | undefined {
+  if (!labels || typeof labels !== "object") return undefined;
+  const out: Record<string, string> = {};
+  for (const id of sourceColumns) {
+    const label = labels[id];
+    if (typeof label === "string" && label.trim()) out[id] = label.trim().slice(0, 120);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 export async function POST(request: NextRequest) {
   let body: Body;
@@ -136,6 +151,7 @@ export async function POST(request: NextRequest) {
   const workspaceCategories = runUsesCategories(body.enabledColumns)
     ? await loadCategorySnapshot(workspaceId)
     : undefined;
+  const sourceColumns = body.sourceColumns?.length ? body.sourceColumns : project.sourceColumns;
   const settings: CatalogJobSettings = {
     workspaceSlug: workspace?.slug,
     sessionName: session.name,
@@ -145,7 +161,8 @@ export async function POST(request: NextRequest) {
     enrichmentModel: body.settings?.enrichmentModel,
     outputLanguage: body.settings?.outputLanguage || "English",
     cmsType,
-    sourceColumns: body.sourceColumns?.length ? body.sourceColumns : project.sourceColumns,
+    sourceColumns,
+    sourceColumnLabels: sanitizeSourceColumnLabels(body.sourceColumnLabels, sourceColumns ?? []),
     workspaceCategories,
     ownerUserId: ctx.subscription.user_id ?? ctx.ownerId ?? user.id,
     actorUserId: user.id,

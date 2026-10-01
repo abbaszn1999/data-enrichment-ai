@@ -36,13 +36,19 @@ description: >-
   `src/lib/enrich/source-urls/` (one Google AI Mode search via SearchApi, fixed prompt template, one photo max,
   code-side link checks, second search with new angles). Alone it makes no OpenAI call; next to other columns the
   OpenAI call (without that column) and the Google call run in parallel and both costs go on the row's charge.
-  PLP sheets keep the OpenAI `sourceUrls` column.
+  If only the OpenAI half fails, the row's retry reuses the Google answer (`sourceUrlsMemo`, kept by
+  `processCatalogRow`) so the search is never paid twice. A 429/5xx SearchApi answer (never billed) gets one more
+  try. PLP sheets keep the OpenAI `sourceUrls` column.
 
 ## Sources
 
 - Any column with data (sheet or AI column from any tool) can be a source. `src/lib/jobs/row-sources.ts` splits
   image columns (Image Finder output, image-named columns, extension-less CDN URLs) into `input_image` parts
-  (cap 8, deduped); other columns are text (cap 4000 chars each).
+  (cap 8, deduped); other columns are text (cap 4000 chars each). AI source columns reach the agent under their
+  label (`sourceColumnLabels` from the browser, `"<label> (AI)"` when a sheet column has the same name); found
+  pages read as `title (url)`. Links are never mined for product codes (`extractRowIdentifiers`).
+- The sidebar sends only the sources it lists (sheet columns + AI columns with data on the active sheet); a preset
+  may tick an AI column that is still empty here, and it stays ticked without being sent.
 
 ## Billing
 

@@ -77,6 +77,15 @@ describe("wordsPresentRatio", () => {
 });
 
 describe("extractRowIdentifiers", () => {
+  it("never takes codes from links (found pages, image URLs)", () => {
+    const ids = extractRowIdentifiers({
+      Name: "Sony WH-1000XM5",
+      "Source URLs":
+        "Sony WH-1000XM5 (https://www.amazon.com/dp/B0BXYCS74H/ref=sr_1_3), www.sony.com/en/p/wh1000xm5-b?id=884213",
+    });
+    expect(ids.map((id) => id.value)).toEqual(["WH-1000XM5"]);
+  });
+
   it("finds codes in any column without relying on column names, and skips prices and quantities", () => {
     const ids = extractRowIdentifiers({
       Code: "RCP1151426",

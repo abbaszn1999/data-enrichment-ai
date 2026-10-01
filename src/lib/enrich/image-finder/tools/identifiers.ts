@@ -45,6 +45,7 @@ function isStrong(token: string): boolean {
 }
 
 const TOKEN_SPLIT = /[\s,;:()[\]{}|"'<>]+/;
+const URL_RE = /\b(?:https?:\/\/|www\.)[^\s,;|"'<>()]+/gi;
 const IDENTITY_LABEL = /^\s*(sku|mpn|model|part|p\/n|pn|code|barcode|ean|upc|gtin|isbn|ref|reference|item)\b[^:]*:/i;
 
 /**
@@ -72,7 +73,9 @@ function cleanToken(raw: string): string {
 export function extractRowIdentifiers(rowData: Record<string, string>): RowIdentifier[] {
   const identity: string[] = [];
   for (const raw of Object.values(rowData)) {
-    const text = String(raw ?? "").trim();
+    // Links (found pages, image URLs) carry paths, hashes and tracking codes,
+    // not the item's own codes.
+    const text = String(raw ?? "").replace(URL_RE, " ").trim();
     if (!text) continue;
     const segments = listSegments(text);
     if (!segments) {

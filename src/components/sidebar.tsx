@@ -417,6 +417,14 @@ export function Sidebar() {
     );
   }, [activeSheet, enrichmentColumns, productGroupColumn, rows]);
 
+  // The sources a run sends: only ones listed (and so visible) under Source
+  // Columns. A preset can tick an AI column that has no values on this sheet
+  // yet; it stays ticked for later but sends nothing until it has data.
+  const runSourceColumns = useMemo(() => {
+    const listed = new Set([...originalColumns, ...enrichedColumnsWithData.map((col) => col.id)]);
+    return sourceColumns.filter((col) => listed.has(col));
+  }, [enrichedColumnsWithData, originalColumns, sourceColumns]);
+
   const applyStatusPayload = useCallback(
     (payload: {
       run?: CatalogPollRun | null;
@@ -747,7 +755,12 @@ export function Sidebar() {
           settings: enrichSettings,
           kind: sessionKind,
           cmsType: workspace?.cms_type || undefined,
-          sourceColumns,
+          sourceColumns: runSourceColumns,
+          sourceColumnLabels: Object.fromEntries(
+            enrichedColumnsWithData
+              .filter((col) => runSourceColumns.includes(col.id))
+              .map((col) => [col.id, col.label])
+          ),
         }),
       });
 
@@ -798,7 +811,8 @@ export function Sidebar() {
     existingColumnInstructions,
     updateEnrichmentColumnConfig,
     enrichmentSettings,
-    sourceColumns,
+    runSourceColumns,
+    enrichedColumnsWithData,
     sessionKind,
     workspace,
     sheetWorkspaceId,
@@ -1792,8 +1806,8 @@ export function Sidebar() {
             )}
           </div>
 
-          {/* Settings. Image Finder has nothing to configure here, so it is not shown. */}
-          {mode !== "images" && (
+          {/* Settings: Enrichment only (the output language). Image Finder and Categories have nothing to configure. */}
+          {mode === "enrich" && (
           <>
           <Separator />
 
@@ -1847,29 +1861,6 @@ export function Sidebar() {
                     />
                   )}
                 </div>
-
-                {/* Categories mode has one fixed model; nothing to pick. */}
-                {mode === "categories" && (
-                  <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
-                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6.1 Sol, no web search</p>
-                    <p className="text-[10px] text-muted-foreground/70">
-                      Each product is classified from its own data in one fast call. You are charged for the AI
-                      tokens used, per product.
-                    </p>
-                  </div>
-                )}
-
-                {/* Enrich mode is one fixed agent; nothing to pick. */}
-                {mode !== "categories" && (
-                  <div className="space-y-1 rounded-lg border border-transparent bg-muted/30 p-2">
-                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">GPT-6.1 Sol, web search on</p>
-                    <p className="text-[10px] text-muted-foreground/70">
-                      One AI agent fills every selected column. It searches the web for each product and follows the
-                      custom instruction on each column. You are charged for the exact AI tokens and searches used,
-                      per row.
-                    </p>
-                  </div>
-                )}
 
               </div>
             )}
@@ -1974,7 +1965,7 @@ export function Sidebar() {
                   ? enabledColumns.length === 0
                   : existingColumnsToEnrich.length === 0) ||
               enrichableRows.length === 0 ||
-              sourceColumns.length === 0
+              runSourceColumns.length === 0
             }
             className="w-full gap-2 font-medium h-10 shadow-sm"
             size="sm"

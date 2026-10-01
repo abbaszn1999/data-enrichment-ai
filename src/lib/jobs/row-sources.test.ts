@@ -58,6 +58,32 @@ describe("buildRowSources", () => {
     expect(new Set(sourceImageUrls).size).toBe(MAX_SOURCE_IMAGES);
   });
 
+  it("names AI source columns by their label and writes found pages with their titles", () => {
+    const { productData } = buildRowSources(
+      row(
+        { Name: "Widget", "Title tag": "Old title" },
+        {
+          sourceUrls: [
+            { title: "Widget WX-1 | Acme", uri: "https://acme.com/wx-1" },
+            { title: "https://shop.example.com/wx-1", uri: "https://shop.example.com/wx-1" },
+          ],
+          titleTag: "New title",
+          custom_1: [],
+        }
+      ),
+      ["Name", "sourceUrls", "titleTag", "Title tag", "custom_1"],
+      new Set(),
+      { sourceUrls: "Source URLs", titleTag: "Title tag", custom_1: "Care tips" }
+    );
+    expect(productData["Source URLs"]).toBe("Widget WX-1 | Acme (https://acme.com/wx-1), https://shop.example.com/wx-1");
+    // Never overwrites a sheet column that has the same name.
+    expect(productData["Title tag"]).toBe("Old title");
+    expect(productData["Title tag (AI)"]).toBe("New title");
+    // An empty AI value sends nothing.
+    expect(Object.keys(productData)).not.toContain("Care tips");
+    expect(productData.sourceUrls).toBeUndefined();
+  });
+
   it("keeps long descriptions up to the raised field cap", () => {
     const long = "x".repeat(MAX_SOURCE_FIELD_CHARS + 500);
     const { productData } = buildRowSources(row({ Description: long }), ["Description"], new Set());

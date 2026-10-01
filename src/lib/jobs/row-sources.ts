@@ -57,7 +57,10 @@ function enrichedToText(val: unknown): string {
           answer?: string;
         };
         if (o.question) return o.answer ? `${o.question} ${o.answer}` : o.question;
-        return String(o.uri || o.pageUrl || o.title || JSON.stringify(item));
+        const link = o.uri || o.pageUrl;
+        // A found page reads best with its title: it often names the exact variant.
+        if (link && o.title && o.title !== link) return `${o.title} (${link})`;
+        return String(link || o.title || JSON.stringify(item));
       })
       .join(val.every((item) => typeof item === "string") ? "\n" : ", ");
   }
@@ -75,19 +78,23 @@ export interface RowSources {
  * The selected source columns of one row, split into what the model reads as
  * text and what it sees as images. Image columns from any tool (Image Finder
  * output, a pasted "Image Src" column) are attached as images instead of being
- * dumped as URL text.
+ * dumped as URL text. AI columns are named by their label (`custom_1` means
+ * nothing to the model), falling back to the id when no label is known.
  */
 export function buildRowSources(
   row: ProjectRow,
   sourceColumns: string[],
-  enrichmentColumnIds: Set<string>
+  enrichmentColumnIds: Set<string>,
+  aiColumnLabels: Record<string, string> = {}
 ): RowSources {
   const productData: Record<string, string> = {};
   const images: string[] = [];
+  const sheetNames = new Set(Object.keys(row.originalData));
 
   for (const col of sourceColumns) {
     let text: string | undefined;
     let colImages: string[] = [];
+    let name = col;
 
     // An AI column made in another tool (Image Finder, Categories, an earlier
     // Enrich run) is not part of this run's column list, so it is recognised
@@ -100,6 +107,8 @@ export function buildRowSources(
       if (val === undefined || val === null || val === "") continue;
       colImages = imageUrlsFromEnriched(val);
       text = colImages.length > 0 ? undefined : enrichedToText(val);
+      const label = aiColumnLabels[col]?.trim();
+      if (label) name = sheetNames.has(label) || label in productData ? `${label} (AI)` : label;
     } else {
       const val = row.originalData[col];
       if (val === undefined) continue;
@@ -109,11 +118,11 @@ export function buildRowSources(
 
     if (colImages.length > 0) {
       images.push(...colImages);
-      productData[col] = `[${colImages.length} image${colImages.length === 1 ? "" : "s"} attached]`;
+      productData[name] = `[${colImages.length} image${colImages.length === 1 ? "" : "s"} attached]`;
       continue;
     }
-    if (text === undefined) continue;
-    productData[col] = text.length > MAX_SOURCE_FIELD_CHARS ? text.slice(0, MAX_SOURCE_FIELD_CHARS) : text;
+    if (text === undefined || text.trim() === "") continue;
+    productData[name] = text.length > MAX_SOURCE_FIELD_CHARS ? text.slice(0, MAX_SOURCE_FIELD_CHARS) : text;
   }
 
   return {

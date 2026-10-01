@@ -63,6 +63,8 @@ export interface CatalogJobSettings extends JobRunSettings {
   outputLanguage?: string;
   cmsType?: string;
   sourceColumns: string[];
+  /** Labels of AI columns used as sources (keyed by column id), so the agent reads "Source URLs", not "sourceUrls". */
+  sourceColumnLabels?: Record<string, string>;
   workspaceCategories?: CategoryItem[];
   categoriesRawRows?: Record<string, string>[];
   ownerUserId: string;
