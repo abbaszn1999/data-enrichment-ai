@@ -86,27 +86,28 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
   // Wording is deliberate: keep the task line short and plain. Describing a
   // failed first search ("found nothing usable") made Google AI Mode search that
   // sentence itself, so attempt 2 only asks for other angles.
-  const lines: string[] = [
-    attempt === 2
-      ? "Find web pages for this exact product. Use search angles beyond the obvious ones. Return links only."
-      : "Find web pages for this exact product. Return links only.",
-    "",
-    "PRODUCT",
-    ...(fieldLines.length > 0 ? fieldLines : [hasImage ? "- No text details; use the photo." : "- No usable product data was provided."]),
-  ];
-  if (instruction) lines.push("", `Instruction from the store owner: ${instruction}`);
-  if (hasImage) {
-    lines.push(
-      "",
-      fieldLines.length > 0
-        ? "The attached photo shows the product."
-        : "The attached photo shows the product. Identify it from the photo, then find the pages that sell it."
-    );
+  const hasText = fieldLines.length > 0;
+  const sellers =
+    "from any seller in any country or language: the brand's own site, manufacturers and factories (for example Alibaba, 1688), wholesalers, retailers and marketplaces.";
+  const extraAngles = attempt === 2 ? " Use search angles beyond the obvious ones." : "";
+
+  // Photo only: the first line tells Google to identify the item before searching.
+  const task =
+    !hasText && hasImage
+      ? `Identify the product in the attached photo, then find every web page that sells that exact product, ${sellers}${extraAngles}`
+      : `Find every web page that sells this exact product, ${sellers}${extraAngles}`;
+
+  const lines: string[] = [task];
+  if (hasText || !hasImage) {
+    lines.push("", "PRODUCT", ...(hasText ? fieldLines : ["- No usable product data was provided."]));
   }
+  if (instruction) lines.push("", `Instruction from the store owner: ${instruction}`);
+  // Photo plus text: one plain line. Asking Google to "confirm" pages against the photo made it
+  // over-strict when the photo was slightly off.
+  if (hasText && hasImage) lines.push("", "The attached photo shows the same product.");
   lines.push(
     "",
-    "List every website that has this exact product: the manufacturer or brand's own site, factories and suppliers (including Chinese ones, for example Alibaba, 1688, AliExpress, Made-in-China), wholesalers, distributors, retailers and marketplaces, in any country or language. Each as its own page. Aim for 10 or more when they exist. Same product only, not a similar one; the same item in another colour or size does not count.",
-    "Return full https:// product page links, best first, as JSON, with no commentary:",
+    "Same product only. A different colour, size or model does not count. Aim for 10 or more pages. Return full product page links (no search or category pages), best first, as JSON only:",
     '{"sources":[{"url":"https://...","title":"page title"}]}'
   );
   return lines.join("\n");

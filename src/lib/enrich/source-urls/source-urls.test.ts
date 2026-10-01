@@ -49,7 +49,7 @@ const row = { Title: "Widget WX-1", Brand: "Acme" };
 describe("Source URLs query", () => {
   it("is a short task: the product, the custom instruction and the output format", () => {
     const query = buildSourceUrlsQuery({ rowData: row, customInstruction: "Prefer the manufacturer's own site." });
-    expect(query).toContain("Find web pages for this exact product. Return links only.");
+    expect(query).toContain("Find every web page that sells this exact product");
     expect(query).toContain("- Title: Widget WX-1");
     expect(query).toContain("- Brand: Acme");
     expect(query).toContain("Instruction from the store owner: Prefer the manufacturer's own site.");
@@ -65,25 +65,33 @@ describe("Source URLs query", () => {
 
   it("asks for every kind of seller, manufacturers and Chinese sources included, in any language", () => {
     const query = buildSourceUrlsQuery({ rowData: row });
-    expect(query).toContain("List every website that has this exact product");
-    expect(query).toContain("the manufacturer or brand's own site, factories and suppliers");
-    expect(query).toContain("Alibaba, 1688, AliExpress, Made-in-China");
-    expect(query).toContain("in any country or language");
-    expect(query).toContain("Aim for 10 or more when they exist");
-    expect(query).toContain("another colour or size does not count");
-    expect(query).toContain("Return full https:// product page links, best first, as JSON");
+    expect(query).toContain("from any seller in any country or language");
+    expect(query).toContain("the brand's own site, manufacturers and factories (for example Alibaba, 1688)");
+    expect(query).toContain("wholesalers, retailers and marketplaces");
+    expect(query).toContain("Aim for 10 or more pages");
+    expect(query).toContain("A different colour, size or model does not count");
+    expect(query).toContain("(no search or category pages), best first, as JSON only");
   });
 
   it("mentions the photo only when one is sent, and works with the photo alone", () => {
-    expect(buildSourceUrlsQuery({ rowData: row, hasImage: true })).toContain("The attached photo shows the product.");
+    // Text only: no photo wording.
     expect(buildSourceUrlsQuery({ rowData: row })).not.toContain("photo");
+
+    // Photo only: identify first, no PRODUCT block.
     const photoOnly = buildSourceUrlsQuery({ rowData: { Img: "[1 image attached]" }, hasImage: true });
-    expect(photoOnly).toContain("- No text details; use the photo.");
-    expect(photoOnly).toContain("The attached photo shows the product. Identify it from the photo, then find the pages that sell it.");
-    // With text details the photo line stays short.
-    const withText = buildSourceUrlsQuery({ rowData: row, hasImage: true });
-    expect(withText).toContain("The attached photo shows the product.");
-    expect(withText).not.toContain("Identify it from the photo");
+    expect(photoOnly).toContain("Identify the product in the attached photo, then find every web page that sells that exact product");
+    expect(photoOnly).not.toContain("PRODUCT");
+    expect(photoOnly).not.toContain("No usable product data");
+
+    // Text and photo: the photo confirms the match.
+    const both = buildSourceUrlsQuery({ rowData: row, hasImage: true });
+    expect(both).toContain("Find every web page that sells this exact product");
+    expect(both).toContain("- Title: Widget WX-1");
+    expect(both).toContain("The attached photo shows the same product.");
+    expect(both).not.toContain("Identify the product in the attached photo");
+
+    // Neither: says so plainly.
+    expect(buildSourceUrlsQuery({ rowData: {} })).toContain("No usable product data was provided.");
   });
 
   it("leaves out the instruction line without one, and asks for other angles on attempt 2", () => {
@@ -250,7 +258,7 @@ describe("searchSourceUrls", () => {
     const result = await searchSourceUrls({ ...input, imageUrl: "https://cdn.example.com/widget.jpg" });
     const called = new URL(String(fetchMock.mock.calls[0]![0]));
     expect(called.searchParams.get("url")).toBe("https://cdn.example.com/widget.jpg");
-    expect(called.searchParams.get("q")).toContain("The attached photo shows the product.");
+    expect(called.searchParams.get("q")).toContain("The attached photo shows the same product.");
     expect(result.usedImage).toBe(true);
   });
 

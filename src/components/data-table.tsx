@@ -620,8 +620,11 @@ function SourceUrlsCell({ sources, isEditable, rowId, enrichKey }: { sources: { 
   const [open, setOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState<{ title: string; uri: string }[]>([]);
-  const preview = sources.slice(0, 3);
-  const remaining = sources.length - 3;
+  // The default row only fits three lines. With more than three sources, show two
+  // links and use the third line for the "+N more" chip, so it is never cropped.
+  const previewCount = sources.length > 3 ? 2 : sources.length;
+  const preview = sources.slice(0, previewCount);
+  const remaining = sources.length - previewCount;
 
   const startEdit = () => {
     setDraft(sources.map((s) => ({ ...s })));
@@ -655,7 +658,7 @@ function SourceUrlsCell({ sources, isEditable, rowId, enrichKey }: { sources: { 
         {remaining > 0 && (
           <button
             onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-            className="text-[10px] text-primary hover:underline text-left cursor-pointer"
+            className="self-start rounded-full bg-primary/10 px-2 py-px text-[10px] font-medium leading-4 text-primary hover:bg-primary/20 cursor-pointer"
           >
             +{remaining} more
           </button>

@@ -33,8 +33,10 @@ description: >-
   instruction; a new product sheet starts with only Source URLs switched on.
 - **Source URLs is not an OpenAI column on product sheets.** `enrichRow` routes the column with id `sourceUrls`
   (by id, never by the `sourceUrls` type — Image sources `imageSourceUrls` shares the type) to
-  `src/lib/enrich/source-urls/` (one Google AI Mode search via SearchApi with a tiny prompt: "find web pages for this
-  exact product", the row's source fields, the custom instruction if any, one photo max; asks for every kind of
+  `src/lib/enrich/source-urls/` (one Google AI Mode search via SearchApi with a tiny prompt that adapts to the input
+  (text only: "find every web page that sells this exact product" + the row's fields; photo only: "identify the
+  product in the attached photo, then find…"; both: fields + "the attached photo shows the same product"), plus the
+  custom instruction if any, one photo max; asks for every kind of
   seller — manufacturer/brand site, Chinese factories and suppliers such as Alibaba/1688, wholesalers, retailers,
   marketplaces, any language — with a soft "aim for 10 or more"; no website rules — a safety cap of 15 links in code
   only; code-side link checks that also allow plain `http://` pages (opt-in `allowHttp`, Image Finder stays https
