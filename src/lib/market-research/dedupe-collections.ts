@@ -48,13 +48,17 @@ export async function checkCollectionDuplicates(
   let duplicateIds = new Set<string>();
   let matchesById = new Map<string, Array<{ id: string; name: string }>>();
   let geminiCheckFailed = false;
+  // Ids in batches that failed. Only these are unknown when the rest ran.
+  let uncheckedIds = new Set<string>();
   if (!catalogFetchFailed && existingCollections.length > 0 && newCollections.length > 0) {
     const result = await runDuplicateCollectionExclusion(newCollections, existingCollections);
     duplicateIds = result.duplicateIds;
     matchesById = result.matchesById;
     geminiCheckFailed = !result.checked;
+    uncheckedIds = result.uncheckedIds ?? new Set<string>();
   }
   const dedupeCheckFailed = catalogFetchFailed || geminiCheckFailed;
+  const everyNewUnknown = catalogFetchFailed || (geminiCheckFailed && uncheckedIds.size === 0);
 
   const updated: ProposedCollection[] = collections.map((c) => {
     if (duplicateIds.has(c.id)) {
@@ -71,7 +75,8 @@ export async function checkCollectionDuplicates(
     if (c.status === "new") {
       return {
         ...c,
-        dedupeCheckStatus: dedupeCheckFailed ? ("unknown" as const) : ("ok" as const),
+        dedupeCheckStatus:
+          everyNewUnknown || uncheckedIds.has(c.id) ? ("unknown" as const) : ("ok" as const),
       };
     }
     return c;

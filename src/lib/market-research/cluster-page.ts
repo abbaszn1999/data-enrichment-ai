@@ -12,6 +12,7 @@ import {
   termEmbedText,
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
+  type Vec,
 } from "@/lib/market-research/agent/embeddings";
 import {
   appendEmbeddingsShardAdmin,
@@ -61,8 +62,8 @@ export type CollectionsContext = {
   seedRowById: Map<string, MockSeedRow>;
   parentNiches: string[];
   products: MarketResearchProduct[];
-  termVectors: Map<string, number[]>;
-  productVectors: Map<string, number[]>;
+  termVectors: Map<string, Vec>;
+  productVectors: Map<string, Vec>;
 };
 
 async function embedMissing<T extends { id: string; text: string; collectionId?: string }>(
@@ -71,7 +72,7 @@ async function embedMissing<T extends { id: string; text: string; collectionId?:
   projectId: string,
   kind: "terms" | "products",
   pending: T[],
-  into: Map<string, number[]>
+  into: Map<string, Vec>
 ): Promise<void> {
   if (pending.length === 0 || !embeddingsAvailable()) return;
   const run = await runWithConcurrency(
@@ -143,12 +144,14 @@ export async function loadCollectionsContext(
   const seedRowById = new Map(seedRows.map((row) => [row.id, row]));
   const parentNiches = (nichesSlice?.structuredNiches ?? []).map((niche) => niche.name);
 
-  const termVectors = new Map(
-    [...termEmbeddings.entries()].map(([id, value]) => [id, value.vector])
-  );
-  const productVectors = new Map(
-    [...productEmbeddings.entries()].map(([id, value]) => [id, value.vector])
-  );
+  // Built in place, without an intermediate [id, vector] array per entry, so
+  // tens of thousands of vectors are never held twice.
+  const termVectors = new Map<string, Vec>();
+  for (const [id, value] of termEmbeddings) termVectors.set(id, value.vector);
+  const productVectors = new Map<string, Vec>();
+  for (const [id, value] of productEmbeddings) productVectors.set(id, value.vector);
+  termEmbeddings.clear();
+  productEmbeddings.clear();
 
   // Vectors written by the browser-driven passes may be missing or not yet
   // readable. Embed whatever is missing here so matching never silently

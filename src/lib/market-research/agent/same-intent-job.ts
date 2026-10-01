@@ -11,7 +11,10 @@ import {
   exactIntentKey,
   judgePackedClusters,
   nearestLeaderIndex,
+  nearestQuantLeader,
   packClusters,
+  quantizeVector,
+  type QuantVec,
   SAME_INTENT_COSINE,
   SAME_INTENT_EMBEDDING_DIMENSIONS,
   SAME_INTENT_PARALLEL,
@@ -143,31 +146,6 @@ function categoryIntentTerms(
   return terms;
 }
 
-/** Unit-normalized int8 copy of a vector, the same quantization the stored vectors use. */
-function quantize(vector: number[]): { values: Int8Array; norm: number } {
-  let magSq = 0;
-  for (const v of vector) magSq += v * v;
-  const mag = Math.sqrt(magSq) || 1;
-  const values = new Int8Array(vector.length);
-  let norm = 0;
-  for (let i = 0; i < vector.length; i += 1) {
-    const q = Math.max(-127, Math.min(127, Math.round((vector[i]! / mag) * 127)));
-    values[i] = q;
-    norm += q * q;
-  }
-  return { values, norm: Math.sqrt(norm) || 1 };
-}
-
-function int8Cosine(
-  a: { values: Int8Array; norm: number },
-  b: { values: Int8Array; norm: number }
-): number {
-  const n = Math.min(a.values.length, b.values.length);
-  let dot = 0;
-  for (let i = 0; i < n; i += 1) dot += a.values[i]! * b.values[i]!;
-  return dot / (a.norm * b.norm);
-}
-
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -202,9 +180,7 @@ export async function runSameIntentInMemory(
   await onProgress?.({ done: 0, total });
   if (survivors.length === 0) return state.drops;
 
-  const vectors: Array<{ values: Int8Array; norm: number } | null> = new Array(
-    survivors.length
-  ).fill(null);
+  const vectors: Array<QuantVec | null> = new Array(survivors.length).fill(null);
   for (let offset = 0; offset < survivors.length; offset += EMBED_PAGE) {
     const slice = survivors.slice(offset, offset + EMBED_PAGE);
     const embedded = await embedTexts(
@@ -212,7 +188,7 @@ export async function runSameIntentInMemory(
       SAME_INTENT_EMBEDDING_DIMENSIONS
     );
     embedded.forEach((vector, index) => {
-      vectors[offset + index] = vector && vector.length > 0 ? quantize(vector) : null;
+      vectors[offset + index] = vector && vector.length > 0 ? quantizeVector(vector) : null;
     });
     state.embedOffset = offset + slice.length;
     await onProgress?.({ done: state.embedOffset, total });
@@ -220,22 +196,18 @@ export async function runSameIntentInMemory(
   state.phase = "cluster";
   await save();
 
-  const leaders: Array<{ index: number; vector: { values: Int8Array; norm: number } }> = [];
+  const leaders: Array<{ index: number; vector: QuantVec }> = [];
+  // Parallel array of just the vectors, so the hot loop walks a flat list.
+  const leaderVectors: QuantVec[] = [];
   const membersByLeader = new Map<number, number[]>();
   for (let index = 0; index < survivors.length; index += 1) {
     const vector = vectors[index];
     if (vector) {
-      let best = -1;
-      let bestSim = -1;
-      for (let l = 0; l < leaders.length; l += 1) {
-        const sim = int8Cosine(vector, leaders[l]!.vector);
-        if (sim >= SAME_INTENT_COSINE && sim > bestSim) {
-          best = l;
-          bestSim = sim;
-        }
-      }
-      if (best === -1) leaders.push({ index, vector });
-      else {
+      const best = nearestQuantLeader(vector, leaderVectors, SAME_INTENT_COSINE);
+      if (best === -1) {
+        leaders.push({ index, vector });
+        leaderVectors.push(vector);
+      } else {
         const leaderIndex = leaders[best]!.index;
         const list = membersByLeader.get(leaderIndex) ?? [];
         list.push(index);

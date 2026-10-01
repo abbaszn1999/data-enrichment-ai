@@ -260,11 +260,7 @@ export type PushCollectionsStoreResult = {
   error?: string;
 };
 
-export async function pushCollectionsApi(
-  workspaceId: string,
-  projectId: string,
-  collectionIds: string[]
-): Promise<{
+export type PushCollectionsResponse = {
   ok?: boolean;
   chargedUsd: number;
   refundedUsd?: number;
@@ -273,13 +269,68 @@ export async function pushCollectionsApi(
   failedCount?: number;
   pushedIds?: string[];
   storeResults?: PushCollectionsStoreResult[];
-}> {
-  const response = await fetch("/api/market-research/push", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, projectId, collectionIds }),
-  });
-  return readJson(response);
+  /** Set when a later chunk was refused (for example the wallet ran out) and the rest were not attempted. */
+  stoppedReason?: string;
+};
+
+/**
+ * Collections per push request. The store API is called one collection at a
+ * time, so a very large push in one request would run for an hour and be cut
+ * off. Chunks keep each request short; the server skips anything already
+ * pushed, so a stopped run resumes by simply selecting the rest again.
+ */
+export const PUSH_CHUNK_SIZE = 25;
+
+export async function pushCollectionsApi(
+  workspaceId: string,
+  projectId: string,
+  collectionIds: string[],
+  onProgress?: (progress: { done: number; total: number }) => void
+): Promise<PushCollectionsResponse> {
+  const total = collectionIds.length;
+  const post = async (ids: string[]): Promise<PushCollectionsResponse> => {
+    const response = await fetch("/api/market-research/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId, projectId, collectionIds: ids }),
+    });
+    return readJson(response);
+  };
+  if (total <= PUSH_CHUNK_SIZE) return post(collectionIds);
+
+  const merged: PushCollectionsResponse = {
+    ok: true,
+    chargedUsd: 0,
+    refundedUsd: 0,
+    pushedCount: 0,
+    failedCount: 0,
+    pushedIds: [],
+    storeResults: [],
+  };
+  for (let offset = 0; offset < total; offset += PUSH_CHUNK_SIZE) {
+    const ids = collectionIds.slice(offset, offset + PUSH_CHUNK_SIZE);
+    let part: PushCollectionsResponse;
+    try {
+      part = await post(ids);
+    } catch (error) {
+      // Nothing done yet: surface the error as before. Otherwise keep what
+      // was published and report the rest as not attempted.
+      if (offset === 0) throw error;
+      merged.stoppedReason =
+        error instanceof Error ? error.message : "Publishing stopped before finishing";
+      merged.failedCount = (merged.failedCount ?? 0) + (total - offset);
+      merged.ok = false;
+      break;
+    }
+    merged.chargedUsd += part.chargedUsd ?? 0;
+    merged.refundedUsd = (merged.refundedUsd ?? 0) + (part.refundedUsd ?? 0);
+    merged.pushedCount = (merged.pushedCount ?? 0) + (part.pushedCount ?? 0);
+    merged.failedCount = (merged.failedCount ?? 0) + (part.failedCount ?? 0);
+    merged.pushedIds!.push(...(part.pushedIds ?? []));
+    merged.storeResults!.push(...(part.storeResults ?? []));
+    onProgress?.({ done: Math.min(total, offset + ids.length), total });
+  }
+  return merged;
 }
 
 // ─── Internal link graph as a cursor job ──────────────────────────────────
@@ -346,22 +397,53 @@ export async function runBuildInternalLinksLoop(
   }
 }
 
-export async function syncSeoApi(
-  workspaceId: string,
-  projectId: string,
-  collectionIds?: string[]
-): Promise<{
+export type SyncSeoResponse = {
   ok: boolean;
   syncedCount: number;
   results?: Array<{ collectionId: string; ok: boolean; error?: string }>;
   errors?: string[];
-}> {
-  const response = await fetch("/api/market-research/sync-seo", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, projectId, collectionIds }),
-  });
-  return readJson(response);
+};
+
+/** Collections per SEO sync request, for the same reason as PUSH_CHUNK_SIZE. */
+export const SYNC_SEO_CHUNK_SIZE = 25;
+
+export async function syncSeoApi(
+  workspaceId: string,
+  projectId: string,
+  collectionIds?: string[]
+): Promise<SyncSeoResponse> {
+  const post = async (ids?: string[]): Promise<SyncSeoResponse> => {
+    const response = await fetch("/api/market-research/sync-seo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId, projectId, collectionIds: ids }),
+    });
+    return readJson(response);
+  };
+  if (!collectionIds || collectionIds.length <= SYNC_SEO_CHUNK_SIZE) {
+    return post(collectionIds);
+  }
+
+  const merged: SyncSeoResponse = { ok: true, syncedCount: 0, results: [], errors: [] };
+  for (let offset = 0; offset < collectionIds.length; offset += SYNC_SEO_CHUNK_SIZE) {
+    const ids = collectionIds.slice(offset, offset + SYNC_SEO_CHUNK_SIZE);
+    try {
+      const part = await post(ids);
+      merged.ok = merged.ok && part.ok;
+      merged.syncedCount += part.syncedCount ?? 0;
+      merged.results!.push(...(part.results ?? []));
+      merged.errors!.push(...(part.errors ?? []));
+    } catch (error) {
+      // Report this chunk's collections as failed and carry on with the rest.
+      const message = error instanceof Error ? error.message : "Sync failed";
+      merged.ok = false;
+      merged.errors!.push(message);
+      for (const collectionId of ids) {
+        merged.results!.push({ collectionId, ok: false, error: message });
+      }
+    }
+  }
+  return merged;
 }
 
 export type AgentAnalyzeResponse = {

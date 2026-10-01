@@ -7,6 +7,7 @@ import {
 } from "@/lib/market-research/api-schema";
 import { fetchStoreCatalog } from "@/lib/market-research/agent/store-catalog";
 import { runStage5CollectionClustering } from "@/lib/market-research/agent/stage5-collection-clusterer";
+import type { Vec } from "@/lib/market-research/agent/embeddings";
 import {
   loadClassifiedCategoryTerms,
   loadExtractRowsAdmin,
@@ -114,12 +115,10 @@ async function handlePost(request: NextRequest) {
         loadEmbeddingsMap(auth.admin, parsed.data.workspaceId, parsed.data.projectId, "terms"),
         loadEmbeddingsMap(auth.admin, parsed.data.workspaceId, parsed.data.projectId, "products"),
       ]);
-      const termVectors = new Map(
-        [...termEmbeddings.entries()].map(([id, v]) => [id, v.vector])
-      );
-      const productVectors = new Map(
-        [...productEmbeddings.entries()].map(([id, v]) => [id, v.vector])
-      );
+      const termVectors = new Map<string, Vec>();
+      for (const [id, v] of termEmbeddings) termVectors.set(id, v.vector);
+      const productVectors = new Map<string, Vec>();
+      for (const [id, v] of productEmbeddings) productVectors.set(id, v.vector);
 
       result = await runStage5CollectionClustering({
         storeName,

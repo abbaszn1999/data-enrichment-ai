@@ -10,6 +10,12 @@ export type DuplicateExclusionResult = {
    * response — even an empty or malformed one — was actually parsed.
    */
   checked: boolean;
+  /**
+   * New-collection ids whose batch failed after retries. Only these are
+   * unknown; every other id was genuinely compared. Absent or empty when the
+   * whole check ran (and `checked` carries the all-or-nothing failure case).
+   */
+  uncheckedIds?: Set<string>;
 };
 
 type RawDuplicateItem = {

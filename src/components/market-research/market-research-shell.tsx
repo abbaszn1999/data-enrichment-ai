@@ -20,6 +20,7 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { useRole } from "@/hooks/use-role";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { previewBalance } from "@/lib/market-research/billing";
+import { isPushedCollection } from "@/lib/market-research/push-coverage";
 import {
   activeStoreAnalysisApi,
   analyzeStoreApi,
@@ -3123,7 +3124,9 @@ export function MarketResearchShell() {
         toast.error(
           `${pushResult.failedCount} collection${pushResult.failedCount === 1 ? "" : "s"} failed to publish`,
           {
-            description: "You were not charged for the ones that failed. Select them again to retry.",
+            description:
+              pushResult.stoppedReason ??
+              "You were not charged for the ones that failed. Select them again to retry.",
           }
         );
       }
@@ -3366,7 +3369,16 @@ export function MarketResearchShell() {
     const projectId = activeProject.id;
     setSyncingSeoByProject((prev) => ({ ...prev, [projectId]: true }));
     try {
-      const res = await syncSeoApi(workspaceId, projectId);
+      // Pass the pushed ids so a big store syncs in short requests. With none
+      // known locally the server picks its own targets, as before.
+      const pushedIds = (proposedCollectionsByProject[projectId] ?? [])
+        .filter(isPushedCollection)
+        .map((c) => c.id);
+      const res = await syncSeoApi(
+        workspaceId,
+        projectId,
+        pushedIds.length > 0 ? pushedIds : undefined
+      );
 
       // Stamp each row with its own outcome. This lives on the content slice,
       // so the table still reports the truth after a refresh.
@@ -3443,7 +3455,9 @@ export function MarketResearchShell() {
         toast.error(
           `${pushResult.failedCount} collection${pushResult.failedCount === 1 ? "" : "s"} failed to publish`,
           {
-            description: "You were not charged for the ones that failed. Select them again to retry.",
+            description:
+              pushResult.stoppedReason ??
+              "You were not charged for the ones that failed. Select them again to retry.",
           }
         );
       }

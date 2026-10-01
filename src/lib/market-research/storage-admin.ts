@@ -630,11 +630,11 @@ export async function appendEmbeddingsShardAdmin(
 
 export type DecodedEmbedding = {
   hash: string;
-  vector: number[];
+  vector: Int8Array;
   collectionId?: string;
 };
 
-/** Reads every shard for a kind and decodes vectors back to float arrays. */
+/** Reads every shard for a kind and decodes vectors to compact int8 arrays. */
 export async function loadEmbeddingsMap(
   admin: SupabaseClient,
   workspaceId: string,

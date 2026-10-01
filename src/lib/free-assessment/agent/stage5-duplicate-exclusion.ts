@@ -14,6 +14,9 @@ export interface ExistingCollectionForDuplicateCheck {
   description?: string;
 }
 
+/** New collections judged per Gemini call, so the reply stays bounded on big runs. */
+export const DUPLICATE_CHECK_BATCH = 300;
+
 interface GeminiDuplicateExclusionResponse {
   duplicates: Array<{ id: string; status: "duplicate" }>;
 }
@@ -35,10 +38,24 @@ const DUPLICATE_EXCLUSION_SYSTEM_INSTRUCTION = `Apply the single duplicate test 
  */
 export async function runDuplicateCollectionExclusion(
   newCollections: NewCollectionForDuplicateCheck[],
-  existingCollections: ExistingCollectionForDuplicateCheck[]
+  existingCollections: ExistingCollectionForDuplicateCheck[],
+  batchSize = DUPLICATE_CHECK_BATCH
 ): Promise<Set<string>> {
   if (newCollections.length === 0 || existingCollections.length === 0) {
     return new Set();
+  }
+  if (newCollections.length > batchSize) {
+    // Each batch still sees the full existing list; only the new side is split.
+    const merged = new Set<string>();
+    for (let i = 0; i < newCollections.length; i += batchSize) {
+      const found = await runDuplicateCollectionExclusion(
+        newCollections.slice(i, i + batchSize),
+        existingCollections,
+        batchSize
+      );
+      for (const id of found) merged.add(id);
+    }
+    return merged;
   }
 
   const userPrompt = `Compare every new collection against the existing collections and flag duplicates by shopper-intent coverage:

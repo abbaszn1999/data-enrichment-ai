@@ -4,7 +4,7 @@ import type {
   ProposedCollection,
 } from "@/components/market-research/workspace-data";
 import { runGeminiMarketResearch } from "./gemini-runner";
-import { cosineSimilarity, contentHash } from "./embeddings";
+import { cosineSimilarity, contentHash, type Vec } from "./embeddings";
 import { runWithConcurrency } from "@/lib/sync/core/batch-executor";
 import {
   acceptCollectionExclusions,
@@ -53,9 +53,9 @@ export interface Stage5ClusteringInput {
    */
   collectionIdByKeywordId?: Record<string, string>;
   /** Term embedding vectors keyed by keyword id, decoded from int8 storage. */
-  termVectors?: Map<string, number[]>;
+  termVectors?: Map<string, Vec>;
   /** Product embedding vectors keyed by product id, decoded from int8 storage. */
-  productVectors?: Map<string, number[]>;
+  productVectors?: Map<string, Vec>;
 }
 
 export interface Stage5ClusteringResult {
@@ -231,9 +231,9 @@ export function scoreCollectionAgainstIndex(
  * embedding pass never masquerades as "this product doesn't match".
  */
 export function computeCollectionVectorMatches(
-  termVector: number[],
+  termVector: Vec,
   candidateProducts: MarketResearchProduct[],
-  productVectors: Map<string, number[]>,
+  productVectors: Map<string, Vec>,
   minCosineThreshold = 0.32,
   topCap = 200
 ): CollectionProductMatch[] {
@@ -302,8 +302,8 @@ export async function runStage5CollectionClustering(
   const seedRows = input.seedRows ?? [];
   const defaultNiche = input.parentNiches?.[0] || "General";
   const collectionIdByKeywordId = input.collectionIdByKeywordId ?? {};
-  const termVectors = input.termVectors ?? new Map<string, number[]>();
-  const productVectors = input.productVectors ?? new Map<string, number[]>();
+  const termVectors = input.termVectors ?? new Map<string, Vec>();
+  const productVectors = input.productVectors ?? new Map<string, Vec>();
   const useVectors = termVectors.size > 0 && productVectors.size > 0;
 
   if (!input.keywords || input.keywords.length === 0) {

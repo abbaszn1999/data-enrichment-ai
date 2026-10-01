@@ -1,4 +1,4 @@
-import { cosineSimilarity } from "./embeddings";
+import { cosineSimilarity, type Vec } from "./embeddings";
 
 /** Candidate net only. Cosine never deletes a term; Gemini does. */
 export const SAME_INTENT_COSINE = 0.84;
@@ -70,7 +70,99 @@ export function collapseExactCopies(terms: IntentTerm[]): {
   return { kept, drops };
 }
 
-export type VectorTerm = IntentTerm & { vector: number[] | null };
+export type VectorTerm = IntentTerm & { vector: Vec | null };
+
+/**
+ * A unit-normalized int8 vector with its norms precomputed, so a comparison
+ * is one integer dot product and one division.
+ */
+export type QuantVec = { values: Int8Array; norm: number; prefixNorm: number };
+
+/**
+ * Leading dimensions used for the cheap first check. text-embedding-3
+ * vectors put usable meaning in a leading slice, so most unrelated pairs can
+ * be rejected after reading 256 of 1536 numbers.
+ */
+export const PREFIX_DIMS = 256;
+/**
+ * A pair is only compared at full width when its prefix cosine reaches this.
+ * It sits well below SAME_INTENT_COSINE so a real match is not lost to the
+ * prefix being a slightly different estimate of the same angle.
+ */
+export const PREFIX_COSINE = 0.7;
+
+/** Unit-normalized int8 copy of a vector, the same quantization the stored vectors use. */
+export function quantizeVector(vector: Vec): QuantVec {
+  let magSq = 0;
+  for (let i = 0; i < vector.length; i += 1) magSq += vector[i]! * vector[i]!;
+  const mag = Math.sqrt(magSq) || 1;
+  const values = new Int8Array(vector.length);
+  let norm = 0;
+  let prefix = 0;
+  for (let i = 0; i < vector.length; i += 1) {
+    const q = Math.max(-127, Math.min(127, Math.round((vector[i]! / mag) * 127)));
+    values[i] = q;
+    norm += q * q;
+    if (i < PREFIX_DIMS) prefix += q * q;
+  }
+  return { values, norm: Math.sqrt(norm) || 1, prefixNorm: Math.sqrt(prefix) || 1 };
+}
+
+/** Wrap a stored int8 vector (see decodeVectorInt8) without re-quantizing it. */
+export function quantFromInt8(values: Int8Array): QuantVec {
+  let norm = 0;
+  let prefix = 0;
+  for (let i = 0; i < values.length; i += 1) {
+    const q = values[i]!;
+    norm += q * q;
+    if (i < PREFIX_DIMS) prefix += q * q;
+  }
+  return { values, norm: Math.sqrt(norm) || 1, prefixNorm: Math.sqrt(prefix) || 1 };
+}
+
+/** Exact cosine at full width. */
+export function quantCosine(a: QuantVec, b: QuantVec): number {
+  const n = Math.min(a.values.length, b.values.length);
+  let dot = 0;
+  for (let i = 0; i < n; i += 1) dot += a.values[i]! * b.values[i]!;
+  return dot / (a.norm * b.norm);
+}
+
+/**
+ * Nearest leader at or above `threshold`, or -1. With `prefilter`, a leader
+ * is first screened on the leading PREFIX_DIMS and only compared at full
+ * width when that screen passes. The accepted similarity is always the exact
+ * full-width cosine, so the threshold itself is never loosened.
+ */
+export function nearestQuantLeader(
+  vector: QuantVec,
+  leaders: QuantVec[],
+  threshold = SAME_INTENT_COSINE,
+  prefilter = true
+): number {
+  const n = vector.values.length;
+  const p = Math.min(PREFIX_DIMS, n);
+  let best = -1;
+  let bestSim = -1;
+  for (let l = 0; l < leaders.length; l += 1) {
+    const leader = leaders[l]!;
+    const m = Math.min(n, leader.values.length);
+    const pm = Math.min(p, m);
+    let dot = 0;
+    for (let i = 0; i < pm; i += 1) dot += vector.values[i]! * leader.values[i]!;
+    if (prefilter && m > pm) {
+      const prefixSim = dot / (vector.prefixNorm * leader.prefixNorm);
+      if (prefixSim < PREFIX_COSINE) continue;
+    }
+    for (let i = pm; i < m; i += 1) dot += vector.values[i]! * leader.values[i]!;
+    const sim = dot / (vector.norm * leader.norm);
+    if (sim >= threshold && sim > bestSim) {
+      best = l;
+      bestSim = sim;
+    }
+  }
+  return best;
+}
 
 /**
  * Volume-desc leader clustering. Each term joins the nearest earlier leader
@@ -80,8 +172,8 @@ export type VectorTerm = IntentTerm & { vector: number[] | null };
  */
 /** Index of the nearest leader at or above `threshold`, or -1 to become a new leader. */
 export function nearestLeaderIndex(
-  vector: number[] | null,
-  leaders: number[][],
+  vector: Vec | null,
+  leaders: Vec[],
   threshold = SAME_INTENT_COSINE
 ): number {
   if (!vector || vector.length === 0) return -1;
@@ -102,7 +194,7 @@ export function clusterByLeaders(
   threshold = SAME_INTENT_COSINE
 ): IntentTerm[][] {
   const clusters: IntentTerm[][] = [];
-  const leaderVectors: number[][] = [];
+  const leaderVectors: Vec[] = [];
   const leaderClusterIndex: number[] = [];
 
   for (const term of terms) {

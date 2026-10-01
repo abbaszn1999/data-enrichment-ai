@@ -35,9 +35,9 @@ export function contentHash(text: string): string {
  * 1% cosine error — the difference is irrelevant next to the threshold-based
  * candidate cutoff downstream.
  */
-export function encodeVectorInt8(vector: number[]): string {
+export function encodeVectorInt8(vector: Vec): string {
   let magSq = 0;
-  for (const v of vector) magSq += v * v;
+  for (let i = 0; i < vector.length; i++) magSq += vector[i] * vector[i];
   const mag = Math.sqrt(magSq) || 1;
 
   const bytes = new Int8Array(vector.length);
@@ -50,15 +50,20 @@ export function encodeVectorInt8(vector: number[]): string {
   );
 }
 
-/** Inverse of `encodeVectorInt8`. Returns a vector scaled back to ~unit length. */
-export function decodeVectorInt8(base64: string, dims: number): number[] {
+/** Any numeric vector; cosine similarity ignores scale, so int8 and float vectors mix freely. */
+export type Vec = ArrayLike<number>;
+
+/**
+ * Inverse of `encodeVectorInt8`. Returns the stored int8 values as a compact
+ * copy (one byte per dimension, against eight for a number[]), which is what
+ * keeps tens of thousands of vectors in memory. The values are the unit
+ * vector times 127; only cosine similarity should be taken from them.
+ */
+export function decodeVectorInt8(base64: string, dims: number): Int8Array {
   const buf = Buffer.from(base64, "base64");
-  const bytes = new Int8Array(buf.buffer, buf.byteOffset, Math.min(dims, buf.byteLength));
-  const out = new Array<number>(bytes.length);
-  for (let i = 0; i < bytes.length; i++) {
-    out[i] = bytes[i] / 127;
-  }
-  return out;
+  const view = new Int8Array(buf.buffer, buf.byteOffset, Math.min(dims, buf.byteLength));
+  // Copy so a small vector does not pin the larger buffer it was sliced from.
+  return Int8Array.from(view);
 }
 
 /**
@@ -195,7 +200,7 @@ export async function embedTexts(
 }
 
 /** Cosine similarity for two equal-length dense vectors. */
-export function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: Vec, b: Vec): number {
   if (a.length === 0 || b.length !== a.length) return 0;
 
   let dot = 0;
