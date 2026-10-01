@@ -26,7 +26,7 @@ import { extractJsonValues } from "../image-finder/exact/json-extract";
  * mentions it: it only keeps one cell, the saved sheet and the next prompt
  * (when this column is used as a source) from growing without bound.
  */
-export const SOURCE_URLS_MAX = 10;
+export const SOURCE_URLS_MAX = 15;
 
 const MAX_FIELD_CHARS = 300;
 const MAX_FIELDS = 20;
@@ -95,10 +95,18 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
     ...(fieldLines.length > 0 ? fieldLines : [hasImage ? "- No text details; use the photo." : "- No usable product data was provided."]),
   ];
   if (instruction) lines.push("", `Instruction from the store owner: ${instruction}`);
-  if (hasImage) lines.push("", "The attached photo shows the product.");
+  if (hasImage) {
+    lines.push(
+      "",
+      fieldLines.length > 0
+        ? "The attached photo shows the product."
+        : "The attached photo shows the product. Identify it from the photo, then find the pages that sell it."
+    );
+  }
   lines.push(
     "",
-    "Only the exact same product counts, not a similar one or another variant. Return every full https:// product page you find for it, best first, as JSON, with no commentary:",
+    "List every website that has this exact product: the manufacturer or brand's own site, factories and suppliers (including Chinese ones, for example Alibaba, 1688, AliExpress, Made-in-China), wholesalers, distributors, retailers and marketplaces, in any country or language. Each as its own page. Aim for 10 or more when they exist. Same product only, not a similar one; the same item in another colour or size does not count.",
+    "Return full https:// product page links, best first, as JSON, with no commentary:",
     '{"sources":[{"url":"https://...","title":"page title"}]}'
   );
   return lines.join("\n");
@@ -238,7 +246,8 @@ export function harvestSourceCandidates(texts: string[], referenceLinks: string[
   const out: SourceCandidate[] = [];
   const add = (rawUrl: string, title?: string) => {
     const url = rawUrl.replace(/[.,;:!?)\]]+$/, "").trim();
-    if (!/^https:\/\//i.test(url)) return;
+    // Plain http:// pages count too: many small manufacturer and factory sites still use it.
+    if (!/^https?:\/\//i.test(url)) return;
     const key = url.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);

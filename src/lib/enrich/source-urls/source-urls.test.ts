@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDefaultEnrichmentColumns } from "@/types";
 import { enrichRow } from "../agent";
 import { billedCostsOf, OPENAI_RESPONSES_URL } from "../openai";
+import { checkExactLinksDetailed } from "../image-finder/exact/links-checks";
 import { buildExactLinksQuery } from "../image-finder/exact/links-skill";
 import { usesGoogleSourceUrls } from "./agent";
 import { looksLikeListingPage, pageKey, rankSources, searchSourceUrls } from "./search";
@@ -60,7 +61,17 @@ describe("Source URLs query", () => {
     const query = buildSourceUrlsQuery({ rowData: row, customInstruction: "x" });
     expect(query).not.toMatch(/up to \d|maximum \d/i);
     expect(query).not.toMatch(/website rules|STEP \d|identified by|never pad/i);
-    expect(query).toContain("Return every full https:// product page you find for it");
+  });
+
+  it("asks for every kind of seller, manufacturers and Chinese sources included, in any language", () => {
+    const query = buildSourceUrlsQuery({ rowData: row });
+    expect(query).toContain("List every website that has this exact product");
+    expect(query).toContain("the manufacturer or brand's own site, factories and suppliers");
+    expect(query).toContain("Alibaba, 1688, AliExpress, Made-in-China");
+    expect(query).toContain("in any country or language");
+    expect(query).toContain("Aim for 10 or more when they exist");
+    expect(query).toContain("another colour or size does not count");
+    expect(query).toContain("Return full https:// product page links, best first, as JSON");
   });
 
   it("mentions the photo only when one is sent, and works with the photo alone", () => {
@@ -68,7 +79,11 @@ describe("Source URLs query", () => {
     expect(buildSourceUrlsQuery({ rowData: row })).not.toContain("photo");
     const photoOnly = buildSourceUrlsQuery({ rowData: { Img: "[1 image attached]" }, hasImage: true });
     expect(photoOnly).toContain("- No text details; use the photo.");
-    expect(photoOnly).toContain("The attached photo shows the product.");
+    expect(photoOnly).toContain("The attached photo shows the product. Identify it from the photo, then find the pages that sell it.");
+    // With text details the photo line stays short.
+    const withText = buildSourceUrlsQuery({ rowData: row, hasImage: true });
+    expect(withText).toContain("The attached photo shows the product.");
+    expect(withText).not.toContain("Identify it from the photo");
   });
 
   it("leaves out the instruction line without one, and asks for other angles on attempt 2", () => {
@@ -104,6 +119,12 @@ describe("Image Finder's Exact Match prompt is not affected", () => {
     expect(query).toContain("Never pad the list with near matches");
     expect(query).toContain('"result":"MATCHES_FOUND" or "NO_EXACT_MATCH"');
     expect(buildSourceUrlsQuery({ rowData: row })).not.toBe(query);
+  });
+
+  it("still takes only https:// pages (plain http is a Source URLs-only option)", () => {
+    const candidates = [{ url: "http://shop.example.com/p/widget" }, { url: "https://shop.example.com/p/widget" }];
+    expect(checkExactLinksDetailed(candidates, []).links.map((l) => l.url)).toEqual(["https://shop.example.com/p/widget"]);
+    expect(checkExactLinksDetailed(candidates, [], 10, undefined, { allowHttp: true }).links).toHaveLength(2);
   });
 });
 
@@ -161,6 +182,9 @@ describe("Source URLs ranking", () => {
     expect(looksLikeListingPage("https://www.amazon.com/stores/Acme/page/ABC")).toBe(true);
     expect(looksLikeListingPage("https://www.amazon.com/clp/B0CP9Z1S51")).toBe(true);
     expect(looksLikeListingPage("https://shop.example.com/search?q=widget")).toBe(true);
+    expect(looksLikeListingPage("https://www.amazon.com/dyson-v15-detect/s?k=dyson+v15")).toBe(true);
+    expect(looksLikeListingPage("https://www.walmart.com/c/kp/stanley-quencher")).toBe(true);
+    expect(looksLikeListingPage("https://www.walmart.com/ip/Anker-735/1710516052")).toBe(false);
     expect(looksLikeListingPage("https://www.amazon.com/dp/B0CP9Z1S51")).toBe(false);
     expect(looksLikeListingPage("https://shop.example.com/products/widget-wx-1")).toBe(false);
   });
@@ -323,7 +347,7 @@ describe("searchSourceUrls", () => {
   });
 
   it("keeps every page it finds, not just a few, up to the safety cap", async () => {
-    const pages = Array.from({ length: 14 }, (_, i) => ({
+    const pages = Array.from({ length: 20 }, (_, i) => ({
       url: `https://shop${i}.example.com/p/widget-wx-1`,
       title: `Shop ${i}`,
     }));
@@ -332,6 +356,24 @@ describe("searchSourceUrls", () => {
     expect(result.sources).toHaveLength(SOURCE_URLS_MAX);
     expect(result.sources[0]).toEqual({ title: "Shop 0", uri: "https://shop0.example.com/p/widget-wx-1" });
     expect(result.attempts).toBe(1);
+  });
+
+  it("keeps manufacturer and wholesale pages, including plain http:// ones", async () => {
+    const answer = JSON.stringify({
+      sources: [
+        { url: "http://www.acme-factory.cn/product/widget-wx-1.html", title: "Acme factory" },
+        { url: "https://detail.1688.com/offer/123456.html", title: "1688 offer" },
+        { url: "https://www.alibaba.com/product-detail/Widget-WX-1_1600123.html", title: "Alibaba" },
+        { url: "https://www.example.com/", title: "bare domain" },
+      ],
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(aiModeBody(answer), { status: 200 })));
+    const result = await searchSourceUrls(input);
+    expect(result.sources.map((s) => s.uri)).toEqual([
+      "http://www.acme-factory.cn/product/widget-wx-1.html",
+      "https://detail.1688.com/offer/123456.html",
+      "https://www.alibaba.com/product-detail/Widget-WX-1_1600123.html",
+    ]);
   });
 
   it("does not search a second time when the first search found pages, however few", async () => {

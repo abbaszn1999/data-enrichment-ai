@@ -51,9 +51,9 @@ const NON_PRODUCT_HOST_PATTERNS: RegExp[] = [
  * returned exactly this shape ("footshop.com", "gohailo.com") for links it
  * could describe but not actually point to.
  */
-function fullProductUrl(raw: string): { ok: boolean; host?: string } {
+function fullProductUrl(raw: string, allowHttp = false): { ok: boolean; host?: string } {
   const trimmed = raw.trim();
-  if (!/^https:\/\//i.test(trimmed)) return { ok: false };
+  if (!(allowHttp ? /^https?:\/\//i : /^https:\/\//i).test(trimmed)) return { ok: false };
   let url: URL;
   try {
     url = new URL(trimmed);
@@ -120,7 +120,9 @@ export function checkExactLinksDetailed(
   candidates: ExactLinkCandidate[],
   identifiers: string[],
   maxLinks = EXACT_LINKS_MAX,
-  domainRules?: DomainRules
+  domainRules?: DomainRules,
+  /** Off for Image Finder (https only). Source URLs turns it on: small manufacturer sites often serve plain http. */
+  options: { allowHttp?: boolean } = {}
 ): CheckedExactLinks {
   const links: CheckedExactLink[] = [];
   const rejected: Partial<Record<RejectedLinkReason, number>> = {};
@@ -131,7 +133,7 @@ export function checkExactLinksDetailed(
 
   for (const candidate of candidates) {
     if (links.length >= maxLinks) break;
-    const { ok, host } = fullProductUrl(candidate.url ?? "");
+    const { ok, host } = fullProductUrl(candidate.url ?? "", options.allowHttp === true);
     if (!ok || !host) {
       reject("not_full_url");
       continue;

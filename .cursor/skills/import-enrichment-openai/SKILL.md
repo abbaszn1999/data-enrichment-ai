@@ -34,9 +34,11 @@ description: >-
 - **Source URLs is not an OpenAI column on product sheets.** `enrichRow` routes the column with id `sourceUrls`
   (by id, never by the `sourceUrls` type — Image sources `imageSourceUrls` shares the type) to
   `src/lib/enrich/source-urls/` (one Google AI Mode search via SearchApi with a tiny prompt: "find web pages for this
-  exact product", the row's source fields, the custom instruction if any, one photo max; no page count and no
-  website rules — a safety cap of 10 links in code only; code-side link checks; a second search with new angles only
-  when nothing was found). It is independent of Image Finder's strict Exact Match prompt. Alone it makes no OpenAI
+  exact product", the row's source fields, the custom instruction if any, one photo max; asks for every kind of
+  seller — manufacturer/brand site, Chinese factories and suppliers such as Alibaba/1688, wholesalers, retailers,
+  marketplaces, any language — with a soft "aim for 10 or more"; no website rules — a safety cap of 15 links in code
+  only; code-side link checks that also allow plain `http://` pages (opt-in `allowHttp`, Image Finder stays https
+  only); a second search with new angles only when nothing was found). It is independent of Image Finder's strict Exact Match prompt. Alone it makes no OpenAI
   call; next to other columns the
   OpenAI call (without that column) and the Google call run in parallel and both costs go on the row's charge.
   If only the OpenAI half fails, the row's retry reuses the Google answer (`sourceUrlsMemo`, kept by

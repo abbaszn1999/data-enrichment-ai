@@ -93,7 +93,12 @@ export function looksLikeListingPage(raw: string): boolean {
   try {
     const url = new URL(raw);
     const host = url.hostname.toLowerCase();
-    if (/(^|\.)amazon\.[a-z.]+$/.test(host) && /^\/(stores|clp|b|gp\/browse|s)(\/|$)/i.test(url.pathname)) return true;
+    if (/(^|\.)amazon\.[a-z.]+$/.test(host)) {
+      if (/^\/(stores|clp|b|gp\/browse|s)(\/|$)/i.test(url.pathname)) return true;
+      // Search pages with a name in front: /some-product-name/s?k=...
+      if (/\/s\/?$/i.test(url.pathname) && url.searchParams.has("k")) return true;
+    }
+    if (/(^|\.)walmart\.[a-z.]+$/.test(host) && /^\/(c|cp|browse)(\/|$)/i.test(url.pathname)) return true;
     if (/^\/(search|s|catalogsearch)(\/|$)/i.test(url.pathname)) return true;
     return url.searchParams.has("q") && /search/i.test(url.pathname);
   } catch {
@@ -217,7 +222,9 @@ async function runAttempt(
     // compare, and Enrichment has no website-rules setting.
     [],
     // Generous cap: listing pages are dropped after the checks, then the safety cap applies.
-    SOURCE_URLS_MAX * 2
+    SOURCE_URLS_MAX * 2,
+    undefined,
+    { allowHttp: true }
   );
   const titles = new Map(candidates.map((c) => [c.url.trim().toLowerCase(), c.title]));
   const sources = rankSources(
