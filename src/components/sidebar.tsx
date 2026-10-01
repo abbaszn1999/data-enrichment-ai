@@ -397,24 +397,32 @@ export function Sidebar() {
     (r) => r.status === "pending" || r.status === "error" || r.status === "done"
   );
 
-  // AI Generated source options: every AI column that has a value on any row
-  // of the active sheet, whichever tool (Enrich, Image Finder, Categories)
-  // produced it and whichever mode is open, so a column made in one tool is a
-  // source in all of them.
-  const enrichedColumnsWithData = useMemo(() => {
+  // AI Generated source options: every AI column that has a value on at least
+  // one SELECTED row (the rows a run covers), whichever tool (Enrich, Image
+  // Finder, Categories) produced it and whichever mode is open, so a column made
+  // in one tool is a source in all of them. With no rows selected it looks at
+  // the whole active sheet so the list is not empty before rows are picked.
+  // At run time each row sends only the ticked columns it actually has.
+  const aiSources = useMemo(() => {
     const sheet = visibleCatalogRows(rows, {
       groupColumn: productGroupColumn,
       activeSheet,
     });
-    if (sheet.length === 0) return [];
-    return enrichmentColumns.filter((col) =>
-      sheet.some((r) => {
+    const selected = sheet.filter((r) => selectedRowIds.has(r.id));
+    const scope = selected.length > 0 ? selected : sheet;
+    const counts: Record<string, number> = {};
+    const columns = enrichmentColumns.filter((col) => {
+      const count = scope.filter((r) => {
         const val = r.enrichedData?.[col.id];
         if (Array.isArray(val)) return val.length > 0;
         return val !== undefined && val !== null && val !== "";
-      })
-    );
-  }, [activeSheet, enrichmentColumns, productGroupColumn, rows]);
+      }).length;
+      counts[col.id] = count;
+      return count > 0;
+    });
+    return { columns, counts, total: scope.length, isSelection: selected.length > 0 };
+  }, [activeSheet, enrichmentColumns, productGroupColumn, rows, selectedRowIds]);
+  const enrichedColumnsWithData = aiSources.columns;
 
   // The sources a run sends: only ones listed (and so visible) under Source
   // Columns. A preset can tick an AI column that has no values on this sheet
@@ -1706,8 +1714,9 @@ export function Sidebar() {
                 <p className="text-[10px] text-muted-foreground mb-2 leading-tight">
                   Choose which columns are sent to the AI agent for context.
                   AI Generated columns (including images found in Image Finder
-                  and categories) appear once they have values on the sheet;
-                  image columns are sent to the AI as pictures.
+                  and categories) appear when a selected row has a value in
+                  them; each row sends only what it has. Image columns are sent
+                  to the AI as pictures.
                 </p>
                 {originalColumns.map((col) => {
                   const isSource = sourceColumns.includes(col);
@@ -1777,6 +1786,15 @@ export function Sidebar() {
                           <span className="truncate font-medium">
                             {col.label}
                           </span>
+                          {aiSources.isSelection &&
+                            (aiSources.counts[col.id] ?? 0) < aiSources.total && (
+                              <span
+                                className="shrink-0 text-[10px] text-muted-foreground/70"
+                                title="Rows without a value in this column run without it"
+                              >
+                                {aiSources.counts[col.id]} of {aiSources.total} rows
+                              </span>
+                            )}
                           <Sparkles className="h-2.5 w-2.5 text-primary/50 shrink-0" />
                         </label>
                       );
