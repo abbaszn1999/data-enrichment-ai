@@ -153,7 +153,7 @@ async function enrichWithOpenAi(
       language: outputLanguage,
     }
   );
-  const { instructions, text, imageUrls } = buildEnrichPrompt({
+  const { instructions, text, imageUrls, textWithoutImages } = buildEnrichPrompt({
     productData,
     enabledColumns,
     enrichmentColumns,
@@ -174,6 +174,7 @@ async function enrichWithOpenAi(
     maxOutputTokens: ENRICH_MAX_OUTPUT_TOKENS,
     instructions,
     promptText: text,
+    promptTextWithoutImages: textWithoutImages,
     imageUrls,
     policy,
     schemaName,

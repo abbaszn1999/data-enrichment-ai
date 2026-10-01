@@ -105,6 +105,34 @@ describe("buildEnrichPrompt layout", () => {
     },
   ];
 
+  it("offers a text for a call whose pictures could not load, with no image claimed", () => {
+    const policy = buildEnrichToolPolicy(["titleTag"], columns, "product");
+    const withImages = buildEnrichPrompt({
+      productData: { Name: "Widget", "Image Src": "[2 images attached]", Photo: "data:image/png;base64,AAAA" },
+      enabledColumns: ["titleTag"],
+      enrichmentColumns: columns,
+      policy,
+      sourceImageUrls: ["https://cdn.example.com/a.jpg"],
+    });
+    expect(withImages.text).toContain("[2 images attached]");
+    expect(withImages.text).toContain("2 product images are attached");
+
+    const plain = withImages.textWithoutImages!;
+    expect(plain).toContain("- Name: Widget");
+    expect(plain).toContain("- Image Src: [image could not be loaded]");
+    expect(plain).toContain("- Photo: [image could not be loaded]");
+    expect(plain).toContain("no image is attached");
+    expect(plain).not.toMatch(/\d+ product images? (is|are) attached|\[\d+ images? attached\]|\[attached image\]/);
+
+    const noImages = buildEnrichPrompt({
+      productData: { Name: "Widget" },
+      enabledColumns: ["titleTag"],
+      enrichmentColumns: columns,
+      policy,
+    });
+    expect(noImages.textWithoutImages).toBeUndefined();
+  });
+
   it("puts the stable agent + numbered columns in instructions and only row data in the input", () => {
     const policy = buildEnrichToolPolicy(["titleTag", "custom_1"], columns, "product");
     const prompt = buildEnrichPrompt({

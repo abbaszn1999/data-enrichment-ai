@@ -243,6 +243,12 @@ function inputImageParts(imageUrls: string[]): Array<Record<string, unknown>> {
 export async function runEnrichOpenAiResponse(params: {
   tier: EnrichSettings["enrichmentModel"];
   promptText: string;
+  /**
+   * The row text to send instead when none of `imageUrls` ends up attached (a
+   * dead link makes the call retry without pictures), so the text never says
+   * an image is attached when it is not.
+   */
+  promptTextWithoutImages?: string;
   imageUrls: string[];
   policy: EnrichToolPolicy;
   schemaName: string;
@@ -364,9 +370,14 @@ export async function runEnrichOpenAiResponse(params: {
 
   const postOnce = async (imageUrls: string[], withFilters: boolean) => {
     const tool = withFilters ? { ...webSearchTool, filters } : webSearchTool;
+    const imageParts = inputImageParts(imageUrls);
+    const lostItsImages = params.imageUrls.length > 0 && imageParts.length === 0;
     const content: Array<Record<string, unknown>> = [
-      ...inputImageParts(imageUrls),
-      { type: "input_text", text: params.promptText },
+      ...imageParts,
+      {
+        type: "input_text",
+        text: lostItsImages && params.promptTextWithoutImages ? params.promptTextWithoutImages : params.promptText,
+      },
     ];
 
     console.log(`[Enrich OpenAI] Starting row enrichment`, {

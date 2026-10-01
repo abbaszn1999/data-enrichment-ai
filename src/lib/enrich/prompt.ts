@@ -51,7 +51,19 @@ export interface EnrichPrompt {
   text: string;
   /** Images to attach to the row: pasted data-URIs / image URLs found in fields plus `sourceImageUrls`. */
   imageUrls: string[];
+  /**
+   * The same row text for a call that ends up with no picture (every image link
+   * was dead): it never claims an image is attached. Only set when `imageUrls`
+   * is not empty.
+   */
+  textWithoutImages?: string;
 }
+
+/** Row values that stand for pictures sent alongside the text ("[2 images attached]", a pasted image). */
+const IMAGE_PLACEHOLDER_RE = /^\[\d+ images? attached\]$/i;
+const IMAGES_UNAVAILABLE_VALUE = "[image could not be loaded]";
+export const NO_IMAGES_NOTICE =
+  "The product image for this row could not be loaded, so no image is attached. Identify the product from the fields above and web search only.";
 
 /** Max product images sent with one row. */
 export const MAX_ROW_IMAGES = 8;
@@ -144,9 +156,21 @@ export function buildEnrichPrompt(params: {
     );
   }
 
+  let textWithoutImages: string | undefined;
+  if (imageUrls.length > 0) {
+    const withoutPictures = Object.fromEntries(
+      Object.entries(params.productData).map(([key, value]) => {
+        const text = String(value ?? "").trim();
+        return [key, IMAGE_PLACEHOLDER_RE.test(text) || text.startsWith("data:image/") ? IMAGES_UNAVAILABLE_VALUE : value];
+      })
+    );
+    textWithoutImages = [preamble.dataHeading, formatRowData(withoutPictures).textBlock, "", NO_IMAGES_NOTICE].join("\n");
+  }
+
   return {
     instructions: instructionSections.join("\n"),
     text: rowSections.join("\n"),
     imageUrls,
+    ...(textWithoutImages ? { textWithoutImages } : {}),
   };
 }

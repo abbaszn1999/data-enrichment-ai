@@ -79,6 +79,42 @@ describe("runEnrichOpenAiResponse and Stop", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a dead image link without pictures and without claiming one is attached", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ usage, error: { message: "Error while downloading file https://cdn.example.com/dead.jpg" } }),
+          { status: 400 }
+        )
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(completedBody()), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runEnrichOpenAiResponse({
+      ...baseParams,
+      promptText: "Product data:\n- Image: [1 image attached]\n\n1 product image is attached.",
+      promptTextWithoutImages: "Product data:\n- Image: [image could not be loaded]\n\nno image is attached.",
+      imageUrls: ["https://cdn.example.com/dead.jpg"],
+    });
+
+    expect(result.data).toEqual({ enhancedTitle: "Widget" });
+    // The failed call was billed too.
+    expect(result.costs).toHaveLength(2);
+    const contentOf = (call: number) => JSON.parse(fetchMock.mock.calls[call]![1].body).input[0].content;
+    expect(contentOf(0).map((part: { type: string }) => part.type)).toEqual(["input_image", "input_text"]);
+    expect(contentOf(0)[1].text).toContain("1 product image is attached");
+    expect(contentOf(1).map((part: { type: string }) => part.type)).toEqual(["input_text"]);
+    expect(contentOf(1)[0].text).toBe("Product data:\n- Image: [image could not be loaded]\n\nno image is attached.");
+  });
+
+  it("keeps the normal text when the row never had images", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(completedBody()), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await runEnrichOpenAiResponse({ ...baseParams, promptTextWithoutImages: "should not be used" });
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body).input[0].content[0].text).toBe("Enrich this row");
+  });
+
   it("a failed Stop check never ends a call early", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(completedBody()), { status: 200 })
