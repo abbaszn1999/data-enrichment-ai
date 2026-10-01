@@ -8,23 +8,29 @@
  * skill (image-finder/exact/links-skill.ts): the two share only the generic
  * JSON extractor, so changing one prompt can never change the other.
  *
- * The query is a fixed template with three variable parts: the product (every
- * source column of the row), the store owner's custom instruction (if any),
- * and whether a photo of the item is attached to the call.
+ * The query is deliberately tiny — a task line, the product (every source
+ * column of the row), the store owner's custom instruction when there is one,
+ * and a line about the photo when one is attached. Google AI Mode answers
+ * best to a short, plain request (a long rulebook made it behave like a strict
+ * code search that returns few pages, and a dramatic one made it hang), and a
+ * photo does the heavy lifting when the row has one. The code-side link checks
+ * (search.ts) do the policing, not the prompt.
  *
  * Two attempts exist: attempt 1 is the normal prompt; attempt 2 runs only when
  * attempt 1 produced no usable page, and asks for DIFFERENT search angles.
  */
 import { extractJsonValues } from "../image-finder/exact/json-extract";
 
-/** Hard ceiling on pages per row, whatever the column's own count says. */
+/**
+ * Safety cap on pages kept per row. It is not a setting and the prompt never
+ * mentions it: it only keeps one cell, the saved sheet and the next prompt
+ * (when this column is used as a source) from growing without bound.
+ */
 export const SOURCE_URLS_MAX = 10;
 
 const MAX_FIELD_CHARS = 300;
 const MAX_FIELDS = 20;
 const MAX_INSTRUCTION_CHARS = 1_500;
-const MAX_TASK_IDENTIFIERS = 3;
-const MAX_PROMPT_DOMAINS = 30;
 /** SearchApi's documented `q` limit is 8,193 characters; stay under it. */
 const MAX_QUERY_CHARS = 8_000;
 
@@ -69,144 +75,51 @@ function productDataLines(rowData: Record<string, string>): string[] {
 
 export interface BuildSourceUrlsQueryInput {
   rowData: Record<string, string>;
-  /** Code-like values already extracted from the row (see image-finder/tools/identifiers.ts). */
-  rowIdentifiers: string[];
   customInstruction?: string;
-  /** How many pages to ask for (the column's source count). */
-  maxSources: number;
   /** A photo of the item is attached to the call. */
   hasImage?: boolean;
-  allowedDomains?: string[];
-  blockedDomains?: string[];
   /** 1 = normal search; 2 = second try with different angles. Defaults to 1. */
   attempt?: SourceUrlsAttempt;
 }
 
-function websiteRuleLines(allowed: string[], blocked: string[]): string[] {
-  const lines: string[] = [];
-  if (allowed.length > 0) {
-    lines.push(`Website rules: only return pages on these websites: ${allowed.slice(0, MAX_PROMPT_DOMAINS).join(", ")}.`);
-  }
-  if (blocked.length > 0) {
-    lines.push(`Website rules: never return pages on these websites: ${blocked.slice(0, MAX_PROMPT_DOMAINS).join(", ")}.`);
-  }
-  return lines;
-}
-
-function taskLines(identifiers: string[], attempt: SourceUrlsAttempt): string[] {
-  const named = identifiers.slice(0, MAX_TASK_IDENTIFIERS).join(", ");
-  const item = named
-    ? `this exact item, identified by: ${named} (full row below)`
-    : "the exact item described below";
-  // Wording is deliberate (see exact/links-skill.ts): a long or dramatic task
-  // line made Google AI Mode hang, or search the sentence itself. Keep it
-  // short and plain.
-  if (attempt === 2) {
-    return ["TASK", `Find web pages for ${item}. Use search angles beyond the obvious ones.`, "Return links only."];
-  }
-  return ["TASK", `Find web pages for ${item}.`, "Return links only."];
-}
-
-function searchStepLines(attempt: SourceUrlsAttempt): string[] {
-  if (attempt === 2) {
-    return [
-      "STEP 4 — SEARCH (new angles only; build your own queries from what this row contains)",
-      "1. The manufacturer's or brand's own website and its product catalogue.",
-      "2. Every identifier on the row (code, model, part number, barcode), each in other common formats: with and without separators, obvious prefix or suffix forms.",
-      "3. Other marketplaces, distributors and regional or local-language shops.",
-      "4. The product described in other words or another language, with its brand and the attributes that tell it apart from its variants.",
-    ];
-  }
-  return [
-    "STEP 4 — SEARCH (build your own queries from what this row contains)",
-    "Start from the strongest identifier the row has, then widen only if needed:",
-    "1. The strongest identifier alone, in quotes.",
-    "2. The same identifier written the other common ways (with and without separators, obvious prefix or suffix forms).",
-    "3. That identifier + the brand, if the row has one.",
-    "4. No identifier: brand + full product name + the attributes that tell it apart from its variants.",
-    "5. Alternate wording or local-language names, if the row's market suggests it.",
-    "Look across the manufacturer's own site, shops and marketplaces.",
-  ];
-}
-
-function composeQuery(
-  fieldLines: string[],
-  identifiers: string[],
-  instruction: string,
-  maxSources: number,
-  hasImage: boolean,
-  attempt: SourceUrlsAttempt,
-  ruleLines: string[]
-): string {
+function composeQuery(fieldLines: string[], instruction: string, hasImage: boolean, attempt: SourceUrlsAttempt): string {
+  // Wording is deliberate: keep the task line short and plain. Describing a
+  // failed first search ("found nothing usable") made Google AI Mode search that
+  // sentence itself, so attempt 2 only asks for other angles.
   const lines: string[] = [
-    ...taskLines(identifiers, attempt),
+    attempt === 2
+      ? "Find web pages for this exact product. Use search angles beyond the obvious ones. Return links only."
+      : "Find web pages for this exact product. Return links only.",
     "",
-    "PRODUCT (every field the row has; missing fields are unknown)",
-    ...(fieldLines.length > 0 ? fieldLines : ["- No usable product data was provided."]),
+    "PRODUCT",
+    ...(fieldLines.length > 0 ? fieldLines : [hasImage ? "- No text details; use the photo." : "- No usable product data was provided."]),
   ];
-  if (identifiers.length > 0) {
-    lines.push(`- Code-like values in this row (the strongest proof of identity): ${identifiers.join(", ")}`);
-  }
-  if (hasImage) {
-    lines.push(
-      "- A photo of the item is attached. Use it to confirm which product this is (shape, colour, packaging, markings). It never overrides a code on the row."
-    );
-  }
-
+  if (instruction) lines.push("", `Instruction from the store owner: ${instruction}`);
+  if (hasImage) lines.push("", "The attached photo shows the product.");
   lines.push(
     "",
-    "STEP 1 — READ THE ROW AS A WHOLE",
-    "Use every field. Judge each value by what it contains, not by its column name. Ignore fields that list related, similar or \"bought with\" products — they describe OTHER products.",
-    "",
-    "STEP 2 — DECIDE THE IDENTITY PATH",
-    "- The row has a code (SKU, barcode, part number, model number): the code is the ONLY proof of identity. Title, price and every other field are context, never proof.",
-    "- The row has no code: identify by brand + full description + every distinguishing attribute (colour, size, capacity, pack count, material, edition). Pick ONE clear candidate. If two different products fit about equally well, that is no match — never guess between them.",
-    "",
-    "STEP 3 — STORE OWNER INSTRUCTION",
-    instruction || "None given.",
-    ...ruleLines,
-    "It chooses which pages to prefer (the manufacturer first, certain shops, a language or region) and overrides the defaults in these steps where they conflict, but it can never justify accepting a different product than the one Step 2 identified.",
-    "",
-    ...searchStepLines(attempt),
-    "",
-    "STEP 5 — CONFIRM EACH PAGE",
-    "- One product: a detail page dedicated to ONE product (the manufacturer's page, a retailer, marketplace listing or distributor). Never a search page, category or collection page, multi-product list, blog, review, forum, PDF, datasheet-aggregator page or social post.",
-    "- Identity, per Step 2: with a code, the code appears in the page text, title, URL or product data (ignore only case, spaces, hyphens and slashes); with no code, the brand, full name and every distinguishing attribute match with no equally good rival.",
-    "- Variant: attributes that make a different product must match — model, colour/colourway, capacity or size of the product itself, pack count, edition, generation, flavour, voltage/region. A different suffix, prefix or digit in the code is a different item.",
-    "- Live: the page loads now and shows the product — not suspended, parked or out of the catalogue.",
-    "- Differences in title wording, language, price, currency, stock status or seller are fine: report them, do not reject for them.",
-    "- Every url is the complete https:// address of the page — never a bare domain, never guessed or constructed.",
-    "",
-    `STEP 6 — RETURN LINKS ONLY, BEST FIRST, UP TO ${maxSources}`,
-    `Return up to ${maxSources} full https:// page URLs for this exact item, best first, each with the page's own title. No commentary, no follow-up questions. Never pad the list with near matches: fewer links, or none, is correct when fewer exact pages exist.`,
-    "",
-    "OUTPUT FORMAT (valid JSON only, no markdown fences, no commentary before or after)",
-    '{"result":"FOUND" or "NOT_FOUND","sources":[{"url":"https://...","title":"the page title","matchedOn":"code|barcode|brand+description","evidence":"text from the page that shows the code (or, with no code, the title and brand)","differences":"or none"}]}',
-    `Maximum ${maxSources} sources. If none: sources is an empty array.`
+    "Only the exact same product counts, not a similar one or another variant. Return every full https:// product page you find for it, best first, as JSON, with no commentary:",
+    '{"sources":[{"url":"https://...","title":"page title"}]}'
   );
-
   return lines.join("\n");
 }
 
 /**
- * Builds the query. The static steps always fit; if the row's fields would
- * push the query past SearchApi's limit, trailing fields are dropped (never
- * the steps or the output format, which sit after them and must survive intact
- * for the answer to be parseable).
+ * Builds the query. The task and output format always fit; if the row's fields
+ * would push the query past SearchApi's limit, trailing fields are dropped
+ * (never the output format, which sits after them and must survive intact for
+ * the answer to be parseable).
  */
 export function buildSourceUrlsQuery(input: BuildSourceUrlsQueryInput): string {
-  const identifiers = input.rowIdentifiers;
   const attempt = input.attempt ?? 1;
-  const maxSources = Math.min(SOURCE_URLS_MAX, Math.max(1, Math.floor(input.maxSources || 1)));
   const instruction = (input.customInstruction ?? "").trim().slice(0, MAX_INSTRUCTION_CHARS);
-  const ruleLines = websiteRuleLines(input.allowedDomains ?? [], input.blockedDomains ?? []);
   const hasImage = Boolean(input.hasImage);
   let fields = productDataLines(input.rowData);
 
-  let query = composeQuery(fields, identifiers, instruction, maxSources, hasImage, attempt, ruleLines);
+  let query = composeQuery(fields, instruction, hasImage, attempt);
   while (query.length > MAX_QUERY_CHARS && fields.length > 1) {
     fields = fields.slice(0, -1);
-    query = composeQuery(fields, identifiers, instruction, maxSources, hasImage, attempt, ruleLines);
+    query = composeQuery(fields, instruction, hasImage, attempt);
   }
   return query;
 }

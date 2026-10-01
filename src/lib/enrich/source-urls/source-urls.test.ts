@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDefaultEnrichmentColumns } from "@/types";
 import { enrichRow } from "../agent";
 import { billedCostsOf, OPENAI_RESPONSES_URL } from "../openai";
+import { buildExactLinksQuery } from "../image-finder/exact/links-skill";
 import { usesGoogleSourceUrls } from "./agent";
 import { looksLikeListingPage, pageKey, rankSources, searchSourceUrls } from "./search";
 import {
@@ -10,6 +11,7 @@ import {
   harvestSourceCandidates,
   parseBestSourceAnswer,
   parseSourceUrlsAnswer,
+  SOURCE_URLS_MAX,
 } from "./skill";
 
 const SEARCHAPI_HOST = "https://www.searchapi.io/api/v1/search";
@@ -44,49 +46,64 @@ const WEB_RESULTS_ANSWER = [
 const row = { Title: "Widget WX-1", Brand: "Acme" };
 
 describe("Source URLs query", () => {
-  it("carries the product, the custom instruction and the output format", () => {
-    const query = buildSourceUrlsQuery({
-      rowData: row,
-      rowIdentifiers: ["WX-1"],
-      customInstruction: "Prefer the manufacturer's own site.",
-      maxSources: 3,
-    });
+  it("is a short task: the product, the custom instruction and the output format", () => {
+    const query = buildSourceUrlsQuery({ rowData: row, customInstruction: "Prefer the manufacturer's own site." });
+    expect(query).toContain("Find web pages for this exact product. Return links only.");
     expect(query).toContain("- Title: Widget WX-1");
-    expect(query).toContain("identified by: WX-1");
-    expect(query).toContain("Prefer the manufacturer's own site.");
-    expect(query).toContain("UP TO 3");
+    expect(query).toContain("- Brand: Acme");
+    expect(query).toContain("Instruction from the store owner: Prefer the manufacturer's own site.");
     expect(query).toContain('"sources":[');
+    expect(query.length).toBeLessThan(800);
   });
 
-  it("mentions the photo only when one is sent", () => {
-    const base = { rowData: row, rowIdentifiers: [], maxSources: 3 };
-    expect(buildSourceUrlsQuery({ ...base, hasImage: true })).toContain("A photo of the item is attached");
-    expect(buildSourceUrlsQuery(base)).not.toContain("A photo of the item is attached");
+  it("has no page count, no website rules and no strict rulebook", () => {
+    const query = buildSourceUrlsQuery({ rowData: row, customInstruction: "x" });
+    expect(query).not.toMatch(/up to \d|maximum \d/i);
+    expect(query).not.toMatch(/website rules|STEP \d|identified by|never pad/i);
+    expect(query).toContain("Return every full https:// product page you find for it");
   });
 
-  it("says 'None given.' without a custom instruction and uses new angles on attempt 2", () => {
-    const base = { rowData: row, rowIdentifiers: [], maxSources: 3 };
-    expect(buildSourceUrlsQuery(base)).toContain("None given.");
-    expect(buildSourceUrlsQuery({ ...base, attempt: 2 })).toContain("beyond the obvious ones");
+  it("mentions the photo only when one is sent, and works with the photo alone", () => {
+    expect(buildSourceUrlsQuery({ rowData: row, hasImage: true })).toContain("The attached photo shows the product.");
+    expect(buildSourceUrlsQuery({ rowData: row })).not.toContain("photo");
+    const photoOnly = buildSourceUrlsQuery({ rowData: { Img: "[1 image attached]" }, hasImage: true });
+    expect(photoOnly).toContain("- No text details; use the photo.");
+    expect(photoOnly).toContain("The attached photo shows the product.");
   });
 
-  it("never lets the fields push the steps and output format out of the query", () => {
+  it("leaves out the instruction line without one, and asks for other angles on attempt 2", () => {
+    expect(buildSourceUrlsQuery({ rowData: row })).not.toContain("Instruction from the store owner");
+    expect(buildSourceUrlsQuery({ rowData: row, customInstruction: "   " })).not.toContain("Instruction from the store owner");
+    expect(buildSourceUrlsQuery({ rowData: row, attempt: 2 })).toContain("beyond the obvious");
+  });
+
+  it("never lets the fields push the output format out of the query", () => {
     const rowData = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`Field ${i}`, "x".repeat(300)]));
-    const query = buildSourceUrlsQuery({ rowData, rowIdentifiers: [], maxSources: 10, customInstruction: "y".repeat(5000) });
+    const query = buildSourceUrlsQuery({ rowData, customInstruction: "y".repeat(5000) });
     expect(query.length).toBeLessThanOrEqual(8_000);
-    expect(query).toContain("OUTPUT FORMAT");
-    expect(query).toContain("Maximum 10 sources");
+    expect(query).toContain('{"sources":[{"url"');
   });
 
   it("leaves image attachments and image links out of the product fields", () => {
     const query = buildSourceUrlsQuery({
       rowData: { Title: "Widget", Photos: "[3 images attached]", Img: "https://cdn.example.com/a.jpg" },
-      rowIdentifiers: [],
-      maxSources: 3,
     });
     expect(query).toContain("- Title: Widget");
     expect(query).not.toContain("Photos");
     expect(query).not.toContain("cdn.example.com");
+  });
+});
+
+describe("Image Finder's Exact Match prompt is not affected", () => {
+  it("still asks for the strict, code-proven, up-to-10 matches", () => {
+    const query = buildExactLinksQuery({ rowData: row, rowIdentifiers: ["WX-1"] });
+    expect(query).toContain("Find product pages for this exact item, identified by: WX-1 (full row below).");
+    expect(query).toContain("STEP 2 — DECIDE THE IDENTITY PATH");
+    expect(query).toContain("STEP 5 — CONFIRM EACH LINK");
+    expect(query).toContain("UP TO 10");
+    expect(query).toContain("Never pad the list with near matches");
+    expect(query).toContain('"result":"MATCHES_FOUND" or "NO_EXACT_MATCH"');
+    expect(buildSourceUrlsQuery({ rowData: row })).not.toBe(query);
   });
 });
 
@@ -148,17 +165,26 @@ describe("Source URLs ranking", () => {
     expect(looksLikeListingPage("https://shop.example.com/products/widget-wx-1")).toBe(false);
   });
 
-  it("puts pages Google itself cited first, with Google's title, and respects the limit", () => {
+  it("puts pages Google itself cited first, with Google's title, and keeps the others after them", () => {
     const ranked = rankSources(
       [
         { url: "https://a.example.com/p/1", title: "A" },
         { url: "https://b.example.com/p/2", title: "B" },
         { url: "https://c.example.com/p/3", title: "C" },
       ],
-      [{ link: "https://b.example.com/p/2#:~:text=x", title: "B from Google" }],
-      3
+      [{ link: "https://b.example.com/p/2#:~:text=x", title: "B from Google" }]
     );
-    expect(ranked).toEqual([{ title: "B from Google", uri: "https://b.example.com/p/2" }]);
+    expect(ranked).toEqual([
+      { title: "B from Google", uri: "https://b.example.com/p/2" },
+      { title: "A", uri: "https://a.example.com/p/1" },
+      { title: "C", uri: "https://c.example.com/p/3" },
+    ]);
+  });
+
+  it("stops at the safety cap", () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({ url: `https://s${i}.example.com/p/1` }));
+    expect(rankSources(many, [])).toHaveLength(SOURCE_URLS_MAX);
+    expect(rankSources(many, [], 2)).toHaveLength(2);
   });
 
   it("keeps the checked pages when Google cited none, and falls back to the host for a title", () => {
@@ -178,7 +204,7 @@ describe("searchSourceUrls", () => {
     vi.restoreAllMocks();
   });
 
-  const input = { rowData: row, rowIdentifiers: ["WX-1"], maxSources: 3 };
+  const input = { rowData: row };
 
   it("returns the pages from one search and records one SearchApi charge", async () => {
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(aiModeBody(FOUND_ANSWER), { status: 200 }));
@@ -200,7 +226,7 @@ describe("searchSourceUrls", () => {
     const result = await searchSourceUrls({ ...input, imageUrl: "https://cdn.example.com/widget.jpg" });
     const called = new URL(String(fetchMock.mock.calls[0]![0]));
     expect(called.searchParams.get("url")).toBe("https://cdn.example.com/widget.jpg");
-    expect(called.searchParams.get("q")).toContain("A photo of the item is attached");
+    expect(called.searchParams.get("q")).toContain("The attached photo shows the product.");
     expect(result.usedImage).toBe(true);
   });
 
@@ -213,7 +239,7 @@ describe("searchSourceUrls", () => {
     vi.stubGlobal("fetch", fetchMock);
     const result = await searchSourceUrls({ ...input, imageUrl: "https://cdn.example.com/widget.jpg" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(new URL(String(fetchMock.mock.calls[1]![0])).searchParams.get("q")).not.toContain("A photo of the item is attached");
+    expect(new URL(String(fetchMock.mock.calls[1]![0])).searchParams.get("q")).not.toContain("attached photo");
     expect(result.usedImage).toBe(false);
     expect(result.sources).toHaveLength(2);
     // The failed call was not billed (non-200), only the answered one.
@@ -244,7 +270,7 @@ describe("searchSourceUrls", () => {
     vi.stubGlobal("fetch", fetchMock);
     const result = await searchSourceUrls(input);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(new URL(String(fetchMock.mock.calls[1]![0])).searchParams.get("q")).toContain("beyond the obvious ones");
+    expect(new URL(String(fetchMock.mock.calls[1]![0])).searchParams.get("q")).toContain("beyond the obvious");
     expect(result.sources).toEqual([]);
     expect(result.costs).toHaveLength(2);
     expect(result.notFoundReason).toMatch(/search 1: returned no pages; search 2: returned no pages/);
@@ -296,13 +322,26 @@ describe("searchSourceUrls", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("enforces the store owner's website rules on what it returns", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(aiModeBody(FOUND_ANSWER), { status: 200 })));
-    const result = await searchSourceUrls({
-      ...input,
-      domainRules: { allowedDomains: ["acme.com"], blockedDomains: [] },
-    });
-    expect(result.sources.map((s) => s.uri)).toEqual(["https://www.acme.com/products/widget-wx-1"]);
+  it("keeps every page it finds, not just a few, up to the safety cap", async () => {
+    const pages = Array.from({ length: 14 }, (_, i) => ({
+      url: `https://shop${i}.example.com/p/widget-wx-1`,
+      title: `Shop ${i}`,
+    }));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(aiModeBody(JSON.stringify({ sources: pages })), { status: 200 })));
+    const result = await searchSourceUrls(input);
+    expect(result.sources).toHaveLength(SOURCE_URLS_MAX);
+    expect(result.sources[0]).toEqual({ title: "Shop 0", uri: "https://shop0.example.com/p/widget-wx-1" });
+    expect(result.attempts).toBe(1);
+  });
+
+  it("does not search a second time when the first search found pages, however few", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) =>
+      new Response(aiModeBody(JSON.stringify({ sources: [{ url: "https://shop.example.com/p/widget-wx-1", title: "Shop" }] })), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await searchSourceUrls(input);
+    expect(result.sources).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

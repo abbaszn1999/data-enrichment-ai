@@ -6,11 +6,11 @@
  * before its answer is read — and an unreadable answer can never lose the
  * charge.
  *
- * Every page that is returned passes the same code-side checks the Image
- * Finder's Exact Match uses (a full product URL, not a search engine, social
- * or reference site, the store owner's website rules, no variant in the
- * evidence). The answer is also compared with the pages Google itself cited
- * (`reference_links`): a page Google cited is real by construction.
+ * Every page that is returned passes the code-side checks the Image Finder's
+ * Exact Match uses (a full product URL, not a search engine, social or
+ * reference site), plus a listing-page filter. The answer is also compared with
+ * the pages Google itself cited (`reference_links`): a page Google cited is
+ * real by construction, so those are ranked first.
  *
  * A failed call on attempt 1 (bad key, network, non-200) throws as-is —
  * nothing was billed. A failure on attempt 2 does not throw: attempt 1 already
@@ -19,7 +19,6 @@
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
 import type { SourceUrl } from "@/types";
-import type { DomainRules } from "../domains";
 import { checkExactLinksDetailed, describeRejected } from "../image-finder/exact/links-checks";
 import {
   callGoogleAiMode,
@@ -40,13 +39,9 @@ import {
 
 export interface SearchSourceUrlsInput {
   rowData: Record<string, string>;
-  rowIdentifiers: string[];
   customInstruction?: string;
-  /** How many pages the column asks for. */
-  maxSources: number;
   /** One public http(s) photo of the item for Google to look at; omit when the row has none. */
   imageUrl?: string;
-  domainRules?: DomainRules;
   shouldCancel?: () => Promise<boolean>;
   /** Wait before the one retry of a rate-limited or 5xx call (tests shorten it). */
   retryDelayMs?: number;
@@ -117,14 +112,15 @@ function citedPages(referenceLinks: GoogleAiModeReferenceLink[]): Map<string, st
 }
 
 /**
- * Keeps the pages that passed the checks, best first. When Google cited some of
- * them, those come first (and lend their real page title); a page Google did
- * not cite is kept only when it is all there is.
+ * Orders the pages that passed the checks, best first, and cuts the list at the
+ * safety cap. Pages Google itself cited come first (and lend their real page
+ * title) because a cited page is real by construction; the others follow in the
+ * order Google listed them, so a row can still get every source it found.
  */
 export function rankSources(
   checked: Array<{ url: string; title?: string }>,
   referenceLinks: GoogleAiModeReferenceLink[],
-  limit: number
+  limit: number = SOURCE_URLS_MAX
 ): SourceUrl[] {
   const cited = citedPages(referenceLinks);
   const toSource = (link: { url: string; title?: string }): SourceUrl => ({
@@ -132,8 +128,8 @@ export function rankSources(
     uri: link.url,
   });
   const grounded = checked.filter((link) => cited.has(pageKey(link.url)));
-  const chosen = grounded.length > 0 ? grounded : checked;
-  return chosen.slice(0, limit).map(toSource);
+  const rest = checked.filter((link) => !cited.has(pageKey(link.url)));
+  return [...grounded, ...rest].slice(0, limit).map(toSource);
 }
 
 /**
@@ -193,12 +189,8 @@ async function runAttempt(
   const buildQuery = (hasImage: boolean) =>
     buildSourceUrlsQuery({
       rowData: input.rowData,
-      rowIdentifiers: input.rowIdentifiers,
       customInstruction: input.customInstruction,
-      maxSources: input.maxSources,
       hasImage,
-      allowedDomains: input.domainRules?.allowedDomains,
-      blockedDomains: input.domainRules?.blockedDomains,
       attempt,
     });
 
@@ -221,18 +213,18 @@ async function runAttempt(
   const candidates: SourceCandidate[] = answer.sources;
   const { links, rejected } = checkExactLinksDetailed(
     candidates.map((c) => ({ url: c.url, site: c.title, matchedOn: c.matchedOn, evidence: c.evidence, differences: c.differences })),
-    input.rowIdentifiers,
-    // Generous cap: listing pages are dropped after the checks, then the real limit applies.
-    SOURCE_URLS_MAX * 2,
-    input.domainRules
+    // No identifiers and no website rules: the prompt asks for no evidence to
+    // compare, and Enrichment has no website-rules setting.
+    [],
+    // Generous cap: listing pages are dropped after the checks, then the safety cap applies.
+    SOURCE_URLS_MAX * 2
   );
   const titles = new Map(candidates.map((c) => [c.url.trim().toLowerCase(), c.title]));
   const sources = rankSources(
     links
       .filter((link) => !looksLikeListingPage(link.url))
       .map((link) => ({ url: link.url, title: titles.get(link.url.toLowerCase()) })),
-    call.referenceLinks,
-    input.maxSources
+    call.referenceLinks
   );
 
   console.log("[Source URLs] Google AI Mode call", {

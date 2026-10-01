@@ -139,7 +139,6 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     // The only output column that is on for a new sheet; the other four are
     // one click away. See lib/enrich/source-urls for how it is found.
     enabled: true,
-    sourceCount: 3,
     customInstruction:
       "Return the manufacturer's own product page first, then trusted retailers that sell this exact item. Only real, working product pages.",
   },
