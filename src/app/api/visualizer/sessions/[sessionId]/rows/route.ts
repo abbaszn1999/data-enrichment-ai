@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { visualizerRowStoreEnabled } from "@/lib/catalog/flag";
 import { requireVisualizerAuth } from "@/lib/visualizer/auth";
 import { collectVisualizerImagePaths } from "@/lib/visualizer/html-embed";
+import { visualizerWarn } from "@/lib/visualizer/log";
 import { createVisualizerSignedUrlsAdmin } from "@/lib/visualizer/storage-admin";
 import type { VisualizerRow } from "@/lib/visualizer/types";
 import { jsonByteLength, recordResponseBytes } from "@/lib/observability/metrics";
@@ -91,9 +92,25 @@ export async function GET(request: NextRequest, context: Ctx) {
   });
 
   const paths = [...new Set(rows.flatMap((row) => collectVisualizerImagePaths(row.imagePlaceholders)))];
-  const signedUrls = await createVisualizerSignedUrlsAdmin(paths, 3600).catch(
-    () => ({}) as Record<string, string>
-  );
+  let signedUrls: Record<string, string> = {};
+  if (paths.length > 0) {
+    try {
+      signedUrls = await createVisualizerSignedUrlsAdmin(paths, 3600);
+    } catch (error) {
+      visualizerWarn("rows-delta", "Could not sign image URLs for changed rows", {
+        sessionId,
+        pathCount: paths.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const unsigned = paths.filter((path) => !signedUrls[path]);
+    if (unsigned.length > 0) {
+      visualizerWarn("rows-delta", "Some stored images have no signed URL yet", {
+        sessionId,
+        unsigned: unsigned.length,
+      });
+    }
+  }
   const cursor = records.length > 0 ? records[records.length - 1].updated_at : since;
   const body = { supported: true, rows, signedUrls, cursor, hasMore };
   recordResponseBytes("visualizer.rows-delta", jsonByteLength(body));

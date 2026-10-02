@@ -99,14 +99,18 @@ describe("processScrapingRow billing", () => {
     expect(result.row.errorMessage).toBe("No gallery images found");
   });
 
-  it("does not charge a failed row but still reports the cost OpenAI billed", async () => {
+  it("charges a failed row for the rounds OpenAI already billed", async () => {
     const billed = [round(9_000, 0, 900, 1)];
     research.researchGalleryImages.mockRejectedValue(new EnrichBilledAttemptError("timeout", billed));
     const { rpc, params } = setup();
     const result = await processScrapingRow(params);
     expect(result.row.status).toBe("failed");
-    expect(result.creditsUsed).toBe(0);
+    expect(result.creditsUsed).toBeCloseTo(sumCosts(billed).totalCredits, 6);
     expect(result.cost).toBeCloseTo(billed[0]!.totalCost, 10);
-    expect(rpc).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const args = (rpc.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    const details = args.p_details as Record<string, unknown>;
+    expect(details.idempotencyKey).toBe("run1:r1:full:failed");
+    expect(details.failedRow).toBe(true);
   });
 });

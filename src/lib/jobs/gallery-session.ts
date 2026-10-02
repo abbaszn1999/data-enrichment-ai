@@ -211,6 +211,11 @@ async function runGallerySessionInner(
         usedCost += outcome.cost;
         if (outcome.status === "ready") completed += 1;
         else if (!outcome.noCredits) failed += 1;
+        // The row's work is kept and billed, but the balance is spent: stop before spending more.
+        if (outcome.balanceExhausted) {
+          pausedNoCredits = true;
+          stopObserved = true;
+        }
 
         if (worksheet!.activeRun) {
           worksheet!.activeRun.completed = completed;

@@ -307,15 +307,21 @@ export async function createVisualizerSignedUrlsAdmin(
           .createSignedUrls(chunk, expiresInSec);
         if (error) throw error;
         const next: Record<string, string> = {};
-        for (const item of data ?? []) {
-          if (item.path && item.signedUrl) next[item.path] = item.signedUrl;
-          if (item.error) {
-            visualizerWarn("storage", "Signed URL item error", {
-              path: item.path,
-              error: item.error,
-            });
+        // Key by the path we asked for. The storage response path is not always
+        // identical, and the preview looks images up by the stored path.
+        (data ?? []).forEach((item, index) => {
+          const requested = chunk[index];
+          if (!requested || !item?.signedUrl) {
+            if (requested) {
+              visualizerWarn("storage", "Signed URL item error", {
+                path: requested,
+                error: item?.error || "No signed URL returned",
+              });
+            }
+            return;
           }
-        }
+          next[requested] = item.signedUrl;
+        });
         return next;
       }
     );

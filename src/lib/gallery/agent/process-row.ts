@@ -3,7 +3,6 @@ import {
   sumCosts,
   type AiCallCost,
 } from "@/lib/ai-pricing";
-import { updateCachedCredits } from "@/lib/workspace-context";
 import { researchGalleryImages } from "@/lib/gallery/agents/gallery-research-agent";
 import { GALLERY_SCRAPING_OPENAI_MODEL } from "@/lib/enrich/models";
 import { billedCostsOf } from "@/lib/enrich/openai";
@@ -25,6 +24,7 @@ import {
 } from "@/lib/gallery/log";
 import { parseImageUrls } from "@/lib/gallery/image-urls";
 import { shouldChargeGalleryCredits } from "@/lib/gallery/pricing";
+import { settleProviderUsage, type UsageSettlement } from "@/lib/jobs/credits";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -43,57 +43,6 @@ async function removeStoragePaths(admin: Admin, paths: string[]): Promise<void> 
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
-}
-
-export async function deductGalleryCredits(params: {
-  admin: Admin;
-  ownerUserId: string;
-  workspaceId: string;
-  actorUserId: string;
-  amount: number;
-  sessionId: string;
-  rowId: string;
-  details: Record<string, unknown>;
-  operation?: "gallery_google" | "gallery_ai";
-}): Promise<{
-  success: boolean;
-  duplicate?: boolean;
-  remaining?: number;
-  error?: string;
-}> {
-  const { data, error } = await params.admin.rpc("deduct_user_credits", {
-    p_user_id: params.ownerUserId,
-    p_amount: params.amount,
-    p_workspace_id: params.workspaceId,
-    p_operation: params.operation ?? "gallery_google",
-    p_uid: params.actorUserId,
-    p_entity_type: "gallery_session",
-    p_entity_id: params.sessionId,
-        p_details: {
-          ...params.details,
-          rowId: params.rowId,
-          idempotencyKey:
-            typeof params.details.idempotencyKey === "string"
-              ? params.details.idempotencyKey
-              : `${params.operation ?? "gallery_google"}:${params.sessionId}:${params.rowId}`,
-        },
-  });
-  if (error) return { success: false, error: error.message };
-  if (!data?.success) {
-    return {
-      success: false,
-      remaining: data?.remaining,
-      error: data?.error || "Deduction failed",
-    };
-  }
-  if (!data?.duplicate && typeof data.remaining === "number") {
-    updateCachedCredits(params.workspaceId, data.remaining);
-  }
-  return {
-    success: true,
-    duplicate: !!data?.duplicate,
-    remaining: data?.remaining,
-  };
 }
 
 /**
@@ -122,6 +71,8 @@ export async function processScrapingRow(params: {
   creditsUsed: number;
   cost: number;
   error?: string;
+  /** The balance is spent: the run must stop, but this row's work is kept and billed. */
+  balanceExhausted?: boolean;
 }> {
   const { admin, workspaceId, sessionId, worksheet, row } = params;
   const settings = worksheet.settings.scraping;
@@ -198,6 +149,7 @@ export async function processScrapingRow(params: {
       return image.role === "main" ? !runMain : !runGallery;
     });
 
+  let charged = false;
   const fail = async (
     message: string,
     extra?: Record<string, unknown>
@@ -206,11 +158,37 @@ export async function processScrapingRow(params: {
     creditsUsed: number;
     cost: number;
     error?: string;
+    balanceExhausted?: boolean;
   }> => {
     if (newlyStoredMainPaths.length > 0) {
       await removeStoragePaths(admin, newlyStoredMainPaths).catch(() => undefined);
     }
     const totals = sumCosts(costs);
+    // Billing rule: rounds OpenAI answered (and billed us for) are charged even when the row fails.
+    let settlement: UsageSettlement | null = null;
+    if (!charged && shouldChargeGalleryCredits(totals.totalCredits)) {
+      settlement = await settleProviderUsage({
+        admin,
+        ownerUserId: params.ownerUserId,
+        workspaceId,
+        actorUserId: params.actorUserId,
+        amount: totals.totalCredits,
+        operation: "gallery_google",
+        entityType: "gallery_session",
+        entityId: sessionId,
+        idempotencyKey: `${params.runId}:${row.id}:${runPhase}:failed`,
+        details: {
+          rowId: row.id,
+          runPhase,
+          provider: "scraping",
+          pipeline: "gallery-research",
+          failedRow: true,
+          error: message.slice(0, 300),
+          rounds: costs.length,
+          dollarCost: totals.totalCost,
+        },
+      });
+    }
     trace.finish("failed", { error: message, ...extra });
     return {
       row: {
@@ -227,9 +205,10 @@ export async function processScrapingRow(params: {
         mainImagePath: previousMainPaths[0] ?? null,
         galleryImagePaths: previousGalleryPaths,
       },
-      creditsUsed: 0,
+      creditsUsed: settlement?.charged ?? 0,
       cost: totals.totalCost,
       error: message,
+      balanceExhausted: settlement?.balanceExhausted === true,
     };
   };
 
@@ -396,7 +375,7 @@ export async function processScrapingRow(params: {
         galleryNote = NO_GALLERY_MESSAGE;
       }
     } catch (error) {
-      // Rounds OpenAI already billed are recorded (usage), never charged to the customer.
+      // Rounds OpenAI already billed are recorded and charged by fail().
       for (const cost of billedCostsOf(error)) await recordUsage("gallery-research", cost);
       return fail(
         error instanceof Error ? error.message : "Gallery research failed",
@@ -415,18 +394,22 @@ export async function processScrapingRow(params: {
     runPhase,
   });
 
-  const deduct =
+  // The research is delivered, so it is always kept and billed. If the balance
+  // cannot cover all of it, the rest of the balance is charged and the run stops.
+  const settlement: UsageSettlement | null =
     shouldChargeGalleryCredits(credits)
-      ? await deductGalleryCredits({
+      ? await settleProviderUsage({
           admin,
           ownerUserId: params.ownerUserId,
           workspaceId,
           actorUserId: params.actorUserId,
           amount: credits,
-          sessionId,
-          rowId: row.id,
+          operation: "gallery_google",
+          entityType: "gallery_session",
+          entityId: sessionId,
+          idempotencyKey: `${params.runId}:${row.id}:${runPhase}`,
           details: {
-            idempotencyKey: `${params.runId}:${row.id}:${runPhase}`,
+            rowId: row.id,
             provider: "scraping",
             pipeline: "gallery-research",
             model: GALLERY_SCRAPING_OPENAI_MODEL,
@@ -452,10 +435,16 @@ export async function processScrapingRow(params: {
             hasUsableOriginalImage: hasUsableOriginal,
           },
         })
-      : { success: true, duplicate: false };
-
-  if (!deduct.success) {
-    return fail(deduct.error || "Credit deduction failed");
+      : null;
+  charged = true;
+  const creditsCharged = settlement?.charged ?? 0;
+  const alreadyCharged = settlement?.duplicate === true;
+  if (settlement && settlement.shortfall > 0) {
+    galleryWarn("row", "Balance could not cover the row; result kept and the rest of the balance charged", {
+      rowId: row.id,
+      shortfallCredits: settlement.shortfall,
+      billingError: settlement.billingError,
+    });
   }
 
   await removeStoragePaths(admin, [
@@ -483,14 +472,14 @@ export async function processScrapingRow(params: {
     mainPath,
     galleryCount: finalGalleryPaths.length,
     galleryNote,
-    credits: deduct.duplicate ? 0 : credits,
+    credits: creditsCharged,
     dollarCost: totals.totalCost,
     searchQueryCount,
   });
   trace.finish("ready", {
     mainPath,
     galleryCount: finalGalleryPaths.length,
-    credits: deduct.duplicate ? 0 : credits,
+    credits: creditsCharged,
     dollarCost: totals.totalCost,
   });
 
@@ -516,13 +505,14 @@ export async function processScrapingRow(params: {
         galleryNote,
         cost: {
           total: totals.totalCost,
-          credits: deduct.duplicate ? 0 : credits,
+          credits: creditsCharged,
         },
       },
-      creditsUsed: deduct.duplicate ? row.creditsUsed ?? 0 : credits,
+      creditsUsed: alreadyCharged ? row.creditsUsed ?? 0 : creditsCharged,
     },
-    creditsUsed: deduct.duplicate ? 0 : credits,
+    creditsUsed: creditsCharged,
     cost: totals.totalCost,
+    balanceExhausted: settlement?.balanceExhausted === true,
   };
 }
 

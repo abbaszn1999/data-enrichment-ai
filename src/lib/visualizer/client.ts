@@ -111,6 +111,32 @@ export async function getVisualizerRowsDelta(
   }>(res);
 }
 
+/** Signs stored image paths the preview does not have a link for yet. */
+export async function signVisualizerStoragePaths(params: {
+  workspaceId: string;
+  sessionId: string;
+  paths: string[];
+}) {
+  const signedUrls: Record<string, string> = {};
+  const unique = [...new Set(params.paths.filter(Boolean))];
+  for (let offset = 0; offset < unique.length; offset += 200) {
+    const res = await fetch(
+      `/api/visualizer/sessions/${params.sessionId}/signed-urls`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: params.workspaceId,
+          paths: unique.slice(offset, offset + 200),
+        }),
+      }
+    );
+    const body = await parseJson<{ signedUrls: Record<string, string> }>(res);
+    Object.assign(signedUrls, body.signedUrls);
+  }
+  return { signedUrls };
+}
+
 /** Saves project settings only; rows are never sent, so results a run wrote stay intact. */
 export async function saveVisualizerSettings(params: {
   workspaceId: string;

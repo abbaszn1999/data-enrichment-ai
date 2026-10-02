@@ -1,5 +1,4 @@
 import { GoogleGenAI } from "@google/genai";
-import { createAdminClient } from "@/lib/supabase-admin";
 import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
 import { GALLERY_PLANNER_OPENAI_MODEL } from "@/lib/enrich/models";
 import { parseImageUrls } from "@/lib/gallery/image-urls";
@@ -17,7 +16,7 @@ import {
   MISSING_ORIGINAL_IMAGE_MESSAGE,
   resolveGalleryRunPhase,
 } from "@/lib/gallery/types";
-import { deductGalleryCredits } from "@/lib/gallery/agent/process-row";
+import { settleProviderUsage, type UsageSettlement } from "@/lib/jobs/credits";
 import { buildAiRowCharge } from "@/lib/gallery/agent/ai-row-billing";
 import { shouldChargeGalleryCredits } from "@/lib/gallery/pricing";
 import {
@@ -85,6 +84,8 @@ export async function processAiRow(params: {
   creditsUsed: number;
   cost: number;
   error?: string;
+  /** The balance is spent: the run must stop, but this row's work is kept and billed. */
+  balanceExhausted?: boolean;
 }> {
   const { workspaceId, sessionId, worksheet, row } = params;
   const settings = worksheet.settings.ai;
@@ -133,17 +134,44 @@ export async function processAiRow(params: {
   let plan: GalleryPlannerPlan | null = null;
   let committed = false;
 
-  const spent = () => sumCosts([...plannerCosts, ...imageCosts]).totalCost;
-
   const fail = async (error: string) => {
     if (!committed) await removeGalleryPathsAdmin(newlyStoredPaths).catch(() => undefined);
-    const unbilled = spent();
-    if (unbilled > 0) {
-      galleryWarn("ai-image:row", "Row failed after provider usage; not charged to the customer", {
-        rowId: row.id,
-        dollarCost: unbilled,
-        error,
+    // Billing rule: what the providers answered (and billed us for) is charged,
+    // even when the row fails. A saved plan is not charged again on retry.
+    const planner = sumCosts(plannerCosts);
+    const images = sumCosts(imageCosts);
+    const unbilled = planner.totalCost + images.totalCost;
+    let settlement: UsageSettlement | null = null;
+    if (!committed && unbilled > 0 && shouldChargeGalleryCredits(planner.totalCredits + images.totalCredits)) {
+      settlement = await settleProviderUsage({
+        ownerUserId: params.ownerUserId,
+        workspaceId,
+        actorUserId: params.actorUserId,
+        amount: sumCosts([...plannerCosts, ...imageCosts]).totalCredits,
+        operation: "gallery_ai",
+        entityType: "gallery_session",
+        entityId: sessionId,
+        idempotencyKey: `${params.runId}:${row.id}:${runPhase}:failed`,
+        details: {
+          rowId: row.id,
+          runPhase,
+          provider: "ai",
+          pipeline: "gallery-generate",
+          failedRow: true,
+          error: error.slice(0, 300),
+          plannerCost: planner.totalCost,
+          imageCost: images.totalCost,
+          imageCalls: imageCosts.length,
+          dollarCost: unbilled,
+        },
       });
+      if (settlement.shortfall > 0) {
+        galleryWarn("ai-image:row", "Failed row: balance could not cover the provider usage", {
+          rowId: row.id,
+          shortfallCredits: settlement.shortfall,
+          billingError: settlement.billingError,
+        });
+      }
     }
     return {
       row: {
@@ -157,9 +185,10 @@ export async function processAiRow(params: {
         // A plan that was already paid for stays on the row so a retry does not pay for it twice.
         sourceMeta: plan ? { ...(row.sourceMeta ?? {}), plan } : row.sourceMeta,
       },
-      creditsUsed: 0,
+      creditsUsed: settlement?.charged ?? 0,
       cost: unbilled,
       error,
+      balanceExhausted: settlement?.balanceExhausted === true,
     };
   };
 
@@ -412,19 +441,22 @@ export async function processAiRow(params: {
       references: referencesUsed,
     });
     const totals = charge.totals;
+    // The work is delivered, so it is always kept and billed. If the balance
+    // cannot cover all of it, the rest of the balance is charged and the run stops.
     let creditsUsed = 0;
+    let billing: UsageSettlement | null = null;
     if (shouldChargeGalleryCredits(totals.totalCredits)) {
-      const deduct = await deductGalleryCredits({
-        admin: createAdminClient(),
+      billing = await settleProviderUsage({
         ownerUserId: params.ownerUserId,
         workspaceId,
         actorUserId: params.actorUserId,
         amount: totals.totalCredits,
-        sessionId,
-        rowId: row.id,
         operation: "gallery_ai",
+        entityType: "gallery_session",
+        entityId: sessionId,
+        idempotencyKey: `${params.runId}:${row.id}:${runPhase}`,
         details: {
-          idempotencyKey: `${params.runId}:${row.id}:${runPhase}`,
+          rowId: row.id,
           runPhase,
           galleryImages: finalGalleryPaths.length,
           usedOriginalImage: originalUrls.length > 0,
@@ -433,10 +465,14 @@ export async function processAiRow(params: {
           ...charge.details,
         },
       });
-      if (!deduct.success) {
-        return await fail(deduct.error || "Credit deduction failed");
+      creditsUsed = billing.charged;
+      if (billing.shortfall > 0) {
+        galleryWarn("ai-image:row", "Balance could not cover the row; result kept and the rest of the balance charged", {
+          rowId: row.id,
+          shortfallCredits: billing.shortfall,
+          billingError: billing.billingError,
+        });
       }
-      creditsUsed = deduct.duplicate ? 0 : totals.totalCredits;
     }
     committed = true;
 
@@ -487,12 +523,17 @@ export async function processAiRow(params: {
           brandingEnabled: settings.brandingEnabled,
           partialWarning,
           plan: plan ?? row.sourceMeta?.plan,
-          cost: { total: totals.totalCost, credits: creditsUsed },
+          cost: {
+            total: totals.totalCost,
+            credits: creditsUsed,
+            ...(billing && billing.shortfall > 0 ? { shortfallCredits: billing.shortfall } : {}),
+          },
         },
         creditsUsed: creditsUsed || row.creditsUsed || 0,
       },
       creditsUsed,
       cost: totals.totalCost,
+      balanceExhausted: billing?.balanceExhausted === true,
     };
   } catch (error) {
     galleryError("ai-image:row", "AI row failed unexpectedly", error);

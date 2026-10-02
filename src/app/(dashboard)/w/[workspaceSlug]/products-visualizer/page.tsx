@@ -80,6 +80,7 @@ import {
   getVisualizerProgress,
   getVisualizerRowsDelta,
   getVisualizerSession,
+  signVisualizerStoragePaths,
   listVisualizerSessions,
   requestVisualizerGenerationStop,
   saveVisualizerSettings,
@@ -94,7 +95,7 @@ import {
   visualizerRunIsActive,
 } from "@/lib/visualizer/generation-worksheet-merge";
 import { maxRevision, snapshotRevision } from "@/lib/jobs/snapshot-clock";
-import { resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
+import { collectVisualizerImagePaths, resolveVisualizerHtmlImages } from "@/lib/visualizer/html-embed";
 import {
   productDisplayName,
   visualizerImageColumnOptions,
@@ -518,6 +519,54 @@ export default function ProductsVisualizerPage() {
     };
   }, [workspace?.id, projectId, hasWorksheet]);
 
+  // Images land in storage during a run. If their signed link was missed (the
+  // delta poll moves on after one try), ask again until the preview can show them.
+  const unsignedImageKey = useMemo(() => {
+    if (!worksheet) return "";
+    const missing: string[] = [];
+    for (const row of worksheet.rows) {
+      for (const path of collectVisualizerImagePaths(row.imagePlaceholders)) {
+        if (!signedUrls[path]) missing.push(path);
+      }
+    }
+    return missing.sort().join("\n");
+  }, [signedUrls, worksheet]);
+  useEffect(() => {
+    if (!workspace?.id || !projectId || !unsignedImageKey) return;
+    const paths = unsignedImageKey.split("\n");
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const attempt = async (tryIndex: number) => {
+      if (cancelled) return;
+      try {
+        const result = await signVisualizerStoragePaths({
+          workspaceId: workspace.id,
+          sessionId: projectId,
+          paths,
+        });
+        if (cancelled) return;
+        const signed = result.signedUrls ?? {};
+        if (Object.keys(signed).length > 0) {
+          signedAtRef.current = Date.now();
+          setSignedUrls((current) => ({ ...current, ...signed }));
+        }
+        const stillMissing = paths.some((path) => !signed[path]);
+        if (stillMissing && tryIndex < 6) {
+          timer = setTimeout(() => void attempt(tryIndex + 1), Math.min(8_000, 400 * 2 ** tryIndex));
+        }
+      } catch {
+        if (!cancelled && tryIndex < 6) {
+          timer = setTimeout(() => void attempt(tryIndex + 1), Math.min(8_000, 400 * 2 ** tryIndex));
+        }
+      }
+    };
+    timer = setTimeout(() => void attempt(0), 250);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [projectId, unsignedImageKey, workspace?.id]);
+
   useEffect(() => {
     setSelectedRowIds(new Set());
     setReviewRowId(null);
@@ -628,9 +677,10 @@ export default function ProductsVisualizerPage() {
           progress.jobStatus === "running" ||
           progress.jobStatus === "queued" ||
           progress.status === "processing";
+        const previousJobStatus = lastJobStatusRef.current;
         if (
           progress.jobStatus === "paused_no_credits" &&
-          (lastJobStatusRef.current === "running" || lastJobStatusRef.current === "queued")
+          (previousJobStatus === "running" || previousJobStatus === "queued")
         ) {
           showBillingBlockedToast("no_credits", workspace.slug, { context: "Generation" });
         }
@@ -670,10 +720,18 @@ export default function ProductsVisualizerPage() {
           if (cancelled) return;
         }
         const serverRevision = snapshotRevision(progress.worksheetRevision);
+        const jobJustFinished =
+          !jobStillRunning &&
+          (previousJobStatus === "running" ||
+            previousJobStatus === "queued" ||
+            previousJobStatus === "paused_no_credits");
+        // A finished run always reloads once, so the last images are not stuck
+        // behind a delta poll that already moved on.
         const needsWorksheet =
-          !deltaHandled &&
-          (serverRevision > worksheetRevisionRef.current ||
-            (!jobStillRunning && (localBusy || localRunActive)));
+          jobJustFinished ||
+          (!deltaHandled &&
+            (serverRevision > worksheetRevisionRef.current ||
+              (!jobStillRunning && (localBusy || localRunActive))));
         if (needsWorksheet) {
           const fresh = await getVisualizerSession(workspace.id, projectId, {
             includeSignedUrls: true,
@@ -2833,6 +2891,7 @@ export default function ProductsVisualizerPage() {
                 </style></head><body dir="auto">${html}</body></html>`;
               const previewFrame = (
                 <iframe
+                  key={html}
                   title="Generated description preview"
                   sandbox=""
                   srcDoc={previewDoc}

@@ -40,6 +40,8 @@ export type GalleryRowOutcome = {
   generationStage?: GalleryRow["generationStage"];
   error?: string;
   noCredits?: boolean;
+  /** The row's work is kept and billed, but the balance is spent: stop the run after it. */
+  balanceExhausted?: boolean;
 };
 
 async function loadGallerySessionSettings(
@@ -250,5 +252,6 @@ export async function executeGalleryRow(
     generationStage: undefined,
     error,
     noCredits: isInsufficientCredits(error),
+    balanceExhausted: result.balanceExhausted === true,
   };
 }

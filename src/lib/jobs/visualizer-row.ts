@@ -25,6 +25,8 @@ export type VisualizerRowOutcome = {
   imagesStoppedEarly: boolean;
   error?: string;
   noCredits?: boolean;
+  /** The row's work is kept and billed, but the balance is spent: stop the run after it. */
+  balanceExhausted?: boolean;
 };
 
 /** Time a row task may use: the visualizerRow task timeout (1500s) minus a margin for billing and cleanup. */
@@ -145,6 +147,7 @@ export async function executeVisualizerRow(
   let finalRow = structuredClone(row);
   let failed = false;
   let imagesStoppedEarly = false;
+  let balanceExhausted = false;
   let error: string | undefined;
 
   try {
@@ -157,8 +160,11 @@ export async function executeVisualizerRow(
       cost += descResult.cost;
       finalRow = descResult.row;
       error = descResult.error;
+      if (descResult.balanceExhausted) balanceExhausted = true;
       if (descResult.row.status !== "description_ready") {
         failed = true;
+      } else if (balanceExhausted) {
+        // The description is kept, but the balance is spent, so no further images are started.
       } else if (phase === "full") {
         const withImages: VisualizerRow = {
           ...descResult.row,
@@ -184,6 +190,7 @@ export async function executeVisualizerRow(
         cost += imageResult.cost;
         finalRow = { ...imageResult.row, generationStage: undefined };
         error = imageResult.error || error;
+        if (imageResult.balanceExhausted) balanceExhausted = true;
         if (imageResult.row.status === "description_ready") {
           imagesStoppedEarly = true;
         } else if (imageResult.row.status !== "images_ready") {
@@ -202,6 +209,7 @@ export async function executeVisualizerRow(
       cost += imageResult.cost;
       finalRow = { ...imageResult.row, generationStage: undefined };
       error = imageResult.error;
+      if (imageResult.balanceExhausted) balanceExhausted = true;
       if (imageResult.row.status === "description_ready") {
         imagesStoppedEarly = true;
       } else if (imageResult.row.status !== "images_ready") {
@@ -230,5 +238,6 @@ export async function executeVisualizerRow(
     imagesStoppedEarly,
     error,
     noCredits: isInsufficientCredits(error),
+    balanceExhausted,
   };
 }

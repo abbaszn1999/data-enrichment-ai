@@ -8,13 +8,13 @@ import { extensionForMime } from "@/lib/gallery/agents/ai-shared";
 import { requireGeminiApiKey } from "@/lib/sync/agent/ai-utils";
 import { resolveSlotPrompt } from "@/lib/visualizer/agents/planner-plan";
 import { buildImagesCharge } from "@/lib/visualizer/billing";
-import { deductVisualizerCredits } from "@/lib/visualizer/credits";
+import { settleProviderUsage, type UsageSettlement } from "@/lib/jobs/credits";
 import { embedVisualizerPlaceholders } from "@/lib/visualizer/html-embed";
 import { visualizerLog, visualizerWarn } from "@/lib/visualizer/log";
 import { shouldChargeVisualizerCredits } from "@/lib/visualizer/pricing";
 import { loadVisualizerReferences } from "@/lib/visualizer/references";
 import { loadVisualizerSkill } from "@/lib/visualizer/skill-loader";
-import { removeVisualizerPathsAdmin, uploadVisualizerBytesAdmin } from "@/lib/visualizer/storage-admin";
+import { uploadVisualizerBytesAdmin } from "@/lib/visualizer/storage-admin";
 import { getVisualizerRowImagePath } from "@/lib/visualizer/storage-paths";
 import {
   resolveVisualizerImageModel,
@@ -51,6 +51,8 @@ export async function processImagesRow(params: {
   creditsUsed: number;
   cost: number;
   error?: string;
+  /** The balance is spent: the run must stop, but this row's images are kept and billed. */
+  balanceExhausted?: boolean;
 }> {
   const { row, settings, workspaceId, sessionId } = params;
   const description = String(row.generatedDescription || "").trim();
@@ -117,8 +119,36 @@ export async function processImagesRow(params: {
 
   const imageCosts: AiCallCost[] = [];
   const generatedIndexes: number[] = [];
-  const newlyStored: string[] = [];
   const failures: string[] = [];
+  let charged = false;
+  /** Bills every image call the provider answered, then never bills this row again. */
+  const billUsage = async (
+    idempotencyKey: string,
+    details: Record<string, unknown>
+  ): Promise<UsageSettlement | null> => {
+    const amount = sumCosts(imageCosts).totalCredits;
+    if (charged || !shouldChargeVisualizerCredits(amount)) return null;
+    const settlement = await settleProviderUsage({
+      ownerUserId: params.ownerUserId,
+      workspaceId,
+      actorUserId: params.actorUserId,
+      amount,
+      operation: "visualizer_images",
+      entityType: "visualizer_session",
+      entityId: sessionId,
+      idempotencyKey,
+      details: { runId: params.runId, rowId: row.id, phase: "images", ...details },
+    });
+    charged = true;
+    if (settlement.shortfall > 0) {
+      visualizerWarn("images-row", "Balance could not cover the image usage; images kept and the rest of the balance charged", {
+        rowId: row.id,
+        shortfallCredits: settlement.shortfall,
+        billingError: settlement.billingError,
+      });
+    }
+    return settlement;
+  };
   let stoppedEarly: string | undefined;
   let nextSlot = 0;
   let checkpointChain: Promise<void> = Promise.resolve();
@@ -184,7 +214,6 @@ export async function processImagesRow(params: {
         await uploadVisualizerBytesAdmin(storagePath, generated.image.buffer, generated.image.contentType, {
           upsert: true,
         });
-        newlyStored.push(storagePath);
         generatedIndexes.push(placeholder.index);
         current.set(placeholder.index, { ...placeholder, storagePath });
         checkpointChain = checkpointChain.then(async () => {
@@ -218,18 +247,31 @@ export async function processImagesRow(params: {
     await Promise.all(Array.from({ length: Math.min(SLOT_CONCURRENCY, missing.length) }, () => worker()));
     await checkpointChain;
 
-    const spent = sumCosts(imageCosts).totalCost;
+    const spent = sumCosts(imageCosts);
     if (generatedIndexes.length === 0) {
-      if (stoppedEarly) return { ...stoppedRow(`${stoppedEarly} before any image was created`), cost: spent };
-      const message = failures[0] ?? "No images were created";
-      if (spent > 0) {
-        visualizerWarn("images-row", "Row failed after provider usage; not charged to the customer", {
-          rowId: row.id,
-          dollarCost: spent,
-          error: message,
-        });
+      const message = stoppedEarly
+        ? `${stoppedEarly} before any image was created`
+        : (failures[0] ?? "No images were created");
+      // A failed call still has a provider response, so it is billed.
+      const settlement = await billUsage(`${params.runId}:visualizer_images:${row.id}:failed`, {
+        failedRow: true,
+        error: message.slice(0, 300),
+        imageCalls: imageCosts.length,
+        dollarCost: spent.totalCost,
+      });
+      if (stoppedEarly) {
+        return {
+          ...stoppedRow(message),
+          creditsUsed: settlement?.charged ?? 0,
+          cost: spent.totalCost,
+          balanceExhausted: settlement?.balanceExhausted === true,
+        };
       }
-      return failRow(message, spent);
+      return {
+        ...failRow(message, spent.totalCost),
+        creditsUsed: settlement?.charged ?? 0,
+        balanceExhausted: settlement?.balanceExhausted === true,
+      };
     }
 
     const charge = buildImagesCharge({
@@ -244,31 +286,12 @@ export async function processImagesRow(params: {
       failedImages: failures.length,
       references: references.counts,
     });
-    let creditsUsed = charge.totals.totalCredits;
-    if (shouldChargeVisualizerCredits(creditsUsed)) {
-      const deduct = await deductVisualizerCredits({
-        admin: params.admin,
-        ownerUserId: params.ownerUserId,
-        workspaceId,
-        actorUserId: params.actorUserId,
-        amount: creditsUsed,
-        sessionId,
-        rowId: row.id,
-        operation: "visualizer_images",
-        details: {
-          runId: params.runId,
-          idempotencyKey: `${params.runId}:visualizer_images:${row.id}:${charge.indexKey}`,
-          phase: "images",
-          ...charge.details,
-        },
-      });
-      if (!deduct.success) {
-        // The images were never paid for, so they are not kept.
-        await removeVisualizerPathsAdmin(newlyStored).catch(() => undefined);
-        return failRow(deduct.error || "Credit deduction failed", charge.totals.totalCost);
-      }
-      if (deduct.duplicate) creditsUsed = 0;
-    }
+    // Images that were stored are kept even when the balance cannot cover them.
+    const settlement = await billUsage(
+      `${params.runId}:visualizer_images:${row.id}:${charge.indexKey}`,
+      charge.details
+    );
+    const creditsUsed = settlement?.charged ?? 0;
 
     const { merged, html } = snapshot();
     const done = merged.filter((item) => !!item.storagePath).length;
@@ -298,11 +321,39 @@ export async function processImagesRow(params: {
       },
       creditsUsed,
       cost: charge.totals.totalCost,
+      balanceExhausted: settlement?.balanceExhausted === true,
     };
   } catch (error) {
-    await removeVisualizerPathsAdmin(newlyStored).catch(() => undefined);
     const message = error instanceof Error ? error.message : "Image generation failed";
     visualizerWarn("images-row", `Row ${row.id} image phase failed`, { message });
-    return failRow(message, sumCosts(imageCosts).totalCost);
+    const spent = sumCosts(imageCosts);
+    const settlement = await billUsage(`${params.runId}:visualizer_images:${row.id}:failed`, {
+      failedRow: true,
+      error: message.slice(0, 300),
+      imageCalls: imageCosts.length,
+      dollarCost: spent.totalCost,
+    }).catch(() => null);
+    if (generatedIndexes.length > 0) {
+      const { merged, html } = snapshot();
+      return {
+        row: {
+          ...row,
+          generatedDescription: html,
+          imagePlaceholders: merged,
+          status: "description_ready",
+          generationStage: undefined,
+          errorMessage: message.slice(0, 500),
+        },
+        creditsUsed: settlement?.charged ?? 0,
+        cost: spent.totalCost,
+        error: message,
+        balanceExhausted: settlement?.balanceExhausted === true,
+      };
+    }
+    return {
+      ...failRow(message, spent.totalCost),
+      creditsUsed: settlement?.charged ?? 0,
+      balanceExhausted: settlement?.balanceExhausted === true,
+    };
   }
 }

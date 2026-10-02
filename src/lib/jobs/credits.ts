@@ -86,6 +86,64 @@ export async function chargeCompletedCall(
   return { ...partial, charged: partial.success && !partial.duplicate ? rest : 0 };
 }
 
+export type UsageSettlement = {
+  /** Credits actually taken from the balance for this usage. */
+  charged: number;
+  /** Credits of real provider usage the balance could not cover (0 when fully charged). */
+  shortfall: number;
+  remaining?: number;
+  /** The same usage was already charged earlier (a retried call). */
+  duplicate: boolean;
+  /** The balance is spent, or billing failed: the run must stop before spending more. */
+  balanceExhausted: boolean;
+  billingError?: string;
+};
+
+const roundCredits = (value: number) => Math.round(value * 1000) / 1000;
+
+/**
+ * The one billing rule for generation: whatever the AI providers answered (and
+ * billed us for) is charged to the user, whether or not the row succeeded.
+ * The delivered work is never thrown away because the balance ran short: the
+ * rest of the balance is charged, and `balanceExhausted` tells the run to stop.
+ */
+export async function settleProviderUsage(
+  params: Parameters<typeof deductCreditsIdempotent>[0]
+): Promise<UsageSettlement> {
+  const amount = roundCredits(params.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { charged: 0, shortfall: 0, duplicate: false, balanceExhausted: false };
+  }
+  let result = await chargeCompletedCall({ ...params, amount });
+  if (!result.success && !isInsufficientCredits(result.error)) {
+    // One retry for a transient database error; the idempotency key makes it safe.
+    result = await chargeCompletedCall({ ...params, amount });
+  }
+  if (!result.success) {
+    return {
+      charged: 0,
+      shortfall: amount,
+      remaining: result.remaining,
+      duplicate: false,
+      balanceExhausted: true,
+      billingError: result.error || "Credit deduction failed",
+    };
+  }
+  if (result.duplicate) {
+    return { charged: 0, shortfall: 0, remaining: result.remaining, duplicate: true, balanceExhausted: false };
+  }
+  const charged = roundCredits(result.charged);
+  const shortfall = roundCredits(Math.max(0, amount - charged));
+  return {
+    charged,
+    shortfall,
+    remaining: result.remaining,
+    duplicate: false,
+    balanceExhausted:
+      shortfall > 0 || (typeof result.remaining === "number" && result.remaining <= 0),
+  };
+}
+
 export function isInsufficientCredits(error?: string | null): boolean {
   if (!error) return false;
   return /insufficient credits|insufficient_credits|no_credits|no active subscription/i.test(

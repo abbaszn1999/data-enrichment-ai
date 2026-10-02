@@ -20,10 +20,22 @@ const cost = () => createImageGenerationCost("gemini-3.1-flash-image", "1K", usa
 
 vi.mock("@/lib/supabase-admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/visualizer/log", () => ({ visualizerLog: vi.fn(), visualizerWarn: vi.fn() }));
-vi.mock("@/lib/visualizer/credits", () => ({
-  deductVisualizerCredits: async (params: Record<string, unknown>) => {
+vi.mock("@/lib/jobs/credits", () => ({
+  settleProviderUsage: async (params: { amount: number }) => {
     state.deductCalls.push(params);
-    return state.deductResult;
+    if (state.deductResult.duplicate) {
+      return { charged: 0, shortfall: 0, duplicate: true, balanceExhausted: false };
+    }
+    if (state.deductResult.success === false) {
+      return {
+        charged: 0,
+        shortfall: params.amount,
+        duplicate: false,
+        balanceExhausted: true,
+        billingError: state.deductResult.error || "Credit deduction failed",
+      };
+    }
+    return { charged: params.amount, shortfall: 0, duplicate: false, balanceExhausted: false };
   },
 }));
 vi.mock("@/lib/visualizer/storage-admin", () => ({
@@ -114,9 +126,14 @@ describe("processDescriptionRow", () => {
   it("charges the planner once with the tier's image model in the details", async () => {
     const result = await run(baseRow());
     expect(state.deductCalls).toHaveLength(1);
-    const call = state.deductCalls[0] as { amount: number; operation: string; details: Record<string, unknown> };
+    const call = state.deductCalls[0] as {
+      amount: number;
+      operation: string;
+      idempotencyKey: string;
+      details: Record<string, unknown>;
+    };
     expect(call.operation).toBe("visualizer_description");
-    expect(call.details.idempotencyKey).toBe("run1:visualizer_description:r1");
+    expect(call.idempotencyKey).toBe("run1:visualizer_description:r1");
     expect(call.details).toMatchObject({
       plannerModel: "gpt-6.1-sol",
       imageModel: "gemini-3-pro-image",
@@ -136,12 +153,14 @@ describe("processDescriptionRow", () => {
     expect(state.removed.flat()).toEqual(["w/s/r1/old.jpg"]);
   });
 
-  it("fails without a charge when the planner fails, but records the billed rounds", async () => {
+  it("charges the planner when it answered and the row still failed", async () => {
     state.planError = new VisualizerPlannerError("Planner returned 1 usable image prompts; expected 2", [cost(), cost()]);
     const result = await run(baseRow());
-    expect(state.deductCalls).toHaveLength(0);
+    expect(state.deductCalls).toHaveLength(1);
+    const call = state.deductCalls[0] as { amount: number; idempotencyKey: string };
+    expect(call.idempotencyKey).toBe("run1:visualizer_description:r1:failed");
     expect(result.row.status).toBe("failed");
-    expect(result.creditsUsed).toBe(0);
+    expect(result.creditsUsed).toBe(call.amount);
     expect(result.cost).toBeGreaterThan(cost().totalCost);
   });
 
@@ -153,11 +172,12 @@ describe("processDescriptionRow", () => {
     expect(result.error).toContain("product image");
   });
 
-  it("fails the row and keeps no description when the charge is refused", async () => {
-    state.deductResult = { success: false, error: "INSUFFICIENT_CREDITS" };
+  it("keeps the description when the balance cannot cover the planner", async () => {
+    state.deductResult = { success: false, error: "Insufficient credits" };
     const result = await run(baseRow());
-    expect(result.row.status).toBe("failed");
-    expect(result.row.generatedDescription).toBeUndefined();
+    expect(result.row.status).toBe("description_ready");
+    expect(result.row.generatedDescription).toContain("[imageplaceholder-1]");
+    expect(result.balanceExhausted).toBe(true);
     expect(result.creditsUsed).toBe(0);
   });
 

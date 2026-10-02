@@ -278,7 +278,13 @@ async function runVisualizerSessionInner(
       let rowFailed = outcome.failed;
       const imagesStoppedEarly = outcome.imagesStoppedEarly;
 
-      if (outcome.noCredits || isInsufficientCredits(outcome.error)) {
+      if (outcome.balanceExhausted) {
+        // The row is kept and billed. Further rows would spend money the balance cannot cover.
+        pausedNoCredits = true;
+        stopObserved = true;
+      }
+
+      if (!outcome.balanceExhausted && (outcome.noCredits || isInsufficientCredits(outcome.error))) {
         pausedNoCredits = true;
         stopObserved = true;
         const previous = previousStatus.get(rowId);

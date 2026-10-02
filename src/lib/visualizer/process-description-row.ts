@@ -3,7 +3,7 @@ import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
 import { VISUALIZER_PLANNER_OPENAI_MODEL } from "@/lib/enrich/models";
 import { planVisualizerContent, VisualizerPlannerError } from "@/lib/visualizer/agents/description-agent";
 import { buildDescriptionCharge } from "@/lib/visualizer/billing";
-import { deductVisualizerCredits } from "@/lib/visualizer/credits";
+import { settleProviderUsage, type UsageSettlement } from "@/lib/jobs/credits";
 import { collectVisualizerImagePaths } from "@/lib/visualizer/html-embed";
 import { shouldChargeVisualizerCredits } from "@/lib/visualizer/pricing";
 import { loadVisualizerReferences } from "@/lib/visualizer/references";
@@ -39,6 +39,8 @@ export async function processDescriptionRow(params: {
   creditsUsed: number;
   cost: number;
   error?: string;
+  /** The balance is spent: the run must stop, but this row's work is kept and billed. */
+  balanceExhausted?: boolean;
 }> {
   const { row, settings } = params;
   const product = mappedProductFields(row, settings);
@@ -46,12 +48,31 @@ export async function processDescriptionRow(params: {
     ...row,
     errorMessage: undefined,
   };
-  const fail = (message: string, unbilledCost = 0) => {
-    if (unbilledCost > 0) {
-      visualizerWarn("description-row", "Row failed after provider usage; not charged to the customer", {
-        rowId: row.id,
-        dollarCost: unbilledCost,
-        error: message,
+  let charged = false;
+  const fail = async (message: string, billedCosts: AiCallCost[] = []) => {
+    // Billing rule: what the planner answered (and billed us for) is charged even when the row fails.
+    const totals = sumCosts(billedCosts);
+    let settlement: UsageSettlement | null = null;
+    if (!charged && shouldChargeVisualizerCredits(totals.totalCredits)) {
+      settlement = await settleProviderUsage({
+        ownerUserId: params.ownerUserId,
+        workspaceId: params.workspaceId,
+        actorUserId: params.actorUserId,
+        amount: totals.totalCredits,
+        operation: "visualizer_description",
+        entityType: "visualizer_session",
+        entityId: params.sessionId,
+        idempotencyKey: `${params.runId}:visualizer_description:${row.id}:failed`,
+        details: {
+          runId: params.runId,
+          rowId: row.id,
+          phase: "description",
+          pipeline: "visualizer-description",
+          failedRow: true,
+          error: message.slice(0, 300),
+          plannerRounds: billedCosts.length,
+          dollarCost: totals.totalCost,
+        },
       });
     }
     return {
@@ -62,9 +83,10 @@ export async function processDescriptionRow(params: {
         generatedDescription: undefined,
         imagePlaceholders: undefined,
       },
-      creditsUsed: 0,
-      cost: unbilledCost,
+      creditsUsed: settlement?.charged ?? 0,
+      cost: totals.totalCost,
       error: message,
+      balanceExhausted: settlement?.balanceExhausted === true,
     };
   };
 
@@ -117,31 +139,39 @@ export async function processDescriptionRow(params: {
       requestedImages: plan.imagePlaceholders.length,
       references: references.counts,
     });
-    let creditsUsed = charge.totals.totalCredits;
+    let creditsUsed = 0;
+    let billing: UsageSettlement | null = null;
 
-    if (shouldChargeVisualizerCredits(creditsUsed)) {
-      const deduct = await deductVisualizerCredits({
-        admin: params.admin,
+    // The description is delivered, so it is always kept and billed. If the balance
+    // cannot cover all of it, the rest of the balance is charged and the run stops.
+    if (shouldChargeVisualizerCredits(charge.totals.totalCredits)) {
+      billing = await settleProviderUsage({
         ownerUserId: params.ownerUserId,
         workspaceId: params.workspaceId,
         actorUserId: params.actorUserId,
-        amount: creditsUsed,
-        sessionId: params.sessionId,
-        rowId: row.id,
+        amount: charge.totals.totalCredits,
         operation: "visualizer_description",
+        entityType: "visualizer_session",
+        entityId: params.sessionId,
+        idempotencyKey: `${params.runId}:visualizer_description:${row.id}`,
         details: {
           runId: params.runId,
-          idempotencyKey: `${params.runId}:visualizer_description:${row.id}`,
+          rowId: row.id,
           phase: "description",
           placeholderCount: plan.imagePlaceholders.length,
           notes: plan.notes,
           ...charge.details,
         },
       });
-      if (!deduct.success) {
-        return fail(deduct.error || "Credit deduction failed", charge.totals.totalCost);
+      creditsUsed = billing.charged;
+      charged = true;
+      if (billing.shortfall > 0) {
+        visualizerWarn("description-row", "Balance could not cover the row; result kept and the rest of the balance charged", {
+          rowId: row.id,
+          shortfallCredits: billing.shortfall,
+          billingError: billing.billingError,
+        });
       }
-      if (deduct.duplicate) creditsUsed = 0;
     }
 
     // A new description replaces the page, so images from an earlier run are no longer used.
@@ -160,11 +190,16 @@ export async function processDescriptionRow(params: {
     next.status = "description_ready";
     next.errorMessage = undefined;
 
-    return { row: next, creditsUsed, cost: charge.totals.totalCost };
+    return {
+      row: next,
+      creditsUsed,
+      cost: charge.totals.totalCost,
+      balanceExhausted: billing?.balanceExhausted === true,
+    };
   } catch (error) {
     if (error instanceof VisualizerPlannerError) plannerCosts.push(...error.costs);
     const message = error instanceof Error ? error.message : "Description generation failed";
     visualizerWarn("description-row", `Row ${row.id} failed`, { message });
-    return fail(message, sumCosts(plannerCosts).totalCost);
+    return fail(message, plannerCosts);
   }
 }

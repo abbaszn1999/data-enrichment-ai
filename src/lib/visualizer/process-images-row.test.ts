@@ -37,10 +37,22 @@ vi.mock("@/lib/visualizer/storage-admin", () => ({
     state.removed.push(paths);
   },
 }));
-vi.mock("@/lib/visualizer/credits", () => ({
-  deductVisualizerCredits: async (params: Record<string, unknown>) => {
+vi.mock("@/lib/jobs/credits", () => ({
+  settleProviderUsage: async (params: { amount: number }) => {
     state.deductCalls.push(params);
-    return state.deductResult;
+    if (state.deductResult.duplicate) {
+      return { charged: 0, shortfall: 0, duplicate: true, balanceExhausted: false };
+    }
+    if (state.deductResult.success === false) {
+      return {
+        charged: 0,
+        shortfall: params.amount,
+        duplicate: false,
+        balanceExhausted: true,
+        billingError: state.deductResult.error || "Credit deduction failed",
+      };
+    }
+    return { charged: params.amount, shortfall: 0, duplicate: false, balanceExhausted: false };
   },
 }));
 vi.mock("@/lib/visualizer/references", () => ({
@@ -172,9 +184,14 @@ describe("processImagesRow", () => {
   it("charges once per row and keys the charge by the generated slots", async () => {
     const result = await run(row([null, null, null]));
     expect(state.deductCalls).toHaveLength(1);
-    const call = state.deductCalls[0] as { amount: number; operation: string; details: Record<string, unknown> };
+    const call = state.deductCalls[0] as {
+      amount: number;
+      operation: string;
+      idempotencyKey: string;
+      details: Record<string, unknown>;
+    };
     expect(call.operation).toBe("visualizer_images");
-    expect(call.details.idempotencyKey).toBe("run1:visualizer_images:r1:1-2-3");
+    expect(call.idempotencyKey).toBe("run1:visualizer_images:r1:1-2-3");
     expect(call.details).toMatchObject({ model: "gemini-3.1-flash-image", tier: "standard", generatedImages: 3, imageCalls: 3 });
     expect(result.creditsUsed).toBe(call.amount);
     expect(result.creditsUsed).toBeGreaterThan(0);
@@ -184,8 +201,8 @@ describe("processImagesRow", () => {
     state.failIndexes = new Set([3]);
     const result = await run(row([null, null, null]));
     expect(state.deductCalls).toHaveLength(1);
-    const call = state.deductCalls[0] as { details: Record<string, unknown> };
-    expect(call.details.idempotencyKey).toBe("run1:visualizer_images:r1:1-2");
+    const call = state.deductCalls[0] as { idempotencyKey: string; details: Record<string, unknown> };
+    expect(call.idempotencyKey).toBe("run1:visualizer_images:r1:1-2");
     expect(call.details).toMatchObject({ generatedImages: 2, failedImages: 1, imageCalls: 3 });
     expect(result.row.status).toBe("description_ready");
     expect(result.row.errorMessage).toContain("Created 2 of 3 images");
@@ -193,12 +210,15 @@ describe("processImagesRow", () => {
     expect((result.row.imagePlaceholders ?? []).filter((item) => item.storagePath)).toHaveLength(2);
   });
 
-  it("fails without a charge when nothing was created, and records the cost", async () => {
+  it("charges image calls that the model answered even when no image was stored", async () => {
     state.failIndexes = new Set([1, 2]);
     const result = await run(row([null, null]));
-    expect(state.deductCalls).toHaveLength(0);
+    expect(state.deductCalls).toHaveLength(1);
+    const call = state.deductCalls[0] as { amount: number; idempotencyKey: string };
+    expect(call.idempotencyKey).toBe("run1:visualizer_images:r1:failed");
     expect(result.row.status).toBe("failed");
-    expect(result.creditsUsed).toBe(0);
+    expect(result.creditsUsed).toBe(call.amount);
+    expect(result.creditsUsed).toBeGreaterThan(0);
     expect(result.cost).toBeGreaterThan(0);
     expect(result.error).toContain("Image ");
   });
@@ -210,12 +230,13 @@ describe("processImagesRow", () => {
     expect(result.row.status).toBe("images_ready");
   });
 
-  it("removes the new files and fails the row when the charge is refused", async () => {
-    state.deductResult = { success: false, error: "INSUFFICIENT_CREDITS" };
+  it("keeps the new images when the balance cannot cover them", async () => {
+    state.deductResult = { success: false, error: "Insufficient credits" };
     const result = await run(row([null, null]));
-    expect(result.row.status).toBe("failed");
-    expect(result.error).toBe("INSUFFICIENT_CREDITS");
-    expect(state.removed.flat().sort()).toEqual(["w/s/r1/1.jpg", "w/s/r1/2.jpg"]);
+    expect(result.row.status).toBe("images_ready");
+    expect(result.balanceExhausted).toBe(true);
+    expect(state.removed).toEqual([]);
+    expect((result.row.imagePlaceholders ?? []).every((item) => !!item.storagePath)).toBe(true);
     expect(result.creditsUsed).toBe(0);
   });
 
