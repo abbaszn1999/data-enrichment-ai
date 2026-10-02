@@ -1965,8 +1965,7 @@ export default function ProductsVisualizerPage() {
               <div>
                 <h2 className="text-xs font-semibold">Image quality</h2>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  Descriptions and image prompts are written by GPT-6.1 Sol.
-                  Quality picks the image model.
+                  Standard is faster. Premium is studio-grade.
                 </p>
               </div>
               <div className="grid grid-cols-2 rounded-xl bg-muted/60 p-1">
@@ -1982,10 +1981,7 @@ export default function ProductsVisualizerPage() {
                         : "text-muted-foreground"
                     }`}
                   >
-                    <span className="block">{tier === "standard" ? "Standard" : "Premium"}</span>
-                    <span className="block text-[10px] font-normal opacity-80">
-                      {tier === "standard" ? "Nano Banana 2" : "Nano Banana Pro"}
-                    </span>
+                    {tier === "standard" ? "Standard" : "Premium"}
                   </button>
                 ))}
               </div>

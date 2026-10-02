@@ -3174,8 +3174,8 @@ export default function ProductsGalleryPage() {
                         </InfoTip>
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        Standard uses Nano Banana 2 and Premium uses Nano Banana Pro. GPT-6.1 Sol plans a
-                        separate prompt for every image from your product data, images and instructions.
+                        Standard is faster. Premium is studio-grade. A separate prompt is planned for every
+                        image from your product data, images and instructions.
                       </p>
                     </div>
                     <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
@@ -3188,10 +3188,7 @@ export default function ProductsGalleryPage() {
                             : "text-muted-foreground"
                         }`}
                       >
-                        <span className="block">Standard</span>
-                        <span className="block text-[10px] font-normal text-muted-foreground">
-                          Nano Banana 2
-                        </span>
+                        Standard
                       </button>
                       <button
                         type="button"
@@ -3203,10 +3200,7 @@ export default function ProductsGalleryPage() {
                           aiModel === "pro" ? "bg-background shadow-sm" : "text-muted-foreground"
                         }`}
                       >
-                        <span className="block">Premium</span>
-                        <span className="block text-[10px] font-normal text-muted-foreground">
-                          Nano Banana Pro
-                        </span>
+                        Premium
                       </button>
                     </div>
                     <ConfigSelect
