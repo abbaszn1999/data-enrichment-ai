@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { resolveShareToken } from "@/lib/share/links";
+import { sanitizeShareView } from "@/lib/share/view";
 import { loadProjectJsonAdmin } from "@/lib/jobs/project-json";
 import { resolveProductGroupColumn } from "@/lib/catalog/product-groups";
 import { getDefaultEnrichmentColumns, type ProductRow, type SessionKind } from "@/types";
@@ -47,6 +48,9 @@ export async function GET(request: NextRequest, context: Ctx) {
     return NextResponse.json({ error: "This share link is invalid or has been turned off" }, { status: 404 });
   }
 
+  // The owner's filters and sort at the time they shared; the page opens on them.
+  const view = sanitizeShareView(link.view);
+
   try {
     if (link.resource_type === "catalog") {
       const { data: session } = await admin
@@ -92,6 +96,7 @@ export async function GET(request: NextRequest, context: Ctx) {
         columnLayout: project.columnLayout,
         matchingSkipped: project.matchingSkipped ?? false,
         productGroupColumn,
+        view,
       });
     }
 
@@ -119,6 +124,7 @@ export async function GET(request: NextRequest, context: Ctx) {
         selectedColumns: worksheet.selectedColumns,
         columnLayout: worksheet.columnLayout,
         signedUrls,
+        view,
       });
     }
 
@@ -149,6 +155,7 @@ export async function GET(request: NextRequest, context: Ctx) {
         productImageColumn: worksheet.settings.productImageColumn,
         columnLayout: worksheet.settings.columnLayout,
         signedUrls,
+        view,
       });
     }
 

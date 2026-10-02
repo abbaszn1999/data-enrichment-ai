@@ -1,5 +1,6 @@
 import { randomBytes } from "crypto";
 import type { createAdminClient } from "@/lib/supabase-admin";
+import { sanitizeShareView, type ShareView } from "./view";
 
 /**
  * Public, revocable read-only share links for a sheet (Catalog Intelligence,
@@ -23,6 +24,8 @@ export interface ShareLink {
   resource_id: string;
   token: string;
   created_by: string;
+  /** The sheet view the link opens with; null opens it unfiltered. */
+  view: ShareView | null;
   revoked_at: string | null;
   last_viewed_at: string | null;
   created_at: string;
@@ -60,6 +63,7 @@ export async function createShareLink(
     resourceType: ShareResourceType;
     resourceId: string;
     createdBy: string;
+    view?: ShareView | null;
   }
 ): Promise<ShareLink> {
   await admin
@@ -78,6 +82,7 @@ export async function createShareLink(
       resource_id: params.resourceId,
       token: newToken(),
       created_by: params.createdBy,
+      view: sanitizeShareView(params.view),
     })
     .select("*")
     .single();
@@ -95,9 +100,32 @@ export async function regenerateShareLink(
     resourceType: ShareResourceType;
     resourceId: string;
     createdBy: string;
+    view?: ShareView | null;
   }
 ): Promise<ShareLink> {
   return createShareLink(admin, params);
+}
+
+/** Replaces the view the active link opens with. Pass null to open it unfiltered. */
+export async function updateShareLinkView(
+  admin: Admin,
+  params: {
+    workspaceId: string;
+    resourceType: ShareResourceType;
+    resourceId: string;
+    view: ShareView | null;
+  }
+): Promise<ShareLink | null> {
+  const { data } = await admin
+    .from("share_links")
+    .update({ view: sanitizeShareView(params.view) })
+    .eq("workspace_id", params.workspaceId)
+    .eq("resource_type", params.resourceType)
+    .eq("resource_id", params.resourceId)
+    .is("revoked_at", null)
+    .select("*")
+    .maybeSingle();
+  return (data as ShareLink | null) ?? null;
 }
 
 export async function revokeShareLink(

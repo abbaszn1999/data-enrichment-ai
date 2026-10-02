@@ -96,6 +96,7 @@ import { RowResizeHandle } from "@/components/sheet/resize-handles";
 import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
 import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
 import { ShareSheetButton } from "@/components/share/share-sheet-button";
+import { buildShareView, viewToColumnFilters, type ShareView } from "@/lib/share/view";
 import { applyColumnLayout, fullColumnOrder } from "@/lib/sheet/column-layout";
 import {
   applyColumnFilters,
@@ -1706,7 +1707,16 @@ type ContextMenuState =
 
 // --- Column Visibility Popover ---
 // --- Main DataTable ---
-export function DataTable({ readOnly = false }: { readOnly?: boolean } = {}) {
+const STATUS_FILTERS: StatusFilter[] = ["all", "pending", "processing", "done", "error"];
+
+export function DataTable({
+  readOnly = false,
+  initialView = null,
+}: {
+  readOnly?: boolean;
+  /** The view a share link opens with (filters, sort, search, status tab). */
+  initialView?: ShareView | null;
+} = {}) {
   const {
     rows,
     originalColumns,
@@ -1753,15 +1763,32 @@ export function DataTable({ readOnly = false }: { readOnly?: boolean } = {}) {
     ? { existing: "Existing pages", new: "New pages" }
     : { existing: "Existing", new: "New" };
 
-  const [globalFilter, setGlobalFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const [globalFilter, setGlobalFilter] = useState(initialView?.search ?? "");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(
+    STATUS_FILTERS.find((status) => status === initialView?.status) ?? "all"
+  );
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(() => viewToColumnFilters(initialView));
   const [previewRowId, setPreviewRowId] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [showColumnVisibility, setShowColumnVisibility] = useState(false);
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const [sorting, setSorting] = useState<SortingState>(() =>
+    initialView?.sort ? [{ id: initialView.sort.column, desc: initialView.sort.direction === "desc" }] : []
+  );
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
+
+  // What a share link made right now would open with.
+  const shareView = useMemo(
+    () =>
+      buildShareView({
+        columnFilters,
+        sort: sorting[0] ? { column: sorting[0].id, direction: sorting[0].desc ? "desc" : "asc" } : null,
+        search: globalFilter,
+        status: statusFilter,
+        activeSheet,
+      }),
+    [columnFilters, sorting, globalFilter, statusFilter, activeSheet]
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const currentPageRowIdsRef = useRef<string[]>([]);
@@ -2447,7 +2474,12 @@ export function DataTable({ readOnly = false }: { readOnly?: boolean } = {}) {
             </span>
 
             {!isViewer && workspaceId && projectId && (
-              <ShareSheetButton workspaceId={workspaceId} resourceType="catalog" resourceId={projectId} />
+              <ShareSheetButton
+                workspaceId={workspaceId}
+                resourceType="catalog"
+                resourceId={projectId}
+                view={shareView}
+              />
             )}
 
             {/* Selection info */}

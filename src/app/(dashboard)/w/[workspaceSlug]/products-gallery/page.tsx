@@ -67,6 +67,7 @@ import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
 import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
 import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
 import { ShareSheetButton } from "@/components/share/share-sheet-button";
+import { buildShareView } from "@/lib/share/view";
 import { applyColumnLayout, fullColumnOrder, moveColumn, toggleColumnHidden, EMPTY_COLUMN_LAYOUT, type ColumnLayout } from "@/lib/sheet/column-layout";
 import {
   applyColumnFilters,
@@ -1747,6 +1748,16 @@ export default function ProductsGalleryPage() {
     );
     return sortDirection === "asc" ? sorted : sorted.reverse();
   }, [rows, selectedRowIds, worksheetFilter, worksheetSearch, columnFilters, sortColumn, sortDirection]);
+
+  // The filters and sort a share link made now would open with.
+  const shareView = useMemo(
+    () =>
+      buildShareView({
+        columnFilters,
+        sort: sortColumn ? { column: sortColumn, direction: sortDirection } : null,
+      }),
+    [columnFilters, sortColumn, sortDirection]
+  );
 
   const worksheetPageCount = Math.max(
     1,
@@ -3793,7 +3804,12 @@ export default function ProductsGalleryPage() {
                         : `${rows.length} products`}
                     </span>
                     {canEdit && workspace?.id && projectId && (
-                      <ShareSheetButton workspaceId={workspace.id} resourceType="gallery" resourceId={projectId} />
+                      <ShareSheetButton
+                        workspaceId={workspace.id}
+                        resourceType="gallery"
+                        resourceId={projectId}
+                        view={shareView}
+                      />
                     )}
                     {canEdit && selectedRowIds.size > 0 && (
                       <Button

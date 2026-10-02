@@ -7,8 +7,10 @@ import {
   regenerateShareLink,
   revokeShareLink,
   SHARE_RESOURCE_TYPES,
+  updateShareLinkView,
   type ShareResourceType,
 } from "@/lib/share/links";
+import { sanitizeShareView } from "@/lib/share/view";
 
 function shareUrl(request: NextRequest, token: string): string {
   const origin =
@@ -88,10 +90,14 @@ export async function GET(request: NextRequest) {
   });
 }
 
-/** POST — turn sharing on (or regenerate the link if `regenerate: true`). */
+/**
+ * POST — turn sharing on (or regenerate the link if `regenerate: true`).
+ * `view` is the sheet view the link should open with; an existing link that
+ * is reused takes the new view too.
+ */
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => null)) as
-    | { workspaceId?: string; resourceType?: string; resourceId?: string; regenerate?: boolean }
+    | { workspaceId?: string; resourceType?: string; resourceId?: string; regenerate?: boolean; view?: unknown }
     | null;
   const parsed = readResourceParams(body ?? {});
   if (!parsed) {
@@ -100,16 +106,37 @@ export async function POST(request: NextRequest) {
   const auth = await requireEditor(parsed.workspaceId);
   if (!auth.ok) return auth.response;
 
+  const view = sanitizeShareView(body?.view);
   try {
-    const link = body?.regenerate
-      ? await regenerateShareLink(auth.admin, { ...parsed, createdBy: auth.userId })
-      : (await getActiveShareLink(auth.admin, parsed.workspaceId, parsed.resourceType, parsed.resourceId)) ??
-        (await createShareLink(auth.admin, { ...parsed, createdBy: auth.userId }));
+    let link = body?.regenerate
+      ? await regenerateShareLink(auth.admin, { ...parsed, createdBy: auth.userId, view })
+      : await getActiveShareLink(auth.admin, parsed.workspaceId, parsed.resourceType, parsed.resourceId);
+    if (!link) link = await createShareLink(auth.admin, { ...parsed, createdBy: auth.userId, view });
+    else if (!body?.regenerate && body && "view" in body) {
+      link = (await updateShareLinkView(auth.admin, { ...parsed, view })) ?? link;
+    }
     return NextResponse.json({ link, shareUrl: shareUrl(request, link.token) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to create share link";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/** PATCH — change the view the active link opens with (null opens it unfiltered). */
+export async function PATCH(request: NextRequest) {
+  const body = (await request.json().catch(() => null)) as
+    | { workspaceId?: string; resourceType?: string; resourceId?: string; view?: unknown }
+    | null;
+  const parsed = readResourceParams(body ?? {});
+  if (!parsed) {
+    return NextResponse.json({ error: "Missing or invalid parameters" }, { status: 400 });
+  }
+  const auth = await requireEditor(parsed.workspaceId);
+  if (!auth.ok) return auth.response;
+
+  const link = await updateShareLinkView(auth.admin, { ...parsed, view: sanitizeShareView(body?.view) });
+  if (!link) return NextResponse.json({ error: "Sharing is not turned on" }, { status: 404 });
+  return NextResponse.json({ link, shareUrl: shareUrl(request, link.token) });
 }
 
 /** DELETE — turn sharing off. The old link stops working immediately. */

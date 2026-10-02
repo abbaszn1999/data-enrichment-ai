@@ -12,6 +12,7 @@ import { DataTable } from "@/components/data-table";
 import { useSheetStore } from "@/store/sheet-store";
 import { ShareGalleryView, type GallerySharePayload } from "@/components/share/share-gallery-view";
 import { ShareVisualizerView, type VisualizerSharePayload } from "@/components/share/share-visualizer-view";
+import type { ShareView } from "@/lib/share/view";
 import {
   DEFAULT_ENRICHMENT_SETTINGS,
   getDefaultEnrichmentColumns,
@@ -37,6 +38,7 @@ interface CatalogSharePayload {
   columnLayout?: { order: string[]; hidden: string[] };
   matchingSkipped?: boolean;
   productGroupColumn?: string | null;
+  view?: ShareView | null;
 }
 
 type SharePayload = CatalogSharePayload | GallerySharePayload | VisualizerSharePayload;
@@ -68,13 +70,18 @@ function CatalogShareView({ payload }: { payload: CatalogSharePayload }) {
       payload.kind,
       payload.matchingSkipped,
       payload.productGroupColumn,
-      payload.columnLayout
+      payload.columnLayout,
+      { activeSheet: payload.view?.activeSheet }
     );
   }, [payload, loadProject]);
 
+  // Read once on mount: filters the visitor changes afterwards must stay, even
+  // when the 45-minute refresh brings a new payload.
+  const [initialView] = useState(() => payload.view ?? null);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <DataTable readOnly />
+      <DataTable readOnly initialView={initialView} />
     </div>
   );
 }

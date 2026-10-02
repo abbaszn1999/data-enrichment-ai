@@ -17,6 +17,7 @@ import {
   type ColumnFilters,
 } from "@/lib/sheet/column-filters";
 import type { ColumnLayout } from "@/lib/sheet/column-layout";
+import { viewToColumnFilters, type ShareView } from "@/lib/share/view";
 
 interface ShareVisualizerRow {
   id: string;
@@ -34,6 +35,8 @@ export interface VisualizerSharePayload {
   productImageColumn: string | null;
   columnLayout?: ColumnLayout;
   signedUrls: Record<string, string>;
+  /** The filters and sort the owner had when they shared; the page opens on them. */
+  view?: ShareView | null;
 }
 
 const RESULT_DESCRIPTION = "\u0000visualizer:description";
@@ -110,12 +113,12 @@ function ImageCell({ paths, signedUrls }: { paths: string[]; signedUrls: Record<
 }
 
 export function ShareVisualizerView({ payload }: { payload: VisualizerSharePayload }) {
-  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(() => viewToColumnFilters(payload.view));
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [textDialog, setTextDialog] = useState<{ title: string; value: string } | null>(null);
-  const [sortColumn, setSortColumn] = useState<string | null>(null);
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [sortColumn, setSortColumn] = useState<string | null>(payload.view?.sort?.column ?? null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">(payload.view?.sort?.direction ?? "asc");
 
   const naturalColumns = useMemo(() => {
     const productImage =

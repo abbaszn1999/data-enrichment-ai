@@ -63,6 +63,7 @@ import { SheetImage } from "@/components/sheet-image";
 import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
 import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
 import { ShareSheetButton } from "@/components/share/share-sheet-button";
+import { buildShareView } from "@/lib/share/view";
 import { applyColumnLayout, fullColumnOrder, moveColumn, toggleColumnHidden } from "@/lib/sheet/column-layout";
 import {
   applyColumnFilters,
@@ -1468,6 +1469,16 @@ export default function ProductsVisualizerPage() {
     return sortDirection === "asc" ? sorted : sorted.reverse();
   }, [rows, columnFilters, sortColumn, sortDirection]);
 
+  // The filters and sort a share link made now would open with.
+  const shareView = useMemo(
+    () =>
+      buildShareView({
+        columnFilters,
+        sort: sortColumn ? { column: sortColumn, direction: sortDirection } : null,
+      }),
+    [columnFilters, sortColumn, sortDirection]
+  );
+
   const worksheetPageCount = Math.max(
     1,
     Math.ceil(visibleRows.length / worksheetPageSize) || 1
@@ -2390,7 +2401,12 @@ export default function ProductsVisualizerPage() {
                   <span>{rows.length} products</span>
                 )}
                 {canEdit && workspace?.id && projectId && (
-                  <ShareSheetButton workspaceId={workspace.id} resourceType="visualizer" resourceId={projectId} />
+                  <ShareSheetButton
+                    workspaceId={workspace.id}
+                    resourceType="visualizer"
+                    resourceId={projectId}
+                    view={shareView}
+                  />
                 )}
                 {generationRun ? (
                   <span className="font-medium text-amber-700">

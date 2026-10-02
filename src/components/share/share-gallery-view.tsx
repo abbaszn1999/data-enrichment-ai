@@ -17,6 +17,7 @@ import {
   type ColumnFilters,
 } from "@/lib/sheet/column-filters";
 import { getRowMainImagePaths, type ColumnLayout } from "@/lib/gallery/types";
+import { viewToColumnFilters, type ShareView } from "@/lib/share/view";
 
 interface ShareGalleryRow {
   id: string;
@@ -35,6 +36,8 @@ export interface GallerySharePayload {
   originalImageColumn: string | null;
   columnLayout?: ColumnLayout;
   signedUrls: Record<string, string>;
+  /** The filters and sort the owner had when they shared; the page opens on them. */
+  view?: ShareView | null;
 }
 
 const RESULT_MAIN = "\u0000gallery:main";
@@ -110,12 +113,12 @@ function ImageCell({
 }
 
 export function ShareGalleryView({ payload }: { payload: GallerySharePayload }) {
-  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(() => viewToColumnFilters(payload.view));
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [textDialog, setTextDialog] = useState<{ title: string; value: string } | null>(null);
-  const [sortColumn, setSortColumn] = useState<string | null>(null);
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [sortColumn, setSortColumn] = useState<string | null>(payload.view?.sort?.column ?? null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">(payload.view?.sort?.direction ?? "asc");
 
   const naturalColumns = useMemo(() => {
     const selectedImage = payload.originalImageColumn;

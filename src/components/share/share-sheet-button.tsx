@@ -4,34 +4,37 @@
  * "Share" button for a sheet header (Catalog Intelligence, Product Gallery,
  * Visualizer). Opens a popup with a public, revocable read-only link — the
  * link always shows the sheet's latest saved data, with no automatic expiry.
- * Editor role or above only; viewers never see this button.
+ * The link also remembers the view the owner has open (filters, sort, search,
+ * tabs) and opens on it; the owner can switch that off. Editor role or above
+ * only; viewers never see this button.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Link2, Loader2, RotateCw, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ShareResourceType } from "@/lib/share/links";
+import { describeShareView, shareViewKey, type ShareView } from "@/lib/share/view";
 
 interface ShareLinkInfo {
   shareUrl: string | null;
+  link?: { view: ShareView | null } | null;
 }
 
-async function fetchShareLink(params: {
+type ResourceParams = {
   workspaceId: string;
   resourceType: ShareResourceType;
   resourceId: string;
-}): Promise<ShareLinkInfo> {
+};
+
+async function fetchShareLink(params: ResourceParams): Promise<ShareLinkInfo> {
   const search = new URLSearchParams(params);
   const res = await fetch(`/api/share-links?${search.toString()}`);
   if (!res.ok) throw new Error("Failed to load share link");
   return res.json();
 }
 
-async function postShareLink(params: {
-  workspaceId: string;
-  resourceType: ShareResourceType;
-  resourceId: string;
-  regenerate?: boolean;
-}): Promise<ShareLinkInfo> {
+async function postShareLink(
+  params: ResourceParams & { regenerate?: boolean; view: ShareView | null }
+): Promise<ShareLinkInfo> {
   const res = await fetch("/api/share-links", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -41,11 +44,16 @@ async function postShareLink(params: {
   return res.json();
 }
 
-async function deleteShareLink(params: {
-  workspaceId: string;
-  resourceType: ShareResourceType;
-  resourceId: string;
-}): Promise<void> {
+async function patchShareView(params: ResourceParams & { view: ShareView | null }): Promise<void> {
+  const res = await fetch("/api/share-links", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error("Failed to update the shared view");
+}
+
+async function deleteShareLink(params: ResourceParams): Promise<void> {
   const res = await fetch("/api/share-links", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
@@ -58,11 +66,14 @@ export function ShareSheetButton({
   workspaceId,
   resourceType,
   resourceId,
+  view,
   className,
 }: {
   workspaceId: string;
   resourceType: ShareResourceType;
   resourceId: string;
+  /** The view the sheet is showing right now; null when it is unfiltered. */
+  view?: ShareView | null;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -71,6 +82,14 @@ export function ShareSheetButton({
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [withView, setWithView] = useState(true);
+
+  const viewRef = useRef<ShareView | null>(view ?? null);
+  viewRef.current = view ?? null;
+  const withViewRef = useRef(withView);
+  withViewRef.current = withView;
+
+  const currentView = () => (withViewRef.current ? viewRef.current : null);
 
   useEffect(() => {
     if (!open) return;
@@ -78,8 +97,15 @@ export function ShareSheetButton({
     setLoading(true);
     setError(null);
     fetchShareLink({ workspaceId, resourceType, resourceId })
-      .then((info) => {
-        if (!cancelled) setShareUrl(info.shareUrl);
+      .then(async (info) => {
+        if (cancelled) return;
+        setShareUrl(info.shareUrl);
+        // The link opens on the view you have now, so a link copied earlier
+        // follows the sheet as you leave it.
+        const desired = withViewRef.current ? viewRef.current : null;
+        if (info.shareUrl && shareViewKey(desired) !== shareViewKey(info.link?.view)) {
+          await patchShareView({ workspaceId, resourceType, resourceId, view: desired });
+        }
       })
       .catch(() => {
         if (!cancelled) setError("Could not load sharing status");
@@ -96,7 +122,7 @@ export function ShareSheetButton({
     setBusy(true);
     setError(null);
     try {
-      const info = await postShareLink({ workspaceId, resourceType, resourceId, regenerate });
+      const info = await postShareLink({ workspaceId, resourceType, resourceId, regenerate, view: currentView() });
       setShareUrl(info.shareUrl);
       setCopied(false);
     } catch {
@@ -120,6 +146,18 @@ export function ShareSheetButton({
     }
   };
 
+  const changeWithView = async (next: boolean) => {
+    setWithView(next);
+    withViewRef.current = next;
+    if (!shareUrl) return;
+    setError(null);
+    try {
+      await patchShareView({ workspaceId, resourceType, resourceId, view: next ? viewRef.current : null });
+    } catch {
+      setError("Could not update the shared view");
+    }
+  };
+
   const copyLink = async () => {
     if (!shareUrl) return;
     try {
@@ -130,6 +168,8 @@ export function ShareSheetButton({
       setError("Could not copy — select and copy the link manually");
     }
   };
+
+  const viewSummary = describeShareView(view);
 
   return (
     <div className={`relative ${className ?? ""}`}>
@@ -178,6 +218,20 @@ export function ShareSheetButton({
                     {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
+                {viewSummary && (
+                  <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 px-2 py-1.5">
+                    <input
+                      type="checkbox"
+                      checked={withView}
+                      onChange={(e) => void changeWithView(e.target.checked)}
+                      className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                    />
+                    <span className="text-[11px] leading-snug">
+                      <span className="block font-medium text-foreground">Open with my current view</span>
+                      <span className="block text-[10px] text-muted-foreground">{viewSummary}</span>
+                    </span>
+                  </label>
+                )}
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <Button
                     type="button"
@@ -207,6 +261,20 @@ export function ShareSheetButton({
                 <p className="text-[11px] text-muted-foreground">
                   Create a public link so anyone can view this sheet — read-only, no sign-in required.
                 </p>
+                {viewSummary && (
+                  <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 px-2 py-1.5">
+                    <input
+                      type="checkbox"
+                      checked={withView}
+                      onChange={(e) => void changeWithView(e.target.checked)}
+                      className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                    />
+                    <span className="text-[11px] leading-snug">
+                      <span className="block font-medium text-foreground">Open with my current view</span>
+                      <span className="block text-[10px] text-muted-foreground">{viewSummary}</span>
+                    </span>
+                  </label>
+                )}
                 <Button
                   type="button"
                   size="sm"
