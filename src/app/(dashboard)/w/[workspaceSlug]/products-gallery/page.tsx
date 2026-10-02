@@ -3981,13 +3981,12 @@ export default function ProductsGalleryPage() {
                             row.generationStage === "main" ||
                             (!row.generationStage &&
                               row.generationTarget !== "gallery"));
+                        // The gallery cell shows loading for the whole time a row
+                        // is queued or working (planning, searching, main,
+                        // gallery, finalizing), in Scraping and Generate mode,
+                        // unless the run only rebuilds the Main image.
                         const galleryIsLoading =
-                          rowIsBusy &&
-                          (row.generationStage === "gallery" ||
-                            (row.generationStage === "planning" &&
-                              row.generationTarget === "gallery") ||
-                            (!row.generationStage &&
-                              row.generationTarget === "gallery"));
+                          rowIsBusy && row.generationTarget !== "main";
                         const rowHeight = rowHeightFor(row.id);
                         return (
                           <tr
