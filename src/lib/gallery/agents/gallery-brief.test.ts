@@ -69,15 +69,16 @@ describe("buildGalleryBrief", () => {
     expect(brief.inputImageUrls).toEqual(["https://cdn.shop.com/main.jpg", "https://cdn.shop.com/a.jpg"]);
     expect(brief.sourcePageUrls).toEqual(["https://shop.com/products/acme-trail"]);
     expect(brief.maxCandidates).toBe(9);
-    expect(brief.text).toContain("## Known source pages (start here)");
-    expect(brief.text).toContain("Open them first and scrape their galleries");
+    expect(brief.text).toContain("## Sheet source pages");
+    expect(brief.text).toContain("Open these first");
     expect(brief.text).toContain("- https://shop.com/products/acme-trail");
     expect(brief.text).not.toContain("Images the sheet already has");
     expect(brief.knownImageUrls).toEqual(["https://cdn.shop.com/main.jpg", "https://cdn.shop.com/a.jpg"]);
-    expect(brief.text).toContain("6 NEW gallery images");
+    expect(brief.text).toContain("Return 6 new photos (up to 3 extra");
     expect(brief.text).toContain("Custom instruction (store owner, highest priority)");
     expect(brief.text).toContain("Prefer white background");
-    expect(brief.text).toContain("Preferred minimum resolution: 1200px");
+    expect(brief.text).toContain("Minimum size: 1200px");
+    expect(brief.text).toContain("Depth: deep");
     expect(brief.text).toContain("AC-12345");
   });
 
@@ -91,13 +92,13 @@ describe("buildGalleryBrief", () => {
     });
     expect(brief.text).toContain("None attached.");
     expect(brief.text).toContain("None in the sheet");
-    expect(brief.text).toContain("Use only official brand or manufacturer pages");
-    expect(brief.text).toContain("no SKU, barcode or model code");
+    expect(brief.text).toContain("official brand or manufacturer pages only");
+    expect(brief.text).toContain("None in this row.");
     expect(brief.maxCandidates).toBe(4);
   });
 
   it("caps the count at 12", () => {
     const brief = buildGalleryBrief({ classified, mainImageUrls: [], count: 99, settings });
-    expect(brief.text).toContain("12 NEW gallery images");
+    expect(brief.text).toContain("Return 12 new photos");
   });
 });

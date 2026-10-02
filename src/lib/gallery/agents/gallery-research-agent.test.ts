@@ -58,7 +58,7 @@ describe("researchGalleryImages (single request)", () => {
     const call = openai.runEnrichOpenAiResponse.mock.calls[0]![0];
     expect(call.functionTools).toBeUndefined();
     expect(call.policy.searchContentTypes).toEqual(["image", "text"]);
-    expect(call.promptText).toContain("## Known source pages (start here)");
+    expect(call.promptText).toContain("## Sheet source pages");
     expect(call.promptText).toContain(`- ${SOURCE_PAGE}`);
     expect(result.stats.pagesOpened).toBe(1);
   });

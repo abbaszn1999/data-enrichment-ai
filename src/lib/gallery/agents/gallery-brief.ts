@@ -99,18 +99,18 @@ export function textOnlyRow(classified: ClassifiedRow): Record<string, string> {
 export function sourcePolicyLine(policy: GalleryScrapingSettings["sourcePolicy"]): string {
   switch (policy) {
     case "official-only":
-      return "Use only official brand or manufacturer pages and images. Skip retailers and marketplaces.";
+      return "official brand or manufacturer pages only (skip retailers and marketplaces)";
     case "prefer-official":
-      return "Prefer official brand or manufacturer pages (including the factory or manufacturer's own site), then reputable retailers. Marketplaces last.";
+      return "official brand or manufacturer pages first, then retailers, marketplaces last";
     default:
-      return "Any source is acceptable if it shows the exact same item: official brand and manufacturer pages, factory and OEM sites, reputable retailers, and marketplaces worldwide (including Chinese sources such as 1688, Alibaba, AliExpress, Taobao/Tmall, Made-in-China, DHgate and Global Sources).";
+      return "any";
   }
 }
 
 export const RESEARCH_DEPTH_LABELS: Record<GalleryScrapingSettings["searchDepth"], string> = {
-  low: "quick — the sheet's source pages and a few best matches",
-  medium: "balanced — sheet sources plus several independent stores, the brand site and manufacturer sources",
-  high: "deep — scan the web thoroughly: sheet sources, brand and manufacturer sites (Chinese sources too), many retailers and marketplaces, until the count is met",
+  low: "quick",
+  medium: "balanced",
+  high: "deep",
 };
 
 export interface GalleryBriefInput {
@@ -161,29 +161,27 @@ export function buildGalleryBrief(input: GalleryBriefInput): GalleryBrief {
 
   sections.push(
     "",
-    "## Input images",
+    "## Attached photos",
     inputImageUrls.length === 0
       ? "None attached."
-      : `${inputImageUrls.length} image${inputImageUrls.length === 1 ? " is" : "s are"} attached (the first ${
-          Math.min(inputImageUrls.length, Math.max(1, input.mainImageUrls.length))
-        } ${input.mainImageUrls.length <= 1 ? "is the Main image" : "are the Main images"}). They show the exact item: every gallery image must be another photo of this same item.`
+      : `${inputImageUrls.length} photo${inputImageUrls.length === 1 ? " of the product is" : "s of the product are"} attached.\n${inputImageUrls
+          .map((url, index) => `${index + 1}. ${url}`)
+          .join("\n")}`
   );
-  if (inputImageUrls.length > 0) {
-    sections.push(inputImageUrls.map((url, index) => `${index + 1}. ${url}`).join("\n"));
-  }
 
   sections.push(
     "",
-    "## Known source pages (start here)",
+    "## Sheet source pages",
     sourcePageUrls.length === 0
-      ? "None in the sheet. Find the exact item's pages yourself."
-      : `The sheet's own links for this item. Open them first and scrape their galleries.\n${sourcePageUrls.map((url) => `- ${url}`).join("\n")}`
+      ? "None in the sheet."
+      : `Open these first:\n${sourcePageUrls.map((url) => `- ${url}`).join("\n")}`
   );
 
+  const extra = maxCandidates - count;
   sections.push(
     "",
-    "## Number of new gallery images",
-    `The store owner wants ${count} NEW gallery image${count === 1 ? "" : "s"} of this exact item (other photos than the attached ones), preferably from different perspectives. Return them best first, largest and sharpest first. If more good candidates exist than requested, you may add up to ${maxCandidates - count} reserve image${maxCandidates - count === 1 ? "" : "s"} at the end of the list. Return fewer only when a deep search of the web, brand and manufacturer sites included, truly does not show more photos of this exact item.`
+    "## Request",
+    `Return ${count} new photo${count === 1 ? "" : "s"} (up to ${extra} extra if you find more good ones).`
   );
 
   const custom = input.settings.instructions.trim();
@@ -194,22 +192,18 @@ export function buildGalleryBrief(input: GalleryBriefInput): GalleryBrief {
   const preferences = [
     `- Sources: ${sourcePolicyLine(input.settings.sourcePolicy)}`,
     input.settings.minResolution > 0
-      ? `- Preferred minimum resolution: ${input.settings.minResolution}px on the shortest side. Always prefer the largest original file; use a smaller image only for a perspective nothing larger covers.`
-      : "- Preferred minimum resolution: none.",
-    input.settings.aspectRatio !== "any"
-      ? `- Preferred aspect ratio: ${input.settings.aspectRatio}.`
-      : "- Preferred aspect ratio: any.",
-    `- Research depth: ${RESEARCH_DEPTH_LABELS[input.settings.searchDepth]}.`,
+      ? `- Minimum size: ${input.settings.minResolution}px on the shortest side (prefer larger).`
+      : "- Minimum size: none",
+    `- Aspect ratio: ${input.settings.aspectRatio !== "any" ? input.settings.aspectRatio : "any"}`,
+    `- Depth: ${RESEARCH_DEPTH_LABELS[input.settings.searchDepth]}`,
   ];
   sections.push("", "## Preferences", ...preferences);
 
   const identifiers = input.rowIdentifiers ?? [];
   sections.push(
     "",
-    "## Row identifiers",
-    identifiers.length > 0
-      ? `Code-like values in this row (the exact item carries these codes): ${identifiers.join(", ")}`
-      : "None: this row has no SKU, barcode or model code. The attached images are your primary evidence: find the item by visual match, supported by brand, title and attributes."
+    "## Codes",
+    identifiers.length > 0 ? identifiers.join(", ") : "None in this row."
   );
 
   return { text: sections.join("\n"), inputImageUrls, knownImageUrls, sourcePageUrls, maxCandidates };
