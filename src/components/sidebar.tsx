@@ -1693,37 +1693,6 @@ export function Sidebar() {
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 Switch on what to find for each selected product. Each one has its own instructions.
               </p>
-              {modeColumn && (
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Image search
-                  </label>
-                  <div className="grid grid-cols-1 gap-1.5">
-                    {IMAGE_FINDER_DEPTH_OPTIONS.map((option) => {
-                      const selected =
-                        resolveEnrichmentModel(enrichmentSettings.enrichmentModel) === option.value;
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          disabled={isEnriching}
-                          onClick={() => updateSettings({ enrichmentModel: option.value })}
-                          className={`rounded-md border px-2.5 py-2 text-left transition-colors disabled:opacity-50 ${
-                            selected
-                              ? "border-primary bg-primary/5"
-                              : "border-border hover:bg-muted/50"
-                          }`}
-                        >
-                          <span className="block text-xs font-semibold">{option.label}</span>
-                          <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">
-                            {option.description}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
               <div className="space-y-0.5">
                 {sourceUrlsColumn && (
                   <FinderOutputCard
@@ -1760,6 +1729,33 @@ export function Sidebar() {
                     onToggle={() => toggleFinderOutput("images")}
                     onExpand={() => toggleColumnExpanded(modeColumn.id)}
                   >
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Image search</label>
+                      <div className="grid grid-cols-1 gap-1.5">
+                        {IMAGE_FINDER_DEPTH_OPTIONS.map((option) => {
+                          const selected =
+                            resolveEnrichmentModel(enrichmentSettings.enrichmentModel) === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              disabled={isEnriching}
+                              onClick={() => updateSettings({ enrichmentModel: option.value })}
+                              className={`rounded-md border px-2.5 py-2 text-left transition-colors disabled:opacity-50 ${
+                                selected
+                                  ? "border-primary bg-primary/5"
+                                  : "border-border hover:bg-muted/50"
+                              }`}
+                            >
+                              <span className="block text-xs font-semibold">{option.label}</span>
+                              <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">
+                                {option.description}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
                       <CustomInstructionButton
