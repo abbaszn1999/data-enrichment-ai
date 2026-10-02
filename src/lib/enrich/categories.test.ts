@@ -3,6 +3,7 @@ import type { CategoryItem } from "@/types";
 import { buildCategoryItems } from "@/lib/categories/items";
 import {
   categoryFormatsFor,
+  SUGGEST_CATEGORY_FORMATS,
   categoryStructureFor,
   defaultCategoryFormat,
   resolveCategoryFormat,
@@ -49,10 +50,23 @@ describe("platform formats", () => {
     expect(defaultCategoryFormat("woocommerce")).toBe("depth2");
   });
 
-  it("a saved format that does not fit the platform falls back to that platform's default", () => {
-    expect(resolveCategoryFormat("shopify", "depth3")).toBe("collections");
-    expect(resolveCategoryFormat("woocommerce", "collections")).toBe("depth2");
+  it("when the AI suggests categories any platform can use any format; an unknown one falls back to the platform default", () => {
+    expect(resolveCategoryFormat("shopify", "depth3")).toBe("depth3");
+    expect(resolveCategoryFormat("woocommerce", "collections")).toBe("collections");
     expect(resolveCategoryFormat("woocommerce", "depth3")).toBe("depth3");
+    expect(resolveCategoryFormat("shopify", undefined)).toBe("collections");
+    expect(resolveCategoryFormat("woocommerce", "nope")).toBe("depth2");
+  });
+
+  it("offers all four formats to pick from", () => {
+    expect(SUGGEST_CATEGORY_FORMATS.map((o) => o.id)).toEqual(["collections", "flat", "depth2", "depth3"]);
+  });
+
+  it("a Shopify store can suggest paths: the chosen format drives the plan, not the platform", () => {
+    const plan = resolveCategoryPlan({ cmsType: "shopify", categoryFormat: "depth2", useStoreCategories: false });
+    expect(plan.mode).toBe("suggest");
+    expect(plan.depth).toBe(2);
+    expect(buildCategoryInstructions(plan)).toContain("at most 2 levels");
   });
 });
 

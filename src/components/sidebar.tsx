@@ -83,9 +83,12 @@ import type { EnrichSettings } from "@/lib/enrich";
 import { IMAGE_FINDER_MAX_IMAGES } from "@/lib/enrich/image-finder/brief";
 import {
   categoryCountLabel,
-  categoryFormatsFor,
+  categoryFormatOption,
+  defaultCategoryFormat,
   resolveCategoryFormat,
+  SUGGEST_CATEGORY_FORMATS,
 } from "@/lib/categories/format";
+import { fetchCategoryPlatform } from "@/lib/categories/platform-client";
 import type { ProjectJson } from "@/lib/storage-helpers";
 import {
   deleteEnrichmentPreset,
@@ -103,6 +106,9 @@ import {
   overlayCatalogRowsForActiveRun,
   type CatalogPollRun,
 } from "@/lib/catalog/enrich-poll-merge";
+
+/** Store-category count per workspace, remembered across sidebar mounts so the "Use my store categories" option shows instantly. */
+const storeCategoryCountCache = new Map<string, number>();
 
 const SIDEBAR_MODES: { id: CatalogSidebarMode; label: string; icon: LucideIcon }[] = [
   { id: "enrich", label: "Enrichment", icon: Sparkles },
@@ -466,10 +472,15 @@ export function Sidebar() {
   // classifies into the store's list (unless the user turns that off);
   // otherwise it suggests categories in the chosen format for the platform.
   const cmsType = workspace?.cms_type || undefined;
-  const categoryFormats = categoryFormatsFor(cmsType);
+  const storeCategoriesLoading = storeCategoryCount === null;
   const storeListAvailable = (storeCategoryCount ?? 0) > 0;
   const usingStoreList = mode === "categories" && storeListAvailable && modeColumn?.useStoreCategories !== false;
-  const activeCategoryFormat = resolveCategoryFormat(cmsType, modeColumn?.categoryFormat);
+  // With the store list the format is the platform's own (view only); when the
+  // AI suggests its own categories the user's choice stands, whatever the platform.
+  const platformCategoryFormat = defaultCategoryFormat(cmsType);
+  const activeCategoryFormat = usingStoreList
+    ? platformCategoryFormat
+    : resolveCategoryFormat(cmsType, modeColumn?.categoryFormat);
   const modeCount =
     modeColumn && mode === "categories"
       ? {
@@ -480,22 +491,28 @@ export function Sidebar() {
         }
       : null;
 
+  // The store-list check runs as soon as the workspace is known (not only once
+  // Categories is opened) and is remembered per workspace, so the checkbox shows
+  // instantly; opening Categories refreshes the count in the background.
+  const categoryWorkspaceId = workspace?.id || sheetWorkspaceId;
+  const inCategoriesMode = mode === "categories";
   useEffect(() => {
-    const workspaceId = workspace?.id || sheetWorkspaceId;
-    if (mode !== "categories" || !workspaceId) return;
+    if (!categoryWorkspaceId) return;
+    const cached = storeCategoryCountCache.get(categoryWorkspaceId);
+    setStoreCategoryCount(cached ?? null);
     let cancelled = false;
-    fetch(`/api/categories?workspaceId=${workspaceId}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { categories?: unknown[] } | null) => {
-        if (!cancelled) setStoreCategoryCount(data?.categories?.length ?? 0);
+    fetchCategoryPlatform(categoryWorkspaceId)
+      .then(({ categoryCount }) => {
+        storeCategoryCountCache.set(categoryWorkspaceId, categoryCount);
+        if (!cancelled) setStoreCategoryCount(categoryCount);
       })
       .catch(() => {
-        if (!cancelled) setStoreCategoryCount(null);
+        if (!cancelled) setStoreCategoryCount((current) => current ?? 0);
       });
     return () => {
       cancelled = true;
     };
-  }, [mode, workspace?.id, sheetWorkspaceId]);
+  }, [inCategoriesMode, categoryWorkspaceId]);
 
   // Scope selection to active sheet
   const sheetRows = visibleCatalogRows(rows, {
@@ -1762,13 +1779,35 @@ export function Sidebar() {
                 </label>
               )}
 
-              {mode === "categories" && !usingStoreList && (
+              {mode === "categories" && storeCategoriesLoading && (
+                <div className="h-[58px] animate-pulse rounded-md border bg-muted/30" aria-hidden />
+              )}
+
+              {mode === "categories" && usingStoreList && (
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-medium text-muted-foreground">
-                    {categoryFormats.length === 1 ? "Format" : "Categories format"}
-                  </label>
+                  <label className="text-[10px] font-medium text-muted-foreground">Format</label>
+                  <div
+                    className="w-full cursor-default rounded-md border border-border/40 bg-muted/30 p-2"
+                    aria-readonly="true"
+                  >
+                    <span className="block text-[11px] font-semibold">
+                      {categoryFormatOption(platformCategoryFormat).label}
+                    </span>
+                    <span className="block font-mono text-[10px] text-muted-foreground">
+                      {categoryFormatOption(platformCategoryFormat).example}
+                    </span>
+                    <span className="mt-1 block text-[10px] text-muted-foreground">
+                      Follows your store platform. Turn off &ldquo;Use my store categories&rdquo; to pick another.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {mode === "categories" && !storeCategoriesLoading && !usingStoreList && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-medium text-muted-foreground">Categories format</label>
                   <div className="space-y-1">
-                    {categoryFormats.map((option) => {
+                    {SUGGEST_CATEGORY_FORMATS.map((option) => {
                       const selected = option.id === activeCategoryFormat;
                       return (
                         <button

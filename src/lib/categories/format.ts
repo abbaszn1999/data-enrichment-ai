@@ -31,24 +31,43 @@ const FORMAT_OPTIONS: Record<CategoryFormat, CategoryFormatOption> = {
   },
 };
 
-/** The formats a platform can take when the agent has to suggest categories. */
+/** The formats a platform's own category list is shaped like. */
 export function categoryFormatsFor(cmsType: string | null | undefined): CategoryFormatOption[] {
   return categoryStructureFor(cmsType) === "flat"
     ? [FORMAT_OPTIONS.collections]
     : [FORMAT_OPTIONS.flat, FORMAT_OPTIONS.depth2, FORMAT_OPTIONS.depth3];
 }
 
+/**
+ * Every format the user can pick when the AI suggests its own categories
+ * ("Use my store categories" off). It is the user's choice, whatever the
+ * platform.
+ */
+export const SUGGEST_CATEGORY_FORMATS: CategoryFormatOption[] = [
+  FORMAT_OPTIONS.collections,
+  FORMAT_OPTIONS.flat,
+  FORMAT_OPTIONS.depth2,
+  FORMAT_OPTIONS.depth3,
+];
+
+export function categoryFormatOption(format: CategoryFormat): CategoryFormatOption {
+  return FORMAT_OPTIONS[format];
+}
+
 export function defaultCategoryFormat(cmsType: string | null | undefined): CategoryFormat {
   return categoryStructureFor(cmsType) === "flat" ? "collections" : "depth2";
 }
 
-/** A saved format may not fit the platform any more (the platform was switched); fall back to the default. */
+/**
+ * The format a run uses when the AI suggests categories: the user's choice
+ * when it is one we know (any platform may pick any format), otherwise the
+ * platform's default. Store-list runs ignore it.
+ */
 export function resolveCategoryFormat(
   cmsType: string | null | undefined,
   requested: CategoryFormat | string | null | undefined
 ): CategoryFormat {
-  const allowed = categoryFormatsFor(cmsType);
-  return allowed.find((option) => option.id === requested)?.id ?? defaultCategoryFormat(cmsType);
+  return SUGGEST_CATEGORY_FORMATS.find((option) => option.id === requested)?.id ?? defaultCategoryFormat(cmsType);
 }
 
 export function categoryFormatDepth(format: CategoryFormat): number {
