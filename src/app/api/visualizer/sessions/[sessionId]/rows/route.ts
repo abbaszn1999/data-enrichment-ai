@@ -13,6 +13,18 @@ const PAGE_LIMIT = 1_000;
 /** With no cursor, return what changed recently (covers the gap after a page load). */
 const INITIAL_WINDOW_MS = 2 * 60 * 1000;
 
+const MAX_WATCHED_IDS = 100;
+const ROW_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+function parseWatchedIds(raw: string | null): string[] {
+  if (!raw) return [];
+  const ids = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => ROW_ID_PATTERN.test(id));
+  return [...new Set(ids)].slice(0, MAX_WATCHED_IDS);
+}
+
 type StoredRow = {
   row_id: string;
   row_index: number;
@@ -81,7 +93,31 @@ export async function GET(request: NextRequest, context: Ctx) {
     if (trimmed.length > 0) records = trimmed;
   }
 
-  const rows: VisualizerRow[] = records.map((record) => {
+  const cursor = records.length > 0 ? records[records.length - 1].updated_at : since;
+
+  // Rows the client is still waiting on are always answered with their current
+  // state. A timestamp cursor alone can skip a row whose write landed late, and
+  // that row would then stay in its loading state until a page refresh.
+  const watchedIds = parseWatchedIds(request.nextUrl.searchParams.get("ids"));
+  let watched: StoredRow[] = [];
+  if (watchedIds.length > 0) {
+    const { data: watchedData, error: watchedError } = await auth.admin
+      .from("visualizer_session_rows")
+      .select("row_id, row_index, status, data, updated_at")
+      .eq("session_id", sessionId)
+      .in("row_id", watchedIds);
+    if (watchedError) {
+      return NextResponse.json({ error: watchedError.message }, { status: 500, headers: auth.headers });
+    }
+    watched = (watchedData ?? []) as StoredRow[];
+  }
+  const deltaIds = new Set(records.map((record) => record.row_id));
+  const responseRecords = [
+    ...records,
+    ...watched.filter((record) => !deltaIds.has(record.row_id)),
+  ];
+
+  const rows: VisualizerRow[] = responseRecords.map((record) => {
     const payload = (record.data ?? {}) as Partial<VisualizerRow>;
     return {
       ...(payload as VisualizerRow),
@@ -111,7 +147,6 @@ export async function GET(request: NextRequest, context: Ctx) {
       });
     }
   }
-  const cursor = records.length > 0 ? records[records.length - 1].updated_at : since;
   const body = { supported: true, rows, signedUrls, cursor, hasMore };
   recordResponseBytes("visualizer.rows-delta", jsonByteLength(body));
   return NextResponse.json(body, { headers: auth.headers });

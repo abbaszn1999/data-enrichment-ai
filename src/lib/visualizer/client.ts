@@ -95,10 +95,12 @@ export async function getVisualizerSession(
 export async function getVisualizerRowsDelta(
   workspaceId: string,
   sessionId: string,
-  since: string | null
+  since: string | null,
+  watchedRowIds: string[] = []
 ) {
   const params = new URLSearchParams({ workspaceId });
   if (since) params.set("since", since);
+  if (watchedRowIds.length > 0) params.set("ids", watchedRowIds.join(","));
   const res = await fetch(
     `/api/visualizer/sessions/${sessionId}/rows?${params.toString()}`
   );

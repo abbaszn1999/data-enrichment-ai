@@ -56,6 +56,8 @@ export async function healVisualizerSessionOnRead(params: {
   usedFallback: boolean;
   /** Treat long-running "running" as dead after this many ms (default 3 min). */
   staleRunMs?: number;
+  /** A background job for this session is queued/running with a fresh heartbeat. */
+  liveJobAlive?: boolean;
 }): Promise<{
   session: VisualizerSession;
   worksheet: VisualizerWorksheetJson;
@@ -108,8 +110,10 @@ export async function healVisualizerSessionOnRead(params: {
 
   // Unlock dead runs only when clearly abandoned — never during a fresh cooperative stop
   // or a healthy long OpenAI/Gemini call (can exceed 90s).
+  // A row takes minutes; a live job keeps its heartbeat fresh, so its age says nothing.
   const runLooksDead =
     session.status === "processing" &&
+    !params.liveJobAlive &&
     (!run ||
       run.status !== "running" ||
       runAgeMs > staleRunMs ||

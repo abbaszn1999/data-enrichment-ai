@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { loadActiveJobForSession } from "@/lib/jobs/repo";
 import {
   requireVisualizerAuth,
   requireVisualizerAdmin,
@@ -24,6 +25,9 @@ import {
 } from "@/lib/visualizer/types";
 
 type Ctx = { params: Promise<{ sessionId: string }> };
+
+/** The visualizer job pings its heartbeat every 30s while it runs. */
+const LIVE_JOB_HEARTBEAT_MS = 5 * 60 * 1000;
 
 async function loadOwnedSession(
   admin: ReturnType<typeof createAdminClient>,
@@ -85,12 +89,24 @@ export async function GET(request: NextRequest, context: Ctx) {
     );
   }
 
+  const liveJob = await loadActiveJobForSession(auth.admin, {
+    kind: "visualizer",
+    sessionId,
+    workspaceId,
+  }).catch(() => null);
+  const heartbeat = liveJob?.heartbeat_at ? Date.parse(liveJob.heartbeat_at) : Number.NaN;
+  const liveJobAlive =
+    !!liveJob &&
+    Number.isFinite(heartbeat) &&
+    Date.now() - heartbeat < LIVE_JOB_HEARTBEAT_MS;
+
   const healed = await healVisualizerSessionOnRead({
     admin: auth.admin,
     workspaceId,
     session,
     worksheet: loaded.worksheet,
     usedFallback: loaded.usedFallback,
+    liveJobAlive,
   });
   if (healed.stillSyncing) {
     return NextResponse.json(

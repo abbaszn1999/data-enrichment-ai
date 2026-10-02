@@ -92,6 +92,7 @@ import {
   adoptIncomingVisualizerWorksheet,
   mergePolledVisualizerRow,
   mergePolledVisualizerWorksheet,
+  rotateWatchedRowIds,
   visualizerRowIsBusy,
   visualizerRunIsActive,
 } from "@/lib/visualizer/generation-worksheet-merge";
@@ -603,12 +604,25 @@ export default function ProductsVisualizerPage() {
     // Delta polling state: changed rows only, never the whole worksheet.
     let deltaCursor: string | null = null;
     let deltaSupported = true;
+    let pollCount = 0;
 
     const pollDeltaRows = async (): Promise<boolean> => {
       if (!deltaSupported) return false;
+      pollCount += 1;
       let hasMore = true;
       for (let page = 0; hasMore && page < 5 && !cancelled; page += 1) {
-        const delta = await getVisualizerRowsDelta(workspace.id, projectId, deltaCursor);
+        const busyIds =
+          page === 0
+            ? (worksheetRef.current?.rows ?? [])
+                .filter(visualizerRowIsBusy)
+                .map((row) => row.id)
+            : [];
+        const delta = await getVisualizerRowsDelta(
+          workspace.id,
+          projectId,
+          deltaCursor,
+          rotateWatchedRowIds(busyIds, pollCount)
+        );
         if (!delta.supported) {
           deltaSupported = false;
           return false;
@@ -2562,17 +2576,20 @@ export default function ProductsVisualizerPage() {
                       </tr>
                     ) : (
                       pageRows.map((row) => {
-                        const hasDescription = !!row.generatedDescription?.trim();
-                        const descriptionIsLoading =
-                          row.status === "generating" &&
-                          (row.generationStage === "description" ||
-                            row.generationStage === "planning" ||
-                            !row.generationStage);
-                        const imagesIsLoading =
-                          row.status === "generating" &&
-                          row.generationStage === "images";
+                        const rowIsGenerating = row.status === "generating";
+                        // A generating row shows loading only; a previous result
+                        // never shows while the new one is being produced.
+                        const hasDescription =
+                          !rowIsGenerating && !!row.generatedDescription?.trim();
+                        const descriptionIsLoading = rowIsGenerating;
+                        const imagesIsLoading = rowIsGenerating;
+                        const generatingImagesStage =
+                          row.generationStage === "images" ||
+                          row.generationStage === "finalizing";
                         const snippet = descriptionIsLoading
-                          ? "Writing description…"
+                          ? generatingImagesStage
+                            ? "Generating images…"
+                            : "Writing description…"
                           : descriptionSnippet(row.generatedDescription) ||
                             row.errorMessage ||
                             "—";
@@ -2666,10 +2683,10 @@ export default function ProductsVisualizerPage() {
                                           className={`mb-1 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-medium capitalize ${rowStatusTone(row.status)}`}
                                         >
                                           {descriptionIsLoading
-                                            ? "writing description"
-                                            : imagesIsLoading
+                                            ? generatingImagesStage
                                               ? "generating images"
-                                              : row.status.replaceAll("_", " ")}
+                                              : "writing description"
+                                            : row.status.replaceAll("_", " ")}
                                         </span>
                                         <p
                                           onClick={
@@ -2778,10 +2795,6 @@ export default function ProductsVisualizerPage() {
                                       <span className="text-[11px] text-muted-foreground">
                                         {placeholders.length} placeholder
                                         {placeholders.length === 1 ? "" : "s"}
-                                      </span>
-                                    ) : descriptionIsLoading ? (
-                                      <span className="text-[11px] text-muted-foreground">
-                                        Waiting for description…
                                       </span>
                                     ) : (
                                       <span className="text-[11px] text-muted-foreground">

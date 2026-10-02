@@ -13,18 +13,42 @@ function isBusyRowStatus(status: VisualizerRowStatus | undefined): boolean {
   return status === "generating";
 }
 
-function storedImageCount(row: VisualizerRow): number {
-  return (row.imagePlaceholders ?? []).filter((item) => item.storagePath).length;
+export const MAX_WATCHED_ROW_IDS = 100;
+
+/**
+ * The delta poll names the rows it is still waiting on. Large runs are split
+ * into windows that rotate per poll so every busy row is asked about.
+ */
+export function rotateWatchedRowIds(
+  ids: string[],
+  pollIndex: number,
+  limit = MAX_WATCHED_ROW_IDS
+): string[] {
+  if (ids.length <= limit) return ids;
+  const windows = Math.ceil(ids.length / limit);
+  const start = (Math.max(0, pollIndex) % windows) * limit;
+  return ids.slice(start, start + limit);
 }
 
-function polledHasNewVisualizerEvidence(
+function storedImageSignature(row: VisualizerRow): string {
+  return (row.imagePlaceholders ?? [])
+    .map((item) => item.storagePath ?? "")
+    .join("|");
+}
+
+/**
+ * While a run is being requested the client still holds the previous results
+ * of a regenerated row. A polled snapshot only counts as the new result when
+ * it differs from what the client holds; the pre-run snapshot is identical.
+ */
+function polledIsNewVisualizerResult(
   local: VisualizerRow,
   polled: VisualizerRow
 ): boolean {
-  if (storedImageCount(polled) > storedImageCount(local)) return true;
-  const localDesc = local.generatedDescription ?? "";
-  const polledDesc = polled.generatedDescription ?? "";
-  return polledDesc.length > localDesc.length;
+  if ((polled.generatedDescription ?? "") !== (local.generatedDescription ?? "")) {
+    return true;
+  }
+  return storedImageSignature(polled) !== storedImageSignature(local);
 }
 
 export function visualizerRowIsBusy(row: Pick<VisualizerRow, "status">): boolean {
@@ -40,13 +64,15 @@ export function visualizerRunIsActive(
 
 /**
  * Merge one polled row onto the client copy while generate is in flight.
- * Stale idle/ready snapshots must not wipe optimistic generating UI.
- * A newer revision or new description/images are terminal evidence.
+ * Stale idle/ready snapshots (the pre-run result) must not wipe the optimistic
+ * generating UI. Only a failure or a description/images that differ from what
+ * the client holds count as the new result. Once the request has returned,
+ * storage is authoritative.
  */
 export function mergePolledVisualizerRow(
   local: VisualizerRow,
   polled: VisualizerRow,
-  options: { clientRunActive: boolean; polledIsNewer?: boolean }
+  options: { clientRunActive: boolean }
 ): VisualizerRow {
   const localBusy = isBusyRowStatus(local.status);
   const polledBusy = isBusyRowStatus(polled.status);
@@ -64,24 +90,7 @@ export function mergePolledVisualizerRow(
     }
     const polledTerminal =
       polled.status === "images_ready" || polled.status === "description_ready";
-    if (options.polledIsNewer && polledTerminal) {
-      return polled;
-    }
-    if (polledTerminal && polledHasNewVisualizerEvidence(local, polled)) {
-      return polled;
-    }
-    // Accept terminal progress once the server has moved past planning/description.
-    if (
-      polledTerminal &&
-      (local.generationStage === "images" ||
-        local.generationStage === "finalizing")
-    ) {
-      return polled;
-    }
-    if (
-      polled.status === "images_ready" &&
-      local.generationStage === "description"
-    ) {
+    if (polledTerminal && polledIsNewVisualizerResult(local, polled)) {
       return polled;
     }
 
@@ -114,10 +123,7 @@ export function mergePolledVisualizerWorksheet(params: {
   const rows = polled.rows.map((polledRow) => {
     const localRow = localById.get(polledRow.id);
     if (!localRow) return polledRow;
-    return mergePolledVisualizerRow(localRow, polledRow, {
-      clientRunActive,
-      polledIsNewer,
-    });
+    return mergePolledVisualizerRow(localRow, polledRow, { clientRunActive });
   });
 
   let activeRun = polled.activeRun ?? local.activeRun ?? null;
@@ -151,9 +157,26 @@ export function adoptIncomingVisualizerWorksheet(
   if (isStaleRevision(incoming.revision, current.revision)) {
     return current;
   }
+  // The generate response is a snapshot from the moment the run started. A
+  // fast run can already have delivered a finished row through the poll; the
+  // snapshot's generating copy of that row must not bring the loading back.
+  const currentById = new Map(current.rows.map((row) => [row.id, row]));
+  const rows = incoming.rows.map((incomingRow) => {
+    const currentRow = currentById.get(incomingRow.id);
+    if (
+      currentRow &&
+      incomingRow.status === "generating" &&
+      (currentRow.status === "images_ready" ||
+        currentRow.status === "description_ready") &&
+      polledIsNewVisualizerResult(incomingRow, currentRow)
+    ) {
+      return currentRow;
+    }
+    return incomingRow;
+  });
   return mergePolledVisualizerWorksheet({
     local: current,
-    polled: incoming,
+    polled: { ...incoming, rows },
     clientRunActive: false,
   });
 }
