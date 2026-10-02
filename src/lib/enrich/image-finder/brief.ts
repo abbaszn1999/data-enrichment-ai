@@ -16,7 +16,7 @@
  */
 export const IMAGE_FINDER_MAX_IMAGES = 7;
 const MAX_REFERENCE_IMAGES = 4;
-const FIELD_VALUE_CHARS = 400;
+const FIELD_VALUE_CHARS = 4_000;
 
 export interface ImageFinderBriefInput {
   rowData: Record<string, string>;

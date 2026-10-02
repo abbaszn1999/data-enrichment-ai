@@ -23,7 +23,7 @@ import { extractJsonValues } from "./json-extract";
 /** Agent 1 returns at most this many exact-match links, best first. */
 export const EXACT_LINKS_MAX = 10;
 
-const MAX_FIELD_CHARS = 300;
+const MAX_FIELD_CHARS = 600;
 const MAX_FIELDS = 20;
 const MAX_INSTRUCTION_CHARS = 1_500;
 const MAX_TASK_IDENTIFIERS = 3;

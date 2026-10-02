@@ -28,7 +28,7 @@ import { extractJsonValues } from "../image-finder/exact/json-extract";
  */
 export const SOURCE_URLS_MAX = 15;
 
-const MAX_FIELD_CHARS = 300;
+const MAX_FIELD_CHARS = 600;
 const MAX_FIELDS = 20;
 const MAX_INSTRUCTION_CHARS = 1_500;
 /** SearchApi's documented `q` limit is 8,193 characters; stay under it. */
