@@ -54,7 +54,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useSheetStore } from "@/store/sheet-store";
+import { flushProjectSave, useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { ExportDialog } from "@/components/export-dialog";
 import {
@@ -837,6 +837,15 @@ export function Sidebar() {
     const workspaceId = workspace?.id || sheetWorkspaceId;
     if (!workspaceId || !projectId) {
       toast.error("Session is not saved yet");
+      return;
+    }
+
+    // The job reads the sheet from the server, and the autosave stops the moment
+    // a run starts. Store pending edits first, or the run would use the old
+    // values and the edit would be lost when the results come back.
+    await flushProjectSave();
+    if (useSheetStore.getState().saveStatus === "error") {
+      toast.error("Could not save your latest edits", { description: "Check your connection and try again." });
       return;
     }
 
