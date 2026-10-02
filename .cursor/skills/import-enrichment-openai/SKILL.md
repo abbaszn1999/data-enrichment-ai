@@ -29,8 +29,15 @@ description: >-
   and attached images. Custom instructions outrank the built-in brief, never the grounding rules.
 - Structured output via `text.format` strict `json_schema` for **requested columns only**.
 - Columns are instruction-only: label + optional custom instruction (no tone/length settings). Defaults: Title tag,
-  Product description, Product specifications, FAQ section, Source URLs — each with an editable starting custom
-  instruction; a new product sheet starts with only Source URLs switched on.
+  Product description, Product specifications, FAQ section — each with an editable starting custom
+  instruction; a new product sheet starts with all of them switched off.
+- **Source URLs lives in the "Source & Image Finder" tab, not in the Enrichment list** (`isProductModeColumn` hides
+  the `sourceUrls` column from Enrichment on product sheets; PLP keeps it in its list). The tab shows two outputs the
+  user switches on or off — Source URLs (Google AI Mode) and Images (Image Finder, with website rules) — each with its
+  own custom instruction; the choice is stored in `enrichmentSettings.finderOutputs` (default: Images). A run's
+  `enabledColumns` is `[imageUrls, imageSourceUrls]`, `[sourceUrls]`, or all three; with all three `isImageFinderRun`
+  stays true and `enrichRow` runs both agents side by side (`withGoogleSourceUrls`, images decide the row, the final
+  re-check of Not-found rows only re-runs images). Agents and prompts are unchanged by the move.
 - **Source URLs is not an OpenAI column on product sheets.** `enrichRow` routes the column with id `sourceUrls`
   (by id, never by the `sourceUrls` type — Image sources `imageSourceUrls` shares the type) to
   `src/lib/enrich/source-urls/` (one Google AI Mode search via SearchApi with a tiny prompt that adapts to the input

@@ -1,4 +1,9 @@
-import { IMAGE_SOURCES_COLUMN_ID, PRODUCT_MODE_COLUMN_IDS, type SessionKind } from "@/types";
+import {
+  IMAGE_SOURCES_COLUMN_ID,
+  PRODUCT_MODE_COLUMN_IDS,
+  SOURCE_URLS_COLUMN_ID,
+  type SessionKind,
+} from "@/types";
 import type { EnrichAgentParams, EnrichAgentResult } from "../types";
 import { findProductImagesAuto } from "./pipeline";
 
@@ -7,8 +12,10 @@ export { IMAGE_FINDER_ATTEMPT_BUDGET_MS, IMAGE_FINDER_MAX_ROUNDS } from "./premi
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 /**
  * Image Finder sends the product image column, optionally with its companion
- * Image sources column (filled by the same run). Anything else is a regular
- * enrichment run.
+ * Image sources column (filled by the same run) and, when the user switched it
+ * on in the same "Source & Image Finder" tab, the Source URLs column (found by
+ * its own Google AI Mode agent, see ../source-urls). Source URLs alone is not
+ * an Image Finder run. Anything else is a regular enrichment run.
  */
 export function isImageFinderRun(
   kind: SessionKind,
@@ -17,7 +24,9 @@ export function isImageFinderRun(
   return (
     kind === "product" &&
     enabledColumns.includes(IMAGE_COLUMN_ID) &&
-    enabledColumns.every((id) => id === IMAGE_COLUMN_ID || id === IMAGE_SOURCES_COLUMN_ID)
+    enabledColumns.every(
+      (id) => id === IMAGE_COLUMN_ID || id === IMAGE_SOURCES_COLUMN_ID || id === SOURCE_URLS_COLUMN_ID
+    )
   );
 }
 

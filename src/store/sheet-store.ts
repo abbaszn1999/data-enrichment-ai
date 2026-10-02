@@ -10,6 +10,7 @@ import type {
   SessionKind,
   ColumnLayout,
   CatalogSidebarMode,
+  FinderOutput,
 } from "@/types";
 import {
   DEFAULT_ENRICHMENT_COLUMNS,
@@ -29,9 +30,13 @@ function normalizeEnrichmentSettings(
     ...DEFAULT_ENRICHMENT_SETTINGS,
     ...(settings || {}),
   };
+  const finderOutputs = Array.isArray(merged.finderOutputs)
+    ? merged.finderOutputs.filter((o): o is FinderOutput => o === "sourceUrls" || o === "images")
+    : undefined;
   return {
     ...merged,
     enrichmentModel: resolveEnrichmentModel(merged.enrichmentModel),
+    ...(finderOutputs ? { finderOutputs } : {}),
   };
 }
 
@@ -883,7 +888,12 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
       }
 
       if (enrichmentSettings) {
-        next.enrichmentSettings = normalizeEnrichmentSettings(enrichmentSettings);
+        // Saved settings belong to Enrichment: they never change what the
+        // Source & Image Finder tab runs.
+        next.enrichmentSettings = normalizeEnrichmentSettings({
+          ...enrichmentSettings,
+          finderOutputs: state.enrichmentSettings.finderOutputs,
+        });
       }
 
       return { ...next, undoVersion: state.undoVersion + 1 };

@@ -2986,7 +2986,7 @@ export default function ProductsGalleryPage() {
                   <InfoTip>
                     Pick the column that holds each product&apos;s image URL. It becomes the
                     Main image and the reference for the gallery. Products without an image
-                    here are skipped. To find missing images, use Image Finder in Catalog
+                    here are skipped. To find missing images, use Source & Image Finder in Catalog
                     Intelligence.
                   </InfoTip>
                 </div>
@@ -3016,7 +3016,7 @@ export default function ProductsGalleryPage() {
                 </select>
                 {originalImageCandidateColumns.length === 0 ? (
                   <p className="text-[11px] leading-snug text-muted-foreground">
-                    No image URL columns found in this sheet. Find images with Image Finder in
+                    No image URL columns found in this sheet. Find images with Source & Image Finder in
                     Catalog Intelligence, export the sheet, and upload it here.
                   </p>
                 ) : !hasOriginalImageColumn ? (

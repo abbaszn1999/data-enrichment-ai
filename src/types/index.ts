@@ -86,8 +86,8 @@ export interface EnrichmentColumn {
 }
 
 export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
-  // A new sheet starts with only Source URLs switched on; the rest are listed
-  // and ready to enable. The five Enrich defaults carry no tone / length / limit knobs: the only
+  // A new sheet starts with every Enrichment column switched off; they are
+  // listed and ready to enable. The five Enrich defaults carry no tone / length / limit knobs: the only
   // thing a user sets per column is a custom instruction. `description` is the
   // built-in brief the agent always receives. Each default also ships with a
   // starting `customInstruction`, shown in the column's settings so the user
@@ -136,9 +136,10 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     label: "Source URLs",
     description: "The web pages for this exact product. Found with Google AI Mode.",
     type: "sourceUrls",
-    // The only output column that is on for a new sheet; the other four are
-    // one click away. See lib/enrich/source-urls for how it is found.
-    enabled: true,
+    // Runs from the "Source & Image Finder" tab, not the Enrichment list; like
+    // Image URLs, `enabled` only controls whether the column shows in the grid,
+    // and it appears once it has been generated. See lib/enrich/source-urls.
+    enabled: false,
     customInstruction:
       "Return the manufacturer's own product page first, then trusted retailers that sell this exact item. Only real, working product pages.",
   },
@@ -339,7 +340,9 @@ export function isProductModeColumn(
     kind !== "plp" &&
     (id === PRODUCT_MODE_COLUMN_IDS.categories ||
       id === PRODUCT_MODE_COLUMN_IDS.images ||
-      id === IMAGE_SOURCES_COLUMN_ID)
+      id === IMAGE_SOURCES_COLUMN_ID ||
+      // Source URLs runs from the "Source & Image Finder" tab, not the Enrichment list.
+      id === SOURCE_URLS_COLUMN_ID)
   );
 }
 
@@ -361,14 +364,15 @@ export function ensureImageSourcesColumn(
 }
 
 /**
- * The Enrichment "Source URLs" column (found with Google AI Mode). Matched by
- * this id, never by the `sourceUrls` type, which Image sources shares.
+ * The "Source URLs" column of the Source & Image Finder tab (found with Google
+ * AI Mode). Matched by this id, never by the `sourceUrls` type, which Image
+ * sources shares.
  */
 export const SOURCE_URLS_COLUMN_ID = "sourceUrls";
 
 /**
- * Sessions saved before Source URLs became an Enrichment default (and presets
- * that predate it) lack the column. Adds it, switched OFF so nothing changes
+ * Sessions saved before the Source URLs column existed (and presets that
+ * predate it) lack the column. Adds it, switched OFF so nothing changes
  * for that session, next to the other content columns; leaves PLP sessions and
  * sheets that already have it alone.
  */
@@ -394,10 +398,15 @@ export function catalogModeForRunColumns(
   if (tab === "new" && columnIds.length === 1 && columnIds[0] === PRODUCT_MODE_COLUMN_IDS.categories) {
     return "categories";
   }
+  // The "Source & Image Finder" tab: Images (with its Image sources column),
+  // Source URLs, or both together.
   if (
     tab === "new" &&
-    columnIds.includes(PRODUCT_MODE_COLUMN_IDS.images) &&
-    columnIds.every((id) => id === PRODUCT_MODE_COLUMN_IDS.images || id === IMAGE_SOURCES_COLUMN_ID)
+    columnIds.some((id) => id === PRODUCT_MODE_COLUMN_IDS.images || id === SOURCE_URLS_COLUMN_ID) &&
+    columnIds.every(
+      (id) =>
+        id === PRODUCT_MODE_COLUMN_IDS.images || id === IMAGE_SOURCES_COLUMN_ID || id === SOURCE_URLS_COLUMN_ID
+    )
   ) {
     return "images";
   }
@@ -452,7 +461,15 @@ export type WritingTone = "professional" | "persuasive" | "simple" | "technical"
 
 export type ContentLength = "short" | "medium" | "long";
 
+/** The outputs the "Source & Image Finder" tab can fill. */
+export type FinderOutput = "sourceUrls" | "images";
+
+/** What a new sheet's Source & Image Finder tab runs until the user switches something on or off. */
+export const DEFAULT_FINDER_OUTPUTS: FinderOutput[] = ["images"];
+
 export interface EnrichmentSettings {
+  /** Source & Image Finder tab: which outputs to run. Missing means DEFAULT_FINDER_OUTPUTS. */
+  finderOutputs?: FinderOutput[];
   outputLanguage: OutputLanguage;
   customLanguage: string;
   enrichmentModel: EnrichmentModel;

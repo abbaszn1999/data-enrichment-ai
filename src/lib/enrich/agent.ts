@@ -38,6 +38,12 @@ export async function enrichRow(
     throw new Error("No enrichment columns selected");
   }
   if (isImageFinderRun(kind, enabledColumns)) {
+    // The "Source & Image Finder" tab can run Source URLs next to Images. The
+    // two agents are untouched and run side by side. The final re-check of
+    // Not-found rows only re-runs the image search, never the Google search.
+    if (enabledColumns.includes(SOURCE_URLS_COLUMN_ID) && !params.recheck) {
+      return withGoogleSourceUrls(params, () => findProductImages(params));
+    }
     return findProductImages(params);
   }
   if (isCategoriesModeRun(kind, enabledColumns)) {
@@ -50,7 +56,7 @@ export async function enrichRow(
   if (usesGoogleSourceUrls(kind, enabledColumns)) {
     const others = enabledColumns.filter((id) => id !== SOURCE_URLS_COLUMN_ID);
     if (others.length === 0) return findSourceUrls(params);
-    return enrichWithGoogleSourceUrls(params, others);
+    return withGoogleSourceUrls(params, () => enrichWithOpenAi(params, others));
   }
 
   return enrichWithOpenAi(params, enabledColumns);
@@ -70,9 +76,15 @@ function withExtraCosts(error: unknown, extra: AiCallCost[]): unknown {
   return new EnrichBilledAttemptError(error instanceof Error ? error.message : String(error), extra);
 }
 
-async function enrichWithGoogleSourceUrls(
+/**
+ * Runs the Source URLs search (Google AI Mode) next to the row's other work
+ * (`runMain`: the OpenAI enrichment call, or the Image Finder) and merges both.
+ * The main work decides the row; a Google failure never throws away what the
+ * main work produced and billed.
+ */
+async function withGoogleSourceUrls(
   params: EnrichAgentParams,
-  otherColumns: string[]
+  runMain: () => Promise<EnrichAgentResult>
 ): Promise<EnrichAgentResult> {
   const memo = params.sourceUrlsMemo;
   const cached = memo?.result;
@@ -83,36 +95,39 @@ async function enrichWithGoogleSourceUrls(
         if (memo) memo.result = result;
         return result;
       });
-  const [openAi, sources] = await Promise.allSettled([enrichWithOpenAi(params, otherColumns), googleTask]);
+  const [main, sources] = await Promise.allSettled([runMain(), googleTask]);
 
-  if (openAi.status === "rejected") {
-    // The OpenAI work decides the row. Whatever Google billed is still charged.
+  if (main.status === "rejected") {
+    // The main work decides the row. Whatever Google billed is still charged.
     const googleCosts = sources.status === "fulfilled" ? sources.value.costs : billedCostsOf(sources.reason);
-    throw withExtraCosts(openAi.reason, googleCosts);
+    throw withExtraCosts(main.reason, googleCosts);
   }
 
   if (sources.status === "rejected") {
     // Stop was clicked: end the row like any other stopped row, charged for what both providers billed.
     if (sources.reason instanceof EnrichCancelledError) {
-      throw withExtraCosts(sources.reason, openAi.value.costs);
+      throw withExtraCosts(sources.reason, main.value.costs);
     }
-    // Any other Google failure must not throw away the columns OpenAI already
-    // wrote (and billed): they are kept, and the Source URLs cell says why it is empty.
+    // Any other Google failure must not throw away the columns the main work
+    // already wrote (and billed): they are kept, and the Source URLs cell says why it is empty.
     const message = sources.reason instanceof Error ? sources.reason.message : String(sources.reason);
     console.error("[Enrich] Source URLs search failed; the other columns were kept", { message: message.slice(0, 300) });
     return {
+      ...main.value,
       data: {
-        ...openAi.value.data,
+        ...main.value.data,
         [SOURCE_URLS_COLUMN_ID]: [],
         [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: `The Google AI Mode search failed, so no pages were found. Run this column again. (${message.slice(0, 200)})`,
       },
-      costs: [...openAi.value.costs, ...billedCostsOf(sources.reason)],
+      costs: [...main.value.costs, ...billedCostsOf(sources.reason)],
     };
   }
 
   return {
-    data: { ...openAi.value.data, ...sources.value.data },
-    costs: [...openAi.value.costs, ...sources.value.costs],
+    // `meta` (Image Finder tiers) belongs to the main work and is kept for the charge details.
+    ...main.value,
+    data: { ...main.value.data, ...sources.value.data },
+    costs: [...main.value.costs, ...sources.value.costs],
   };
 }
 

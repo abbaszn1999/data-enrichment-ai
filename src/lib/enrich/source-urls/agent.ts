@@ -1,7 +1,8 @@
 /**
- * Source URLs agent: fills the Enrichment "Source URLs" output column with the
- * web pages for the exact product, using one Google AI Mode search (SearchApi)
- * instead of the OpenAI enrichment call. It is a small agent with a tiny fixed
+ * Source URLs agent: fills the "Source URLs" output column (switched on in the
+ * "Source & Image Finder" tab, alone or next to Images) with the web pages for
+ * the exact product, using one Google AI Mode search (SearchApi) instead of an
+ * OpenAI call. It is a small agent with a tiny fixed
  * prompt (./skill.ts): the product from the row's source columns, the column's
  * custom instruction when there is one, and one photo of the item when image
  * columns are selected. There is no page count and no website-rules setting.

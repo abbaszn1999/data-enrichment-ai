@@ -4,13 +4,17 @@ import {
   SOURCE_URLS_COLUMN_ID,
   ensureSourceUrlsColumn,
   getDefaultEnrichmentColumns,
+  isProductModeColumn,
 } from "./index";
 
 describe("Source URLs default column", () => {
-  it("is the only column switched on for a new product sheet", () => {
-    expect(getDefaultEnrichmentColumns("product").filter((c) => c.enabled).map((c) => c.id)).toEqual([
-      SOURCE_URLS_COLUMN_ID,
-    ]);
+  it("starts hidden like Image URLs, and is not part of the Enrichment list", () => {
+    expect(getDefaultEnrichmentColumns("product").filter((c) => c.enabled).map((c) => c.id)).toEqual([]);
+    expect(isProductModeColumn(SOURCE_URLS_COLUMN_ID, "product")).toBe(true);
+  });
+
+  it("stays in the list for PLP sheets, which keep their own Source URLs flow", () => {
+    expect(isProductModeColumn(SOURCE_URLS_COLUMN_ID, "plp")).toBe(false);
   });
 
   it("keeps all five defaults, each with an editable starting instruction", () => {

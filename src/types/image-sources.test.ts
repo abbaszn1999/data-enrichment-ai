@@ -46,12 +46,26 @@ describe("Image sources column", () => {
     expect(catalogModeForRunColumns("new", [IMAGE_SOURCES_COLUMN_ID])).toBe("enrich");
     expect(catalogModeForRunColumns("existing", ["imageUrls"])).toBe("enrich");
   });
+
+  it("puts Source URLs, alone or with Images, in the Source & Image Finder tab", () => {
+    expect(catalogModeForRunColumns("new", ["sourceUrls"])).toBe("images");
+    expect(catalogModeForRunColumns("new", ["imageUrls", IMAGE_SOURCES_COLUMN_ID, "sourceUrls"])).toBe("images");
+    // Next to Enrichment columns it is still an Enrichment-shaped run.
+    expect(catalogModeForRunColumns("new", ["sourceUrls", "enhancedTitle"])).toBe("enrich");
+    expect(catalogModeForRunColumns("existing", ["sourceUrls"])).toBe("enrich");
+  });
 });
 
 describe("isImageFinderRun", () => {
   it("is true for Image URLs alone or with Image sources", () => {
     expect(isImageFinderRun("product", ["imageUrls"])).toBe(true);
     expect(isImageFinderRun("product", ["imageUrls", IMAGE_SOURCES_COLUMN_ID])).toBe(true);
+  });
+
+  it("stays true when Source URLs is switched on in the same run, but Source URLs alone is not an Image Finder run", () => {
+    expect(isImageFinderRun("product", ["imageUrls", IMAGE_SOURCES_COLUMN_ID, "sourceUrls"])).toBe(true);
+    expect(isImageFinderRun("product", ["sourceUrls"])).toBe(false);
+    expect(isImageFinderRun("product", ["sourceUrls", "enhancedTitle"])).toBe(false);
   });
 
   it("is false when anything else is enabled, for PLP, and for sources alone", () => {

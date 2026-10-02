@@ -63,8 +63,8 @@ describe("Enrich default columns", () => {
     ]);
   });
 
-  it("start with only Source URLs switched on", () => {
-    expect(defaultColumns.filter((c) => c.enabled).map((c) => c.id)).toEqual(["sourceUrls"]);
+  it("start switched off; Source URLs runs from the Source & Image Finder tab", () => {
+    expect(defaultColumns.filter((c) => c.enabled).map((c) => c.id)).toEqual([]);
   });
 
   it("each of the five ships with a starting custom instruction the user can read and edit", () => {

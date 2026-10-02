@@ -260,7 +260,12 @@ export async function processCatalogRow(params: {
 
 /** Which providers did the row's work, as recorded with its charge. */
 export function catalogChargeModel(settings: CatalogJobSettings, imageFinder: boolean): string {
-  if (imageFinder) return IMAGE_FINDER_OPENAI_MODEL;
+  if (imageFinder) {
+    // Source URLs can run in the same Source & Image Finder run: its Google search is billed too.
+    return usesGoogleSourceUrls(settings.kind ?? "product", settings.enabledColumns)
+      ? `${IMAGE_FINDER_OPENAI_MODEL}+${GOOGLE_AI_MODE_MODEL}`
+      : IMAGE_FINDER_OPENAI_MODEL;
+  }
   const openAi = resolveEnrichOpenAiModel(settings.enrichmentModel);
   if (!usesGoogleSourceUrls(settings.kind ?? "product", settings.enabledColumns)) return openAi;
   const onlySourceUrls = settings.enabledColumns.every((id) => id === SOURCE_URLS_COLUMN_ID);

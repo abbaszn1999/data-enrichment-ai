@@ -72,6 +72,8 @@ import {
   SOURCE_URLS_COLUMN_ID,
   isProductModeColumn,
   catalogModeForRunColumns,
+  DEFAULT_FINDER_OUTPUTS,
+  type FinderOutput,
   type CatalogSidebarMode,
   type OutputLanguage,
   type EnrichmentPreset,
@@ -105,8 +107,16 @@ import {
 const SIDEBAR_MODES: { id: CatalogSidebarMode; label: string; icon: LucideIcon }[] = [
   { id: "enrich", label: "Enrichment", icon: Sparkles },
   { id: "categories", label: "Categories", icon: FolderTree },
-  { id: "images", label: "Image Finder", icon: ImageIcon },
+  { id: "images", label: "Source & Image Finder", icon: ImageIcon },
 ];
+
+/** The progress line of a running Source & Image Finder run, from the columns it generates. */
+function finderRunningLabel(columnIds: string[]): string {
+  const sources = columnIds.includes(SOURCE_URLS_COLUMN_ID);
+  const images = columnIds.includes(PRODUCT_MODE_COLUMN_IDS.images);
+  if (sources && images) return "Finding sources & images...";
+  return sources ? "Finding source URLs..." : "Finding images...";
+}
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -134,6 +144,84 @@ function projectJsonToProductRows(project: ProjectJson): ProductRow[] {
 
 const ENRICH_INSTRUCTION_PLACEHOLDER =
   "e.g. Write for busy parents, mention the warranty, keep it under 120 words, avoid superlatives.";
+
+/**
+ * One output of the Source & Image Finder tab: a switch, a name and a panel
+ * that opens to its settings (custom instruction, website rules). Looks like a
+ * column in the Enrichment list so the two tabs read the same way.
+ */
+function FinderOutputCard({
+  label,
+  badge,
+  description,
+  enabled,
+  expanded,
+  disabled,
+  onToggle,
+  onExpand,
+  children,
+}: {
+  label: string;
+  badge?: string;
+  description: string;
+  enabled: boolean;
+  expanded: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+  onExpand: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={`rounded-md border transition-colors ${
+        enabled ? "border-primary/15 bg-primary/[0.04]" : "border-transparent hover:bg-muted/60"
+      } ${expanded ? "border-primary/20 bg-primary/[0.04]" : ""}`}
+    >
+      <div className="flex h-8 items-center gap-1.5 px-1.5">
+        <button
+          type="button"
+          className="shrink-0"
+          onClick={onToggle}
+          disabled={disabled}
+          aria-label={enabled ? `Switch off ${label}` : `Switch on ${label}`}
+        >
+          {enabled ? (
+            <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+          ) : (
+            <div className="h-3.5 w-3.5 rounded-full border-[1.5px] border-muted-foreground/35" />
+          )}
+        </button>
+        <button
+          type="button"
+          className="min-w-0 flex-1 truncate text-left text-[11px] font-medium leading-none"
+          onClick={onToggle}
+          disabled={disabled}
+        >
+          <span className={enabled ? "text-foreground" : "text-muted-foreground"}>{label}</span>
+        </button>
+        {badge && (
+          <span className="shrink-0 rounded bg-muted px-1 py-px text-[8px] font-medium uppercase tracking-wide text-muted-foreground">
+            {badge}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onExpand}
+          className="rounded p-0.5 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
+          aria-label={expanded ? "Collapse settings" : "Open settings"}
+        >
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      {expanded && (
+        <div className="space-y-2.5 border-t border-border/50 px-2 pb-2.5 pt-2">
+          <p className="text-[10px] leading-relaxed text-muted-foreground">{description}</p>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Sidebar() {
   const { workspace, invalidateCredits, role } = useWorkspaceStore();
@@ -348,6 +436,28 @@ export function Sidebar() {
     mode === "enrich"
       ? null
       : enrichmentColumns.find((col) => col.id === PRODUCT_MODE_COLUMN_IDS[mode]) ?? null;
+  // Source & Image Finder tab: two outputs the user switches on or off, each with
+  // its own custom instruction. Source URLs (Google AI Mode) is the `sourceUrls`
+  // column; Images (Image Finder) is `modeColumn`, the Image URLs column, which
+  // also owns the website rules. Kept with the sheet in the settings.
+  const sourceUrlsColumn =
+    mode === "images" ? enrichmentColumns.find((col) => col.id === SOURCE_URLS_COLUMN_ID) ?? null : null;
+  const finderOutputs: FinderOutput[] = enrichmentSettings.finderOutputs ?? DEFAULT_FINDER_OUTPUTS;
+  const runsSourceUrls = mode === "images" && !!sourceUrlsColumn && finderOutputs.includes("sourceUrls");
+  const runsImages = mode === "images" && !!modeColumn && finderOutputs.includes("images");
+  const toggleFinderOutput = (output: FinderOutput) => {
+    const next = finderOutputs.includes(output)
+      ? finderOutputs.filter((o) => o !== output)
+      : [...finderOutputs, output];
+    updateSettings({ finderOutputs: next });
+  };
+  const toggleColumnExpanded = (id: string) =>
+    setExpandedColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   // Image Finder has no count to pick: it always gathers every distinct photo
   // of the exact item its sources show, up to IMAGE_FINDER_MAX_IMAGES.
   const [storeCategoryCount, setStoreCategoryCount] = useState<number | null>(null);
@@ -661,7 +771,7 @@ export function Sidebar() {
     const isNewTab = mode !== "enrich" || enrichOutputTab === "new";
     // Image Finder always writes two columns: the images and the pages they came from.
     const imageSourcesColumn =
-      mode === "images"
+      runsImages
         ? (enrichmentColumns.find((col) => col.id === IMAGE_SOURCES_COLUMN_ID) ??
           getDefaultEnrichmentColumns("product").find((col) => col.id === IMAGE_SOURCES_COLUMN_ID) ??
           null)
@@ -669,7 +779,14 @@ export function Sidebar() {
     const runColumns =
       mode === "enrich"
         ? enrichListColumns.filter((c) => c.enabled)
-        : modeColumn
+        : mode === "images"
+          ? [
+              // Images (with its Image sources column) and/or Source URLs, as switched on in the tab.
+              ...(runsImages && modeColumn ? [{ ...modeColumn, enabled: true }] : []),
+              ...(imageSourcesColumn ? [{ ...imageSourcesColumn, enabled: true }] : []),
+              ...(runsSourceUrls && sourceUrlsColumn ? [{ ...sourceUrlsColumn, enabled: true }] : []),
+            ]
+          : modeColumn
           ? [
               {
                 ...modeColumn,
@@ -686,7 +803,14 @@ export function Sidebar() {
     if (useSheetStore.getState().isStoppingEnrich) return;
     if ((isNewTab ? runColumnIds.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
     // Mode columns start hidden in the grid; show them once they are generated.
-    if (modeColumn && !modeColumn.enabled) {
+    if (mode === "images") {
+      if (runsImages && modeColumn && !modeColumn.enabled) {
+        updateEnrichmentColumnConfig(modeColumn.id, { enabled: true });
+      }
+      if (runsSourceUrls && sourceUrlsColumn && !sourceUrlsColumn.enabled) {
+        updateEnrichmentColumnConfig(sourceUrlsColumn.id, { enabled: true });
+      }
+    } else if (modeColumn && !modeColumn.enabled) {
       updateEnrichmentColumnConfig(modeColumn.id, { enabled: true });
     }
     // Sessions load with the column present (see ensureImageSourcesColumn in the store).
@@ -811,6 +935,9 @@ export function Sidebar() {
   }, [
     mode,
     modeColumn,
+    runsImages,
+    runsSourceUrls,
+    sourceUrlsColumn,
     enrichListColumns,
     enrichableRows,
     enrichOutputTab,
@@ -979,7 +1106,7 @@ export function Sidebar() {
                 <ImageIcon className="h-3.5 w-3.5 text-primary" />
               )}
               <span className="text-[11px] font-semibold">
-                {mode === "categories" ? "Categories" : "Image Finder"}
+                {mode === "categories" ? "Categories" : "Source & Image Finder"}
               </span>
             </div>
           ) : (
@@ -1529,23 +1656,89 @@ export function Sidebar() {
           </div>
           )}
 
-          {/* Categories / Image Finder — one column each, run on its own */}
-          {modeColumn && (
+          {/* Source & Image Finder — switch on what to find; each output has its own instruction */}
+          {mode === "images" && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold">Find on the web</span>
+              </div>
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                Switch on what to find for each selected product. Each one has its own instructions.
+              </p>
+              <div className="space-y-0.5">
+                {sourceUrlsColumn && (
+                  <FinderOutputCard
+                    label="Source URLs"
+                    badge="Google"
+                    description="The web pages that sell this exact product: the brand's own site, factories and suppliers, wholesalers and retailers. Written to the Source URLs column."
+                    enabled={runsSourceUrls}
+                    expanded={expandedColumns.has(sourceUrlsColumn.id)}
+                    disabled={isEnriching}
+                    onToggle={() => toggleFinderOutput("sourceUrls")}
+                    onExpand={() => toggleColumnExpanded(sourceUrlsColumn.id)}
+                  >
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
+                      <CustomInstructionButton
+                        value={sourceUrlsColumn.customInstruction}
+                        onSave={(value) =>
+                          updateEnrichmentColumnConfig(sourceUrlsColumn.id, { customInstruction: value })
+                        }
+                        disabled={isEnriching}
+                        placeholder="e.g. Put the manufacturer's own page first. Include Chinese suppliers and wholesalers."
+                        helpText="Tell the agent which pages you want to see first or which kinds of sellers to look for. It is added to the search for every row."
+                      />
+                    </div>
+                  </FinderOutputCard>
+                )}
+                {modeColumn && (
+                  <FinderOutputCard
+                    label="Images"
+                    description={`Finds the exact product on the web and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
+                    enabled={runsImages}
+                    expanded={expandedColumns.has(modeColumn.id)}
+                    disabled={isEnriching}
+                    onToggle={() => toggleFinderOutput("images")}
+                    onExpand={() => toggleColumnExpanded(modeColumn.id)}
+                  >
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
+                      <CustomInstructionButton
+                        value={modeColumn.customInstruction}
+                        onSave={(value) => updateEnrichmentColumnConfig(modeColumn.id, { customInstruction: value })}
+                        disabled={isEnriching}
+                        placeholder="e.g. This is a toys store. Barcodes in this sheet are unreliable, search by SKU and product name. White background, front view first."
+                        helpText="Tell the agent what you know about this catalog: your industry, which columns to trust or ignore, preferred websites, and image style. It outranks the agent's defaults."
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Websites</label>
+                      <WebsiteRulesButton
+                        allowedDomains={modeColumn.allowedDomains}
+                        blockedDomains={modeColumn.blockedDomains}
+                        onSave={(rules) => updateEnrichmentColumnConfig(modeColumn.id, rules)}
+                        disabled={isEnriching}
+                      />
+                    </div>
+                  </FinderOutputCard>
+                )}
+              </div>
+              {!runsSourceUrls && !runsImages && (
+                <p className="text-[10px] text-amber-600">Switch on at least one to run.</p>
+              )}
+            </div>
+          )}
+
+          {/* Categories — one column, runs on its own */}
+          {mode === "categories" && modeColumn && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                {mode === "categories" ? (
-                  <FolderTree className="h-4 w-4 text-primary" />
-                ) : (
-                  <ImageIcon className="h-4 w-4 text-primary" />
-                )}
-                <span className="text-xs font-semibold">
-                  {mode === "categories" ? "Category Assignment" : "Product Images"}
-                </span>
+                <FolderTree className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold">Category Assignment</span>
               </div>
               <p className="text-[10px] text-muted-foreground leading-relaxed">
-                {mode === "categories"
-                  ? "Assigns each selected product to your store categories and writes them to the Categories column."
-                  : `Finds the exact product on the web and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column.`}
+                Assigns each selected product to your store categories and writes them to the Categories column.
               </p>
 
               {mode === "categories" && storeListAvailable && (
@@ -1641,34 +1834,10 @@ export function Sidebar() {
                     })
                   }
                   disabled={isEnriching}
-                  placeholder={
-                    mode === "categories"
-                      ? "e.g. Prefer the most specific subcategory"
-                      : "e.g. This is a toys store. Barcodes in this sheet are unreliable, search by SKU and product name. White background, front view first."
-                  }
-                  helpText={
-                    mode === "categories"
-                      ? "Tell the AI how to assign categories for this catalog."
-                      : "Tell the agent what you know about this catalog: your industry, which columns to trust or ignore, preferred websites, and image style. It outranks the agent's defaults."
-                  }
+                  placeholder="e.g. Prefer the most specific subcategory"
+                  helpText="Tell the AI how to assign categories for this catalog."
                 />
               </div>
-
-              {mode === "images" && (
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-medium text-muted-foreground">
-                    Websites
-                  </label>
-                  <WebsiteRulesButton
-                    allowedDomains={modeColumn.allowedDomains}
-                    blockedDomains={modeColumn.blockedDomains}
-                    onSave={(rules) =>
-                      updateEnrichmentColumnConfig(modeColumn.id, rules)
-                    }
-                    disabled={isEnriching}
-                  />
-                </div>
-              )}
             </div>
           )}
 
@@ -1881,7 +2050,7 @@ export function Sidebar() {
                       : runningMode === "categories"
                         ? "Categorizing..."
                         : runningMode === "images"
-                          ? "Finding images..."
+                          ? finderRunningLabel(enrichingNewColumns)
                           : "Enriching..."}
                   </span>
                 </span>
@@ -1958,7 +2127,9 @@ export function Sidebar() {
           <Button
             onClick={handleEnrich}
             disabled={
-              (mode !== "enrich"
+              (mode === "images"
+                ? !runsImages && !runsSourceUrls
+                : mode !== "enrich"
                 ? !modeColumn
                 : enrichOutputTab === "new"
                   ? enabledColumns.length === 0
@@ -1979,7 +2150,11 @@ export function Sidebar() {
             {mode === "categories"
               ? "Categorize"
               : mode === "images"
-                ? "Find Images for"
+                ? runsSourceUrls && runsImages
+                  ? "Find Sources & Images for"
+                  : runsSourceUrls
+                    ? "Find Source URLs for"
+                    : "Find Images for"
                 : "Enrich"}{" "}
             {enrichableRows.length} Row
             {enrichableRows.length !== 1 ? "s" : ""}
