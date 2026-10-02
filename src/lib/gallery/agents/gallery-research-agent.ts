@@ -142,6 +142,8 @@ export async function researchGalleryImages(params: {
   settings: GalleryScrapingSettings;
   requestedGalleryImages: number;
   shouldCancel?: () => Promise<boolean>;
+  /** Replaces the research skill (experiments only; production uses GALLERY_RESEARCH_SKILL). */
+  skillOverride?: string;
 }): Promise<GalleryResearchResult> {
   const count = Math.max(1, params.requestedGalleryImages);
   const budget = galleryDepthBudget(params.settings.searchDepth);
@@ -231,7 +233,7 @@ export async function researchGalleryImages(params: {
     schema: galleryResearchSchema(brief.maxCandidates),
     enabledColumns: [],
     rowData: rowText,
-    instructions: GALLERY_RESEARCH_SKILL,
+    instructions: params.skillOverride ?? GALLERY_RESEARCH_SKILL,
     parse,
     modelOverride: GALLERY_SCRAPING_OPENAI_MODEL,
     reasoningEffortOverride: GALLERY_SCRAPING_REASONING_EFFORT,
