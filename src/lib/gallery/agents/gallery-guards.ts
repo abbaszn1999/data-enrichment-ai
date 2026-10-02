@@ -1,30 +1,15 @@
 /**
- * Accepts the Gallery agent's answer only where our own tools' record backs
- * it up. An image is kept when:
- *  - the page it cites was opened successfully and really lists that image;
- *  - that page is evidence of the exact item (a known source page of the
- *    sheet, or a page that shows the row's identifier, or - for rows with no
- *    code - a page that matches the row's brand and description);
- *  - it is not an image the sheet already has, nor a resized copy of one, nor
- *    a repeat of another returned image;
- *  - it is not a known tiny thumbnail.
- * Survivors are ranked (preferred size first) and diversified by perspective.
+ * Accepts the Gallery agent's answer only where our own record backs it up.
+ * The agent makes one request, so it cannot prove an image by opening pages;
+ * instead an image is kept only when its link was SEEN, never merely written:
+ *  - on a known source page that our code read, or
+ *  - in the web search tool's own image results.
+ * A link the model wrote from memory is dropped. Survivors must also not be an
+ * image the sheet already has (nor a resized copy of one), nor a repeat, nor a
+ * known tiny thumbnail. They are then ranked (preferred size first) and
+ * diversified by perspective.
  */
-import {
-  imageFileKey,
-  isOkPage,
-  normalizeImageKey,
-  normalizePageKey,
-  pageShowsImage,
-  type EvidenceLedger,
-  type PageEvidence,
-} from "@/lib/enrich/image-finder/evidence";
-import {
-  distinctiveWords,
-  isSpecificPartNumber,
-  wordsPresentRatio,
-  type RowIdentifier,
-} from "@/lib/enrich/image-finder/tools/identifiers";
+import { imageFileKey, normalizeImageKey } from "@/lib/enrich/image-finder/evidence";
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
 
 export const GALLERY_PERSPECTIVES = [
@@ -56,6 +41,12 @@ export interface KnownImageSize {
   height?: number;
 }
 
+/** An image link our own tools saw, and the page it was seen on. */
+export interface SeenImage {
+  imageUrl: string;
+  pageUrl: string;
+}
+
 export interface GuardedGalleryImage {
   imageUrl: string;
   pageUrl: string;
@@ -71,9 +62,6 @@ export interface GuardedGallery {
 
 /** Below this shortest side a known image is an icon or thumbnail, not a gallery photo. */
 export const GALLERY_MIN_USABLE_EDGE = 240;
-/** Share of a code-less row's distinctive words a page must show. */
-export const GALLERY_BEST_MATCH_MIN_WORD_SHARE = 0.6;
-export const GALLERY_BEST_MATCH_MIN_WORDS = 2;
 
 /** Every key under which an image may be recognised as the same file. */
 export function imageIdentityKeys(url: string): string[] {
@@ -89,31 +77,19 @@ export function buildKnownImageKeys(urls: string[]): Set<string> {
   return keys;
 }
 
+/** Index of seen images by normalised link (size parameters ignored). */
+export function buildSeenImageIndex(images: SeenImage[]): Map<string, SeenImage> {
+  const index = new Map<string, SeenImage>();
+  for (const image of images) {
+    const key = normalizeImageKey(image.imageUrl);
+    if (!index.has(key)) index.set(key, image);
+  }
+  return index;
+}
+
 function normalizePerspective(value: unknown): GalleryPerspective {
   const text = String(value ?? "").trim().toLowerCase();
   return (GALLERY_PERSPECTIVES as readonly string[]).includes(text) ? (text as GalleryPerspective) : "other";
-}
-
-function makePagePasses(input: {
-  rowIdentifiers: RowIdentifier[];
-  rowText: Record<string, string>;
-  sourcePageKeys: Set<string>;
-}): (evidence: PageEvidence) => boolean {
-  const { rowIdentifiers, rowText, sourcePageKeys } = input;
-  const exactKeys = rowIdentifiers.filter((id) => id.strong || isSpecificPartNumber(id.key)).map((id) => id.key);
-  const allKeys = rowIdentifiers.map((id) => id.key);
-  const words = distinctiveWords(rowText);
-  return (evidence) => {
-    if (sourcePageKeys.has(normalizePageKey(evidence.url)) || sourcePageKeys.has(normalizePageKey(evidence.finalUrl))) {
-      return true;
-    }
-    if (exactKeys.length > 0) return exactKeys.some((key) => evidence.identifierKeys.has(key));
-    if (allKeys.length > 0) return allKeys.every((key) => evidence.identifierKeys.has(key));
-    return (
-      words.length >= GALLERY_BEST_MATCH_MIN_WORDS &&
-      wordsPresentRatio(words, evidence.matchText) >= GALLERY_BEST_MATCH_MIN_WORD_SHARE
-    );
-  };
 }
 
 function meetsPreferences(
@@ -154,24 +130,20 @@ export function diversifyByPerspective<T extends { perspective: GalleryPerspecti
   return [...first, ...rest];
 }
 
-export function guardGalleryAnswer(input: {
+/**
+ * Step 1: which of the model's images were really seen, are new to the sheet
+ * and are not repeats. Keeps the model's order.
+ */
+export function guardGalleryCandidates(input: {
   answer: GalleryAnswer;
-  ledger: EvidenceLedger;
-  rowIdentifiers: RowIdentifier[];
-  /** Text-only row values (URL cells removed). */
-  rowText: Record<string, string>;
-  /** normalizePageKey() of the sheet's known source pages. */
-  sourcePageKeys: Set<string>;
+  /** Image links our tools saw, from buildSeenImageIndex(). */
+  seen: Map<string, SeenImage>;
   /** Keys from buildKnownImageKeys() of every image the sheet already has. */
   knownImageKeys: Set<string>;
-  /** Sizes reported by view_images, keyed by normalizeImageKey(). */
-  sizes?: Map<string, KnownImageSize>;
-  prefs: Pick<GalleryScrapingSettings, "minResolution" | "aspectRatio">;
 }): GuardedGallery {
-  const pagePasses = makePagePasses(input);
   const rejections: string[] = [];
   const kept: GuardedGalleryImage[] = [];
-  const seen = new Set<string>();
+  const taken = new Set<string>();
 
   for (const item of input.answer.images ?? []) {
     const imageUrl = String(item?.url ?? "").trim().replaceAll("&amp;", "&");
@@ -181,38 +153,45 @@ export function guardGalleryAnswer(input: {
       rejections.push(`${imageUrl}: the sheet already has this image.`);
       continue;
     }
-    if (keys.some((key) => seen.has(key))) continue;
+    if (keys.some((key) => taken.has(key))) continue;
 
-    const pageUrl = String(item?.pageUrl ?? "").trim();
-    const source = pageUrl ? input.ledger.find(pageUrl) : undefined;
-    if (!isOkPage(source)) {
-      rejections.push(`${imageUrl}: its page ${pageUrl || "(none)"} was not opened.`);
+    const seen = input.seen.get(normalizeImageKey(imageUrl));
+    if (!seen) {
+      rejections.push(`${imageUrl}: this link was not found on a page or in the image search results.`);
       continue;
     }
-    if (!pagePasses(source)) {
-      rejections.push(`${imageUrl}: its page ${pageUrl} does not show the same item.`);
-      continue;
-    }
-    if (!pageShowsImage(source, imageUrl)) {
-      rejections.push(`${imageUrl}: this link does not appear on ${pageUrl}.`);
-      continue;
-    }
-    const size = input.sizes?.get(normalizeImageKey(imageUrl));
-    if (size?.width && size.height && Math.min(size.width, size.height) < GALLERY_MIN_USABLE_EDGE) {
-      rejections.push(`${imageUrl}: too small (${size.width}x${size.height}).`);
-      continue;
-    }
-    for (const key of keys) seen.add(key);
+    for (const key of keys) taken.add(key);
     kept.push({
-      imageUrl,
-      pageUrl,
+      imageUrl: seen.imageUrl,
+      pageUrl: seen.pageUrl || String(item?.pageUrl ?? "").trim() || seen.imageUrl,
       perspective: normalizePerspective(item?.perspective),
-      ...(size?.width && size.height ? { width: size.width, height: size.height } : {}),
     });
   }
+  return { images: kept, rejections };
+}
 
+/**
+ * Step 2, after the images were measured: drop known tiny thumbnails, put the
+ * images that meet the preferred size and shape first, then spread them over
+ * perspectives. An image whose size could not be read is kept.
+ */
+export function rankGalleryImages(
+  images: GuardedGalleryImage[],
+  sizes: Map<string, KnownImageSize>,
+  prefs: Pick<GalleryScrapingSettings, "minResolution" | "aspectRatio">
+): { images: GuardedGalleryImage[]; rejections: string[] } {
+  const rejections: string[] = [];
+  const sized: GuardedGalleryImage[] = [];
+  for (const image of images) {
+    const size = sizes.get(normalizeImageKey(image.imageUrl));
+    if (size?.width && size.height && Math.min(size.width, size.height) < GALLERY_MIN_USABLE_EDGE) {
+      rejections.push(`${image.imageUrl}: too small (${size.width}x${size.height}).`);
+      continue;
+    }
+    sized.push({ ...image, ...(size?.width && size.height ? { width: size.width, height: size.height } : {}) });
+  }
   // Stable: images that meet the preferred size and shape first, the model's order otherwise.
-  const preferred = kept.filter((image) => meetsPreferences(image, input.prefs));
-  const others = kept.filter((image) => !meetsPreferences(image, input.prefs));
+  const preferred = sized.filter((image) => meetsPreferences(image, prefs));
+  const others = sized.filter((image) => !meetsPreferences(image, prefs));
   return { images: diversifyByPerspective([...preferred, ...others]), rejections };
 }

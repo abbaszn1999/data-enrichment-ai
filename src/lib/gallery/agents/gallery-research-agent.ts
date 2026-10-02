@@ -1,57 +1,67 @@
 /**
- * Products Gallery scraping agent: one GPT-6.1 Sol (medium) research loop per
- * row. It reads the sheet's Main image(s) and known source pages, opens more
- * pages of the exact item with web_search + fetch_page + check_pages, looks at
- * candidates with view_images, and answers with N NEW gallery images. Code
- * re-checks the answer (gallery-guards.ts) and load-checks every image.
+ * Products Gallery scraping agent: ONE GPT-6.1 Sol request per row.
+ *
+ * Inputs: a short skill, the checked source columns (text), the Main image(s)
+ * and the row's other images (attached), the settings, and the list of images
+ * the sheet already has. When the sheet holds source-page links, plain code
+ * first reads those pages (no model, no rounds) and lists the photos found
+ * there. The model then searches the web (text + image results) and answers
+ * once. Code keeps only links that were really seen - on a read source page or
+ * in the search tool's image results - and load-checks them.
  */
 import type { AiCallCost } from "@/lib/ai-pricing";
-import {
-  GALLERY_SCRAPING_OPENAI_MODEL,
-  GALLERY_SCRAPING_REASONING_EFFORT,
-} from "@/lib/enrich/models";
+import { GALLERY_SCRAPING_OPENAI_MODEL, GALLERY_SCRAPING_REASONING_EFFORT } from "@/lib/enrich/models";
 import { runEnrichOpenAiResponse, type EnrichResponseParser } from "@/lib/enrich/openai";
 import type { EnrichToolPolicy } from "@/lib/enrich/policy";
-import { EvidenceLedger, normalizeImageKey, normalizePageKey } from "@/lib/enrich/image-finder/evidence";
-import { createCheckPagesTool } from "@/lib/enrich/image-finder/tools/check-pages";
-import { createFetchPageTool, createPageSession } from "@/lib/enrich/image-finder/tools/fetch-page";
+import { collectToolImages } from "@/lib/enrich/tool-results";
+import { EvidenceLedger, normalizeImageKey } from "@/lib/enrich/image-finder/evidence";
+import { createPageSession, type CachedPage } from "@/lib/enrich/image-finder/tools/fetch-page";
 import { extractRowIdentifiers } from "@/lib/enrich/image-finder/tools/identifiers";
-import { createViewImagesTool, loadImagePreview } from "@/lib/enrich/image-finder/tools/view-images";
+import { loadImagePreview } from "@/lib/enrich/image-finder/tools/view-images";
 import { keepLoadableImages, unverifiedImagesNote } from "@/lib/enrich/image-finder/verify-images";
 import { galleryLog } from "@/lib/gallery/log";
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
-import { buildGalleryBrief, classifyRowValues, textOnlyRow } from "./gallery-brief";
+import { buildGalleryBrief, classifyRowValues, textOnlyRow, type SourcePagePhotos } from "./gallery-brief";
 import {
   GALLERY_PERSPECTIVES,
   buildKnownImageKeys,
-  guardGalleryAnswer,
+  buildSeenImageIndex,
+  guardGalleryCandidates,
+  rankGalleryImages,
   type GalleryAnswer,
   type GalleryPerspective,
   type KnownImageSize,
+  type SeenImage,
 } from "./gallery-guards";
 import { GALLERY_RESEARCH_SKILL } from "./gallery-research-skill";
 
 export interface GalleryDepthBudget {
-  /** Live page opens per product (fetch_page + check_pages). */
-  pages: number;
-  /** Candidate images the agent may look at. */
-  views: number;
-  /** Function-call rounds before it must answer. */
-  rounds: number;
-  /** Time budget shared by every round of the attempt. */
+  /** How much page content the web search reads per query. */
+  searchContext: "low" | "medium" | "high";
+  /** Raw image results the web search returns to the model. */
+  imagePool: number;
+  /** Time budget for the single request. */
   budgetMs: number;
 }
 
 /** Research depth (Advanced setting). All budgets fit inside the 1500s galleryRow task timeout. */
 export const GALLERY_DEPTH_BUDGETS: Record<GalleryScrapingSettings["searchDepth"], GalleryDepthBudget> = {
-  low: { pages: 10, views: 16, rounds: 15, budgetMs: 240_000 },
-  medium: { pages: 20, views: 24, rounds: 22, budgetMs: 420_000 },
-  high: { pages: 30, views: 36, rounds: 30, budgetMs: 540_000 },
+  low: { searchContext: "low", imagePool: 20, budgetMs: 240_000 },
+  medium: { searchContext: "medium", imagePool: 30, budgetMs: 360_000 },
+  high: { searchContext: "high", imagePool: 40, budgetMs: 480_000 },
 };
 
 export function galleryDepthBudget(depth: GalleryScrapingSettings["searchDepth"] | undefined): GalleryDepthBudget {
   return GALLERY_DEPTH_BUDGETS[depth ?? "high"] ?? GALLERY_DEPTH_BUDGETS.high;
 }
+
+/** Source pages our code reads before the request, and what it keeps from each. */
+const SOURCE_PAGES_READ = 6;
+const SOURCE_PAGE_CONCURRENCY = 3;
+const PHOTOS_PER_PAGE = 24;
+const PHOTOS_TOTAL = 60;
+/** Most images measured (downloaded) after the model answers. */
+const MEASURE_CONCURRENCY = 4;
 
 export function galleryResearchSchema(maxCandidates: number): Record<string, unknown> {
   return {
@@ -65,13 +75,13 @@ export function galleryResearchSchema(maxCandidates: number): Record<string, unk
       },
       images: {
         type: "array",
-        description: "New gallery images of the exact item, best first, each from a page you opened.",
+        description: "New gallery images of the exact item, best first, each link copied exactly as you saw it.",
         items: {
           type: "object",
           additionalProperties: false,
           properties: {
-            url: { type: "string", description: "Direct image file link exactly as it appeared on the page you opened." },
-            pageUrl: { type: "string", description: "The opened page of the same exact item where this link appeared." },
+            url: { type: "string", description: "Direct image file link exactly as seen on a page or in the image search results." },
+            pageUrl: { type: "string", description: "The page of the same exact item where this link appeared, or an empty string." },
             perspective: { type: "string", enum: [...GALLERY_PERSPECTIVES] },
           },
           required: ["url", "pageUrl", "perspective"],
@@ -98,12 +108,14 @@ export interface GalleryResearchImage {
 export interface GalleryResearchResult {
   productIdentity: string;
   images: GalleryResearchImage[];
-  /** Every billed Responses round, including rounds of a failed first attempt. */
+  /** Every billed Responses round, including a failed first attempt. */
   costs: AiCallCost[];
   searchCallCount: number;
   notes?: string;
   stats: {
+    /** Known source pages our code read successfully. */
     pagesOpened: number;
+    /** Images downloaded to read their size. */
     imagesViewed: number;
     candidatesReturned: number;
     candidatesKept: number;
@@ -112,6 +124,67 @@ export interface GalleryResearchResult {
   };
   rejections: string[];
   unverifiedNote: string;
+}
+
+async function mapWithLimit<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** Plain code step: read the sheet's source pages and list the photo links on them. */
+async function readSourcePages(input: {
+  pageUrls: string[];
+  knownImageKeys: Set<string>;
+  rowIdentifiers: ReturnType<typeof extractRowIdentifiers>;
+  load?: (url: string) => Promise<CachedPage>;
+}): Promise<SourcePagePhotos[]> {
+  const urls = input.pageUrls.slice(0, SOURCE_PAGES_READ);
+  if (urls.length === 0) return [];
+  const session = createPageSession({
+    rowIdentifiers: input.rowIdentifiers,
+    ledger: new EvidenceLedger(),
+    domainRules: { allowedDomains: [], blockedDomains: [] },
+    maxFetches: SOURCE_PAGES_READ,
+    maxFetchesPerSite: SOURCE_PAGES_READ,
+    load: input.load,
+  });
+  const opened = await mapWithLimit(urls, SOURCE_PAGE_CONCURRENCY, async (url) => {
+    try {
+      const result = await session.open(url);
+      if (result.refused !== undefined) return null;
+      return { url, images: result.page.extract?.images ?? [] };
+    } catch {
+      return null;
+    }
+  });
+
+  const taken = new Set<string>();
+  const out: SourcePagePhotos[] = [];
+  let total = 0;
+  for (const entry of opened) {
+    if (!entry) continue;
+    const images: string[] = [];
+    for (const raw of entry.images) {
+      if (images.length >= PHOTOS_PER_PAGE || total >= PHOTOS_TOTAL) break;
+      const image = raw.trim();
+      if (!/^https?:\/\//i.test(image)) continue;
+      const key = normalizeImageKey(image);
+      if (taken.has(key) || input.knownImageKeys.has(key)) continue;
+      taken.add(key);
+      images.push(image);
+      total += 1;
+    }
+    out.push({ pageUrl: entry.url, images });
+  }
+  return out;
 }
 
 /** Image links are attached to the request as-is; local bytes arrive as data URLs. */
@@ -125,68 +198,65 @@ export async function researchGalleryImages(params: {
   settings: GalleryScrapingSettings;
   requestedGalleryImages: number;
   shouldCancel?: () => Promise<boolean>;
+  /** Page loader for the source-page read (tests only; defaults to a live fetch). */
+  loadPage?: (url: string) => Promise<CachedPage>;
 }): Promise<GalleryResearchResult> {
   const count = Math.max(1, params.requestedGalleryImages);
   const budget = galleryDepthBudget(params.settings.searchDepth);
   const classified = classifyRowValues(params.rowData, params.selectedColumns);
   const rowText = textOnlyRow(classified);
   const rowIdentifiers = extractRowIdentifiers(rowText);
-  const brief = buildGalleryBrief({
+  const briefInput = {
     classified,
     mainImageUrls: params.mainImageUrls,
     count,
     settings: params.settings,
     rowIdentifiers: rowIdentifiers.map((identifier) => identifier.value),
-  });
+  };
+  const firstBrief = buildGalleryBrief(briefInput);
+  const knownImageKeys = buildKnownImageKeys(firstBrief.knownImageUrls);
 
-  const ledger = new EvidenceLedger();
-  const sourcePageKeys = new Set(brief.sourcePageUrls.map(normalizePageKey));
-  const pages = createPageSession({
+  // Plain code, no model: photos found on the sheet's own source pages.
+  const sourcePhotos = await readSourcePages({
+    pageUrls: firstBrief.sourcePageUrls,
+    knownImageKeys,
     rowIdentifiers,
-    ledger,
-    domainRules: { allowedDomains: [], blockedDomains: [] },
-    maxFetches: budget.pages,
-    maxFetchesPerSite: Math.max(4, Math.round(budget.pages * 0.5)),
+    load: params.loadPage,
   });
-  const sizes = new Map<string, KnownImageSize>();
-  let imagesViewed = 0;
-  const tools = [
-    createCheckPagesTool(pages),
-    createFetchPageTool(pages),
-    createViewImagesTool({
-      maxViews: budget.views,
-      load: async (url) => {
-        imagesViewed += 1;
-        const result = await loadImagePreview(url);
-        if (result.ok && result.width && result.height) {
-          sizes.set(normalizeImageKey(url), { width: result.width, height: result.height });
-        }
-        return result;
-      },
-    }),
-  ];
+  const brief = buildGalleryBrief({ ...briefInput, sourcePhotos });
 
-  const knownImageKeys = buildKnownImageKeys(brief.knownImageUrls);
-  let guardStats = { returned: 0, kept: 0, unverified: 0, rejections: [] as string[], notes: "" };
+  // Links we saw ourselves: source pages first, the search tool's results are added after the answer.
+  const sourceSeen: SeenImage[] = sourcePhotos.flatMap((entry) =>
+    entry.images.map((imageUrl) => ({ imageUrl, pageUrl: entry.pageUrl }))
+  );
+
+  let guardStats = { returned: 0, unverified: 0, rejections: [] as string[], notes: "" };
   let parsedIdentity = "";
+  let imagesViewed = 0;
 
-  const parse: EnrichResponseParser = async ({ selection }) => {
+  const parse: EnrichResponseParser = async ({ selection, response }) => {
     const answer = selection as unknown as GalleryAnswer;
     parsedIdentity = typeof answer.productIdentity === "string" ? answer.productIdentity.trim() : "";
-    const guarded = guardGalleryAnswer({
-      answer,
-      ledger,
-      rowIdentifiers,
-      rowText,
-      sourcePageKeys,
-      knownImageKeys,
-      sizes,
-      prefs: params.settings,
+
+    const seen = buildSeenImageIndex([...sourceSeen, ...collectToolImages(response)]);
+    const guarded = guardGalleryCandidates({ answer, seen, knownImageKeys });
+
+    // Read each kept image's size (best effort): tiny ones are dropped, preferred sizes go first.
+    const sizes = new Map<string, KnownImageSize>();
+    await mapWithLimit(guarded.images, MEASURE_CONCURRENCY, async (image) => {
+      imagesViewed += 1;
+      const preview = await loadImagePreview(image.imageUrl);
+      if (preview.ok && preview.width && preview.height) {
+        sizes.set(normalizeImageKey(image.imageUrl), { width: preview.width, height: preview.height });
+      }
     });
-    if (guarded.rejections.length > 0) {
-      console.warn("[Gallery research] Rejected by evidence checks", { rejections: guarded.rejections.slice(0, 12) });
+    const ranked = rankGalleryImages(guarded.images, sizes, params.settings);
+    const rejections = [...guarded.rejections, ...ranked.rejections];
+    if (rejections.length > 0) {
+      console.warn("[Gallery research] Rejected by checks", { rejections: rejections.slice(0, 12) });
     }
-    const candidates = guarded.images.map((image) => ({
+
+    const candidates = ranked.images.map((image) => ({
       imageUrl: image.imageUrl,
       pageUrl: image.pageUrl,
       title: `Gallery · ${image.perspective}`,
@@ -195,24 +265,23 @@ export async function researchGalleryImages(params: {
     const { images, unverified } = await keepLoadableImages(candidates, count);
     guardStats = {
       returned: Array.isArray(answer.images) ? answer.images.length : 0,
-      kept: images.length,
       unverified,
-      rejections: guarded.rejections,
+      rejections,
       notes: typeof answer.notes === "string" ? answer.notes.trim() : "",
     };
     return { images };
   };
 
   const policy: EnrichToolPolicy = {
-    needsImages: false,
+    needsImages: true,
     needsSources: false,
     needsCategories: false,
     textColumnIds: [],
     toolChoice: "required",
-    searchContentTypes: ["text"],
+    searchContentTypes: ["image", "text"],
     imageCount: brief.maxCandidates,
     sourceCount: 0,
-    includeResults: false,
+    includeResults: true,
     includeSources: false,
   };
 
@@ -222,6 +291,8 @@ export async function researchGalleryImages(params: {
     count,
     inputImages: brief.inputImageUrls.length + (params.extraInputImages?.length ?? 0),
     sourcePages: brief.sourcePageUrls.length,
+    sourcePagesRead: sourcePhotos.length,
+    sourcePhotos: sourceSeen.length,
     identifiers: rowIdentifiers.length,
   });
 
@@ -238,14 +309,14 @@ export async function researchGalleryImages(params: {
     parse,
     modelOverride: GALLERY_SCRAPING_OPENAI_MODEL,
     reasoningEffortOverride: GALLERY_SCRAPING_REASONING_EFFORT,
-    searchContextSizeOverride: "medium",
-    functionTools: tools,
-    maxFunctionRounds: budget.rounds,
+    searchContextSizeOverride: budget.searchContext,
+    imageSearchPoolSize: budget.imagePool,
     attemptBudgetMs: budget.budgetMs,
     shouldCancel: params.shouldCancel,
   });
 
-  const found = (result.data.images as Array<{ imageUrl: string; pageUrl: string; title: string; perspective?: GalleryPerspective }>) ?? [];
+  const found =
+    (result.data.images as Array<{ imageUrl: string; pageUrl: string; title: string; perspective?: GalleryPerspective }>) ?? [];
   const images: GalleryResearchImage[] = found.map((image) => ({
     imageUrl: image.imageUrl,
     pageUrl: image.pageUrl,
@@ -254,7 +325,7 @@ export async function researchGalleryImages(params: {
   }));
 
   const stats = {
-    pagesOpened: ledger.size,
+    pagesOpened: sourcePhotos.filter((entry) => entry.images.length > 0).length,
     imagesViewed,
     candidatesReturned: guardStats.returned,
     candidatesKept: images.length,

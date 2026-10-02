@@ -1,167 +1,121 @@
 import { describe, expect, it } from "vitest";
-import { EvidenceLedger, normalizeImageKey, normalizePageKey } from "@/lib/enrich/image-finder/evidence";
-import { extractRowIdentifiers } from "@/lib/enrich/image-finder/tools/identifiers";
+import { normalizeImageKey } from "@/lib/enrich/image-finder/evidence";
 import {
   buildKnownImageKeys,
+  buildSeenImageIndex,
   diversifyByPerspective,
-  guardGalleryAnswer,
+  guardGalleryCandidates,
+  rankGalleryImages,
+  type GuardedGalleryImage,
   type KnownImageSize,
 } from "./gallery-guards";
 
-const rowText = { Title: "Acme Trail Shoe Blue", SKU: "ACM-1234567" };
-const rowIdentifiers = extractRowIdentifiers(rowText);
-
-function ledgerWith(pages: Array<{ url: string; images: string[]; identifiers?: boolean; text?: string; status?: number }>) {
-  const ledger = new EvidenceLedger();
-  for (const page of pages) {
-    ledger.recordPage({
-      url: page.url,
-      finalUrl: page.url,
-      status: page.status ?? 200,
-      identifiers: page.identifiers === false ? [] : rowIdentifiers,
-      imageUrls: page.images,
-      matchText: page.text ?? "",
-    });
-  }
-  return ledger;
-}
-
 const prefs = { minResolution: 0, aspectRatio: "any" };
 
-function guard(overrides: Partial<Parameters<typeof guardGalleryAnswer>[0]>) {
-  return guardGalleryAnswer({
-    answer: { images: [] },
-    ledger: new EvidenceLedger(),
-    rowIdentifiers,
-    rowText,
-    sourcePageKeys: new Set(),
-    knownImageKeys: new Set(),
-    prefs,
-    ...overrides,
+function guard(
+  images: Array<{ url: string; pageUrl?: string; perspective?: string }>,
+  seen: Array<{ imageUrl: string; pageUrl: string }>,
+  known: string[] = []
+) {
+  return guardGalleryCandidates({
+    answer: { images: images.map((i) => ({ pageUrl: "", perspective: "other", ...i })) },
+    seen: buildSeenImageIndex(seen),
+    knownImageKeys: buildKnownImageKeys(known),
   });
 }
 
-describe("guardGalleryAnswer", () => {
-  it("keeps an image listed on an opened page that shows the row's code", () => {
-    const ledger = ledgerWith([{ url: "https://brand.com/p/acme", images: ["https://cdn.brand.com/img/back-1.jpg"] }]);
-    const result = guard({
-      ledger,
-      answer: {
-        images: [{ url: "https://cdn.brand.com/img/back-1.jpg", pageUrl: "https://brand.com/p/acme", perspective: "back" }],
-      },
-    });
-    expect(result.images).toHaveLength(1);
-    expect(result.images[0]!.perspective).toBe("back");
+describe("guardGalleryCandidates", () => {
+  it("keeps a link our tools saw and uses the page it was seen on", () => {
+    const result = guard(
+      [{ url: "https://cdn.brand.com/img/back-1.jpg", perspective: "back" }],
+      [{ imageUrl: "https://cdn.brand.com/img/back-1.jpg", pageUrl: "https://brand.com/p/acme" }]
+    );
+    expect(result.images).toEqual([
+      { imageUrl: "https://cdn.brand.com/img/back-1.jpg", pageUrl: "https://brand.com/p/acme", perspective: "back" },
+    ]);
   });
 
-  it("rejects pages that were never opened, that lack the code, or that do not list the image", () => {
-    const ledger = ledgerWith([
-      { url: "https://other.com/p/1", images: ["https://cdn.other.com/a.jpg"], identifiers: false },
-      { url: "https://brand.com/p/acme", images: ["https://cdn.brand.com/real.jpg"] },
-    ]);
-    const result = guard({
-      ledger,
-      answer: {
-        images: [
-          { url: "https://cdn.x.com/a.jpg", pageUrl: "https://never-opened.com", perspective: "front" },
-          { url: "https://cdn.other.com/a.jpg", pageUrl: "https://other.com/p/1", perspective: "front" },
-          { url: "https://cdn.brand.com/invented.jpg", pageUrl: "https://brand.com/p/acme", perspective: "front" },
-        ],
-      },
-    });
+  it("drops a link the model wrote that no page or search result showed", () => {
+    const result = guard(
+      [{ url: "https://cdn.brand.com/img/invented.jpg", pageUrl: "https://brand.com/p/acme" }],
+      [{ imageUrl: "https://cdn.brand.com/img/real.jpg", pageUrl: "https://brand.com/p/acme" }]
+    );
     expect(result.images).toHaveLength(0);
-    expect(result.rejections).toHaveLength(3);
+    expect(result.rejections).toHaveLength(1);
   });
 
-  it("trusts the sheet's own source pages even without a code on them", () => {
-    const ledger = ledgerWith([
-      { url: "https://shop.com/products/acme-trail", images: ["https://cdn.shop.com/x/side.jpg"], identifiers: false },
-    ]);
-    const result = guard({
-      ledger,
-      sourcePageKeys: new Set([normalizePageKey("https://shop.com/products/acme-trail")]),
-      answer: {
-        images: [{ url: "https://cdn.shop.com/x/side.jpg", pageUrl: "https://shop.com/products/acme-trail", perspective: "side" }],
-      },
-    });
+  it("matches a seen link whatever size parameter it carries", () => {
+    const result = guard(
+      [{ url: "https://cdn.shop.com/x/side.jpg?width=1200" }],
+      [{ imageUrl: "https://cdn.shop.com/x/side.jpg?width=400", pageUrl: "https://shop.com/p" }]
+    );
     expect(result.images).toHaveLength(1);
   });
 
-  it("drops images the sheet already has, including resized CDN copies, and repeats", () => {
-    const ledger = ledgerWith([
-      {
-        url: "https://brand.com/p/acme",
-        images: [
-          "https://cdn.brand.com/img/main_600x.jpg",
-          "https://cdn.brand.com/img/new-angle.jpg",
-        ],
-      },
-    ]);
-    const result = guard({
-      ledger,
-      knownImageKeys: buildKnownImageKeys(["https://cdn.brand.com/img/main.jpg"]),
-      answer: {
-        images: [
-          { url: "https://cdn.brand.com/img/main_600x.jpg", pageUrl: "https://brand.com/p/acme", perspective: "front" },
-          { url: "https://cdn.brand.com/img/new-angle.jpg", pageUrl: "https://brand.com/p/acme", perspective: "angle" },
-          { url: "https://cdn.brand.com/img/new-angle.jpg", pageUrl: "https://brand.com/p/acme", perspective: "angle" },
-        ],
-      },
-    });
+  it("drops images the sheet already has, including resized copies, and repeats", () => {
+    const seen = [
+      { imageUrl: "https://cdn.brand.com/img/main_600x.jpg", pageUrl: "https://brand.com/p" },
+      { imageUrl: "https://cdn.brand.com/img/new-angle.jpg", pageUrl: "https://brand.com/p" },
+    ];
+    const result = guard(
+      [
+        { url: "https://cdn.brand.com/img/main_600x.jpg" },
+        { url: "https://cdn.brand.com/img/new-angle.jpg" },
+        { url: "https://cdn.brand.com/img/new-angle.jpg" },
+      ],
+      seen,
+      ["https://cdn.brand.com/img/main.jpg"]
+    );
     expect(result.images.map((i) => i.imageUrl)).toEqual(["https://cdn.brand.com/img/new-angle.jpg"]);
   });
 
-  it("matches code-less rows by brand and description words", () => {
-    const text = { Title: "Bamboo Cutting Board Large Natural" };
-    const ledger = new EvidenceLedger();
-    ledger.recordPage({
-      url: "https://shop.com/bamboo",
-      finalUrl: "https://shop.com/bamboo",
-      status: 200,
-      identifiers: [],
-      imageUrls: ["https://cdn.shop.com/img/bamboo-1.jpg"],
-      matchText: " bamboo cutting board large natural ",
-    });
-    ledger.recordPage({
-      url: "https://shop.com/plastic",
-      finalUrl: "https://shop.com/plastic",
-      status: 200,
-      identifiers: [],
-      imageUrls: ["https://cdn.shop.com/img/plastic-1.jpg"],
-      matchText: " plastic tray small ",
-    });
-    const result = guardGalleryAnswer({
-      answer: {
-        images: [
-          { url: "https://cdn.shop.com/img/bamboo-1.jpg", pageUrl: "https://shop.com/bamboo", perspective: "front" },
-          { url: "https://cdn.shop.com/img/plastic-1.jpg", pageUrl: "https://shop.com/plastic", perspective: "back" },
-        ],
-      },
-      ledger,
-      rowIdentifiers: [],
-      rowText: text,
-      sourcePageKeys: new Set(),
-      knownImageKeys: new Set(),
-      prefs,
-    });
-    expect(result.images.map((i) => i.imageUrl)).toEqual(["https://cdn.shop.com/img/bamboo-1.jpg"]);
+  it("falls back to the model's page, then the image, when the tool gave no page", () => {
+    const withModelPage = guard(
+      [{ url: "https://cdn.a.com/i/1.jpg", pageUrl: "https://a.com/p" }],
+      [{ imageUrl: "https://cdn.a.com/i/1.jpg", pageUrl: "" }]
+    );
+    expect(withModelPage.images[0]!.pageUrl).toBe("https://a.com/p");
+    const withNone = guard([{ url: "https://cdn.a.com/i/2.jpg" }], [{ imageUrl: "https://cdn.a.com/i/2.jpg", pageUrl: "" }]);
+    expect(withNone.images[0]!.pageUrl).toBe("https://cdn.a.com/i/2.jpg");
+  });
+});
+
+describe("rankGalleryImages", () => {
+  const image = (url: string, perspective: GuardedGalleryImage["perspective"] = "other"): GuardedGalleryImage => ({
+    imageUrl: url,
+    pageUrl: "https://b.com/p",
+    perspective,
   });
 
   it("drops known thumbnails and ranks images that meet the preferred size first", () => {
     const urls = ["https://cdn.b.com/i/small.jpg", "https://cdn.b.com/i/low.jpg", "https://cdn.b.com/i/big.jpg"];
-    const ledger = ledgerWith([{ url: "https://b.com/p", images: urls }]);
     const sizes = new Map<string, KnownImageSize>([
       [normalizeImageKey(urls[0]!), { width: 120, height: 120 }],
       [normalizeImageKey(urls[1]!), { width: 800, height: 800 }],
       [normalizeImageKey(urls[2]!), { width: 2000, height: 2000 }],
     ]);
-    const result = guard({
-      ledger,
-      sizes,
-      prefs: { minResolution: 1200, aspectRatio: "any" },
-      answer: { images: urls.map((url) => ({ url, pageUrl: "https://b.com/p", perspective: "other" })) },
-    });
+    const result = rankGalleryImages(urls.map((url) => image(url)), sizes, { minResolution: 1200, aspectRatio: "any" });
     expect(result.images.map((i) => i.imageUrl)).toEqual([urls[2], urls[1]]);
+    expect(result.rejections).toHaveLength(1);
+  });
+
+  it("keeps an image whose size could not be read", () => {
+    const result = rankGalleryImages([image("https://cdn.b.com/i/unknown.jpg")], new Map(), {
+      minResolution: 1200,
+      aspectRatio: "square",
+    });
+    expect(result.images).toHaveLength(1);
+  });
+
+  it("honours the preferred aspect ratio ordering", () => {
+    const wide = "https://cdn.b.com/i/wide.jpg";
+    const square = "https://cdn.b.com/i/square.jpg";
+    const sizes = new Map<string, KnownImageSize>([
+      [normalizeImageKey(wide), { width: 1600, height: 900 }],
+      [normalizeImageKey(square), { width: 1000, height: 1000 }],
+    ]);
+    const result = rankGalleryImages([image(wide), image(square)], sizes, { ...prefs, aspectRatio: "square" });
+    expect(result.images.map((i) => i.imageUrl)).toEqual([square, wide]);
   });
 });
 
