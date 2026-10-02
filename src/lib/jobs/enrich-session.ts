@@ -215,8 +215,7 @@ async function runCatalogWork(
 
   // Image Finder: websites that verified this sheet's products guide later
   // rows. The final re-check of Not-found rows is billed under its own
-  // `:recheck` key. Standard repeats the exact-page search; Premium runs the
-  // deep agent (see image-finder/pipeline.ts).
+  // `:recheck` key and runs the same agent again (see image-finder/agent.ts).
   const imageFinder = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns);
   const imageFinderRecheckEnabled = imageFinder;
   const learner = imageFinder

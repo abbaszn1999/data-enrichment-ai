@@ -6,6 +6,7 @@ import { buildEnrichToolPolicy } from "../policy";
 import { collectOpenedPages, looksLikeDirectImageUrl } from "../tool-results";
 import type { EnrichAgentParams, EnrichAgentResult } from "../types";
 import { buildImageFinderBrief } from "./brief";
+import { prepareKnownPages } from "./known-pages";
 import { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } from "./not-found";
 import { IMAGE_FINDER_STANDARD_SKILL } from "./standard-skill";
 import { extractRowIdentifiers } from "./tools/identifiers";
@@ -13,11 +14,11 @@ import { keepLoadableImages, unverifiedImagesNote } from "./verify-images";
 
 const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
-/** Time budget for Standard's single call (it searches and browses inside one turn). */
+/** Time budget for the single call (it searches and browses inside one turn). */
 export const IMAGE_FINDER_STANDARD_BUDGET_MS = 300_000;
 
 export const STANDARD_MATCH_BASIS = "standard";
-export const STANDARD_MATCH_NOTE = "Fast match from web search â€” not independently page-verified.";
+export const STANDARD_MATCH_NOTE = "Quick match from web search: the page was not independently verified.";
 
 function standardSchema(imageCount: number): Record<string, unknown> {
   return {
@@ -49,6 +50,15 @@ function standardSchema(imageCount: number): Record<string, unknown> {
   };
 }
 
+/** The agent's web citations come back as markdown, including empty `([]())` ones: show plain text. */
+function plainReason(text: string): string {
+  return text
+    .replace(/\s*\(\[\]\(\)\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /** Host without `www.` plus path without trailing slash; query and hash dropped. */
 function pageKey(raw: string): string {
   try {
@@ -60,12 +70,13 @@ function pageKey(raw: string): string {
 }
 
 /**
- * Standard-tier Image Finder: one Responses call with the hosted web_search
- * tool only â€” no function tools, so openai.ts sends exactly one request and
- * never enters its round loop. An image is kept only when its page was
- * really opened by web_search in that same call, the link is a direct image
- * that actually loads, and it passes the website rules. The page content is
- * not independently re-read, so every result is labelled.
+ * Image Finder: one Responses call with the hosted web_search tool only, so
+ * openai.ts sends exactly one request and never enters its round loop. Pages
+ * from a ticked Source URLs column go into the brief as leads to open first.
+ * An image is kept only when its page was really opened by web_search in that
+ * same call, the link is a direct image that actually loads, and it passes the
+ * website rules. The page content is not independently re-read, so every
+ * result is labelled.
  */
 export async function findProductImagesStandard(params: EnrichAgentParams): Promise<EnrichAgentResult> {
   const basePolicy = buildEnrichToolPolicy([IMAGE_COLUMN_ID], params.enrichmentColumns, "product");
@@ -89,7 +100,8 @@ export async function findProductImagesStandard(params: EnrichAgentParams): Prom
     blockedDomains: domainRules.blockedDomains,
     rowIdentifiers: extractRowIdentifiers(params.productData).map((identifier) => identifier.value),
     learnedDomains: params.learnedDomains,
-    variant: "standard",
+    knownPages: prepareKnownPages(params.knownPages, domainRules),
+    recheck: params.recheck,
   });
 
   const parse: EnrichResponseParser = async ({ selection, response }) => {
@@ -114,7 +126,7 @@ export async function findProductImagesStandard(params: EnrichAgentParams): Prom
     let reason = "";
     if (images.length === 0) {
       reason = found ? "The matched item's images could not be confirmed from a page opened during the search." : "";
-      if (notes) reason = `${reason} ${notes}`.trim();
+      if (notes) reason = plainReason(`${reason} ${notes}`);
     }
     // Always write the sibling keys so a later run clears stale values from an earlier one.
     const matched = images.length > 0;

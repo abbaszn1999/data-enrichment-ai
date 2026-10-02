@@ -51,7 +51,7 @@ describe("buildImageFinderBrief", () => {
 
     expect(brief.text).toContain("1 reference image is attached");
     expect(brief.text).toContain(
-      "Return every distinct image of this exact item that its verified sources show, up to 7."
+      "Return every distinct image of this exact item that the matched page shows, up to 7."
     );
     expect(brief.text).toContain(
       "## Custom instruction (store owner, highest priority)\nWhite background, front view first"
@@ -111,23 +111,45 @@ describe("buildImageFinderBrief", () => {
     expect(brief.text).toContain("## Final re-check");
   });
 
-  it("tells the agent to use best-match rules when the row has no code", () => {
-    const brief = buildImageFinderBrief({ rowData: { Description: "Unicorn plush toy" }, rowIdentifiers: [] });
-    expect(brief.text).toContain("## Row identifiers\nNone: this row has no SKU, barcode or model code");
-    expect(brief.text).toContain("matchBasis best_match");
-    const unspecified = buildImageFinderBrief({ rowData: { Description: "Unicorn plush toy" } });
-    expect(unspecified.text).not.toContain("## Row identifiers");
-  });
-
-  it("words the identifier section for Standard without the Premium tools or match fields", () => {
-    const withCode = buildImageFinderBrief({ rowData: { Code: "RCP1151426" }, rowIdentifiers: ["RCP1151426"], variant: "standard" });
-    expect(withCode.text).toContain("## Row identifiers\nCode-like values in this row (the matched page must display one of them exactly): RCP1151426");
-    const noCode = buildImageFinderBrief({ rowData: { Description: "Unicorn plush toy" }, rowIdentifiers: [], variant: "standard" });
+  it("asks for the best match when the row has no code, and omits the section when identifiers are unknown", () => {
+    const withCode = buildImageFinderBrief({ rowData: { Code: "RCP1151426" }, rowIdentifiers: ["RCP1151426"] });
+    expect(withCode.text).toContain(
+      "## Row identifiers\nCode-like values in this row (the matched page must display one of them exactly): RCP1151426"
+    );
+    const noCode = buildImageFinderBrief({ rowData: { Description: "Unicorn plush toy" }, rowIdentifiers: [] });
+    expect(noCode.text).toContain("## Row identifiers\nNone: this row has no SKU, barcode or model code");
     expect(noCode.text).toContain("Identify one item whose brand and description clearly match this row.");
     for (const text of [withCode.text, noCode.text]) {
       expect(text).not.toContain("check_pages");
       expect(text).not.toContain("matchBasis");
     }
+    const unspecified = buildImageFinderBrief({ rowData: { Description: "Unicorn plush toy" } });
+    expect(unspecified.text).not.toContain("## Row identifiers");
+  });
+
+  it("lists known pages as leads between the image count and the custom instruction", () => {
+    const brief = buildImageFinderBrief({
+      rowData: { Code: "YWP1448019" },
+      customInstruction: "Prefer the brand's site",
+      knownPages: [
+        { url: "https://shop.test/p/yellow-mug", title: "Yellow Lemonade Glass Mug" },
+        { url: "https://other.test/item/1" },
+      ],
+    });
+    const count = brief.text.indexOf("## Number of images");
+    const known = brief.text.indexOf("## Known pages for this item");
+    const custom = brief.text.indexOf("## Custom instruction");
+    expect(known).toBeGreaterThan(count);
+    expect(known).toBeLessThan(custom);
+    expect(brief.text).toContain("- Yellow Lemonade Glass Mug (https://shop.test/p/yellow-mug)");
+    expect(brief.text).toContain("- https://other.test/item/1");
+    expect(brief.text).toContain("They are leads, not proof");
+    expect(brief.text).toContain("Open these first.");
+  });
+
+  it("omits the known pages section when there are none", () => {
+    expect(buildImageFinderBrief({ rowData: { Title: "Widget" }, knownPages: [] }).text).not.toContain("## Known pages");
+    expect(buildImageFinderBrief({ rowData: { Title: "Widget" } }).text).not.toContain("## Known pages");
   });
 
   it("does not add sheet-learned websites when the owner set an allow list", () => {

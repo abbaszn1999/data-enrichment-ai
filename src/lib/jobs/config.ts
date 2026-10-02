@@ -49,12 +49,11 @@ export const ENRICH_ROW_TIMEOUT_SECONDS = 900;
  */
 export const GALLERY_ROW_TIMEOUT_SECONDS = 1_500;
 /**
- * An Image Finder row runs the automatic Standard → Exact → Premium chain
- * once. The chain stops starting tiers when 2100s of its own row deadline
- * (IMAGE_FINDER_CHAIN_BUDGET_MS) have passed and each tier has its own worst
- * case budget inside that, so this is the hard backstop above it, leaving
- * room for the image checks and the charge.
+ * An Image Finder row is one agent call (up to 300s, IMAGE_FINDER_STANDARD_BUDGET_MS)
+ * next to the optional Source URLs search (two Google searches of up to 120s
+ * each). This is the hard backstop above both, leaving room for the image
+ * checks and the charge.
  */
-export const IMAGE_FINDER_ROW_TIMEOUT_SECONDS = 2_400;
+export const IMAGE_FINDER_ROW_TIMEOUT_SECONDS = 900;
 export const SESSION_TIMEOUT_SECONDS = 86_400;
 export const JOB_TASK_PLAN = "flex" as const;

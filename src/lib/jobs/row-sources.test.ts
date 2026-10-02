@@ -84,6 +84,41 @@ describe("buildRowSources", () => {
     expect(productData.sourceUrls).toBeUndefined();
   });
 
+  it("collects the pages of Source URLs and Image sources columns, and can keep them out of the text fields", () => {
+    const enriched = {
+      sourceUrls: [
+        { title: "Widget WX-1 | Acme", uri: "https://acme.com/wx-1" },
+        { title: "https://shop.example.com/wx-1", uri: "https://shop.example.com/wx-1" },
+        { title: "No link", uri: "" },
+      ],
+      imageSourceUrls: [
+        { title: "shop.example.com", uri: "https://shop.example.com/wx-1" },
+        { title: "other.test", uri: "https://other.test/wx-1" },
+      ],
+    };
+    const source = row({ Name: "Widget" }, enriched);
+    const labels = { sourceUrls: "Source URLs", imageSourceUrls: "Image sources" };
+
+    const asText = buildRowSources(source, ["Name", "sourceUrls", "imageSourceUrls"], new Set(), labels);
+    expect(asText.knownPages).toEqual([
+      { url: "https://acme.com/wx-1", title: "Widget WX-1 | Acme" },
+      { url: "https://shop.example.com/wx-1" },
+      { url: "https://other.test/wx-1", title: "other.test" },
+    ]);
+    expect(asText.productData["Source URLs"]).toContain("https://acme.com/wx-1");
+
+    const asLeads = buildRowSources(source, ["Name", "sourceUrls", "imageSourceUrls"], new Set(), labels, {
+      pagesAsLeads: true,
+    });
+    expect(asLeads.knownPages).toEqual(asText.knownPages);
+    expect(Object.keys(asLeads.productData)).toEqual(["Name"]);
+  });
+
+  it("has no known pages when no page column is ticked or its value is empty", () => {
+    expect(buildRowSources(row({ Name: "Widget" }, { sourceUrls: [] }), ["Name", "sourceUrls"], new Set()).knownPages).toEqual([]);
+    expect(buildRowSources(row({ Name: "Widget" }, { sourceUrls: [{ uri: "https://a.test/x" }] }), ["Name"], new Set()).knownPages).toEqual([]);
+  });
+
   it("keeps long descriptions up to the raised field cap", () => {
     const long = "x".repeat(MAX_SOURCE_FIELD_CHARS + 500);
     const { productData } = buildRowSources(row({ Description: long }), ["Description"], new Set());

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { IMAGE_FINDER_STANDARD_SKILL } from "./standard-skill";
 
 describe("IMAGE_FINDER_STANDARD_SKILL", () => {
-  it("uses web_search only and never mentions the Premium page tools or model names", () => {
+  it("uses web_search only and never mentions page tools or model names", () => {
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("web_search");
     for (const absent of ["check_pages", "fetch_page", "view_images", "matchBasis", "gpt-"]) {
       expect(IMAGE_FINDER_STANDARD_SKILL).not.toContain(absent);
@@ -15,8 +15,19 @@ describe("IMAGE_FINDER_STANDARD_SKILL", () => {
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("If the row has no unique identifier, identify the item by brand");
   });
 
-  it("searches the exact identifier first and reads it on the opened page", () => {
-    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("## Step 1 — Search the exact identifier first");
+  it("opens known pages first, treats them as leads and moves on from blocked or wrong pages", () => {
+    const known = IMAGE_FINDER_STANDARD_SKILL.indexOf("## Step 1 — Known pages first");
+    const search = IMAGE_FINDER_STANDARD_SKILL.indexOf("## Step 2 — Search the exact identifier");
+    expect(known).toBeGreaterThan(-1);
+    expect(known).toBeLessThan(search);
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("They are leads, not proof");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("only when it displays this row's identifier");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("do not retry it");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("If none is, continue with Step 2");
+  });
+
+  it("searches the exact identifier and reads it on the opened page", () => {
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("## Step 2 — Search the exact identifier");
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("A search snippet is not proof");
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("character for character");
   });
@@ -34,7 +45,7 @@ describe("IMAGE_FINDER_STANDARD_SKILL", () => {
   });
 
   it("takes up to 7 images only after the match, from the matched item's own opened page", () => {
-    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("## Step 5 — Images, only after the match");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("## Step 6 — Images, only after the match");
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("up to 7 distinct images of that matched item from its own page(s) that you opened");
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("with that page's URL");
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("from general image search results");
@@ -52,7 +63,7 @@ describe("IMAGE_FINDER_STANDARD_SKILL", () => {
   });
 
   it("says not found only after both search approaches and never claims non-existence", () => {
-    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("## Step 6 — Before answering not found");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("## Step 7 — Before answering not found");
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("Never claim the product does not exist.");
   });
 

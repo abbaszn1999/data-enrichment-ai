@@ -1,4 +1,6 @@
+import type { KnownPage } from "@/lib/enrich/types";
 import type { ProjectRow } from "@/lib/storage-helpers";
+import { IMAGE_SOURCES_COLUMN_ID, SOURCE_URLS_COLUMN_ID } from "@/types";
 
 /** A long description or spec sheet must reach the model whole. */
 export const MAX_SOURCE_FIELD_CHARS = 4000;
@@ -67,11 +69,36 @@ function enrichedToText(val: unknown): string {
   return String(val);
 }
 
+/** Pages found by the Source URLs and Image sources columns. */
+const PAGE_LIST_COLUMN_IDS = new Set([SOURCE_URLS_COLUMN_ID, IMAGE_SOURCES_COLUMN_ID]);
+
+/** Pages held by a Source URLs / Image sources cell (`{ uri | pageUrl, title }[]`). */
+export function knownPagesFromEnriched(value: unknown): KnownPage[] {
+  if (!Array.isArray(value)) return [];
+  const pages: KnownPage[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const record = item as { uri?: unknown; pageUrl?: unknown; title?: unknown };
+    const url = String(record.uri ?? record.pageUrl ?? "").trim();
+    if (!/^https?:\/\//i.test(url)) continue;
+    const title = typeof record.title === "string" ? record.title.trim() : "";
+    pages.push(title && title !== url ? { url, title } : { url });
+  }
+  return pages;
+}
+
 export interface RowSources {
   /** Text fields for the model, keyed by column name. */
   productData: Record<string, string>;
   /** Images from selected image columns, deduped and capped, attached as vision input. */
   sourceImageUrls: string[];
+  /** Pages from selected Source URLs / Image sources columns, deduped, in column order. */
+  knownPages: KnownPage[];
+}
+
+export interface RowSourcesOptions {
+  /** Keep page-list columns out of the text fields: the caller sends them as pages to open first. */
+  pagesAsLeads?: boolean;
 }
 
 /**
@@ -85,10 +112,12 @@ export function buildRowSources(
   row: ProjectRow,
   sourceColumns: string[],
   enrichmentColumnIds: Set<string>,
-  aiColumnLabels: Record<string, string> = {}
+  aiColumnLabels: Record<string, string> = {},
+  options: RowSourcesOptions = {}
 ): RowSources {
   const productData: Record<string, string> = {};
   const images: string[] = [];
+  const pages = new Map<string, KnownPage>();
   const sheetNames = new Set(Object.keys(row.originalData));
 
   for (const col of sourceColumns) {
@@ -105,6 +134,10 @@ export function buildRowSources(
     if (isAiColumn) {
       const val = row.enrichedData?.[col];
       if (val === undefined || val === null || val === "") continue;
+      if (PAGE_LIST_COLUMN_IDS.has(col)) {
+        for (const page of knownPagesFromEnriched(val)) if (!pages.has(page.url)) pages.set(page.url, page);
+        if (options.pagesAsLeads) continue;
+      }
       colImages = imageUrlsFromEnriched(val);
       text = colImages.length > 0 ? undefined : enrichedToText(val);
       const label = aiColumnLabels[col]?.trim();
@@ -128,5 +161,6 @@ export function buildRowSources(
   return {
     productData,
     sourceImageUrls: [...new Set(images)].slice(0, MAX_SOURCE_IMAGES),
+    knownPages: [...pages.values()],
   };
 }

@@ -36,6 +36,12 @@ export type EnrichColumnConfig = Pick<
   | "contentLength"
 >;
 
+/** A page already found for the row (Source URLs / Image sources column). */
+export interface KnownPage {
+  url: string;
+  title?: string;
+}
+
 export interface EnrichAgentResult {
   data: Record<string, unknown>;
   costs: AiCallCost[];
@@ -59,6 +65,8 @@ export interface EnrichAgentParams {
   learnedDomains?: string[];
   /** Image Finder: final re-check of a row that ended Not found. */
   recheck?: boolean;
+  /** Image Finder: pages from a ticked Source URLs / Image sources column, to open first. */
+  knownPages?: KnownPage[];
   /** Images from selected image columns (Image Finder output, image URL columns), attached as vision input. */
   sourceImageUrls?: string[];
   /**

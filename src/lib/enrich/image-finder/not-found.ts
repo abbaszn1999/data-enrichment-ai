@@ -12,8 +12,9 @@ export function imageFinderNotFoundKey(columnId: string): string {
 }
 
 /**
- * Sibling key holding how the images were matched: identifier, near_identifier,
- * model_variant or best_match (Premium), or standard (Standard's single call).
+ * Sibling key holding how the images were matched: standard (the single agent
+ * call). Rows found before that may also hold identifier, near_identifier,
+ * model_variant, best_match or exact.
  */
 export function imageFinderMatchBasisKey(columnId: string): string {
   return `${columnId}__matchBasis`;
@@ -24,7 +25,7 @@ export function imageFinderMatchNoteKey(columnId: string): string {
   return `${columnId}__matchNote`;
 }
 
-/** Sibling key holding which tier found the images: standard, exact or premium. */
+/** Sibling key holding which step found the images: standard (rows found earlier may hold exact or premium). */
 export function imageFinderFoundByKey(columnId: string): string {
   return `${columnId}__foundBy`;
 }

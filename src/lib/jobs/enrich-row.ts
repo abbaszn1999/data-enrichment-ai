@@ -144,11 +144,13 @@ export async function processCatalogRow(params: {
   const enrichmentColumnIds = new Set(settings.enrichmentColumns.map((c) => c.id));
   const aiColumnLabels: Record<string, string> = { ...(settings.sourceColumnLabels ?? {}) };
   for (const col of settings.enrichmentColumns) if (col.label) aiColumnLabels[col.id] ??= col.label;
-  const { productData, sourceImageUrls } = buildRowSources(
+  const imageFinderRun = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns);
+  const { productData, sourceImageUrls, knownPages } = buildRowSources(
     row,
     settings.sourceColumns,
     enrichmentColumnIds,
-    aiColumnLabels
+    aiColumnLabels,
+    { pagesAsLeads: imageFinderRun }
   );
 
   let lastError = "Enrichment failed";
@@ -159,17 +161,15 @@ export async function processCatalogRow(params: {
   // A Google Source URLs answer from an attempt whose OpenAI half failed; the
   // retry reuses it rather than paying for the same search again.
   const sourceUrlsMemo: { result?: EnrichAgentResult } = {};
-  // Image Finder already runs its own steps per row (Exact only, or the full
-  // chain on Premium), so a second whole-row attempt would re-pay every
-  // provider; a failed row is simply run again.
-  const rowAttempts = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns)
-    ? 1
-    : JOB_ROW_ATTEMPTS;
+  // A second whole-row Image Finder attempt would re-pay the search;
+  // a failed row is simply run again.
+  const rowAttempts = imageFinderRun ? 1 : JOB_ROW_ATTEMPTS;
   for (let attempt = 1; attempt <= rowAttempts; attempt += 1) {
     try {
       const enriched = await enrichRow({
         productData,
         sourceImageUrls,
+        knownPages,
         enabledColumns: settings.enabledColumns,
         enrichmentColumns: settings.enrichmentColumns.map((c) => ({
           id: c.id,

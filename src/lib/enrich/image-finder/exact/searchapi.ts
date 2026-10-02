@@ -1,6 +1,6 @@
 /**
- * SearchApi.io client for Google AI Mode — Image Finder "Exact Match" Agent 1
- * (finds exact-match product-page links; see exact/agent.ts). This needs a
+ * SearchApi.io client for Google AI Mode (finds product-page links for the
+ * Source URLs column; see ../../source-urls/search.ts). This needs a
  * REST API key from the SearchApi dashboard (SEARCHAPI_API_KEY); the MCP
  * token used inside Cursor only authenticates the editor's MCP connection
  * and does not work for server-side calls like this one.
@@ -10,8 +10,8 @@ export const SEARCHAPI_BASE = "https://www.searchapi.io/api/v1/search";
 /**
  * Live calls answer in ~7-17s. A slow call is worth waiting for (SearchApi
  * bills any 200 even if we already hung up), but the row still has to fit the
- * Image Finder chain (see pipeline.ts): Exact runs up to 2 searches of this
- * length plus Agent 2's 300s. Do not raise this past ~150s.
+ * row timeout (jobs/config.ts): Source URLs runs up to 2 searches of this
+ * length. Do not raise this past ~150s.
  */
 const REQUEST_TIMEOUT_MS = 120_000;
 
@@ -19,7 +19,7 @@ export function requireSearchApiKey(): string {
   const apiKey = process.env.SEARCHAPI_API_KEY?.trim();
   if (!apiKey) {
     throw new Error(
-      "SEARCHAPI_API_KEY is not configured (required for Image Finder Exact Match)"
+      "SEARCHAPI_API_KEY is not configured (required for Source URLs)"
     );
   }
   return apiKey;
@@ -185,7 +185,7 @@ export async function callGoogleAiMode(
   const status = data.search_metadata?.status;
   if (data.error || (typeof status === "string" && status !== "Success")) {
     // SearchApi charges Success responses only; an error body is not one.
-    console.warn("[Image Finder/Exact] Google AI Mode returned an error body with HTTP 200", {
+    console.warn("[Google AI Mode] Google AI Mode returned an error body with HTTP 200", {
       status,
       error: String(data.error ?? "").slice(0, 200),
     });

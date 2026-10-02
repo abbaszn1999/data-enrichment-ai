@@ -4,8 +4,8 @@ export type EnrichOpenAiModelId = "gpt-6.1-sol" | "gpt-6-sol" | "gpt-5.6-sol";
 
 /**
  * Both tiers run GPT-6.1 Sol; they differ by reasoning effort and search context.
- * "exact" (Image Finder only) never reaches this map — it always uses
- * IMAGE_FINDER_OPENAI_MODEL directly, the same as Standard/Premium Image Finder.
+ * "exact" (a label on older Image Finder rows) never reaches this map; Image
+ * Finder always uses IMAGE_FINDER_OPENAI_MODEL directly.
  */
 export const ENRICHMENT_OPENAI_MODELS = {
   standard: "gpt-6.1-sol",
@@ -31,11 +31,10 @@ export const ENRICH_SEARCH_CONTEXT_SIZE: EnrichSearchContextSize = "medium";
 export const ENRICH_MAX_OUTPUT_TOKENS = 128_000;
 
 /**
- * Image Finder runs this model on both tiers; the tier instead pays for
- * round budget and the recheck pass (see image-finder/agent.ts). Switched
- * from gpt-5.6-sol to gpt-6-sol, then to gpt-6.1-sol (same $2 / $10 price as
- * gpt-6-sol, cached input $0.10). Same evidence-gated
- * guards on both tiers; watch quality on real runs after a model change.
+ * Image Finder is one agent call on this model (see image-finder/standard-agent.ts).
+ * Switched from gpt-5.6-sol to gpt-6-sol, then to gpt-6.1-sol (same $2 / $10
+ * price as gpt-6-sol, cached input $0.10); watch quality on real runs after a
+ * model change.
  */
 export const IMAGE_FINDER_OPENAI_MODEL: EnrichOpenAiModelId = "gpt-6.1-sol";
 export const IMAGE_FINDER_REASONING_EFFORT: EnrichReasoningEffort = "high";

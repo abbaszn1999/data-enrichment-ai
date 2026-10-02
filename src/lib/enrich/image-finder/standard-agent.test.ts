@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The Standard tier on its own; the automatic chain around it is covered by pipeline.test.ts.
+// The single agent call on its own; the wrapper around it is covered by agent.test.ts.
 const { findProductImagesStandard: enrichRow } = await import("./standard-agent");
 const { OPENAI_RESPONSES_URL } = await import("../openai");
 const { imageFinderMatchBasisKey, imageFinderMatchNoteKey, imageFinderNotFoundKey } = await import("./not-found");
@@ -72,7 +72,7 @@ const params = {
   kind: "product" as const,
 };
 
-describe("Image Finder Standard (one-shot)", () => {
+describe("Image Finder agent (one call)", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "test-key";
   });
@@ -80,7 +80,7 @@ describe("Image Finder Standard (one-shot)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends exactly one request with web_search only, the Standard skill and the same model and effort", async () => {
+  it("sends exactly one request with web_search only, the skill and the Image Finder model and effort", async () => {
     const fetchMock = stubFetch(
       oneShotResponse({ status: "found", images: [image(FRONT), image(SIDE)], notes: "Shop Test, SKU RCP1151426" })
     );
@@ -158,6 +158,18 @@ describe("Image Finder Standard (one-shot)", () => {
     });
   });
 
+  it("shows the agent's citations as plain text in the Not found reason", async () => {
+    stubFetch(
+      oneShotResponse({
+        status: "not_found",
+        images: [],
+        notes: "Opened the lead; it returned 403. ([]()) Rejected the page ([shop.test](https://shop.test/p/x)).",
+      })
+    );
+    const result = await enrichRow(params);
+    expect(result.data[notFoundKey]).toBe("Opened the lead; it returned 403. Rejected the page (shop.test).");
+  });
+
   it("ignores images when the agent says not found", async () => {
     stubFetch(oneShotResponse({ status: "not_found", images: [image(FRONT)], notes: "Only a similar item." }));
     const result = await enrichRow(params);
@@ -170,6 +182,30 @@ describe("Image Finder Standard (one-shot)", () => {
     expect(result.data.imageUrls).toEqual([]);
     expect(String(result.data[notFoundKey])).toContain("could not be confirmed");
     expect(result.data[matchBasisKey]).toBe("");
+  });
+
+  it("puts known pages from a Source URLs column into the prompt, filtered by the website rules", async () => {
+    const fetchMock = stubFetch(oneShotResponse({ status: "found", images: [image(FRONT)], notes: "" }));
+    const result = await enrichRow({
+      ...params,
+      enrichmentColumns: [{ ...column, blockedDomains: ["blocked.test"] }],
+      knownPages: [
+        { url: PAGE, title: "Electric Ride-on Bulldozer" },
+        { url: BLOCKED_PAGE, title: "Blocked seller" },
+      ],
+    });
+    const prompt = openAiRequests(fetchMock)[0].input[0].content.at(-1).text as string;
+    expect(prompt).toContain("## Known pages for this item");
+    expect(prompt).toContain(`- Electric Ride-on Bulldozer (${PAGE})`);
+    expect(prompt).not.toContain(BLOCKED_PAGE);
+    expect(imageUrlsOf(result.data)).toEqual([FRONT]);
+  });
+
+  it("adds the re-check hint to the prompt on a re-check", async () => {
+    const fetchMock = stubFetch(oneShotResponse({ status: "not_found", images: [], notes: "none" }));
+    await enrichRow({ ...params, recheck: true });
+    const prompt = openAiRequests(fetchMock)[0].input[0].content.at(-1).text as string;
+    expect(prompt).toContain("## Final re-check");
   });
 
   it("applies website rules to the search and to the returned images", async () => {

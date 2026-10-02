@@ -5,7 +5,7 @@
  * identify the product (brand, model, SKU) and which attributes define its
  * variant is the agent's own job, using the skill's method, not a fixed
  * field-name lookup here. Order after the product data is fixed: reference
- * image, number of images, custom instruction, website rules, row
+ * image, number of images, known pages, custom instruction, website rules, row
  * identifiers, sheet-learned websites, re-check hint. Pure (no runtime
  * imports) so it is cheap to test.
  */
@@ -26,12 +26,12 @@ export interface ImageFinderBriefInput {
   blockedDomains?: string[];
   /** Code-like values from the row, as written (see tools/identifiers). */
   rowIdentifiers?: string[];
+  /** Pages already found for this row (a ticked Source URLs column), already filtered and capped. */
+  knownPages?: Array<{ url: string; title?: string }>;
   /** Websites where other rows of this sheet were verified, most first. */
   learnedDomains?: string[];
   /** Final re-check of a row that ended Not found in the first pass. */
   recheck?: boolean;
-  /** Standard's one-shot call has no page tools and no match-basis field; Premium omits this. */
-  variant?: "standard";
 }
 
 export interface ImageFinderBrief {
@@ -96,8 +96,20 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     referenceLine,
     "",
     "## Number of images",
-    `Return every distinct image of this exact item that its verified sources show, up to ${imageCount}.`,
+    `Return every distinct image of this exact item that the matched page shows, up to ${imageCount}.`,
   ];
+
+  const knownPages = input.knownPages ?? [];
+  if (knownPages.length > 0) {
+    sections.push(
+      "",
+      "## Known pages for this item",
+      "These pages were found for this row earlier, best first. They are leads, not proof: some may show a similar item or a different variant.",
+      ...knownPages.map((page) => (page.title ? `- ${page.title} (${page.url})` : `- ${page.url}`)),
+      "Open these first. Take the images from the page that displays this row's identifier. If none of them does, search further."
+    );
+  }
+
   if (customInstruction) {
     sections.push("", "## Custom instruction (store owner, highest priority)", customInstruction);
   }
@@ -114,23 +126,18 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     }
   }
 
-  const standard = input.variant === "standard";
   const identifiers = input.rowIdentifiers ?? [];
   if (identifiers.length > 0) {
     sections.push(
       "",
       "## Row identifiers",
-      standard
-        ? `Code-like values in this row (the matched page must display one of them exactly): ${identifiers.join(", ")}`
-        : `Code-like values in this row (check_pages and fetch_page report which of them appear on each page): ${identifiers.join(", ")}`
+      `Code-like values in this row (the matched page must display one of them exactly): ${identifiers.join(", ")}`
     );
   } else if (input.rowIdentifiers) {
     sections.push(
       "",
       "## Row identifiers",
-      standard
-        ? "None: this row has no SKU, barcode or model code. Identify one item whose brand and description clearly match this row."
-        : "None: this row has no SKU, barcode or model code. Use the best-match rules: one item whose brand and description clearly match this row, with its brand in brandSeen and matchBasis best_match."
+      "None: this row has no SKU, barcode or model code. Identify one item whose brand and description clearly match this row."
     );
   }
 
@@ -147,7 +154,7 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     sections.push(
       "",
       "## Final re-check",
-      "An earlier search for this row ended without a verified match. Before anything else, run the own site search of each website listed above for every row identifier, and open every plausible result (and its structured data) before concluding."
+      "An earlier search for this row ended without a match. Search again with different approaches: run the own site search of each website listed above (if any) for every row identifier, try the identifiers written other ways, and open every plausible result before concluding."
     );
   }
 

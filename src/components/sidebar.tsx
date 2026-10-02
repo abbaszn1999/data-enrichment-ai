@@ -73,7 +73,6 @@ import {
   isProductModeColumn,
   catalogModeForRunColumns,
   DEFAULT_FINDER_OUTPUTS,
-  IMAGE_FINDER_DEPTH_OPTIONS,
   type FinderOutput,
   type CatalogSidebarMode,
   type OutputLanguage,
@@ -1712,8 +1711,8 @@ export function Sidebar() {
                           updateEnrichmentColumnConfig(sourceUrlsColumn.id, { customInstruction: value })
                         }
                         disabled={isEnriching}
-                        placeholder="e.g. Put the manufacturer's own page first. Include Chinese suppliers and wholesalers."
-                        helpText="Tell the agent which pages you want to see first or which kinds of sellers to look for. It is added to the search for every row."
+                        placeholder="e.g. Search the Code in quotes first, then the Barcode. Put the manufacturer's own page first."
+                        helpText="Tell the agent what to search on and which pages or sellers you want first. It is added to the search for every row."
                       />
                     </div>
                   </FinderOutputCard>
@@ -1721,40 +1720,17 @@ export function Sidebar() {
                 {modeColumn && (
                   <FinderOutputCard
                     label="Images"
-                    description={`Finds the exact product on the web and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
+                    description={`Finds the exact product on the web, starting from your Source URLs column when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
                     enabled={runsImages}
                     expanded={expandedColumns.has(modeColumn.id)}
                     disabled={isEnriching}
                     onToggle={() => toggleFinderOutput("images")}
                     onExpand={() => toggleColumnExpanded(modeColumn.id)}
                   >
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-medium text-muted-foreground">Image search</label>
-                      <div className="grid grid-cols-1 gap-1.5">
-                        {IMAGE_FINDER_DEPTH_OPTIONS.map((option) => {
-                          const selected =
-                            resolveEnrichmentModel(enrichmentSettings.enrichmentModel) === option.value;
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              disabled={isEnriching}
-                              onClick={() => updateSettings({ enrichmentModel: option.value })}
-                              className={`rounded-md border px-2.5 py-2 text-left transition-colors disabled:opacity-50 ${
-                                selected
-                                  ? "border-primary bg-primary/5"
-                                  : "border-border hover:bg-muted/50"
-                              }`}
-                            >
-                              <span className="block text-xs font-semibold">{option.label}</span>
-                              <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">
-                                {option.description}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      For the best results, run Source URLs first, then tick the Source URLs column as a source
+                      column. The agent opens those pages first and searches further only if none shows the item.
+                    </p>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
                       <CustomInstructionButton
