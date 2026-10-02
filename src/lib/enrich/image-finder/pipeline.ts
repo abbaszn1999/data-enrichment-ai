@@ -90,11 +90,27 @@ function notFoundData(reason: string): Record<string, unknown> {
 }
 
 /**
- * Image Finder for one row: Standard, then Exact, then Premium. The first
- * tier that returns at least one verified image wins and the chain stops —
- * even when that result is only a similar or best-match item. A later tier
- * runs only when the earlier one returned zero images, and Not found is
- * reported only after every tier has honestly failed.
+ * Which internal steps a row runs.
+ * Standard (the sidebar default) is Exact only: Google finds the product
+ * pages, then the image agent takes the photos. No page means Not found.
+ * Premium is the chain: the fast agent, then Exact, then the deep agent.
+ * The first step that returns a real image stops the row.
+ * A re-check stays on that choice: Exact again for Standard, the deep agent for Premium.
+ */
+export function imageFinderRunOrder(
+  params: Pick<EnrichAgentParams, "settings" | "recheck">
+): readonly ImageFinderTier[] {
+  const premium = params.settings?.enrichmentModel === "premium";
+  if (params.recheck) return premium ? ["premium"] : ["exact"];
+  return premium ? IMAGE_FINDER_TIER_ORDER : ["exact"];
+}
+
+/**
+ * Image Finder for one row. The first step that returns at least one verified
+ * image wins and the chain stops — even when that result is only a similar or
+ * best-match item. A later step runs only when the earlier one returned zero
+ * images, and Not found is reported only after every step that was allowed to
+ * run has honestly failed.
  *
  * Billing: every tier's costs (OpenAI tokens, web searches, Google AI Mode
  * calls) are returned together, including the costs carried by errors, so
@@ -105,16 +121,15 @@ function notFoundData(reason: string): Record<string, unknown> {
  * moves on, and if nothing is found afterwards the row is reported as an
  * error (never a false Not found) so it can simply be run again.
  *
- * `recheck` (the sheet-level final pass over Not-found rows) runs Premium
- * alone: it is the tier that can use the sheet's learned websites, and the
- * cheaper tiers have already failed on this row.
+ * `recheck` (the sheet-level final pass over Not-found rows) repeats the
+ * chosen depth: Exact again on Standard, the deep agent alone on Premium.
  */
 export async function findProductImagesAuto(
   params: EnrichAgentParams,
   deps: ImageFinderPipelineDeps = {}
 ): Promise<EnrichAgentResult> {
   const now = deps.now ?? Date.now;
-  const order = params.recheck ? (["premium"] as const) : (deps.order ?? IMAGE_FINDER_TIER_ORDER);
+  const order = deps.order ?? imageFinderRunOrder(params);
   const runners = { ...DEFAULT_RUNNERS, ...deps.runners };
   const deadline = now() + (deps.chainBudgetMs ?? IMAGE_FINDER_CHAIN_BUDGET_MS);
 

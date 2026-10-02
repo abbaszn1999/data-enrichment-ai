@@ -393,7 +393,7 @@ describe("Image Finder final re-check pass", () => {
     expect(recheckCalls[0]![1].learnedDomains).toEqual(["store.test"]);
   });
 
-  it("runs it for every Image Finder run, whatever tier setting was saved (there is no tier to pick)", async () => {
+  it("still re-checks a Not-found row when the run is on Standard", async () => {
     const processRow = await runWithTier("standard");
     const recheckCalls = processRow.mock.calls.filter(([, context]) => context.recheck === true);
     expect(recheckCalls.map(([id]) => id)).toEqual(["r3"]);

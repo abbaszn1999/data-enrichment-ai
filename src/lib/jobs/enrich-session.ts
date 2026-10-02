@@ -214,9 +214,9 @@ async function runCatalogWork(
   const shouldHalt = () => stopObserved || superseded || pausedNoCredits || providerUnavailable || fatalError !== null;
 
   // Image Finder: websites that verified this sheet's products guide later
-  // rows. The final re-check of Not-found rows runs Premium alone (it is the
-  // tier that uses those learned websites), billed under its own `:recheck`
-  // key, and runs for every Image Finder run (see image-finder/pipeline.ts).
+  // rows. The final re-check of Not-found rows is billed under its own
+  // `:recheck` key. Standard repeats the exact-page search; Premium runs the
+  // deep agent (see image-finder/pipeline.ts).
   const imageFinder = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns);
   const imageFinderRecheckEnabled = imageFinder;
   const learner = imageFinder

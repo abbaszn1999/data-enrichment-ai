@@ -427,11 +427,9 @@ export type OutputLanguage = "English" | "Arabic" | "French" | "Spanish" | "Turk
 
 /**
  * Tier label. Catalog AI enrichment uses Standard / Premium from the user's
- * setting. "exact" is an Image-Finder-internal label (Google AI Mode finds
- * exact-match product links, then GPT-6.1 Sol pulls images from them, see
- * image-finder/exact/): Image Finder no longer has a tier setting, it runs
- * Standard, then Exact, then Premium automatically per row (see
- * image-finder/pipeline.ts), so a saved setting never resolves to "exact".
+ * setting. Sidebar Standard on Image Finder runs the exact-page step only.
+ * Sidebar Premium runs the fast agent, then that step, then the deep agent.
+ * "exact" is that internal step's name, not a sidebar choice.
  */
 export type EnrichmentModel = "standard" | "premium" | "exact";
 
@@ -515,6 +513,24 @@ export const LANGUAGE_OPTIONS: { value: OutputLanguage; label: string; flag: str
 export const MODEL_OPTIONS: { value: EnrichmentModel; label: string; description: string; icon: string }[] = [
   { value: "standard", label: "Standard", description: "Balanced quality and cost", icon: "⚡" },
   { value: "premium", label: "Premium", description: "Highest quality, deeper search", icon: "✨" },
+];
+
+/** Source & Image Finder sidebar: Standard is the exact-page search; Premium is the full chain. */
+export const IMAGE_FINDER_DEPTH_OPTIONS: {
+  value: "standard" | "premium";
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "standard",
+    label: "Standard",
+    description: "Finds the exact product page, then takes its photos. Stops if no exact page is found.",
+  },
+  {
+    value: "premium",
+    label: "Premium",
+    description: "Fast search first, then the exact-page search, then a deep search. Stops at the first real image.",
+  },
 ];
 
 export const TONE_OPTIONS: { value: WritingTone; label: string; description: string }[] = [

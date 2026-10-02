@@ -10,6 +10,7 @@ import {
   IMAGE_FINDER_TIER_BUDGET_MS,
   IMAGE_FINDER_TIER_ORDER,
   findProductImagesAuto,
+  imageFinderRunOrder,
   type ImageFinderTier,
 } from "./pipeline";
 
@@ -35,7 +36,15 @@ const missResult = (note: string, costs = [openAi()]): EnrichAgentResult => ({
   costs,
 });
 
-const params = { productData: { Code: "X-1" }, enabledColumns: ["imageUrls"] } as EnrichAgentParams;
+const premiumSettings = { enrichmentModel: "premium" as const, outputLanguage: "English" };
+const standardSettings = { enrichmentModel: "standard" as const, outputLanguage: "English" };
+/** Premium is the full chain. Tests of that chain pass this. */
+const params = {
+  productData: { Code: "X-1" },
+  enabledColumns: ["imageUrls"],
+  settings: premiumSettings,
+} as EnrichAgentParams;
+const standardParams = { ...params, settings: standardSettings } as EnrichAgentParams;
 
 function runners(map: Partial<Record<ImageFinderTier, () => Promise<EnrichAgentResult>>>) {
   const calls: ImageFinderTier[] = [];
@@ -52,8 +61,31 @@ function runners(map: Partial<Record<ImageFinderTier, () => Promise<EnrichAgentR
 }
 
 describe("findProductImagesAuto", () => {
-  it("runs Standard, then Exact, then Premium", () => {
+  it("runs Standard, then Exact, then Premium on the Premium setting", () => {
     expect([...IMAGE_FINDER_TIER_ORDER]).toEqual(["standard", "exact", "premium"]);
+    expect([...imageFinderRunOrder(params)]).toEqual(["standard", "exact", "premium"]);
+  });
+
+  it("Standard runs the exact-page search only", async () => {
+    const { calls, runners: r } = runners({ exact: async () => foundResult("exact") });
+    const result = await findProductImagesAuto(standardParams, { runners: r });
+    expect(calls).toEqual(["exact"]);
+    expect(result.data.imageUrls__foundBy).toBe("exact");
+    expect([...imageFinderRunOrder(standardParams)]).toEqual(["exact"]);
+  });
+
+  it("Standard reports Not found without the fast or deep agents", async () => {
+    const { calls, runners: r } = runners({ exact: async () => missResult("no exact page", [searchApi()]) });
+    const result = await findProductImagesAuto(standardParams, { runners: r });
+    expect(calls).toEqual(["exact"]);
+    expect(result.data.imageUrls).toEqual([]);
+    expect(String(result.data.imageUrls__notFoundReason)).toContain("no exact page");
+  });
+
+  it("a Standard re-check runs the exact-page search again", async () => {
+    const { calls, runners: r } = runners({ exact: async () => foundResult("exact") });
+    await findProductImagesAuto({ ...standardParams, recheck: true }, { runners: r });
+    expect(calls).toEqual(["exact"]);
   });
 
   it("stops at the first tier that returns images, even a weak one", async () => {

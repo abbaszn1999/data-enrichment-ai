@@ -31,11 +31,11 @@ export function isImageFinderRun(
 }
 
 /**
- * Image Finder entry point for one row. There is no tier setting: the row
- * runs Standard, then Exact Match, then Premium, and the first tier that
- * returns verified images wins (pipeline.ts). All tiers share the Responses
- * transport and cost calculation with the enrichment agent, and the row is
- * charged once for everything that ran.
+ * Image Finder entry point for one row. The sidebar Standard/Premium setting
+ * picks the steps (pipeline.ts): Standard is the exact-page search only,
+ * Premium is the fast agent, then Exact, then the deep agent. The first step
+ * that returns verified images wins. The row is charged once for everything
+ * that ran.
  */
 export async function findProductImages(
   params: EnrichAgentParams
