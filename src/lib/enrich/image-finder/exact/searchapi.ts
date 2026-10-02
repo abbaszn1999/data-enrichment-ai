@@ -152,7 +152,7 @@ export async function callGoogleAiMode(
     });
   } catch (error) {
     throw new SearchApiCallError(
-      `SearchApi Google AI Mode request failed: ${error instanceof Error ? error.message : String(error)}`,
+      `Web search request failed: ${error instanceof Error ? error.message : String(error)}`,
       false
     );
   } finally {
@@ -164,13 +164,13 @@ export async function callGoogleAiMode(
     rawText = await response.text();
   } catch (error) {
     throw new SearchApiCallError(
-      `SearchApi Google AI Mode response could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      `Web search response could not be read: ${error instanceof Error ? error.message : String(error)}`,
       false
     );
   }
   if (!response.ok) {
     throw new SearchApiCallError(
-      `SearchApi Google AI Mode failed (${response.status}): ${rawText.slice(0, 300)}`,
+      `Web search failed (${response.status}): ${rawText.slice(0, 300)}`,
       false,
       response.status
     );
@@ -180,7 +180,7 @@ export async function callGoogleAiMode(
   try {
     data = JSON.parse(rawText) as GoogleAiModeApiResponse;
   } catch {
-    throw new SearchApiCallError("SearchApi Google AI Mode returned non-JSON body", false);
+    throw new SearchApiCallError("Web search returned a non-JSON body", false);
   }
   const status = data.search_metadata?.status;
   if (data.error || (typeof status === "string" && status !== "Success")) {
@@ -189,7 +189,7 @@ export async function callGoogleAiMode(
       status,
       error: String(data.error ?? "").slice(0, 200),
     });
-    throw new SearchApiCallError(String(data.error ?? `SearchApi status ${status}`), false);
+    throw new SearchApiCallError(String(data.error ?? `Web search status ${status}`), false);
   }
 
   const texts = answerTexts(data);

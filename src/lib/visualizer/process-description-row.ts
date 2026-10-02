@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { hideProviderNames } from "@/lib/provider-names";
 import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
 import { VISUALIZER_PLANNER_OPENAI_MODEL } from "@/lib/enrich/models";
 import { planVisualizerContent, VisualizerPlannerError } from "@/lib/visualizer/agents/description-agent";
@@ -79,7 +80,7 @@ export async function processDescriptionRow(params: {
       row: {
         ...next,
         status: "failed" as const,
-        errorMessage: message.slice(0, 500),
+        errorMessage: hideProviderNames(message).slice(0, 500),
         generatedDescription: undefined,
         imagePlaceholders: undefined,
       },

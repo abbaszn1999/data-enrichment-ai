@@ -24,7 +24,7 @@ const IMAGE_COLUMN_ID = PRODUCT_MODE_COLUMN_IDS.images;
 
 export const EXACT_MATCH_BASIS = "exact";
 export const EXACT_MATCH_NOTE =
-  "Exact match â€” Google AI Mode found the product link; GPT-6.1 Sol confirmed it and pulled the images.";
+  "Exact match: the product page was confirmed and its images were taken from it.";
 
 /** Agent 2 has no function tools (matches Standard's one-shot design): a single OpenAI call. */
 export const IMAGE_FINDER_EXACT_BUDGET_MS = 300_000;

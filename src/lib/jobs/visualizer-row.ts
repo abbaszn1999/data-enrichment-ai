@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { hideProviderNames } from "@/lib/provider-names";
 import { visualizerRowStoreEnabled } from "@/lib/catalog/flag";
 import { upsertWorksheetRow } from "@/lib/worksheet-rows/store";
 import { processDescriptionRow } from "@/lib/visualizer/process-description-row";
@@ -225,7 +226,7 @@ export async function executeVisualizerRow(
       ...row,
       status: "failed",
       generationStage: undefined,
-      errorMessage: message,
+      errorMessage: hideProviderNames(message),
     };
   }
 

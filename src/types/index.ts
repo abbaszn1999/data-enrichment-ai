@@ -134,7 +134,7 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
   {
     id: "sourceUrls",
     label: "Source URLs",
-    description: "The web pages for this exact product. Found with Google AI Mode.",
+    description: "The web pages for this exact product.",
     type: "sourceUrls",
     // Runs from the "Source & Image Finder" tab, not the Enrichment list; like
     // Image URLs, `enabled` only controls whether the column shows in the grid,

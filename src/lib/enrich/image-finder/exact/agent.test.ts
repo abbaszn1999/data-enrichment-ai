@@ -120,7 +120,7 @@ describe("Image Finder Exact Match", () => {
     expect(result.data).toEqual({
       imageUrls: [],
       [notFoundKey]:
-        "Google AI Mode found no exact-match product page for this item (search 1: returned no links; search 2: returned no links).",
+        "The web search found no exact-match product page for this item (search 1: returned no links; search 2: returned no links).",
       [matchBasisKey]: "",
       [matchNoteKey]: "",
     });

@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { hideProviderNames } from "@/lib/provider-names";
 import {
   sumCosts,
   type AiCallCost,
@@ -195,7 +196,7 @@ export async function processScrapingRow(params: {
         ...row,
         status: row.status === "ready" ? "ready" : "failed",
         generationStage: undefined,
-        errorMessage: message,
+        errorMessage: hideProviderNames(message),
         sourceMeta: {
           ...(row.sourceMeta ?? {}),
           provider: "scraping",
@@ -274,7 +275,7 @@ export async function processScrapingRow(params: {
   let unverifiedNote = "";
   if (runGallery && galleryCount > 0) {
     ensureTime(180_000, "gallery research");
-    trace.stage("gallery-scrape", "Researching new Gallery images with GPT-6.1 Sol");
+    trace.stage("gallery-scrape", "Researching new Gallery images");
     // Clear previous Gallery paths while this stage runs so the UI stays in
     // skeleton mode for the whole field (no one-by-one / stale reveals).
     await params.onCheckpoint?.({

@@ -1,4 +1,5 @@
 import { calculateOpenAiWebSearchCost, type AiCallCost } from "@/lib/ai-pricing";
+import { hideProviderNames } from "@/lib/provider-names";
 import type { CategoryItem, SessionKind } from "@/types";
 import {
   resolveEnrichOpenAiModel,
@@ -478,7 +479,7 @@ export async function runEnrichOpenAiResponse(params: {
       try {
         body = JSON.parse(rawText) as OpenAiResponse;
       } catch {
-        return fail(`OpenAI enrich returned invalid JSON (${httpStatus})`);
+        return fail(`AI enrichment returned invalid JSON (${httpStatus})`);
       }
 
       const roundSearchCalls = countWebSearchCalls(body);
@@ -497,14 +498,14 @@ export async function runEnrichOpenAiResponse(params: {
           console.error("[Enrich OpenAI] Provider account unavailable", { status: httpStatus, code: body.error?.code });
           throw new EnrichProviderUnavailableError(undefined, [...costs]);
         }
-        fail(body.error?.message || `OpenAI enrich failed (${httpStatus})`);
+        fail(hideProviderNames(body.error?.message || `AI enrichment failed (${httpStatus})`));
       }
       if (body.status === "incomplete" && body.incomplete_details?.reason === "max_output_tokens") {
         // Usage was recorded above, so the attempt is charged.
         throw new EnrichOutputTruncatedError([...costs], params.maxOutputTokens);
       }
       if (body.status && body.status !== "completed") {
-        fail(`OpenAI enrich ended with status ${body.status}`);
+        fail(`AI enrichment ended with status ${body.status}`);
       }
       return body;
     };
@@ -518,7 +519,7 @@ export async function runEnrichOpenAiResponse(params: {
     for (let round = 1; functionTools.length > 0; round += 1) {
       const calls = functionCallsOf(body);
       if (calls.length === 0) break;
-      if (!body.id) fail("OpenAI enrich returned a function call without a response id");
+      if (!body.id) fail("AI enrichment returned a function call without a response id");
       // Stop: finish this row with what is already verified instead of
       // discarding the rounds OpenAI has billed so far.
       const stopping = await stopRequested();
@@ -547,7 +548,7 @@ export async function runEnrichOpenAiResponse(params: {
 
     const selection = parseJsonObject(responseOutputText(body));
     if (!selection) {
-      return fail("OpenAI enrich returned no parseable JSON output");
+      return fail("AI enrichment returned no parseable JSON output");
     }
 
     let data: Record<string, unknown>;
@@ -569,7 +570,7 @@ export async function runEnrichOpenAiResponse(params: {
           });
     } catch (error) {
       return fail(
-        error instanceof Error ? error.message : "OpenAI enrich output could not be parsed"
+        error instanceof Error ? error.message : "AI enrichment output could not be parsed"
       );
     }
 

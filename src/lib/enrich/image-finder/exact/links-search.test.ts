@@ -70,7 +70,7 @@ describe("searchExactLinks", () => {
     expect(result.attempts).toBe(2);
     expect(result.costs).toHaveLength(2);
     expect(result.notFoundReason).toBe(
-      "Google AI Mode found no exact-match product page for this item " +
+      "The web search found no exact-match product page for this item " +
         "(search 1: the answer could not be read; search 2: returned 1 link(s), all rejected: 1 not a full product URL)."
     );
   });

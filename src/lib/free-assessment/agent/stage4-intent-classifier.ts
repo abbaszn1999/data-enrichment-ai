@@ -128,7 +128,7 @@ function toAiClassifiedItem(
     keyword: kw.keyword,
     sheet: normalizeSheet(item.sheet || "category"),
     confidence: Math.min(1, Math.max(0.1, item.confidence || 0.9)),
-    reason: item.reason || "Classified by Gemini 3.7 Flash",
+    reason: item.reason || "Classified by AI",
     plpConcept: item.plpConcept || undefined,
     isAiGenerated: true,
   };

@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase-admin";
+import { hideProviderNames } from "@/lib/provider-names";
 import { galleryRowStoreEnabled } from "@/lib/catalog/flag";
 import { processAiRow } from "@/lib/gallery/agent/process-ai-row";
 import { processScrapingRow } from "@/lib/gallery/agent/process-row";
@@ -228,8 +229,8 @@ export async function executeGalleryRow(
     return {
       rowId: input.rowId,
       status: settings.previousStatus?.[input.rowId] === "ready" ? "ready" : "failed",
-      errorMessage: message,
-      error: message,
+      errorMessage: hideProviderNames(message),
+      error: hideProviderNames(message),
       creditsUsed: 0,
       cost: 0,
     };

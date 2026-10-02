@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { hideProviderNames } from "@/lib/provider-names";
 import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
 import { GALLERY_PLANNER_OPENAI_MODEL } from "@/lib/enrich/models";
 import { parseImageUrls } from "@/lib/gallery/image-urls";
@@ -178,7 +179,7 @@ export async function processAiRow(params: {
         ...row,
         status: (row.status === "ready" ? "ready" : "failed") as GalleryRow["status"],
         generationStage: undefined,
-        errorMessage: error,
+        errorMessage: hideProviderNames(error),
         mainImagePaths: oldMainPaths,
         mainImagePath: oldMainPaths[0] ?? null,
         galleryImagePaths: oldGalleryPaths,

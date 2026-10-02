@@ -97,6 +97,7 @@ import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/col
 import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
 import { ShareSheetButton } from "@/components/share/share-sheet-button";
 import { buildShareView, viewToColumnFilters, type ShareView } from "@/lib/share/view";
+import { hideProviderNames } from "@/lib/provider-names";
 import { applyColumnLayout, fullColumnOrder } from "@/lib/sheet/column-layout";
 import {
   applyColumnFilters,
@@ -243,7 +244,7 @@ function StatusCell({ status, errorMessage }: { status: ProductRow["status"]; er
     pending: "Pending",
     processing: "Processing...",
     done: "Complete",
-    error: errorMessage || "Error",
+    error: hideProviderNames(errorMessage) || "Error",
   };
   return (
     <Tooltip>
@@ -795,7 +796,14 @@ function ImageUrlsCell({
   const [newTitle, setNewTitle] = useState("");
   const addInputRef = useRef<HTMLInputElement>(null);
 
-  const list = Array.isArray(images) ? images : [];
+  // Image titles saved by older runs can name the providers; never show those.
+  const list = useMemo(
+    () =>
+      (Array.isArray(images) ? images : []).map((img) =>
+        img.title ? { ...img, title: hideProviderNames(img.title) } : img
+      ),
+    [images]
+  );
   const safeIndex =
     list.length === 0 ? 0 : Math.min(previewIndex, list.length - 1);
   const active = list[safeIndex] ?? null;
@@ -1434,7 +1442,7 @@ function EditableEnrichedCell({
     <>
       <div
         onClick={openEditor}
-        title={notFound ? notFoundReason : undefined}
+        title={notFound ? hideProviderNames(notFoundReason) : undefined}
         className={
           notFound
             ? `text-[11px] font-medium text-destructive ${isEditable ? "cursor-pointer hover:text-destructive/80 transition-colors" : ""}`
@@ -2209,7 +2217,7 @@ export function DataTable({
                 typeof notFoundReason === "string" ? notFoundReason : undefined
               }
               matchBasis={typeof matchBasis === "string" ? matchBasis : undefined}
-              matchNote={typeof matchNote === "string" ? matchNote : undefined}
+              matchNote={typeof matchNote === "string" ? hideProviderNames(matchNote) : undefined}
             />
           );
         },

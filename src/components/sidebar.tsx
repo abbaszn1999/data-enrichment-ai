@@ -1697,7 +1697,6 @@ export function Sidebar() {
                 {sourceUrlsColumn && (
                   <FinderOutputCard
                     label="Source URLs"
-                    badge="Google"
                     description="The web pages that sell this exact product: the brand's own site, factories and suppliers, wholesalers and retailers. Written to the Source URLs column."
                     enabled={runsSourceUrls}
                     expanded={expandedColumns.has(sourceUrlsColumn.id)}

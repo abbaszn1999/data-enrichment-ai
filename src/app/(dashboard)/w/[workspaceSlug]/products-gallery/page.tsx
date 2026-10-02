@@ -3142,7 +3142,7 @@ export default function ProductsGalleryPage() {
                         </InfoTip>
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        Gallery research agent (GPT-6.1 Sol). It studies the product, opens the
+                        Gallery research agent. It studies the product, opens the
                         source pages in your sheet and searches the web for more galleries of the
                         exact same item.
                       </p>

@@ -18,6 +18,7 @@
  * in the note.
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
+import { hideProviderNames } from "@/lib/provider-names";
 import type { SourceUrl } from "@/types";
 import { checkExactLinksDetailed, describeRejected } from "../image-finder/exact/links-checks";
 import {
@@ -291,7 +292,7 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
       costs,
       attempts: 2,
       usedImage: first.usedImage,
-      notFoundReason: `Google AI Mode found no page for this item (search 1: ${first.summary}; search 2 failed: ${message.slice(0, 200)}).`,
+      notFoundReason: `The web search found no page for this item (search 1: ${first.summary}; search 2 failed: ${hideProviderNames(message.slice(0, 200))}).`,
     };
   }
   if (second.sources.length > 0) {
@@ -302,6 +303,6 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
     costs,
     attempts: 2,
     usedImage: second.usedImage,
-    notFoundReason: `Google AI Mode found no page for this item (search 1: ${first.summary}; search 2: ${second.summary}).`,
+    notFoundReason: `The web search found no page for this item (search 1: ${first.summary}; search 2: ${second.summary}).`,
   };
 }

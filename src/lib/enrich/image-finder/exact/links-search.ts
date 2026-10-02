@@ -12,6 +12,7 @@
  * the failure in the note).
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
+import { hideProviderNames } from "@/lib/provider-names";
 import type { DomainRules } from "../../domains";
 import { EnrichBilledAttemptError, EnrichCancelledError } from "../../openai";
 import { checkExactLinksDetailed, describeRejected, type CheckedExactLink } from "./links-checks";
@@ -167,7 +168,7 @@ export async function searchExactLinks(input: SearchExactLinksInput): Promise<Se
       links: [],
       costs,
       attempts: 2,
-      notFoundReason: `Google AI Mode found no exact-match product page for this item (search 1: ${first.summary}; search 2 failed: ${message.slice(0, 200)}).`,
+      notFoundReason: `The web search found no exact-match product page for this item (search 1: ${first.summary}; search 2 failed: ${hideProviderNames(message.slice(0, 200))}).`,
     };
   }
   if (second.links.length > 0) {
@@ -178,6 +179,6 @@ export async function searchExactLinks(input: SearchExactLinksInput): Promise<Se
     links: [],
     costs,
     attempts: 2,
-    notFoundReason: `Google AI Mode found no exact-match product page for this item (search 1: ${first.summary}; search 2: ${second.summary}).`,
+    notFoundReason: `The web search found no exact-match product page for this item (search 1: ${first.summary}; search 2: ${second.summary}).`,
   };
 }

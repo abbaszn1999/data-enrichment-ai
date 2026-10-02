@@ -10,6 +10,7 @@ import { buildEnrichToolPolicy } from "./policy";
 import { buildEnrichJsonSchema } from "./schema";
 import { buildEnrichPrompt } from "./prompt";
 import type { AiCallCost } from "@/lib/ai-pricing";
+import { hideProviderNames } from "@/lib/provider-names";
 import {
   billedCostsOf,
   EnrichBilledAttemptError,
@@ -117,7 +118,7 @@ async function withGoogleSourceUrls(
       data: {
         ...main.value.data,
         [SOURCE_URLS_COLUMN_ID]: [],
-        [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: `The Google AI Mode search failed, so no pages were found. Run this column again. (${message.slice(0, 200)})`,
+        [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: `The web search failed, so no pages were found. Run this column again. (${hideProviderNames(message.slice(0, 200))})`,
       },
       costs: [...main.value.costs, ...billedCostsOf(sources.reason)],
     };

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { createAdminClient } from "@/lib/supabase-admin";
+import { hideProviderNames } from "@/lib/provider-names";
 import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
 import { withAiSlot } from "@/lib/ai/global-concurrency";
 import { generateNanoBananaImage } from "@/lib/ai-images/nano-banana";
@@ -61,7 +62,7 @@ export async function processImagesRow(params: {
   const imageModel = resolveVisualizerImageModel(tier);
 
   const failRow = (message: string, cost = 0) => ({
-    row: { ...row, status: "failed" as const, generationStage: undefined, errorMessage: message.slice(0, 500) },
+    row: { ...row, status: "failed" as const, generationStage: undefined, errorMessage: hideProviderNames(message).slice(0, 500) },
     creditsUsed: 0,
     cost,
     error: message,
@@ -342,7 +343,7 @@ export async function processImagesRow(params: {
           imagePlaceholders: merged,
           status: "description_ready",
           generationStage: undefined,
-          errorMessage: message.slice(0, 500),
+          errorMessage: hideProviderNames(message).slice(0, 500),
         },
         creditsUsed: settlement?.charged ?? 0,
         cost: spent.totalCost,
