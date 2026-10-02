@@ -13,6 +13,7 @@ export const TITLE_TAG_HARD_MAX = 70;
 export const titleTagSpec: ColumnSpec = {
   id: "titleTag",
   kinds: ["product"],
+  preserveRawAnswer: true,
   buildSchemaProperty(ctx) {
     return {
       type: "string",

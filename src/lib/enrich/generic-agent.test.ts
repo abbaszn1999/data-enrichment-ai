@@ -7,6 +7,9 @@ const { OPENAI_RESPONSES_URL, isEnrichOutputTruncatedError, billedCostsOf } = aw
 const { titleTagSpec } = await import("./columns/product/title-tag");
 const { productSpecificationsSpec } = await import("./columns/product/product-specifications");
 const { enrichedValueToText } = await import("@/lib/export-values");
+const { genericTextSpec } = await import("./columns/shared/text");
+const { buildEnrichedData } = await import("./parse");
+const { looksLikeHtml } = await import("@/lib/html-detect");
 
 const usage = { input_tokens: 4_000, input_tokens_details: { cached_tokens: 1_000 }, output_tokens: 9_000 };
 
@@ -177,14 +180,42 @@ describe("Enrich column parsing", () => {
     expect(parsed.length).toBeLessThanOrEqual(70);
   });
 
-  it("normalises specifications to one 'Attribute: Value' per entry and drops the rest", () => {
+  it("normalises specifications to one entry each, removes repeats and keeps every written entry", () => {
     const parsed = productSpecificationsSpec.parseValue(
-      ["Color: Red", "color: red", "no separator here", { attribute: "Weight", value: "2 kg" }],
+      ["Color: Red", "color: red", "Waterproof", { attribute: "Weight", value: "2 kg" }],
       ctx()
     ) as string[];
     expect(parsed).toContain("Color: Red");
-    expect(parsed).not.toContain("no separator here");
+    expect(parsed).toContain("Waterproof");
+    expect(parsed).toContain("Weight: 2 kg");
     expect(parsed.filter((p) => p.toLowerCase() === "color: red")).toHaveLength(1);
+  });
+
+  const SPEC_TABLE =
+    '<table class="product-specifications"><caption>Product Specifications</caption><tbody><tr><th scope="row">Brand</th><td>PAKTAT</td></tr></tbody></table>';
+
+  it("keeps an HTML specifications table (it has no colon) as one string the sheet can preview", () => {
+    const parsed = productSpecificationsSpec.parseValue([SPEC_TABLE], ctx());
+    expect(parsed).toBe(SPEC_TABLE);
+    expect(looksLikeHtml(parsed as string)).toBe(true);
+  });
+
+  it("a custom list column answered with HTML is stored as one HTML string too", () => {
+    const custom = ctx({ col: { id: "custom_1", label: "Specs", description: "", type: "list", enabled: true } });
+    expect(genericTextSpec.parseValue([SPEC_TABLE], custom)).toBe(SPEC_TABLE);
+    expect(genericTextSpec.parseValue(["a", "b"], custom)).toEqual(["a", "b"]);
+  });
+
+  it("never leaves an answered free-form column empty (the parser's result is replaced by the answer as written)", () => {
+    const data = buildEnrichedData({
+      selection: { productSpecifications: [SPEC_TABLE], titleTag: "Widget", marketingDescription: { text: "odd shape" } },
+      response: { output: [] } as never,
+      enabledColumns: ["productSpecifications", "titleTag", "marketingDescription"],
+      kind: "product",
+    });
+    expect(data.productSpecifications).toBe(SPEC_TABLE);
+    expect(data.titleTag).toBe("Widget");
+    expect(String(data.marketingDescription)).toContain("odd shape");
   });
 
   it("exports specifications one 'Attribute: Value' per line", () => {

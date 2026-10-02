@@ -11,19 +11,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const HTML_TAG_RE =
-  /<\/?(?:p|div|section|article|header|footer|main|h[1-6]|ul|ol|li|table|thead|tbody|tfoot|tr|td|th|strong|em|b|i|u|br|hr|span|a|img|blockquote|dl|dt|dd|figure|figcaption|small|sup|sub|code|pre)\b[^>]*>/gi;
+import { looksLikeHtml } from "@/lib/html-detect";
 
-/** True when a value is real HTML markup (at least two known tags), not text like "<5kg". */
-export function looksLikeHtml(value: string): boolean {
-  if (!value || value.indexOf("<") === -1) return false;
-  HTML_TAG_RE.lastIndex = 0;
-  let count = 0;
-  while (HTML_TAG_RE.exec(value)) {
-    if (++count >= 2) return true;
-  }
-  return false;
-}
+export { looksLikeHtml };
 
 /** Readable text for a sheet cell: block tags become breaks, the rest is stripped. */
 export function htmlToPlainText(html: string): string {

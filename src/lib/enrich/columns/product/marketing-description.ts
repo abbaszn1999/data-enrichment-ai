@@ -10,6 +10,7 @@ import {
 export const marketingDescriptionSpec: ColumnSpec = {
   id: "marketingDescription",
   kinds: ["product"],
+  preserveRawAnswer: true,
   buildSchemaProperty(ctx) {
     return {
       type: "string",

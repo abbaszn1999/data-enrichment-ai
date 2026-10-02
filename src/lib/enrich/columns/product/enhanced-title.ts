@@ -10,6 +10,7 @@ import {
 export const enhancedTitleSpec: ColumnSpec = {
   id: "enhancedTitle",
   kinds: ["product"],
+  preserveRawAnswer: true,
   buildSchemaProperty(ctx) {
     return {
       type: "string",

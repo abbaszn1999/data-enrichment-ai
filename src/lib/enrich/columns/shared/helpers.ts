@@ -54,6 +54,28 @@ export function asTrimmedString(raw: unknown): string {
   return String(raw).trim();
 }
 
+/**
+ * The model's answer for a column as plain text, whatever shape it came in.
+ * Used only to keep an answer a column's own parser could not read: a written
+ * answer must never turn into an empty cell.
+ */
+export function rawAnswerText(raw: unknown): string {
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw.trim();
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => rawAnswerText(item))
+      .filter(Boolean)
+      .join("\n");
+  }
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return "";
+  }
+}
+
 export function asStringList(raw: unknown, limit?: number): string[] {
   const list = Array.isArray(raw)
     ? raw.map((v) => String(v ?? "").trim())

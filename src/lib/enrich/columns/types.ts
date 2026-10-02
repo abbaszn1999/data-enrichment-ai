@@ -59,6 +59,13 @@ export interface ColumnSpec {
   /** Session kinds this column is offered in. */
   kinds: SessionKind[];
   needs?: ColumnNeeds;
+  /**
+   * Free-form columns (text, lists): when the model wrote an answer, the cell
+   * must not end up empty. If `parseValue` returns nothing for a non-empty
+   * answer, the answer is kept as written. Validated columns (categories,
+   * images, links) leave this off: dropping unverified values is their job.
+   */
+  preserveRawAnswer?: boolean;
   /** JSON schema property describing this column's expected output shape. */
   buildSchemaProperty(ctx: SpecContext): Record<string, unknown>;
   /** One line (or short block) under "Columns to fill". */

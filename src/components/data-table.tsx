@@ -91,7 +91,7 @@ import {
   trackPointerDrag,
   useProjectSizeMap,
 } from "@/components/sheet/sheet-sizing";
-import { CellText, CellTextDialog } from "@/components/sheet/cell-text-dialog";
+import { CellText, CellTextDialog, looksLikeHtml } from "@/components/sheet/cell-text-dialog";
 import { RowResizeHandle } from "@/components/sheet/resize-handles";
 import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
 import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
@@ -1367,7 +1367,7 @@ function FaqCell({
 
 // --- Editable Enriched Cell ---
 function EditableEnrichedCell({
-  value,
+  value: storedValue,
   rowId,
   enrichKey,
   label,
@@ -1391,6 +1391,15 @@ function EditableEnrichedCell({
 }) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
+  // A list whose entries are HTML (e.g. a specifications table) is one
+  // document: shown with the HTML badge and previewed, not as bullet-joined tags.
+  const value =
+    Array.isArray(storedValue) &&
+    storedValue.length > 0 &&
+    storedValue.every((item) => typeof item === "string") &&
+    (storedValue as string[]).some((item) => looksLikeHtml(item))
+      ? (storedValue as string[]).join("\n")
+      : storedValue;
   const isList = Array.isArray(value);
   const openEditor = isEditable ? () => setOpen(true) : undefined;
   const isEmptyValue =

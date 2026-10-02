@@ -3,6 +3,8 @@ import { resolveEnabledColumns } from "./columns/registry";
 import type { SpecContext } from "./columns/types";
 import type { EnrichColumnConfig, OpenAiResponse } from "./types";
 import { collectToolImages, collectToolSources } from "./tool-results";
+import { rawAnswerText } from "./columns/shared/helpers";
+import { collapseHtmlList } from "@/lib/html-detect";
 
 // Tool-result helpers live in ./tool-results; re-exported here because other
 // agents (sync, market-research) and tests import them from this module.
@@ -35,6 +37,19 @@ export function responseOutputText(response: OpenAiResponse): string {
     .filter((content) => content.type === "output_text")
     .map((content) => content.text ?? "")
     .join("\n");
+}
+
+function isEmptyColumnValue(value: unknown): boolean {
+  return value == null || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+/** The model's answer as written: a list stays a list (HTML collapses to one string), anything else is text. */
+function keepAnswerAsWritten(raw: unknown): string | string[] {
+  if (Array.isArray(raw)) {
+    const items = raw.map((item) => rawAnswerText(item)).filter(Boolean);
+    return collapseHtmlList(items);
+  }
+  return rawAnswerText(raw);
 }
 
 /**
@@ -86,7 +101,20 @@ export function buildEnrichedData(params: {
       toolSources,
     };
 
-    data[id] = spec.parseValue(selection?.[id], ctx);
+    const rawAnswer = selection?.[id];
+    let value = spec.parseValue(rawAnswer, ctx);
+    const answered = rawAnswerText(rawAnswer) !== "";
+    if (answered && isEmptyColumnValue(value)) {
+      if (spec.preserveRawAnswer) {
+        // The model wrote an answer its column parser could not use: keep it as
+        // written rather than leaving a paid-for cell empty.
+        console.warn("[Enrich] Column parser emptied an answer; kept it as written", { column: id });
+        value = keepAnswerAsWritten(rawAnswer);
+      } else {
+        console.warn("[Enrich] Column answer was discarded by validation", { column: id });
+      }
+    }
+    data[id] = value;
   }
 
   return data;

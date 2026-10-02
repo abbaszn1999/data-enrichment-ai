@@ -1,4 +1,5 @@
 import type { ColumnSpec, SpecContext } from "../types";
+import { collapseHtmlList } from "@/lib/html-detect";
 import {
   asStringList,
   asTrimmedString,
@@ -15,6 +16,7 @@ import {
 export const genericTextSpec: ColumnSpec = {
   id: "__generic__",
   kinds: ["product", "plp"],
+  preserveRawAnswer: true,
   buildSchemaProperty(ctx) {
     const isList = ctx.col.type === "list" || ctx.col.type === "keywords";
     const description = describeColumn(
@@ -33,7 +35,9 @@ export const genericTextSpec: ColumnSpec = {
   },
   parseValue(raw, ctx: SpecContext) {
     if (ctx.col.type === "list" || ctx.col.type === "keywords") {
-      return asStringList(raw, ctx.col.itemCount);
+      // A list of HTML (a table, markup) is one document: stored as a single
+      // string so the sheet previews it.
+      return collapseHtmlList(asStringList(raw, ctx.col.itemCount));
     }
     return clampChars(asTrimmedString(raw), ctx.col.maxChars);
   },
