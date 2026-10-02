@@ -3,25 +3,23 @@
  *
  * Inputs: a short skill, the checked source columns (text), the Main image(s)
  * and the row's other images (attached), the settings, and the list of images
- * the sheet already has. When the sheet holds source-page links, plain code
- * first reads those pages (no model, no rounds) and lists the photos found
- * there. The model then searches the web (text + image results) and answers
- * once. Code keeps only links that were really seen - on a read source page or
- * in the search tool's image results - and load-checks them.
+ * the sheet already has. Source-page links in the checked columns are listed
+ * as "Known source pages"; the model opens them itself, searches the web
+ * (text + image results) and answers once. Code then removes known/duplicate/
+ * tiny images and load-checks every link.
  */
 import type { AiCallCost } from "@/lib/ai-pricing";
 import { GALLERY_SCRAPING_OPENAI_MODEL, GALLERY_SCRAPING_REASONING_EFFORT } from "@/lib/enrich/models";
 import { runEnrichOpenAiResponse, type EnrichResponseParser } from "@/lib/enrich/openai";
 import type { EnrichToolPolicy } from "@/lib/enrich/policy";
 import { collectToolImages } from "@/lib/enrich/tool-results";
-import { EvidenceLedger, normalizeImageKey } from "@/lib/enrich/image-finder/evidence";
-import { createPageSession, type CachedPage } from "@/lib/enrich/image-finder/tools/fetch-page";
+import { normalizeImageKey } from "@/lib/enrich/image-finder/evidence";
 import { extractRowIdentifiers } from "@/lib/enrich/image-finder/tools/identifiers";
 import { loadImagePreview } from "@/lib/enrich/image-finder/tools/view-images";
 import { keepLoadableImages, unverifiedImagesNote } from "@/lib/enrich/image-finder/verify-images";
 import { galleryLog } from "@/lib/gallery/log";
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
-import { buildGalleryBrief, classifyRowValues, textOnlyRow, type SourcePagePhotos } from "./gallery-brief";
+import { buildGalleryBrief, classifyRowValues, textOnlyRow } from "./gallery-brief";
 import {
   GALLERY_PERSPECTIVES,
   buildKnownImageKeys,
@@ -31,7 +29,6 @@ import {
   type GalleryAnswer,
   type GalleryPerspective,
   type KnownImageSize,
-  type SeenImage,
 } from "./gallery-guards";
 import { GALLERY_RESEARCH_SKILL } from "./gallery-research-skill";
 
@@ -55,11 +52,6 @@ export function galleryDepthBudget(depth: GalleryScrapingSettings["searchDepth"]
   return GALLERY_DEPTH_BUDGETS[depth ?? "high"] ?? GALLERY_DEPTH_BUDGETS.high;
 }
 
-/** Source pages our code reads before the request, and what it keeps from each. */
-const SOURCE_PAGES_READ = 6;
-const SOURCE_PAGE_CONCURRENCY = 3;
-const PHOTOS_PER_PAGE = 24;
-const PHOTOS_TOTAL = 60;
 /** Most images measured (downloaded) after the model answers. */
 const MEASURE_CONCURRENCY = 4;
 
@@ -113,7 +105,7 @@ export interface GalleryResearchResult {
   searchCallCount: number;
   notes?: string;
   stats: {
-    /** Known source pages our code read successfully. */
+    /** Known source pages handed to the agent (it opens them itself). */
     pagesOpened: number;
     /** Images downloaded to read their size. */
     imagesViewed: number;
@@ -139,54 +131,6 @@ async function mapWithLimit<T, R>(items: T[], limit: number, work: (item: T) => 
   return results;
 }
 
-/** Plain code step: read the sheet's source pages and list the photo links on them. */
-async function readSourcePages(input: {
-  pageUrls: string[];
-  knownImageKeys: Set<string>;
-  rowIdentifiers: ReturnType<typeof extractRowIdentifiers>;
-  load?: (url: string) => Promise<CachedPage>;
-}): Promise<SourcePagePhotos[]> {
-  const urls = input.pageUrls.slice(0, SOURCE_PAGES_READ);
-  if (urls.length === 0) return [];
-  const session = createPageSession({
-    rowIdentifiers: input.rowIdentifiers,
-    ledger: new EvidenceLedger(),
-    domainRules: { allowedDomains: [], blockedDomains: [] },
-    maxFetches: SOURCE_PAGES_READ,
-    maxFetchesPerSite: SOURCE_PAGES_READ,
-    load: input.load,
-  });
-  const opened = await mapWithLimit(urls, SOURCE_PAGE_CONCURRENCY, async (url) => {
-    try {
-      const result = await session.open(url);
-      if (result.refused !== undefined) return null;
-      return { url, images: result.page.extract?.images ?? [] };
-    } catch {
-      return null;
-    }
-  });
-
-  const taken = new Set<string>();
-  const out: SourcePagePhotos[] = [];
-  let total = 0;
-  for (const entry of opened) {
-    if (!entry) continue;
-    const images: string[] = [];
-    for (const raw of entry.images) {
-      if (images.length >= PHOTOS_PER_PAGE || total >= PHOTOS_TOTAL) break;
-      const image = raw.trim();
-      if (!/^https?:\/\//i.test(image)) continue;
-      const key = normalizeImageKey(image);
-      if (taken.has(key) || input.knownImageKeys.has(key)) continue;
-      taken.add(key);
-      images.push(image);
-      total += 1;
-    }
-    out.push({ pageUrl: entry.url, images });
-  }
-  return out;
-}
-
 /** Image links are attached to the request as-is; local bytes arrive as data URLs. */
 export async function researchGalleryImages(params: {
   rowData: Record<string, string>;
@@ -198,8 +142,6 @@ export async function researchGalleryImages(params: {
   settings: GalleryScrapingSettings;
   requestedGalleryImages: number;
   shouldCancel?: () => Promise<boolean>;
-  /** Page loader for the source-page read (tests only; defaults to a live fetch). */
-  loadPage?: (url: string) => Promise<CachedPage>;
 }): Promise<GalleryResearchResult> {
   const count = Math.max(1, params.requestedGalleryImages);
   const budget = galleryDepthBudget(params.settings.searchDepth);
@@ -213,22 +155,8 @@ export async function researchGalleryImages(params: {
     settings: params.settings,
     rowIdentifiers: rowIdentifiers.map((identifier) => identifier.value),
   };
-  const firstBrief = buildGalleryBrief(briefInput);
-  const knownImageKeys = buildKnownImageKeys(firstBrief.knownImageUrls);
-
-  // Plain code, no model: photos found on the sheet's own source pages.
-  const sourcePhotos = await readSourcePages({
-    pageUrls: firstBrief.sourcePageUrls,
-    knownImageKeys,
-    rowIdentifiers,
-    load: params.loadPage,
-  });
-  const brief = buildGalleryBrief({ ...briefInput, sourcePhotos });
-
-  // Links we saw ourselves: source pages first, the search tool's results are added after the answer.
-  const sourceSeen: SeenImage[] = sourcePhotos.flatMap((entry) =>
-    entry.images.map((imageUrl) => ({ imageUrl, pageUrl: entry.pageUrl }))
-  );
+  const brief = buildGalleryBrief(briefInput);
+  const knownImageKeys = buildKnownImageKeys(brief.knownImageUrls);
 
   let guardStats = { returned: 0, unverified: 0, rejections: [] as string[], notes: "" };
   let parsedIdentity = "";
@@ -238,7 +166,7 @@ export async function researchGalleryImages(params: {
     const answer = selection as unknown as GalleryAnswer;
     parsedIdentity = typeof answer.productIdentity === "string" ? answer.productIdentity.trim() : "";
 
-    const seen = buildSeenImageIndex([...sourceSeen, ...collectToolImages(response)]);
+    const seen = buildSeenImageIndex(collectToolImages(response));
     const guarded = guardGalleryCandidates({ answer, seen, knownImageKeys });
 
     // Read each kept image's size (best effort): tiny ones are dropped, preferred sizes go first.
@@ -291,8 +219,6 @@ export async function researchGalleryImages(params: {
     count,
     inputImages: brief.inputImageUrls.length + (params.extraInputImages?.length ?? 0),
     sourcePages: brief.sourcePageUrls.length,
-    sourcePagesRead: sourcePhotos.length,
-    sourcePhotos: sourceSeen.length,
     identifiers: rowIdentifiers.length,
   });
 
@@ -325,7 +251,7 @@ export async function researchGalleryImages(params: {
   }));
 
   const stats = {
-    pagesOpened: sourcePhotos.filter((entry) => entry.images.length > 0).length,
+    pagesOpened: brief.sourcePageUrls.length,
     imagesViewed,
     candidatesReturned: guardStats.returned,
     candidatesKept: images.length,

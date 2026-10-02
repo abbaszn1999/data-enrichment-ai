@@ -114,12 +114,6 @@ export const RESEARCH_DEPTH_LABELS: Record<GalleryScrapingSettings["searchDepth"
   high: "deep — sheet sources, brand site, many retailers, and secondary pages until the count is met",
 };
 
-/** Image links our code read from one known source page. */
-export interface SourcePagePhotos {
-  pageUrl: string;
-  images: string[];
-}
-
 export interface GalleryBriefInput {
   classified: ClassifiedRow;
   /** Main image links (the required image column), first among the input images. */
@@ -131,8 +125,6 @@ export interface GalleryBriefInput {
     "instructions" | "sourcePolicy" | "minResolution" | "aspectRatio" | "searchDepth"
   >;
   rowIdentifiers?: string[];
-  /** Image links already read from the known source pages by our code. */
-  sourcePhotos?: SourcePagePhotos[];
 }
 
 export interface GalleryBrief {
@@ -186,20 +178,8 @@ export function buildGalleryBrief(input: GalleryBriefInput): GalleryBrief {
     "## Known source pages (start here)",
     sourcePageUrls.length === 0
       ? "None in the sheet. Find the exact item's pages yourself."
-      : sourcePageUrls.map((url) => `- ${url}`).join("\n")
+      : `The sheet's own links for this item. Open them first and scrape their galleries.\n${sourcePageUrls.map((url) => `- ${url}`).join("\n")}`
   );
-
-  const sourcePhotos = (input.sourcePhotos ?? []).filter((entry) => entry.images.length > 0);
-  if (sourcePhotos.length > 0) {
-    sections.push(
-      "",
-      "## Photos already read from the known source pages",
-      "These image links were read straight from the pages above, so they are real files of the exact item. Choose from them first; search the web for more only when they do not reach the number needed or miss perspectives."
-    );
-    for (const entry of sourcePhotos) {
-      sections.push(`### ${entry.pageUrl}`, entry.images.map((url) => `- ${url}`).join("\n"));
-    }
-  }
 
   sections.push(
     "",

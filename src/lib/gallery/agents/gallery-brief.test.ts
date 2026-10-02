@@ -70,7 +70,7 @@ describe("buildGalleryBrief", () => {
     expect(brief.sourcePageUrls).toEqual(["https://shop.com/products/acme-trail"]);
     expect(brief.maxCandidates).toBe(9);
     expect(brief.text).toContain("## Known source pages (start here)");
-    expect(brief.text).not.toContain("Photos already read");
+    expect(brief.text).toContain("Open them first and scrape their galleries");
     expect(brief.text).toContain("- https://shop.com/products/acme-trail");
     expect(brief.text).toContain("never return these");
     expect(brief.text).toContain("6 NEW gallery images");
@@ -93,23 +93,6 @@ describe("buildGalleryBrief", () => {
     expect(brief.text).toContain("Use only official brand or manufacturer pages");
     expect(brief.text).toContain("no SKU, barcode or model code");
     expect(brief.maxCandidates).toBe(4);
-  });
-
-  it("lists the photos our code read from the source pages", () => {
-    const brief = buildGalleryBrief({
-      classified,
-      mainImageUrls: [],
-      count: 3,
-      settings,
-      sourcePhotos: [
-        { pageUrl: "https://shop.com/products/acme-trail", images: ["https://cdn.shop.com/p/side.jpg"] },
-        { pageUrl: "https://empty.com/p", images: [] },
-      ],
-    });
-    expect(brief.text).toContain("## Photos already read from the known source pages");
-    expect(brief.text).toContain("### https://shop.com/products/acme-trail");
-    expect(brief.text).toContain("- https://cdn.shop.com/p/side.jpg");
-    expect(brief.text).not.toContain("empty.com");
   });
 
   it("caps the count at 12", () => {

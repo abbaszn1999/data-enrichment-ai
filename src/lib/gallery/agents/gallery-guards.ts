@@ -1,13 +1,10 @@
 /**
- * Accepts the Gallery agent's answer only where our own record backs it up.
- * The agent makes one request, so it cannot prove an image by opening pages;
- * instead an image is kept only when its link was SEEN, never merely written:
- *  - on a known source page that our code read, or
- *  - in the web search tool's own image results.
- * A link the model wrote from memory is dropped. Survivors must also not be an
- * image the sheet already has (nor a resized copy of one), nor a repeat, nor a
- * known tiny thumbnail. They are then ranked (preferred size first) and
- * diversified by perspective.
+ * Cleans the Gallery agent's answer. The agent makes one request and the
+ * skill tells it to copy links exactly as seen; code then guarantees the rest:
+ * no image the sheet already has (nor a resized copy of one), no repeat, no
+ * known tiny thumbnail (and, in the agent, only links that really load as
+ * images). Survivors are ranked (preferred size first) and diversified by
+ * perspective.
  */
 import { imageFileKey, normalizeImageKey } from "@/lib/enrich/image-finder/evidence";
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
@@ -131,13 +128,13 @@ export function diversifyByPerspective<T extends { perspective: GalleryPerspecti
 }
 
 /**
- * Step 1: which of the model's images were really seen, are new to the sheet
- * and are not repeats. Keeps the model's order.
+ * Step 1: which of the model's images are new to the sheet and not repeats.
+ * Keeps the model's order.
  */
 export function guardGalleryCandidates(input: {
   answer: GalleryAnswer;
-  /** Image links our tools saw, from buildSeenImageIndex(). */
-  seen: Map<string, SeenImage>;
+  /** Image results the search tool returned; only used to fill in a missing source page. */
+  seen?: Map<string, SeenImage>;
   /** Keys from buildKnownImageKeys() of every image the sheet already has. */
   knownImageKeys: Set<string>;
 }): GuardedGallery {
@@ -155,15 +152,11 @@ export function guardGalleryCandidates(input: {
     }
     if (keys.some((key) => taken.has(key))) continue;
 
-    const seen = input.seen.get(normalizeImageKey(imageUrl));
-    if (!seen) {
-      rejections.push(`${imageUrl}: this link was not found on a page or in the image search results.`);
-      continue;
-    }
+    const seen = input.seen?.get(normalizeImageKey(imageUrl));
     for (const key of keys) taken.add(key);
     kept.push({
-      imageUrl: seen.imageUrl,
-      pageUrl: seen.pageUrl || String(item?.pageUrl ?? "").trim() || seen.imageUrl,
+      imageUrl,
+      pageUrl: String(item?.pageUrl ?? "").trim() || seen?.pageUrl || imageUrl,
       perspective: normalizePerspective(item?.perspective),
     });
   }

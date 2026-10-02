@@ -25,31 +25,25 @@ function guard(
 }
 
 describe("guardGalleryCandidates", () => {
-  it("keeps a link our tools saw and uses the page it was seen on", () => {
+  it("keeps the model's link and its page, and ignores non-http values", () => {
     const result = guard(
-      [{ url: "https://cdn.brand.com/img/back-1.jpg", perspective: "back" }],
-      [{ imageUrl: "https://cdn.brand.com/img/back-1.jpg", pageUrl: "https://brand.com/p/acme" }]
+      [
+        { url: "https://cdn.brand.com/img/back-1.jpg", pageUrl: "https://brand.com/p/acme", perspective: "back" },
+        { url: "not a link" },
+      ],
+      []
     );
     expect(result.images).toEqual([
       { imageUrl: "https://cdn.brand.com/img/back-1.jpg", pageUrl: "https://brand.com/p/acme", perspective: "back" },
     ]);
   });
 
-  it("drops a link the model wrote that no page or search result showed", () => {
-    const result = guard(
-      [{ url: "https://cdn.brand.com/img/invented.jpg", pageUrl: "https://brand.com/p/acme" }],
-      [{ imageUrl: "https://cdn.brand.com/img/real.jpg", pageUrl: "https://brand.com/p/acme" }]
-    );
-    expect(result.images).toHaveLength(0);
-    expect(result.rejections).toHaveLength(1);
-  });
-
-  it("matches a seen link whatever size parameter it carries", () => {
+  it("fills a missing page from the search results whatever size parameter the link carries", () => {
     const result = guard(
       [{ url: "https://cdn.shop.com/x/side.jpg?width=1200" }],
       [{ imageUrl: "https://cdn.shop.com/x/side.jpg?width=400", pageUrl: "https://shop.com/p" }]
     );
-    expect(result.images).toHaveLength(1);
+    expect(result.images[0]!.pageUrl).toBe("https://shop.com/p");
   });
 
   it("drops images the sheet already has, including resized copies, and repeats", () => {
@@ -69,14 +63,9 @@ describe("guardGalleryCandidates", () => {
     expect(result.images.map((i) => i.imageUrl)).toEqual(["https://cdn.brand.com/img/new-angle.jpg"]);
   });
 
-  it("falls back to the model's page, then the image, when the tool gave no page", () => {
-    const withModelPage = guard(
-      [{ url: "https://cdn.a.com/i/1.jpg", pageUrl: "https://a.com/p" }],
-      [{ imageUrl: "https://cdn.a.com/i/1.jpg", pageUrl: "" }]
-    );
-    expect(withModelPage.images[0]!.pageUrl).toBe("https://a.com/p");
-    const withNone = guard([{ url: "https://cdn.a.com/i/2.jpg" }], [{ imageUrl: "https://cdn.a.com/i/2.jpg", pageUrl: "" }]);
-    expect(withNone.images[0]!.pageUrl).toBe("https://cdn.a.com/i/2.jpg");
+  it("falls back to the image link itself when no page is known", () => {
+    const result = guard([{ url: "https://cdn.a.com/i/2.jpg" }], []);
+    expect(result.images[0]!.pageUrl).toBe("https://cdn.a.com/i/2.jpg");
   });
 });
 
