@@ -168,6 +168,13 @@ export function guardGalleryCandidates(input: {
  * images that meet the preferred size and shape first, then spread them over
  * perspectives. An image whose size could not be read is kept.
  */
+/** Bigger is better: 3 = 1500px+, 2 = 800px+, 1 = 500px+, 0 = smaller or unknown size. */
+function sizeTier(image: KnownImageSize): number {
+  if (!image.width || !image.height) return 0;
+  const edge = Math.min(image.width, image.height);
+  return edge >= 1500 ? 3 : edge >= 800 ? 2 : edge >= 500 ? 1 : 0;
+}
+
 export function rankGalleryImages(
   images: GuardedGalleryImage[],
   sizes: Map<string, KnownImageSize>,
@@ -183,8 +190,12 @@ export function rankGalleryImages(
     }
     sized.push({ ...image, ...(size?.width && size.height ? { width: size.width, height: size.height } : {}) });
   }
-  // Stable: images that meet the preferred size and shape first, the model's order otherwise.
+  // Images that meet the preferred size and shape first; inside each group, bigger
+  // size tiers first. The sort is stable, so the model's order (best match, same
+  // colour first) is kept within a tier.
   const preferred = sized.filter((image) => meetsPreferences(image, prefs));
   const others = sized.filter((image) => !meetsPreferences(image, prefs));
-  return { images: diversifyByPerspective([...preferred, ...others]), rejections };
+  const bySizeTier = (list: GuardedGalleryImage[]) =>
+    [...list].sort((a, b) => sizeTier(b) - sizeTier(a));
+  return { images: diversifyByPerspective([...bySizeTier(preferred), ...bySizeTier(others)]), rejections };
 }

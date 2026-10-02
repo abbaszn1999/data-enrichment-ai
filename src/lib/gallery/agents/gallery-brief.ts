@@ -12,7 +12,6 @@ export const GALLERY_RESERVE_CANDIDATES = 3;
 export const GALLERY_MAX_IMAGES = 12;
 const MAX_INPUT_IMAGES = 6;
 const MAX_SOURCE_PAGES = 12;
-const MAX_KNOWN_IMAGES_LISTED = 30;
 const FIELD_VALUE_CHARS = 400;
 
 const IMAGE_EXTENSION = /\.(jpe?g|png|webp|gif|avif|bmp)(\?|#|$)/i;
@@ -102,16 +101,16 @@ export function sourcePolicyLine(policy: GalleryScrapingSettings["sourcePolicy"]
     case "official-only":
       return "Use only official brand or manufacturer pages and images. Skip retailers and marketplaces.";
     case "prefer-official":
-      return "Prefer official brand or manufacturer pages, then reputable retailers. Marketplaces last.";
+      return "Prefer official brand or manufacturer pages (including the factory or manufacturer's own site), then reputable retailers. Marketplaces last.";
     default:
-      return "Official brand pages, reputable retailers and marketplaces are all acceptable, as long as the item is the exact same product.";
+      return "Any source is acceptable if it shows the exact same item: official brand and manufacturer pages, factory and OEM sites, reputable retailers, and marketplaces worldwide (including Chinese sources such as 1688, Alibaba, AliExpress, Taobao/Tmall, Made-in-China, DHgate and Global Sources).";
   }
 }
 
 export const RESEARCH_DEPTH_LABELS: Record<GalleryScrapingSettings["searchDepth"], string> = {
-  low: "quick — check the sheet's source pages and a few best matches",
-  medium: "balanced — sheet sources plus several independent stores and the brand site",
-  high: "deep — sheet sources, brand site, many retailers, and secondary pages until the count is met",
+  low: "quick — the sheet's source pages and a few best matches",
+  medium: "balanced — sheet sources plus several independent stores, the brand site and manufacturer sources",
+  high: "deep — scan the web thoroughly: sheet sources, brand and manufacturer sites (Chinese sources too), many retailers and marketplaces, until the count is met",
 };
 
 export interface GalleryBriefInput {
@@ -167,7 +166,7 @@ export function buildGalleryBrief(input: GalleryBriefInput): GalleryBrief {
       ? "None attached."
       : `${inputImageUrls.length} image${inputImageUrls.length === 1 ? " is" : "s are"} attached (the first ${
           Math.min(inputImageUrls.length, Math.max(1, input.mainImageUrls.length))
-        } ${input.mainImageUrls.length <= 1 ? "is the Main image" : "are the Main images"}). They show the exact item: confirm every gallery image is the same product, colour, variant and pack.`
+        } ${input.mainImageUrls.length <= 1 ? "is the Main image" : "are the Main images"}). They show the exact item: every gallery image must be another photo of this same item.`
   );
   if (inputImageUrls.length > 0) {
     sections.push(inputImageUrls.map((url, index) => `${index + 1}. ${url}`).join("\n"));
@@ -183,19 +182,8 @@ export function buildGalleryBrief(input: GalleryBriefInput): GalleryBrief {
 
   sections.push(
     "",
-    "## Images the sheet already has (never return these or resized copies of them)",
-    knownImageUrls.length === 0
-      ? "None."
-      : knownImageUrls
-          .slice(0, MAX_KNOWN_IMAGES_LISTED)
-          .map((url) => `- ${url}`)
-          .join("\n")
-  );
-
-  sections.push(
-    "",
     "## Number of new gallery images",
-    `The store owner wants ${count} NEW gallery image${count === 1 ? "" : "s"} for this exact item, each from a different perspective. Return them best first. If more good candidates exist than requested, you may add up to ${maxCandidates - count} reserve image${maxCandidates - count === 1 ? "" : "s"} at the end of the list. Return fewer only when the web truly does not show more verified images of this exact item.`
+    `The store owner wants ${count} NEW gallery image${count === 1 ? "" : "s"} of this exact item (other photos than the attached ones), preferably from different perspectives. Return them best first, largest and sharpest first. If more good candidates exist than requested, you may add up to ${maxCandidates - count} reserve image${maxCandidates - count === 1 ? "" : "s"} at the end of the list. Return fewer only when a deep search of the web, brand and manufacturer sites included, truly does not show more photos of this exact item.`
   );
 
   const custom = input.settings.instructions.trim();
@@ -206,7 +194,7 @@ export function buildGalleryBrief(input: GalleryBriefInput): GalleryBrief {
   const preferences = [
     `- Sources: ${sourcePolicyLine(input.settings.sourcePolicy)}`,
     input.settings.minResolution > 0
-      ? `- Preferred minimum resolution: ${input.settings.minResolution}px on the shortest side. Larger is better; still use a smaller image of a perspective nothing else covers.`
+      ? `- Preferred minimum resolution: ${input.settings.minResolution}px on the shortest side. Always prefer the largest original file; use a smaller image only for a perspective nothing larger covers.`
       : "- Preferred minimum resolution: none.",
     input.settings.aspectRatio !== "any"
       ? `- Preferred aspect ratio: ${input.settings.aspectRatio}.`
@@ -221,7 +209,7 @@ export function buildGalleryBrief(input: GalleryBriefInput): GalleryBrief {
     "## Row identifiers",
     identifiers.length > 0
       ? `Code-like values in this row (the exact item carries these codes): ${identifiers.join(", ")}`
-      : "None: this row has no SKU, barcode or model code. Identify the item by brand, title, variant attributes and the attached images."
+      : "None: this row has no SKU, barcode or model code. The attached images are your primary evidence: find the item by visual match, supported by brand, title and attributes."
   );
 
   return { text: sections.join("\n"), inputImageUrls, knownImageUrls, sourcePageUrls, maxCandidates };

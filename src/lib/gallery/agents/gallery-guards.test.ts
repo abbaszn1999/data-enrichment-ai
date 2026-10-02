@@ -96,6 +96,23 @@ describe("rankGalleryImages", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("puts bigger images first and keeps the model's order inside a size tier", () => {
+    const urls = [
+      "https://cdn.b.com/i/a-600.jpg",
+      "https://cdn.b.com/i/b-2000.jpg",
+      "https://cdn.b.com/i/c-900.jpg",
+      "https://cdn.b.com/i/d-2400.jpg",
+    ];
+    const sizes = new Map<string, KnownImageSize>([
+      [normalizeImageKey(urls[0]!), { width: 600, height: 600 }],
+      [normalizeImageKey(urls[1]!), { width: 2000, height: 2000 }],
+      [normalizeImageKey(urls[2]!), { width: 900, height: 900 }],
+      [normalizeImageKey(urls[3]!), { width: 2400, height: 2400 }],
+    ]);
+    const result = rankGalleryImages(urls.map((url) => image(url)), sizes, prefs);
+    expect(result.images.map((i) => i.imageUrl)).toEqual([urls[1], urls[3], urls[2], urls[0]]);
+  });
+
   it("honours the preferred aspect ratio ordering", () => {
     const wide = "https://cdn.b.com/i/wide.jpg";
     const square = "https://cdn.b.com/i/square.jpg";

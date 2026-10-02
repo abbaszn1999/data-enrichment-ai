@@ -72,7 +72,8 @@ describe("buildGalleryBrief", () => {
     expect(brief.text).toContain("## Known source pages (start here)");
     expect(brief.text).toContain("Open them first and scrape their galleries");
     expect(brief.text).toContain("- https://shop.com/products/acme-trail");
-    expect(brief.text).toContain("never return these");
+    expect(brief.text).not.toContain("Images the sheet already has");
+    expect(brief.knownImageUrls).toEqual(["https://cdn.shop.com/main.jpg", "https://cdn.shop.com/a.jpg"]);
     expect(brief.text).toContain("6 NEW gallery images");
     expect(brief.text).toContain("Custom instruction (store owner, highest priority)");
     expect(brief.text).toContain("Prefer white background");
