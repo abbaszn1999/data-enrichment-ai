@@ -1530,11 +1530,12 @@ export default function ProductsGalleryPage() {
       hasOriginalImageColumn && worksheetColumns.includes(originalImageColumn)
         ? originalImageColumn
         : null;
-    // Keep the original-image column visible in the sheet; only hide it from
-    // the Worksheet columns picker (productColumns).
+    // The chosen original-image column IS the Main image: it shows once, first.
+    // The separate "Main Image" result column only exists when no original
+    // column is chosen. (The column stays hidden from the Worksheet columns
+    // picker via sheetProductColumns.)
     return [
-      ...(selectedImageColumn ? [selectedImageColumn] : []),
-      RESULT_MAIN,
+      selectedImageColumn ?? RESULT_MAIN,
       RESULT_GALLERY,
       ...sheetProductColumns,
     ];
@@ -1575,7 +1576,9 @@ export default function ProductsGalleryPage() {
     columnSizes[column] ??
     (column === SELECT_COLUMN
       ? GALLERY_COLUMN_WIDTHS.select
-      : column === RESULT_MAIN || column === RESULT_GALLERY
+      : column === RESULT_MAIN ||
+          column === RESULT_GALLERY ||
+          (hasOriginalImageColumn && column === originalImageColumn)
         ? GALLERY_COLUMN_WIDTHS.result
         : GALLERY_COLUMN_WIDTHS.text);
   const tableWidthPx = sheetColumns.reduce((sum, column) => sum + columnWidthFor(column), 0);
@@ -4217,7 +4220,14 @@ export default function ProductsGalleryPage() {
                                       </div>
                                     ) : row.status === "failed" ? (
                                       getRowMainPaths(row).length === 0 ? (
-                                        <span className="text-[10px] text-muted-foreground">—</span>
+                                        // The Main image is the original column, so the reason
+                                        // a row failed (e.g. missing image URL) shows here.
+                                        <span
+                                          className="block max-w-[180px] text-[10px] leading-snug text-amber-700 dark:text-amber-400"
+                                          title={row.errorMessage || undefined}
+                                        >
+                                          {row.errorMessage || "—"}
+                                        </span>
                                       ) : (
                                         <button
                                           type="button"
