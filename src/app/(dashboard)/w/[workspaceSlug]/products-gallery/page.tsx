@@ -32,6 +32,7 @@ import {
   Loader2,
   Maximize2,
   Palette,
+  Pencil,
   Plus,
   Search,
   Square,
@@ -357,9 +358,9 @@ export default function ProductsGalleryPage() {
   const [deleteTarget, setDeleteTarget] = useState<GallerySession | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
   const [imageDialogRowId, setImageDialogRowId] = useState<string | null>(null);
-  const [imageDialogKind, setImageDialogKind] = useState<"main" | "gallery">(
-    "gallery"
-  );
+  const [imageDialogKind, setImageDialogKind] = useState<
+    "main" | "gallery" | "original"
+  >("gallery");
   const [imagePreviewPath, setImagePreviewPath] = useState<string | null>(null);
   /** Set of pendingImageDeleteKey(rowId, path) — never path-only. */
   const [pendingImageDeletes, setPendingImageDeletes] = useState<Set<string>>(
@@ -2498,9 +2499,12 @@ export default function ProductsGalleryPage() {
     return row.mainImagePath ? [row.mainImagePath] : [];
   };
 
-  const getRowOriginalSrc = (row: GalleryRow): string | null => {
-    if (!hasOriginalImageColumn || !originalImageColumn) return null;
-    return parseImageUrls(row.originalData[originalImageColumn])[0] ?? null;
+  /** Every image link in the chosen original-image column cell, in order. */
+  const getRowOriginalUrls = (row: GalleryRow): string[] => {
+    if (!hasOriginalImageColumn || !originalImageColumn) return [];
+    return parseImageUrls(row.originalData[originalImageColumn]).filter((url) =>
+      /^https?:\/\//i.test(url)
+    );
   };
 
   const getImageMeta = (
@@ -2760,7 +2764,9 @@ export default function ProductsGalleryPage() {
   const imageDialogPaths = imageDialogRow
     ? imageDialogKind === "main"
       ? getRowMainPaths(imageDialogRow)
-      : imageDialogRow.galleryImagePaths
+      : imageDialogKind === "original"
+        ? getRowOriginalUrls(imageDialogRow)
+        : imageDialogRow.galleryImagePaths
     : [];
   const activeImagePreviewPath = imageDialogPaths.includes(
     imagePreviewPath || ""
@@ -4267,25 +4273,67 @@ export default function ProductsGalleryPage() {
                                   className="px-3 py-2 align-top text-muted-foreground"
                                 >
                                   {isImageCol ? (
-                                    <button
-                                      type="button"
-                                      onClick={openCell}
-                                      title={value || "Add image URL"}
-                                      className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                                    >
-                                      {getRowOriginalSrc(row) ? (
-                                        <SheetImage
-                                          url={getRowOriginalSrc(row)!}
-                                          alt=""
-                                          className="h-9 w-9 rounded object-cover"
-                                          tileClassName="flex h-9 w-9 items-center justify-center rounded border border-dashed bg-muted/40 text-center text-[7px] leading-none text-muted-foreground"
-                                        />
-                                      ) : (
-                                        <div className="flex h-9 w-9 items-center justify-center rounded border border-dashed text-muted-foreground">
-                                          <ImageIcon className="h-3.5 w-3.5" />
+                                    (() => {
+                                      const originalUrls = getRowOriginalUrls(row);
+                                      const openViewer = (url: string) => {
+                                        setImageDialogKind("original");
+                                        setImageDialogRowId(row.id);
+                                        setImagePreviewPath(url);
+                                      };
+                                      if (originalUrls.length === 0) {
+                                        return (
+                                          <button
+                                            type="button"
+                                            onClick={openCell}
+                                            title={value || "Add image URL"}
+                                            className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                          >
+                                            <div className="flex h-9 w-9 items-center justify-center rounded border border-dashed text-muted-foreground">
+                                              <ImageIcon className="h-3.5 w-3.5" />
+                                            </div>
+                                          </button>
+                                        );
+                                      }
+                                      return (
+                                        <div className="flex items-center gap-1">
+                                          {originalUrls.slice(0, 3).map((url, idx) => (
+                                            <button
+                                              key={`${row.id}:original:${idx}:${url}`}
+                                              type="button"
+                                              onClick={() => openViewer(url)}
+                                              className="block h-9 w-9 shrink-0 overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                              aria-label={`Preview image ${idx + 1}`}
+                                            >
+                                              <SheetImage
+                                                url={url}
+                                                alt=""
+                                                className="h-9 w-9 rounded object-cover transition-transform hover:scale-105"
+                                                tileClassName="flex h-9 w-9 items-center justify-center rounded border border-dashed bg-muted/40 text-center text-[7px] leading-none text-muted-foreground"
+                                              />
+                                            </button>
+                                          ))}
+                                          {originalUrls.length > 3 && (
+                                            <button
+                                              type="button"
+                                              onClick={() => openViewer(originalUrls[0]!)}
+                                              className="flex h-9 items-center gap-1 rounded border bg-muted/30 px-2 text-[10px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                                            >
+                                              <Maximize2 className="h-3 w-3" />+
+                                              {originalUrls.length - 3}
+                                            </button>
+                                          )}
+                                          <button
+                                            type="button"
+                                            onClick={openCell}
+                                            title={canEdit ? "Edit image URLs" : "View image URLs"}
+                                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+                                            aria-label="Edit image URLs"
+                                          >
+                                            <Pencil className="h-3 w-3" />
+                                          </button>
                                         </div>
-                                      )}
-                                    </button>
+                                      );
+                                    })()
                                   ) : (
                                     <div
                                       onClick={openCell}
@@ -4484,12 +4532,12 @@ export default function ProductsGalleryPage() {
           <DialogContent className="w-[min(96vw,1120px)] max-w-[min(96vw,1120px)] overflow-hidden p-0 sm:max-w-[min(96vw,1120px)]">
             <DialogHeader className="border-b px-6 py-4">
               <DialogTitle className="flex items-center gap-2">
-                {imageDialogKind === "main" ? (
-                  <ImageIcon className="h-4 w-4 text-primary" />
-                ) : (
+                {imageDialogKind === "gallery" ? (
                   <GalleryHorizontalEnd className="h-4 w-4 text-primary" />
+                ) : (
+                  <ImageIcon className="h-4 w-4 text-primary" />
                 )}
-                {imageDialogKind === "main" ? "Main images" : "Product gallery"}
+                {imageDialogKind === "gallery" ? "Product gallery" : "Main images"}
               </DialogTitle>
               <DialogDescription>
                 {imageDialogRow
@@ -4547,9 +4595,9 @@ export default function ProductsGalleryPage() {
                 ) : (
                   <div className="text-center text-xs text-muted-foreground">
                     <ImageIcon className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                    {imageDialogKind === "main"
-                      ? "No main images"
-                      : "No gallery images"}
+                    {imageDialogKind === "gallery"
+                      ? "No gallery images"
+                      : "No main images"}
                   </div>
                 )}
               </div>
@@ -4585,7 +4633,7 @@ export default function ProductsGalleryPage() {
                             className="h-full w-full object-cover"
                           />
                         </button>
-                        {canEdit && (
+                        {canEdit && imageDialogKind !== "original" && (
                           <button
                             type="button"
                             onClick={() =>
