@@ -468,6 +468,24 @@ export default function ProductsVisualizerPage() {
         result.session.worksheet_revision ?? 0
       );
       setSaveStatus("saved");
+      // A run that is still going (page reload, remount, or a run started in
+      // another tab) must keep polling, or its rows stay loading until a refresh.
+      const loadedRun = result.worksheet?.activeRun;
+      const busyRows = (result.worksheet?.rows ?? []).filter(visualizerRowIsBusy).length;
+      if (
+        visualizerRunIsActive(result.worksheet) ||
+        busyRows > 0 ||
+        result.session.status === "processing"
+      ) {
+        setGenerationRun(
+          (current) =>
+            current ?? {
+              total: loadedRun?.total ?? Math.max(busyRows, 1),
+              completed: loadedRun ? loadedRun.completed + loadedRun.failed : 0,
+              runId: loadedRun?.id,
+            }
+        );
+      }
     } catch (error) {
       toast.error(
         error instanceof VisualizerApiError
@@ -606,6 +624,9 @@ export default function ProductsVisualizerPage() {
     let deltaCursor: string | null = null;
     let deltaSupported = true;
     let pollCount = 0;
+    // Polls in a row that found no live job while rows still look busy. After a
+    // few full reloads the stored rows are final; stop instead of reloading forever.
+    let idleBusyPolls = 0;
 
     const pollDeltaRows = async (): Promise<boolean> => {
       if (!deltaSupported) return false;
@@ -704,6 +725,8 @@ export default function ProductsVisualizerPage() {
         const localWorksheet = worksheetRef.current;
         const localBusy = (localWorksheet?.rows ?? []).some(visualizerRowIsBusy);
         const localRunActive = visualizerRunIsActive(localWorksheet);
+        idleBusyPolls =
+          jobStillRunning || !(localBusy || localRunActive) ? 0 : idleBusyPolls + 1;
         if (jobStillRunning) {
           setGenerationRun({
             total: progress.total,
@@ -714,7 +737,10 @@ export default function ProductsVisualizerPage() {
             stopRequestedRef.current = true;
             setStopping(true);
           }
-        } else if (!generating && !localBusy && !localRunActive) {
+        } else if (
+          !generating &&
+          ((!localBusy && !localRunActive) || idleBusyPolls > 5)
+        ) {
           if (lastCreditsProgressRef.current > 0) invalidateCredits();
           toastStopSavedIfNeeded();
           stopRequestedRef.current = false;
