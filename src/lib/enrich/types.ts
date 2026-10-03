@@ -12,6 +12,8 @@ import type { AiCallCost } from "@/lib/ai-pricing";
 export interface EnrichSettings {
   enrichmentModel: EnrichmentModel;
   outputLanguage: string;
+  /** The owner's method for every column of the run; a column's own instruction wins on conflict. */
+  globalInstruction?: string;
 }
 
 /** Column config accepted by the enrich agent (subset of EnrichmentColumn). */

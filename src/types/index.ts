@@ -469,6 +469,8 @@ export interface EnrichmentSettings {
   finderOutputs?: FinderOutput[];
   outputLanguage: OutputLanguage;
   customLanguage: string;
+  /** Enrichment: the owner's method for every column (how to research, what to trust). A column's own instruction wins on conflict. */
+  globalInstruction?: string;
   enrichmentModel: EnrichmentModel;
   /** @deprecated Ignored by OpenAI enrich agent; tier drives reasoning effort. */
   thinkingLevel: ThinkingLevelOption;

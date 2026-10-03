@@ -23,12 +23,21 @@ type Body = {
   rowIds?: string[];
   enabledColumns?: string[];
   enrichmentColumns?: CatalogJobSettings["enrichmentColumns"];
-  settings?: { enrichmentModel?: string; outputLanguage?: string };
+  settings?: { enrichmentModel?: string; outputLanguage?: string; globalInstruction?: string };
   kind?: SessionKind;
   cmsType?: string;
   sourceColumns?: string[];
   sourceColumnLabels?: Record<string, unknown>;
 };
+
+const MAX_GLOBAL_INSTRUCTION_CHARS = 2000;
+
+/** The sheet-wide instruction: plain text only, empty means none. */
+function sanitizeGlobalInstruction(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim().slice(0, MAX_GLOBAL_INSTRUCTION_CHARS);
+  return text || undefined;
+}
 
 /** Labels for the run's AI source columns; anything else the browser sent is dropped. */
 function sanitizeSourceColumnLabels(
@@ -160,6 +169,7 @@ export async function POST(request: NextRequest) {
     enrichmentColumns: body.enrichmentColumns ?? [],
     enrichmentModel: body.settings?.enrichmentModel,
     outputLanguage: body.settings?.outputLanguage || "English",
+    globalInstruction: sanitizeGlobalInstruction(body.settings?.globalInstruction),
     cmsType,
     sourceColumns,
     sourceColumnLabels: sanitizeSourceColumnLabels(body.sourceColumnLabels, sourceColumns ?? []),

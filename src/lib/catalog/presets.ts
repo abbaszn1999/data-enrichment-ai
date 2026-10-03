@@ -13,6 +13,7 @@ export interface PresetRow {
 const MAX_COLUMNS = 100;
 const MAX_SOURCES = 300;
 const MAX_INSTRUCTION_CHARS = 4000;
+const MAX_GLOBAL_INSTRUCTION_CHARS = 2000;
 const MAX_PAYLOAD_CHARS = 250_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -52,6 +53,9 @@ export function normalizePresetPayload(input: unknown): EnrichmentPresetSettings
   const settings = {
     outputLanguage: typeof rawSettings.outputLanguage === "string" ? rawSettings.outputLanguage : "English",
     customLanguage: typeof rawSettings.customLanguage === "string" ? rawSettings.customLanguage.slice(0, 80) : "",
+    ...(typeof rawSettings.globalInstruction === "string" && rawSettings.globalInstruction.trim()
+      ? { globalInstruction: rawSettings.globalInstruction.trim().slice(0, MAX_GLOBAL_INSTRUCTION_CHARS) }
+      : {}),
     enrichmentModel: rawSettings.enrichmentModel === "premium" ? "premium" : "standard",
     thinkingLevel: typeof rawSettings.thinkingLevel === "string" ? rawSettings.thinkingLevel : "low",
   } as EnrichmentPresetSettings["enrichmentSettings"];

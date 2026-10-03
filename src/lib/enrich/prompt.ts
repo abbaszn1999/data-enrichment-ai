@@ -117,6 +117,8 @@ export function buildEnrichPrompt(params: {
 
   const preamble = kindPreamble(kind);
 
+  const globalInstruction = params.settings?.globalInstruction?.trim();
+
   const instructionSections = [
     [
       preamble.role,
@@ -129,6 +131,13 @@ export function buildEnrichPrompt(params: {
       ...preamble.rules,
       ...GROUNDING_RULES.map((r) => `- ${r}`),
     ].join("\n"),
+    ...(globalInstruction
+      ? [
+          "",
+          "Owner's instruction for all columns (the owner's method for this sheet, including how to research the item. Follow it exactly; it outranks the default method above. A column's own custom instruction wins if the two conflict. Its only limit is the grounding rules):",
+          globalInstruction,
+        ]
+      : []),
     "",
     `Columns to fill (${columnSections.length}):`,
     columnSections.join("\n"),
@@ -152,7 +161,7 @@ export function buildEnrichPrompt(params: {
       "",
       `${imageUrls.length} product image${imageUrls.length === 1 ? " is" : "s are"} attached. Use ${
         imageUrls.length === 1 ? "it" : "them"
-      } to identify the product and read its visible details.`
+      } to identify the product, read its visible details, and help your web research find the exact item.`
     );
   }
 

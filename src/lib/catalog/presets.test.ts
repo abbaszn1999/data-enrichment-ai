@@ -23,6 +23,19 @@ describe("normalizePresetPayload", () => {
     expect(payload?.enrichmentSettings.outputLanguage).toBe("Arabic");
   });
 
+  it("keeps the instruction for all columns, capped, and leaves it out when empty", () => {
+    const withText = normalizePresetPayload({
+      enrichmentColumns: [col("faq")],
+      enrichmentSettings: { globalInstruction: `  ${"y".repeat(9000)}  ` },
+    });
+    expect(withText?.enrichmentSettings.globalInstruction).toHaveLength(2000);
+    const empty = normalizePresetPayload({
+      enrichmentColumns: [col("faq")],
+      enrichmentSettings: { globalInstruction: "   " },
+    });
+    expect(empty?.enrichmentSettings).not.toHaveProperty("globalInstruction");
+  });
+
   it("rejects a preset with no enabled column", () => {
     expect(normalizePresetPayload({ enrichmentColumns: [col("faq", { enabled: false })] })).toBeNull();
     expect(normalizePresetPayload({})).toBeNull();

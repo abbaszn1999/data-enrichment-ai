@@ -140,6 +140,7 @@ export async function processCatalogRow(params: {
   const enrichSettings: EnrichSettings = {
     enrichmentModel: resolveEnrichmentModel(settings.enrichmentModel),
     outputLanguage: settings.outputLanguage || "English",
+    ...(settings.globalInstruction?.trim() ? { globalInstruction: settings.globalInstruction.trim() } : {}),
   };
   const enrichmentColumnIds = new Set(settings.enrichmentColumns.map((c) => c.id));
   const aiColumnLabels: Record<string, string> = { ...(settings.sourceColumnLabels ?? {}) };

@@ -180,6 +180,28 @@ describe("Enrich column parsing", () => {
     expect(parsed.length).toBeLessThanOrEqual(70);
   });
 
+  it("lets the owner's own longer title length through, and keeps the limit for the shipped instruction", () => {
+    const long = "Widget ".repeat(30).trim();
+    const withInstruction = (customInstruction: string) =>
+      ({
+        kind: "product",
+        language: "English",
+        col: { id: "titleTag", label: "Title tag", description: "", type: "text", enabled: true, customInstruction },
+        hasStoreAllowlist: false,
+      }) as never;
+
+    const shipped = titleTagSpec.parseValue(long, withInstruction("Write a clear SEO title of 50-60 characters.")) as string;
+    expect(shipped.length).toBeLessThanOrEqual(70);
+
+    const owner = titleTagSpec.parseValue(long, withInstruction("Titles of 90-100 characters, brand last.")) as string;
+    expect(owner.length).toBeGreaterThan(70);
+    expect(owner.length).toBeLessThanOrEqual(100);
+
+    const section = titleTagSpec.buildPromptSection(withInstruction("Titles of 90-100 characters, brand last.")) as string;
+    expect(section).not.toContain("never more than 70");
+    expect(titleTagSpec.buildPromptSection(withInstruction("Brand last.")) as string).toContain("never more than 70");
+  });
+
   it("normalises specifications to one entry each, removes repeats and keeps every written entry", () => {
     const parsed = productSpecificationsSpec.parseValue(
       ["Color: Red", "color: red", "Waterproof", { attribute: "Weight", value: "2 kg" }],

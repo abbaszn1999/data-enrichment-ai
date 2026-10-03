@@ -173,7 +173,7 @@ async function enrichWithOpenAi(
     productData,
     enabledColumns,
     enrichmentColumns,
-    settings: { enrichmentModel: "standard", outputLanguage },
+    settings: { enrichmentModel: "standard", outputLanguage, globalInstruction: settings?.globalInstruction },
     policy,
     kind,
     cmsType,

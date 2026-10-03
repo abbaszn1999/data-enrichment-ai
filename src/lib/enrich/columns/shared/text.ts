@@ -29,7 +29,7 @@ export const genericTextSpec: ColumnSpec = {
     return { type: "string", description };
   },
   buildPromptSection(ctx) {
-    return promptLine(ctx, "Fill accurately from row data and search.", [
+    return promptLine(ctx, "Fill with facts confirmed for this product from the row data, images or search. If a requested fact cannot be confirmed, leave it out.", [
       charBudgetRule(ctx.col.maxChars),
     ]);
   },

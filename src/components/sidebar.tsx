@@ -878,6 +878,9 @@ export function Sidebar() {
     const enrichSettings: EnrichSettings = {
       enrichmentModel: resolveEnrichmentModel(enrichmentSettings.enrichmentModel),
       outputLanguage: resolvedLanguage,
+      ...(enrichmentSettings.globalInstruction?.trim()
+        ? { globalInstruction: enrichmentSettings.globalInstruction.trim() }
+        : {}),
     };
 
     const existingAsEnrichCols = !isNewTab
@@ -2079,6 +2082,20 @@ export function Sidebar() {
                       className="w-full h-8 px-2.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50"
                     />
                   )}
+                </div>
+
+                {/* Instructions for all columns */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                    Instructions for all columns
+                  </label>
+                  <CustomInstructionButton
+                    value={enrichmentSettings.globalInstruction}
+                    onSave={(value) => updateSettings({ globalInstruction: value })}
+                    disabled={isEnriching}
+                    placeholder="e.g. Scan the barcode and SKU first, then find the exact item. Open the Source URLs pages first, and use the attached images to recognise the product. Use metric units."
+                    helpText="Tell the agent how to research and write for every column: scan the barcode or SKU, open the Source URLs pages first, use the images to find the exact item, your brand voice. If a column has its own custom instruction, that one wins. Only confirmed facts about the item are ever written."
+                  />
                 </div>
 
               </div>

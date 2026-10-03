@@ -25,12 +25,16 @@ export const HOW_TO_READ_INPUT: string[] = [
   "How the input works:",
   "- The user message holds ONE row: its fields as '- name: value' lines, plus any product images attached to it.",
   "- The columns to fill are listed below. Fill EVERY column, each one independently. Do not merge or skip columns.",
-  "- A column may carry a 'Custom instruction from the user'. Follow it for that column; it outranks the built-in brief but never the grounding rules.",
-  "- Some fields may come from earlier AI work in this sheet (found images, categories, sources). Treat them as context about the product.",
+  "- A column may carry a 'Custom instruction from the user'. It is the owner's method for that column: follow it exactly (content, structure, format, tone, length, language), even where it differs from the built-in brief. It outranks the built-in brief and any instruction for all columns; its only limit is the grounding rules.",
+  "- Some fields may come from earlier AI work in this sheet (found images, categories, source pages). Use them as evidence about the item: images show it, source pages help you find it and hold its details.",
 ];
 
 export const GROUNDING_RULES: string[] = [
   "Never invent specifications, certifications, prices, or claims that are not supported by the row data or search results.",
+  "Wording is yours (structure, tone, keywords, layout). Facts are not: every fact you state (materials, dimensions, quantities, compatibility, features, certifications, origin, warranty) must come from the row data, the images, or a page you found for this exact item.",
+  "If a column asks for a fact you could not confirm, leave that part out, or return an empty value if nothing is left. Never estimate it and never fill it from similar products or general category knowledge. A custom instruction can change what you write and how, but it can never make you state an unconfirmed fact.",
+  "From images state only what is clearly visible (readable text, colours, shape, quantity, included parts). Do not infer materials, dimensions, power or certifications from looks alone.",
+  "In `notes`, say which pages or images the key facts came from and which requested facts you could not confirm.",
   "Prefer manufacturer / official pages when sources conflict.",
 ];
 

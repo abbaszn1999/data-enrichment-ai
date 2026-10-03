@@ -61,6 +61,8 @@ export interface CatalogJobSettings extends JobRunSettings {
   }>;
   enrichmentModel?: string;
   outputLanguage?: string;
+  /** Enrichment: the owner's method for every column (see EnrichSettings). */
+  globalInstruction?: string;
   cmsType?: string;
   sourceColumns: string[];
   /** Labels of AI columns used as sources (keyed by column id), so the agent reads "Source URLs", not "sourceUrls". */

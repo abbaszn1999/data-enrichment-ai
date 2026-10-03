@@ -168,6 +168,44 @@ describe("buildEnrichPrompt layout", () => {
     expect(noImages.textWithoutImages).toBeUndefined();
   });
 
+  it("gives the agent the research method, with images and source pages as aids to find the product", () => {
+    const policy = buildEnrichToolPolicy(["titleTag"], columns, "product");
+    const prompt = buildEnrichPrompt({
+      productData: { Name: "Widget" },
+      enabledColumns: ["titleTag"],
+      enrichmentColumns: columns,
+      policy,
+      sourceImageUrls: ["https://cdn.example.com/a.jpg"],
+    });
+    expect(prompt.instructions).toContain("Scan the row for identifiers");
+    expect(prompt.instructions).toContain("Variants (colour, size, pack) of the same product are the same product");
+    expect(prompt.instructions).toContain("help you find the product quickly");
+    expect(prompt.instructions).toContain("Source URLs or Image sources");
+    expect(prompt.instructions).toContain("Never guess and never use similar products");
+    expect(prompt.instructions).toContain("Wording is yours");
+    expect(prompt.text).toContain("help your web research find the exact item");
+  });
+
+  it("adds the instruction for all columns before the columns, and nothing when it is empty", () => {
+    const policy = buildEnrichToolPolicy(["titleTag"], columns, "product");
+    const base = { productData: { Name: "Widget" }, enabledColumns: ["titleTag"], enrichmentColumns: columns, policy };
+    const withGlobal = buildEnrichPrompt({
+      ...base,
+      settings: { enrichmentModel: "standard", outputLanguage: "English", globalInstruction: "Scan the barcode first." },
+    });
+    const text = withGlobal.instructions;
+    expect(text).toContain("Owner's instruction for all columns");
+    expect(text).toContain("Scan the barcode first.");
+    expect(text.indexOf("Scan the barcode first.")).toBeLessThan(text.indexOf("Columns to fill"));
+    expect(text).toContain("A column's own custom instruction wins if the two conflict");
+
+    const without = buildEnrichPrompt({
+      ...base,
+      settings: { enrichmentModel: "standard", outputLanguage: "English", globalInstruction: "   " },
+    });
+    expect(without.instructions).not.toContain("Owner's instruction for all columns");
+  });
+
   it("puts the stable agent + numbered columns in instructions and only row data in the input", () => {
     const policy = buildEnrichToolPolicy(["titleTag", "custom_1"], columns, "product");
     const prompt = buildEnrichPrompt({
