@@ -2252,7 +2252,8 @@ export function Sidebar() {
           <AlertDialogHeader>
             <AlertDialogTitle>Apply &quot;{pendingPreset?.name}&quot;?</AlertDialogTitle>
             <AlertDialogDescription>
-              This replaces your AI columns, their custom instructions, the
+              This replaces your AI columns (including custom columns), their
+              custom instructions, the instructions for all columns, the
               source columns and the language with the saved ones. Values
               already on the sheet are kept: columns that are not part of the
               setting stay hidden with their data and reappear if you turn them
@@ -2349,7 +2350,8 @@ export function Sidebar() {
           <DialogHeader>
             <DialogTitle>Save setting</DialogTitle>
             <DialogDescription>
-              Saves your AI columns with their custom instructions, the source
+              Saves your AI columns (including custom columns) with their custom
+              instructions, the instructions for all columns, the source
               columns and the language under a name. Load it on any later sheet
               in this workspace. Saving with an existing name replaces it.
             </DialogDescription>
