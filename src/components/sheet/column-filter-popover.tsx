@@ -43,6 +43,7 @@ export function ColumnFilterButton({
   const [pending, setPending] = useState<Set<string>>(() => new Set(active ?? []));
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const isFiltered = !!active && active.size > 0;
 
   const filteredOptions = useMemo(
@@ -64,17 +65,31 @@ export function ColumnFilterButton({
     setOpen(true);
   };
 
-  // Closing on any scroll (capture phase, so it also catches the sheet's own
-  // internal scroll container) avoids the popover drifting away from its
-  // trigger once fixed-positioned coordinates go stale.
+  // Scrolling the sheet (capture phase catches its inner scroll container) or
+  // resizing moves the trigger, so follow it instead of closing. Scrolls inside
+  // the popover itself (the values list) must never count, and the popover only
+  // closes once the trigger has scrolled out of view.
   useEffect(() => {
     if (!open) return;
-    const close = () => setOpen(false);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
+    const follow = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && popoverRef.current?.contains(target)) return;
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect || rect.bottom < 0 || rect.top > window.innerHeight) {
+        setOpen(false);
+        return;
+      }
+      const left = Math.min(
+        Math.max(VIEWPORT_MARGIN, rect.left),
+        window.innerWidth - POPOVER_WIDTH - VIEWPORT_MARGIN
+      );
+      setPosition({ top: rect.bottom + 4, left });
+    };
+    window.addEventListener("scroll", follow, true);
+    window.addEventListener("resize", follow);
     return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", follow, true);
+      window.removeEventListener("resize", follow);
     };
   }, [open]);
 
@@ -112,6 +127,7 @@ export function ColumnFilterButton({
           <>
             <div className="fixed inset-0 z-[100]" onClick={() => setOpen(false)} />
             <div
+              ref={popoverRef}
               style={{ top: position.top, left: position.left, width: POPOVER_WIDTH }}
               className="fixed z-[101] rounded-lg border bg-popover p-2 text-left shadow-lg"
               onClick={(e) => e.stopPropagation()}
