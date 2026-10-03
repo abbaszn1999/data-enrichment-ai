@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { withDisplayError } from "@/lib/provider-names";
 import { showBillingBlockedToast, toastIfBillingBlocked } from "@/lib/billing/billing-toast";
 import { PageLoader } from "@/components/brand/page-loader";
 import { useWorkspaceContext } from "../workspace-context";
@@ -2575,7 +2576,8 @@ export default function ProductsVisualizerPage() {
                         </td>
                       </tr>
                     ) : (
-                      pageRows.map((row) => {
+                      pageRows.map((storedRow) => {
+                        const row = withDisplayError(storedRow);
                         const rowIsGenerating = row.status === "generating";
                         // A generating row shows loading only; a previous result
                         // never shows while the new one is being produced.
@@ -2883,10 +2885,11 @@ export default function ProductsVisualizerPage() {
             </div>
 
             {(() => {
-              const reviewRow = reviewRowId
+              const foundReviewRow = reviewRowId
                 ? rows.find((row) => row.id === reviewRowId) ?? null
                 : null;
-              if (!reviewRow) return null;
+              if (!foundReviewRow) return null;
+              const reviewRow = withDisplayError(foundReviewRow);
               const placeholders = reviewRow.imagePlaceholders ?? [];
               const rawHtml = reviewRow.generatedDescription || "";
               const html = resolveVisualizerHtmlImages(rawHtml, signedUrls)

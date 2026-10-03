@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hideProviderNames } from "./provider-names";
+import { hideProviderNames, withDisplayError } from "./provider-names";
 
 describe("hideProviderNames", () => {
   it("rewrites the old Exact match note saved on rows, whatever the dash looked like", () => {
@@ -38,5 +38,17 @@ describe("hideProviderNames", () => {
     expect(hideProviderNames("Best match by title and brand.")).toBe("Best match by title and brand.");
     expect(hideProviderNames("")).toBe("");
     expect(hideProviderNames(undefined)).toBeUndefined();
+  });
+});
+
+describe("withDisplayError", () => {
+  it("hides provider names in a saved error message and leaves other rows untouched", () => {
+    const row = { id: "r1", errorMessage: "OpenAI request failed" };
+    expect(withDisplayError(row).errorMessage).toBe("AI request failed");
+    expect(row.errorMessage).toBe("OpenAI request failed");
+    const clean = { id: "r2", errorMessage: "Row not found" };
+    expect(withDisplayError(clean)).toBe(clean);
+    const none = { id: "r3", errorMessage: undefined };
+    expect(withDisplayError(none)).toBe(none);
   });
 });

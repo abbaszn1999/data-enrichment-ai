@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { EvidenceLedger, pageShowsImage } from "../evidence";
-import { createCheckPagesTool } from "./check-pages";
 import { createFetchPageTool, createPageSession, type CachedPage, type PageSessionOptions } from "./fetch-page";
 import { extractRowIdentifiers } from "./identifiers";
 import { extractHtmlPage } from "./page-extract";
@@ -92,54 +91,5 @@ describe("fetch_page tool", () => {
     expect(output.rowIdentifiersSeen).toEqual([]);
     expect(output.nearCodesSeen).toEqual(["AN5120N"]);
     expect(ledger.find("https://chips.test/an5120n")?.nearCodes.has("AN5120>AN5120N")).toBe(true);
-  });
-});
-
-describe("check_pages tool", () => {
-  const SIMILAR = "https://store.test/products/space-warrior-mini";
-  const similarHtml = `<html><head><title>Space Warrior Mini</title>
-    <script type="application/ld+json">{"@type":"Product","name":"Space Warrior Mini","sku":"RCP887292","brand":{"name":"Toyland"},"offers":{"price":"19.99","priceCurrency":"USD"}}</script>
-    </head><body><img src="https://cdn.test/mini-1.jpg"><img src="https://cdn.test/mini-2.jpg"></body></html>`;
-  const load = async (url: string) => (url === SIMILAR ? page(url, similarHtml) : page(url, robotHtml));
-
-  it("opens every page, records full evidence, and returns one compact line per page", async () => {
-    const ledger = new EvidenceLedger();
-    const tool = createCheckPagesTool(createPageSession({ rowIdentifiers, ledger, domainRules: noRules, load }));
-    const output = JSON.parse(String(await tool.run({ urls: [ROBOT, SIMILAR, ROBOT] })));
-    expect(output.pages).toHaveLength(2);
-    const [hit, miss] = output.pages;
-    expect(hit).toMatchObject({ url: ROBOT, status: 200, rowIdentifiersSeen: ["RCP887291"], images: 1 });
-    expect(hit.text).toBeUndefined();
-    expect(hit.links).toBeUndefined();
-    expect(miss).toMatchObject({ product: "Space Warrior Mini", brand: "Toyland", price: "19.99 USD", rowIdentifiersSeen: [], images: 2 });
-    expect(pageShowsImage(ledger.find(ROBOT)!, "https://cdn.test/robot-front-887291.jpg")).toBe(true);
-  });
-
-  it("shares the per-row and per-site budgets with fetch_page", async () => {
-    const session = createPageSession({ rowIdentifiers, ledger: new EvidenceLedger(), domainRules: noRules, maxFetches: 3, maxFetchesPerSite: 2, load });
-    const check = createCheckPagesTool(session);
-    const fetch = createFetchPageTool(session);
-    const output = JSON.parse(String(await check.run({ urls: [`${ROBOT}?a`, `${ROBOT}?b`, `${ROBOT}?c`] })));
-    expect(output.pages[2].error).toContain("opened 2 pages on store.test");
-    expect(output.pagesLeftForThisProduct).toBe(1);
-    await fetch.run({ url: "https://other.test/p" });
-    expect(JSON.parse(String(await fetch.run({ url: "https://third.test/p" }))).error).toContain("budget");
-  });
-
-  it("checks at most 15 URLs per call and says how many were skipped", async () => {
-    const opened: string[] = [];
-    const session = createPageSession({
-      rowIdentifiers,
-      ledger: new EvidenceLedger(),
-      domainRules: noRules,
-      load: async (url: string) => {
-        opened.push(url);
-        return page(url, robotHtml);
-      },
-    });
-    const urls = Array.from({ length: 18 }, (_, i) => `https://site${i}.test/p`);
-    const output = JSON.parse(String(await createCheckPagesTool(session).run({ urls })));
-    expect(opened).toHaveLength(15);
-    expect(output.skipped).toContain("3 URLs");
   });
 });

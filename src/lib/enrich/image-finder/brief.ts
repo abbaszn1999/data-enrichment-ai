@@ -5,8 +5,8 @@
  * identify the product (brand, model, SKU) and which attributes define its
  * variant is the agent's own job, using the skill's method, not a fixed
  * field-name lookup here. Order after the product data is fixed: reference
- * image, number of images, known pages, custom instruction, website rules, row
- * identifiers, sheet-learned websites, re-check hint. Pure (no runtime
+ * image, number of images, known pages, website rules, row identifiers,
+ * sheet-learned websites, re-check hint, and last the custom instruction. Pure (no runtime
  * imports) so it is cheap to test.
  */
 
@@ -104,14 +104,10 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     sections.push(
       "",
       "## Known pages for this item",
-      "These pages were found for this row earlier, best first. They are leads, not proof: some may show a similar item or a different variant.",
+      "These pages were found for this exact item by an earlier search, best first.",
       ...knownPages.map((page) => (page.title ? `- ${page.title} (${page.url})` : `- ${page.url}`)),
-      "Open these first. Take the images from the page that displays this row's identifier. If none of them does, search further."
+      `Open these first and take their images, up to ${imageCount} distinct images in total. If they give fewer, search the web for more pages of the same item.`
     );
-  }
-
-  if (customInstruction) {
-    sections.push("", "## Custom instruction (store owner, highest priority)", customInstruction);
   }
 
   const allowed = input.allowedDomains ?? [];
@@ -131,7 +127,9 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
     sections.push(
       "",
       "## Row identifiers",
-      `Code-like values in this row (the matched page must display one of them exactly): ${identifiers.join(", ")}`
+      knownPages.length > 0
+        ? `Code-like values in this row (a page you find by searching must display one of them exactly; the known pages above are not checked against them): ${identifiers.join(", ")}`
+        : `Code-like values in this row (the matched page must display one of them exactly): ${identifiers.join(", ")}`
     );
   } else if (input.rowIdentifiers) {
     sections.push(
@@ -155,6 +153,14 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
       "",
       "## Final re-check",
       "An earlier search for this row ended without a match. Search again with different approaches: run the own site search of each website listed above (if any) for every row identifier, try the identifiers written other ways, and open every plausible result before concluding."
+    );
+  }
+
+  if (customInstruction) {
+    sections.push(
+      "",
+      "## Custom instruction (store owner, highest priority)",
+      customInstruction
     );
   }
 

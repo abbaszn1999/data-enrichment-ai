@@ -25,6 +25,7 @@ describe("buildImageFinderBrief", () => {
       "## Number of images",
       "## Custom instruction",
     ].map((heading) => brief.text.indexOf(heading));
+    expect(brief.text.trimEnd().endsWith("White background, front view first")).toBe(true);
     expect(order.every((index) => index >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
 
@@ -81,7 +82,7 @@ describe("buildImageFinderBrief", () => {
     expect(brief.text).toContain("- Col 2: Blue kettle 1.7L");
   });
 
-  it("adds enforced website rules after the custom instruction", () => {
+  it("adds enforced website rules before the custom instruction, which comes last", () => {
     const brief = buildImageFinderBrief({
       rowData: { Title: "Robot kit" },
       customInstruction: "This is a toys store",
@@ -90,8 +91,8 @@ describe("buildImageFinderBrief", () => {
     });
     const custom = brief.text.indexOf("## Custom instruction");
     const rules = brief.text.indexOf("## Website rules (enforced)");
-    expect(custom).toBeGreaterThan(0);
-    expect(rules).toBeGreaterThan(custom);
+    expect(rules).toBeGreaterThan(0);
+    expect(custom).toBeGreaterThan(rules);
     expect(brief.text).toContain(
       "- Only use images from: lego.com, hasbro.com (subdomains included)"
     );
@@ -127,7 +128,7 @@ describe("buildImageFinderBrief", () => {
     expect(unspecified.text).not.toContain("## Row identifiers");
   });
 
-  it("lists known pages as leads between the image count and the custom instruction", () => {
+  it("lists known pages as the item's own pages between the image count and the custom instruction", () => {
     const brief = buildImageFinderBrief({
       rowData: { Code: "YWP1448019" },
       customInstruction: "Prefer the brand's site",
@@ -143,8 +144,20 @@ describe("buildImageFinderBrief", () => {
     expect(known).toBeLessThan(custom);
     expect(brief.text).toContain("- Yellow Lemonade Glass Mug (https://shop.test/p/yellow-mug)");
     expect(brief.text).toContain("- https://other.test/item/1");
-    expect(brief.text).toContain("They are leads, not proof");
-    expect(brief.text).toContain("Open these first.");
+    expect(brief.text).toContain("found for this exact item by an earlier search");
+    expect(brief.text).not.toContain("leads, not proof");
+    expect(brief.text).toContain("Open these first and take their images, up to 7 distinct images in total.");
+  });
+
+  it("does not hold known pages to the row identifiers, but still does for pages found by searching", () => {
+    const withKnown = buildImageFinderBrief({
+      rowData: { Code: "YWP1448019" },
+      rowIdentifiers: ["YWP1448019"],
+      knownPages: [{ url: "https://shop.test/p/yellow-mug" }],
+    });
+    expect(withKnown.text).toContain("a page you find by searching must display one of them exactly");
+    expect(withKnown.text).toContain("the known pages above are not checked against them");
+    expect(withKnown.text).not.toContain("(the matched page must display one of them exactly)");
   });
 
   it("omits the known pages section when there are none", () => {

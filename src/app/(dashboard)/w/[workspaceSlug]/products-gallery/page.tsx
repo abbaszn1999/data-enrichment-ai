@@ -45,6 +45,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { withDisplayError } from "@/lib/provider-names";
 import { showBillingBlockedToast, toastIfBillingBlocked } from "@/lib/billing/billing-toast";
 import { PageLoader } from "@/components/brand/page-loader";
 import { Button } from "@/components/ui/button";
@@ -3979,7 +3980,8 @@ export default function ProductsGalleryPage() {
                         </td>
                       </tr>
                     ) : (
-                      pageRows.map((row) => {
+                      pageRows.map((storedRow) => {
+                        const row = withDisplayError(storedRow);
                         const rowIsBusy =
                           row.status === "generating" || row.status === "queued";
                         const mainIsLoading =

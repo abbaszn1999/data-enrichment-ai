@@ -101,13 +101,21 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
   if (hasText || !hasImage) {
     lines.push("", "PRODUCT", ...(hasText ? fieldLines : ["- No usable product data was provided."]));
   }
-  if (instruction) lines.push("", `Instruction from the store owner: ${instruction}`);
   // Photo plus text: one plain line. Asking Google to "confirm" pages against the photo made it
   // over-strict when the photo was slightly off.
   if (hasText && hasImage) lines.push("", "The attached photo shows the same product.");
+  lines.push("", "Same product only. A different colour, size or model does not count. Aim for 10 or more pages.");
+  // Last before the output format, and ranked above the default rules, so the
+  // owner's way of searching is not drowned out by them.
+  if (instruction) {
+    lines.push(
+      "",
+      `Instruction from the store owner (it takes priority over the rules above, except the JSON format below): ${instruction}`
+    );
+  }
   lines.push(
     "",
-    "Same product only. A different colour, size or model does not count. Aim for 10 or more pages. Return full product page links (no search or category pages), best first, as JSON only:",
+    "Return full product page links (no search or category pages), best first, as JSON only:",
     '{"sources":[{"url":"https://...","title":"page title"}]}'
   );
   return lines.join("\n");

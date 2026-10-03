@@ -15,15 +15,26 @@ describe("IMAGE_FINDER_STANDARD_SKILL", () => {
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("If the row has no unique identifier, identify the item by brand");
   });
 
-  it("opens known pages first, treats them as leads and moves on from blocked or wrong pages", () => {
+  it("trusts known pages as the same item, skips only obvious mismatches and keeps going to fill 7 images", () => {
     const known = IMAGE_FINDER_STANDARD_SKILL.indexOf("## Step 1 — Known pages first");
     const search = IMAGE_FINDER_STANDARD_SKILL.indexOf("## Step 2 — Search the exact identifier");
     expect(known).toBeGreaterThan(-1);
     expect(known).toBeLessThan(search);
-    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("They are leads, not proof");
-    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("only when it displays this row's identifier");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("treat each one as the same item by default");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("do not compare it with the code a known page shows");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("Skip a page only if it will not open, is a search or listing page");
     expect(IMAGE_FINDER_STANDARD_SKILL).toContain("do not retry it");
-    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("If none is, continue with Step 2");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("Do not stop at the first page");
+    expect(IMAGE_FINDER_STANDARD_SKILL).not.toContain("They are leads, not proof");
+    expect(IMAGE_FINDER_STANDARD_SKILL).not.toContain("only when it displays this row's identifier");
+  });
+
+  it("fills the gap by searching when known pages gave fewer than 7 images, and keeps the identifier rule for self-found pages", () => {
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("to fill the gap");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("The pages you find here are not pre-matched");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("## Step 5 — Accept a page you found yourself only on the page itself");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("Known pages and pages you found yourself both count toward the 7");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("identifier differs, product matches");
   });
 
   it("searches the exact identifier and reads it on the opened page", () => {
@@ -60,6 +71,13 @@ describe("IMAGE_FINDER_STANDARD_SKILL", () => {
     expect(rules).toBeLessThan(custom);
     expect(custom).toBeLessThan(own);
     expect(IMAGE_FINDER_STANDARD_SKILL).not.toContain("ignore the barcode");
+  });
+
+  it("makes the custom instruction the owner's method, limited only by website rules and honesty", () => {
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("you follow it exactly");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("how strict a match must be, what counts as the same item");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("Its only limits are the website rules and honesty");
+    expect(IMAGE_FINDER_STANDARD_SKILL).toContain("Without a custom instruction, the strict defaults below apply.");
   });
 
   it("says not found only after both search approaches and never claims non-existence", () => {

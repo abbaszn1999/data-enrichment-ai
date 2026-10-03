@@ -32,3 +32,10 @@ export function hideProviderNames(text: string | undefined): string | undefined 
     .replace(/\bGemini(?:\s+[\d.]+(?:\s+(?:Flash|Pro))?)?/g, "AI")
     .replace(/\bSerper\b/g, "image search");
 }
+
+/** A row as it is shown: error text saved by an older run may still name a provider. */
+export function withDisplayError<T extends { errorMessage?: string }>(row: T): T {
+  if (!row.errorMessage) return row;
+  const shown = hideProviderNames(row.errorMessage);
+  return shown === row.errorMessage ? row : { ...row, errorMessage: shown };
+}

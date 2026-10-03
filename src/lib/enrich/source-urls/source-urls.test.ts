@@ -52,9 +52,20 @@ describe("Source URLs query", () => {
     expect(query).toContain("Find every web page that sells this exact product");
     expect(query).toContain("- Title: Widget WX-1");
     expect(query).toContain("- Brand: Acme");
-    expect(query).toContain("Instruction from the store owner: Prefer the manufacturer's own site.");
+    expect(query).toContain("Prefer the manufacturer's own site.");
     expect(query).toContain('"sources":[');
-    expect(query.length).toBeLessThan(800);
+    expect(query.length).toBeLessThan(900);
+  });
+
+  it("puts the custom instruction last before the output format and ranks it above the default rules", () => {
+    const query = buildSourceUrlsQuery({ rowData: row, customInstruction: "Start with the SKU." });
+    const defaults = query.indexOf("Same product only.");
+    const instruction = query.indexOf("Instruction from the store owner");
+    const format = query.indexOf("as JSON only:");
+    expect(defaults).toBeGreaterThan(-1);
+    expect(instruction).toBeGreaterThan(defaults);
+    expect(format).toBeGreaterThan(instruction);
+    expect(query).toContain("it takes priority over the rules above, except the JSON format below): Start with the SKU.");
   });
 
   it("has no page count, no website rules and no strict rulebook", () => {
