@@ -4,16 +4,12 @@
  * pagination, image gallery, full description viewer — no edit capability. */
 import { useMemo, useState } from "react";
 import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
-import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
 import { CellText, CellTextDialog, htmlToPlainText, looksLikeHtml } from "@/components/sheet/cell-text-dialog";
 import { ImageLightbox } from "@/components/share/image-lightbox";
 import { applyColumnLayout } from "@/lib/sheet/column-layout";
 import {
   applyColumnFilters,
-  bucketFilterValues,
-  columnFilterValues,
   hasActiveFilters,
-  setColumnFilter,
   type ColumnFilters,
 } from "@/lib/sheet/column-filters";
 import type { ColumnLayout } from "@/lib/sheet/column-layout";
@@ -63,15 +59,6 @@ function visualizerColumnFilterValue(row: ShareVisualizerRow, column: string): s
   }
   return row.originalData[column] || "";
 }
-const DESCRIPTION_BUCKETS = [
-  { value: "has_description", label: "Has description" },
-  { value: "no_description", label: "Not generated" },
-];
-const IMAGE_BUCKETS = [
-  { value: "has_images", label: "Has images" },
-  { value: "no_images", label: "No images yet" },
-];
-
 function ImageCell({ paths, signedUrls }: { paths: string[]; signedUrls: Record<string, string> }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const resolved = paths.map((p) => resolveSrc(p, signedUrls)).filter((s): s is string => !!s);
@@ -113,12 +100,13 @@ function ImageCell({ paths, signedUrls }: { paths: string[]; signedUrls: Record<
 }
 
 export function ShareVisualizerView({ payload }: { payload: VisualizerSharePayload }) {
-  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(() => viewToColumnFilters(payload.view));
+  // The shared view is fixed to the filters and sort the owner had; visitors cannot change them.
+  const [columnFilters] = useState<ColumnFilters>(() => viewToColumnFilters(payload.view));
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [textDialog, setTextDialog] = useState<{ title: string; value: string } | null>(null);
-  const [sortColumn, setSortColumn] = useState<string | null>(payload.view?.sort?.column ?? null);
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">(payload.view?.sort?.direction ?? "asc");
+  const sortColumn = payload.view?.sort?.column ?? null;
+  const sortDirection = payload.view?.sort?.direction ?? "asc";
 
   const naturalColumns = useMemo(() => {
     const productImage =
@@ -167,26 +155,6 @@ export function ShareVisualizerView({ payload }: { payload: VisualizerSharePaylo
                 <th key={column} className="group/dragcol relative truncate bg-muted px-3 py-3">
                   <span className="inline-flex items-center gap-1">
                     <span className="truncate">{columnLabel(column)}</span>
-                    <ColumnFilterButton
-                      options={
-                        column === RESULT_DESCRIPTION
-                          ? bucketFilterValues(payload.rows, DESCRIPTION_BUCKETS, (r) =>
-                              visualizerColumnFilterValue(r, column)
-                            )
-                          : column === RESULT_IMAGES
-                            ? bucketFilterValues(payload.rows, IMAGE_BUCKETS, (r) =>
-                                visualizerColumnFilterValue(r, column)
-                              )
-                            : columnFilterValues(payload.rows, (r) => visualizerColumnFilterValue(r, column))
-                      }
-                      active={columnFilters[column]}
-                      onApply={(values) => setColumnFilters((prev) => setColumnFilter(prev, column, values))}
-                      sortDirection={sortColumn === column ? sortDirection : false}
-                      onSort={(direction) => {
-                        setSortColumn(column);
-                        setSortDirection(direction);
-                      }}
-                    />
                   </span>
                 </th>
               ))}

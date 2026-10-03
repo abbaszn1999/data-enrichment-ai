@@ -2289,6 +2289,7 @@ export function DataTable({
     onPaginationChange: setPagination,
     onColumnSizingChange,
     enableColumnResizing: true,
+    enableSorting: !readOnly,
   });
 
   // Reset to first page when filters change
@@ -2432,7 +2433,8 @@ export function DataTable({
                   <button
                     key={st}
                     onClick={() => setStatusFilter(st)}
-                    className={`text-[10px] font-medium px-2 py-1 rounded transition-all capitalize ${colorMap[st]}`}
+                    disabled={readOnly}
+                    className={`text-[10px] font-medium px-2 py-1 rounded transition-all capitalize ${readOnly ? "cursor-default" : ""} ${colorMap[st]}`}
                   >
                     {st} {count > 0 && <span className="font-mono ml-0.5">({count})</span>}
                   </button>
@@ -2670,7 +2672,7 @@ export function DataTable({
                           header.column.columnDef.header,
                           header.getContext()
                         )}
-                    {layoutKey && (
+                    {layoutKey && !readOnly && (
                       <ColumnFilterHeaderIcon
                         className="ml-1"
                         rows={statusFilteredRows}
