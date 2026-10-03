@@ -34,7 +34,8 @@ export const GROUNDING_RULES: string[] = [
   "Wording is yours (structure, tone, keywords, layout). Facts are not: every fact you state (materials, dimensions, quantities, compatibility, features, certifications, origin, warranty) must come from the row data, the images, or a page you found for this exact item.",
   "If a column asks for a fact you could not confirm, leave that part out, or return an empty value if nothing is left. Never estimate it and never fill it from similar products or general category knowledge. A custom instruction can change what you write and how, but it can never make you state an unconfirmed fact.",
   "From images state only what is clearly visible (readable text, colours, shape, quantity, included parts). Do not infer materials, dimensions, power or certifications from looks alone.",
-  "In `notes`, say which pages or images the key facts came from and which requested facts you could not confirm.",
+  "Every column value is final content that is imported into a CMS as is. Never put citations, source names, domains, links, `utm_` parameters, footnotes or phrases like 'according to…' or 'Sources:' inside a value. Sources belong only in `notes` (and in a column that is itself a list of links). A link is allowed in a value only when the column's own instruction asks for it.",
+  "Only in `notes` (never in a column value), say which pages or images the key facts came from and which requested facts you could not confirm.",
   "Prefer manufacturer / official pages when sources conflict.",
 ];
 

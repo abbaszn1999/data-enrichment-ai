@@ -5,6 +5,7 @@ import type { EnrichColumnConfig, OpenAiResponse } from "./types";
 import { collectToolImages, collectToolSources } from "./tool-results";
 import { rawAnswerText } from "./columns/shared/helpers";
 import { collapseHtmlList } from "@/lib/html-detect";
+import { CITATION_SAFE_COLUMNS, stripCitations } from "./strip-citations";
 
 // Tool-result helpers live in ./tool-results; re-exported here because other
 // agents (sync, market-research) and tests import them from this module.
@@ -101,7 +102,9 @@ export function buildEnrichedData(params: {
       toolSources,
     };
 
-    const rawAnswer = selection?.[id];
+    const rawAnswer = CITATION_SAFE_COLUMNS.has(id)
+      ? selection?.[id]
+      : stripCitations(selection?.[id]);
     let value = spec.parseValue(rawAnswer, ctx);
     const answered = rawAnswerText(rawAnswer) !== "";
     if (answered && isEmptyColumnValue(value)) {
