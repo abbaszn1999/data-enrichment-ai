@@ -1774,41 +1774,6 @@ export function Sidebar() {
                     </div>
                   </FinderOutputCard>
                 )}
-                {modeColumn && (
-                  <FinderOutputCard
-                    label="Images"
-                    description={`Finds the exact product on the web, starting from your Source URLs or Lens founds column when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
-                    enabled={runsImages}
-                    expanded={expandedColumns.has(modeColumn.id)}
-                    disabled={isEnriching}
-                    onToggle={() => toggleFinderOutput("images")}
-                    onExpand={() => toggleColumnExpanded(modeColumn.id)}
-                  >
-                    <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      For the best results, run Source URLs or Lens first, then tick that column as a source
-                      column. The agent opens those pages first and searches further only if none shows the item.
-                    </p>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
-                      <CustomInstructionButton
-                        value={modeColumn.customInstruction}
-                        onSave={(value) => updateEnrichmentColumnConfig(modeColumn.id, { customInstruction: value })}
-                        disabled={isEnriching}
-                        placeholder="e.g. This is a toys store. Barcodes in this sheet are unreliable, search by SKU and product name. White background, front view first."
-                        helpText="Tell the agent what you know about this catalog: your industry, which columns to trust or ignore, preferred websites, and image style. It outranks the agent's defaults."
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-medium text-muted-foreground">Websites</label>
-                      <WebsiteRulesButton
-                        allowedDomains={modeColumn.allowedDomains}
-                        blockedDomains={modeColumn.blockedDomains}
-                        onSave={(rules) => updateEnrichmentColumnConfig(modeColumn.id, rules)}
-                        disabled={isEnriching}
-                      />
-                    </div>
-                  </FinderOutputCard>
-                )}
                 {lensColumn && (
                   <FinderOutputCard
                     label="Lens"
@@ -1877,6 +1842,41 @@ export function Sidebar() {
                         allowedDomains={lensColumn.allowedDomains}
                         blockedDomains={lensColumn.blockedDomains}
                         onSave={(rules) => updateEnrichmentColumnConfig(lensColumn.id, rules)}
+                        disabled={isEnriching}
+                      />
+                    </div>
+                  </FinderOutputCard>
+                )}
+                {modeColumn && (
+                  <FinderOutputCard
+                    label="Images"
+                    description={`Finds the exact product on the web, starting from your Source URLs or Lens founds column when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
+                    enabled={runsImages}
+                    expanded={expandedColumns.has(modeColumn.id)}
+                    disabled={isEnriching}
+                    onToggle={() => toggleFinderOutput("images")}
+                    onExpand={() => toggleColumnExpanded(modeColumn.id)}
+                  >
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      For the best results, run Source URLs or Lens first, then tick that column as a source
+                      column. The agent opens those pages first and searches further only if none shows the item.
+                    </p>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
+                      <CustomInstructionButton
+                        value={modeColumn.customInstruction}
+                        onSave={(value) => updateEnrichmentColumnConfig(modeColumn.id, { customInstruction: value })}
+                        disabled={isEnriching}
+                        placeholder="e.g. This is a toys store. Barcodes in this sheet are unreliable, search by SKU and product name. White background, front view first."
+                        helpText="Tell the agent what you know about this catalog: your industry, which columns to trust or ignore, preferred websites, and image style. It outranks the agent's defaults."
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Websites</label>
+                      <WebsiteRulesButton
+                        allowedDomains={modeColumn.allowedDomains}
+                        blockedDomains={modeColumn.blockedDomains}
+                        onSave={(rules) => updateEnrichmentColumnConfig(modeColumn.id, rules)}
                         disabled={isEnriching}
                       />
                     </div>
