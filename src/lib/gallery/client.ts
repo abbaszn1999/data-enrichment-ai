@@ -229,6 +229,36 @@ export async function uploadGalleryAiAsset(params: {
   }>(res);
 }
 
+export async function uploadGalleryRowPhoto(params: {
+  workspaceId: string;
+  sessionId: string;
+  rowId: string;
+  file: File;
+}) {
+  const form = new FormData();
+  form.set("workspaceId", params.workspaceId);
+  form.set("rowId", params.rowId);
+  form.set("file", params.file);
+  const res = await fetch(`/api/gallery/sessions/${params.sessionId}/row-photos`, {
+    method: "POST",
+    body: form,
+  });
+  return parseJson<{ path: string; signedUrls: Record<string, string> }>(res);
+}
+
+export async function deleteGalleryRowPhotos(params: {
+  workspaceId: string;
+  sessionId: string;
+  paths: string[];
+}) {
+  const res = await fetch(`/api/gallery/sessions/${params.sessionId}/row-photos`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId: params.workspaceId, paths: params.paths }),
+  });
+  return parseJson<{ removed: number }>(res);
+}
+
 export async function deleteGalleryAiAsset(params: {
   workspaceId: string;
   sessionId: string;

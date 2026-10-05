@@ -104,6 +104,8 @@ import {
   deleteGalleryRows,
   uploadGalleryAiAsset,
   deleteGalleryAiAsset,
+  uploadGalleryRowPhoto,
+  deleteGalleryRowPhotos,
   type GalleryAiAssetKind,
   GalleryApiError,
 } from "@/lib/gallery/client";
@@ -124,7 +126,13 @@ import {
   resolveGalleryRunPhase,
   resolveSelectionRunPhase,
 } from "@/lib/gallery/types";
-import { parseImageUrls, listColumnsWithHttpUrls } from "@/lib/gallery/image-urls";
+import {
+  parseImageUrls,
+  parseRowPictures,
+  appendStoredPhoto,
+  removeStoredPhoto,
+  listColumnsWithHttpUrls,
+} from "@/lib/gallery/image-urls";
 import { SheetImage } from "@/components/sheet-image";
 import { isImageFileUrl } from "@/lib/gallery/agents/gallery-brief";
 import { imageRefsMatch } from "@/lib/gallery/image-refs";
@@ -160,6 +168,8 @@ import {
 
 /** Default sheet sizes; users resize by dragging row/column edges. */
 const GALLERY_ROW_HEIGHT = 72;
+const MAX_UPLOADED_PHOTOS_PER_ROW = 5;
+const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp";
 const GALLERY_COLUMN_WIDTHS = { select: 56, result: 170, text: 180 } as const;
 const GALLERY_MIN_COLUMN = 60;
 const GALLERY_MAX_COLUMN = 800;
@@ -343,6 +353,9 @@ export default function ProductsGalleryPage() {
   const [activeSession, setActiveSession] = useState<GallerySession | null>(null);
   const [worksheet, setWorksheet] = useState<GalleryWorksheetJson | null>(null);
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
+  const [uploadingPhotoRowIds, setUploadingPhotoRowIds] = useState<Set<string>>(new Set());
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const photoPickerRowRef = useRef<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
@@ -2525,12 +2538,71 @@ export default function ProductsGalleryPage() {
     return row.mainImagePath ? [row.mainImagePath] : [];
   };
 
-  /** Every image link in the chosen original-image column cell, in order. */
+  /** Every photo in the chosen original-image column cell: links first, then photos uploaded from the computer. */
   const getRowOriginalUrls = (row: GalleryRow): string[] => {
     if (!hasOriginalImageColumn || !originalImageColumn) return [];
-    return parseImageUrls(row.originalData[originalImageColumn]).filter((url) =>
-      /^https?:\/\//i.test(url)
+    const { urls, storedPaths } = parseRowPictures(row.originalData[originalImageColumn]);
+    return [...urls, ...storedPaths];
+  };
+
+  const isUploadedPhotoPath = (path: string) => !/^https?:\/\//i.test(path);
+
+  const uploadPhotosToRow = async (row: GalleryRow, files: File[]) => {
+    if (!workspace || !projectId || !canEdit || !originalImageColumn || files.length === 0) return;
+    const current = parseRowPictures(row.originalData[originalImageColumn]);
+    const room = MAX_UPLOADED_PHOTOS_PER_ROW - current.storedPaths.length;
+    if (room <= 0) {
+      toast.error(`A product can have up to ${MAX_UPLOADED_PHOTOS_PER_ROW} uploaded photos. Remove one first.`);
+      return;
+    }
+    const accepted = files.slice(0, room);
+    if (accepted.length < files.length) {
+      toast.message(`Only ${accepted.length} of ${files.length} photos added (limit ${MAX_UPLOADED_PHOTOS_PER_ROW} per product).`);
+    }
+    setUploadingPhotoRowIds((ids) => new Set(ids).add(row.id));
+    let value = row.originalData[originalImageColumn] ?? "";
+    let added = 0;
+    try {
+      for (const file of accepted) {
+        try {
+          const result = await uploadGalleryRowPhoto({
+            workspaceId: workspace.id,
+            sessionId: projectId,
+            rowId: row.id,
+            file,
+          });
+          setSignedUrls((urls) => ({ ...urls, ...result.signedUrls }));
+          value = appendStoredPhoto(value, result.path);
+          added += 1;
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : `Could not upload ${file.name}`);
+        }
+      }
+      if (added > 0) {
+        await saveCellValue(row, originalImageColumn, value);
+        toast.success(added === 1 ? "Photo added" : `${added} photos added`);
+      }
+    } finally {
+      setUploadingPhotoRowIds((ids) => {
+        const next = new Set(ids);
+        next.delete(row.id);
+        return next;
+      });
+    }
+  };
+
+  const removeUploadedPhoto = async (row: GalleryRow, path: string) => {
+    if (!workspace || !projectId || !canEdit || !originalImageColumn) return;
+    const next = removeStoredPhoto(row.originalData[originalImageColumn], path);
+    await saveCellValue(row, originalImageColumn, next);
+    void deleteGalleryRowPhotos({ workspaceId: workspace.id, sessionId: projectId, paths: [path] }).catch(
+      () => undefined
     );
+  };
+
+  const openPhotoPicker = (row: GalleryRow) => {
+    photoPickerRowRef.current = row.id;
+    photoInputRef.current?.click();
   };
 
   const getImageMeta = (
@@ -4308,18 +4380,38 @@ export default function ProductsGalleryPage() {
                                         setImageDialogRowId(row.id);
                                         setImagePreviewPath(url);
                                       };
+                                      const uploading = uploadingPhotoRowIds.has(row.id);
+                                      const uploadButton = canEdit ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => openPhotoPicker(row)}
+                                          disabled={uploading || generationIsActive || isStoppingGeneration}
+                                          title="Upload photos from your computer"
+                                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                          aria-label="Upload photos"
+                                        >
+                                          {uploading ? (
+                                            <Loader2 className="h-3 w-3 animate-spin" />
+                                          ) : (
+                                            <Upload className="h-3 w-3" />
+                                          )}
+                                        </button>
+                                      ) : null;
                                       if (originalUrls.length === 0) {
                                         return (
-                                          <button
-                                            type="button"
-                                            onClick={openCell}
-                                            title={value || "Add image URL"}
-                                            className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                                          >
-                                            <div className="flex h-9 w-9 items-center justify-center rounded border border-dashed text-muted-foreground">
-                                              <ImageIcon className="h-3.5 w-3.5" />
-                                            </div>
-                                          </button>
+                                          <div className="flex items-center gap-1">
+                                            <button
+                                              type="button"
+                                              onClick={openCell}
+                                              title={value || "Add image URL"}
+                                              className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                            >
+                                              <div className="flex h-9 w-9 items-center justify-center rounded border border-dashed text-muted-foreground">
+                                                <ImageIcon className="h-3.5 w-3.5" />
+                                              </div>
+                                            </button>
+                                            {uploadButton}
+                                          </div>
                                         );
                                       }
                                       return (
@@ -4333,7 +4425,7 @@ export default function ProductsGalleryPage() {
                                               aria-label={`Preview image ${idx + 1}`}
                                             >
                                               <SheetImage
-                                                url={url}
+                                                url={resolvePathUrl(url) ?? url}
                                                 alt=""
                                                 className="h-9 w-9 rounded object-cover transition-transform hover:scale-105"
                                                 tileClassName="flex h-9 w-9 items-center justify-center rounded border border-dashed bg-muted/40 text-center text-[7px] leading-none text-muted-foreground"
@@ -4359,6 +4451,7 @@ export default function ProductsGalleryPage() {
                                           >
                                             <Pencil className="h-3 w-3" />
                                           </button>
+                                          {uploadButton}
                                         </div>
                                       );
                                     })()
@@ -4422,6 +4515,20 @@ export default function ProductsGalleryPage() {
             </div>
           </main>
         </div>
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept={PHOTO_ACCEPT}
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            const files = Array.from(event.target.files ?? []);
+            event.target.value = "";
+            const row = rows.find((item) => item.id === photoPickerRowRef.current);
+            photoPickerRowRef.current = null;
+            if (row) void uploadPhotosToRow(row, files);
+          }}
+        />
         {cellDialogRow && cellDialog && (
           <CellTextDialog
             key={`${cellDialog.rowId}:${cellDialog.column}`}
@@ -4565,7 +4672,11 @@ export default function ProductsGalleryPage() {
                 ) : (
                   <ImageIcon className="h-4 w-4 text-primary" />
                 )}
-                {imageDialogKind === "gallery" ? "Product gallery" : "Main images"}
+                {imageDialogKind === "gallery"
+                  ? "Product gallery"
+                  : imageDialogKind === "original"
+                    ? "Product images"
+                    : "Main images"}
               </DialogTitle>
               <DialogDescription>
                 {imageDialogRow
@@ -4662,6 +4773,17 @@ export default function ProductsGalleryPage() {
                             className="h-full w-full object-cover"
                           />
                         </button>
+                        {canEdit && imageDialogKind === "original" && isUploadedPhotoPath(path) && (
+                          <button
+                            type="button"
+                            onClick={() => void removeUploadedPhoto(imageDialogRow, path)}
+                            className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-background/95 text-destructive opacity-0 shadow transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover/dialog-image:opacity-100 focus:opacity-100"
+                            aria-label={`Remove uploaded photo ${index + 1}`}
+                            title="Remove uploaded photo"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        )}
                         {canEdit && imageDialogKind !== "original" && (
                           <button
                             type="button"

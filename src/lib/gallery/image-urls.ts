@@ -1,4 +1,4 @@
-import { splitStoredImageRefs } from "@/lib/stored-image-ref";
+import { splitStoredImageRefs, storedImagePath, toStoredImageRef } from "@/lib/stored-image-ref";
 
 export function parseImageUrls(value: unknown): string[] {
   const text = String(value ?? "").trim();
@@ -29,6 +29,53 @@ export function isStoredPictureCell(text: string): boolean {
   return remainder.replace(/[\s,|;]+/g, "").length === 0;
 }
 
+/** Photos in an image cell: links plus pictures uploaded from the user's computer. */
+export function parseRowPictures(value: unknown): { urls: string[]; storedPaths: string[] } {
+  const text = String(value ?? "").trim();
+  const seen = new Set<string>();
+  const storedPaths: string[] = [];
+  for (const ref of splitStoredImageRefs(text)) {
+    const path = storedImagePath(ref);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    storedPaths.push(path);
+  }
+  return { urls: parseImageUrls(text), storedPaths };
+}
+
+export function stripStoredImageRefs(value: string): string {
+  let text = value;
+  for (const ref of splitStoredImageRefs(value)) text = text.split(ref).join(" ");
+  return text.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
+}
+
+/** Cell value after adding an uploaded photo: existing text stays, the photo goes on a new line. */
+export function appendStoredPhoto(value: unknown, path: string): string {
+  const text = String(value ?? "").trim();
+  const ref = toStoredImageRef(path);
+  return text ? `${text}\n${ref}` : ref;
+}
+
+export function removeStoredPhoto(value: unknown, path: string): string {
+  const ref = toStoredImageRef(path);
+  return String(value ?? "")
+    .split(ref)
+    .join(" ")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Only photos saved for this gallery project may be read from storage. */
+export function isGalleryPhotoPath(path: string, workspaceId: string, sessionId: string): boolean {
+  return (
+    path.startsWith(`${workspaceId}/gallery/${sessionId}/rows/`) &&
+    !path.includes("..") &&
+    !path.includes("//")
+  );
+}
+
 /** Cheap gate before full URL parsing. */
 export function cellContainsHttpUrl(value: unknown): boolean {
   const text = String(value ?? "").trim();
@@ -43,10 +90,11 @@ export function cellContainsHttpUrl(value: unknown): boolean {
 export function cellIsPrimarilyHttpUrl(value: unknown): boolean {
   const text = String(value ?? "").trim();
   if (isStoredPictureCell(text)) return true;
+  const hasPhoto = splitStoredImageRefs(text).length > 0;
   if (!cellContainsHttpUrl(text)) return false;
   const urls = parseImageUrls(text);
   if (urls.length === 0) return false;
-  let remainder = text;
+  let remainder = hasPhoto ? stripStoredImageRefs(text) : text;
   for (const url of urls) {
     remainder = remainder.split(url).join("");
   }

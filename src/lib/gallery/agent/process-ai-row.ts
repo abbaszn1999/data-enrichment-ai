@@ -2,7 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 import { hideProviderNames } from "@/lib/provider-names";
 import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
 import { GALLERY_PLANNER_OPENAI_MODEL } from "@/lib/enrich/models";
-import { parseImageUrls } from "@/lib/gallery/image-urls";
+import { isGalleryPhotoPath, parseRowPictures } from "@/lib/gallery/image-urls";
 import { galleryError, galleryLog, galleryWarn } from "@/lib/gallery/log";
 import {
   downloadImageBytes,
@@ -141,6 +141,7 @@ export async function processAiRow(params: {
   const imageCosts: AiCallCost[] = [];
   let plan: GalleryPlannerPlan | null = null;
   let committed = false;
+  let uploadedPhotoKey = "";
 
   const fail = async (error: string) => {
     if (!committed) await removeGalleryPathsAdmin(newlyStoredPaths).catch(() => undefined);
@@ -203,13 +204,21 @@ export async function processAiRow(params: {
   galleryLog("ai-image:row", `Processing row ${row.id} via AI`, { runPhase, imageModel });
 
   try {
-    const originalUrls = worksheet.originalImageColumn
-      ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
-      : [];
+    const cellPhotos = worksheet.originalImageColumn
+      ? parseRowPictures(row.originalData[worksheet.originalImageColumn])
+      : { urls: [] as string[], storedPaths: [] as string[] };
+    const originalUrls = cellPhotos.urls;
+    const uploadedPaths = cellPhotos.storedPaths.filter((path) =>
+      isGalleryPhotoPath(path, workspaceId, sessionId)
+    );
+    uploadedPhotoKey = uploadedPaths.join("|");
+    // Photos added or removed since the last run replace the saved Main image.
+    const reuseOldMain =
+      oldMainPaths.length > 0 && uploadedPhotoKey === String(row.sourceMeta?.uploadedPhotos ?? "");
 
     // --- Product references: the row's Main image(s), plus more photos of the same item from other image columns.
     const productRefs: AiReferenceImage[] = [];
-    if (oldMainPaths.length > 0) {
+    if (reuseOldMain) {
       mainPaths.push(...oldMainPaths);
       for (const path of mainPaths) {
         if (productRefs.length >= MAX_PRODUCT_REFERENCES) break;
@@ -227,6 +236,27 @@ export async function processAiRow(params: {
       }
     } else {
       let downloadFailure: { url: string; failure?: ImageDownloadFailure } | null = null;
+      for (const photoPath of uploadedPaths) {
+        const file = await downloadGalleryBytesAdmin(photoPath).catch(() => null);
+        if (!file) {
+          galleryWarn("ai-image:row", "Uploaded photo could not be read", { rowId: row.id, photoPath });
+          continue;
+        }
+        const path = getGalleryRowImagePath(
+          workspaceId,
+          sessionId,
+          row.id,
+          "main",
+          extensionForMime(file.contentType)
+        );
+        await uploadGalleryBytesAdmin(path, file.buffer, file.contentType);
+        newlyStoredPaths.push(path);
+        mainPaths.push(path);
+        if (productRefs.length < MAX_PRODUCT_REFERENCES) {
+          const reference = await toReference(file.buffer, "product", photoPath);
+          if (reference) productRefs.push(reference);
+        }
+      }
       for (const originalUrl of originalUrls) {
         if (!/^https?:\/\//i.test(originalUrl)) continue;
         const { image: original, failure } = await downloadImageBytesDetailed(originalUrl);
@@ -246,9 +276,11 @@ export async function processAiRow(params: {
       }
       if (productRefs.length === 0) {
         return await fail(
-          originalUrls.length > 0
-            ? imageDownloadFailureMessage(downloadFailure?.url, downloadFailure?.failure)
-            : MISSING_ORIGINAL_IMAGE_MESSAGE
+          downloadFailure
+            ? imageDownloadFailureMessage(downloadFailure.url, downloadFailure.failure)
+            : uploadedPaths.length > 0
+              ? "Could not read the uploaded photo. Upload it again, then retry."
+              : MISSING_ORIGINAL_IMAGE_MESSAGE
         );
       }
       await checkpoint({
@@ -469,7 +501,7 @@ export async function processAiRow(params: {
           rowId: row.id,
           runPhase,
           galleryImages: finalGalleryPaths.length,
-          usedOriginalImage: originalUrls.length > 0,
+          usedOriginalImage: originalUrls.length > 0 || uploadedPhotoKey.length > 0,
           usedSceneReference: !!sceneReference,
           brandingEnabled: settings.brandingEnabled,
           ...charge.details,
@@ -487,9 +519,12 @@ export async function processAiRow(params: {
     committed = true;
 
     try {
-      await removeGalleryPathsAdmin(
-        runGallery ? oldGalleryPaths.filter((path) => !finalGalleryPaths.includes(path)) : []
-      );
+      await removeGalleryPathsAdmin([
+        ...(runGallery ? oldGalleryPaths.filter((path) => !finalGalleryPaths.includes(path)) : []),
+        ...oldMainPaths.filter(
+          (path) => !/^https?:\/\//i.test(path) && !finalMainPaths.includes(path)
+        ),
+      ]);
     } catch (error) {
       galleryWarn("ai-image:cleanup", "Generated images are ready but old files remain", {
         rowId: row.id,
@@ -528,7 +563,8 @@ export async function processAiRow(params: {
           model: imageModel,
           plannerModel: GALLERY_PLANNER_OPENAI_MODEL,
           runPhase,
-          usedOriginalImage: originalUrls.length > 0,
+          usedOriginalImage: originalUrls.length > 0 || uploadedPhotoKey.length > 0,
+          uploadedPhotos: uploadedPhotoKey,
           usedSceneReference: !!sceneReference,
           brandingEnabled: settings.brandingEnabled,
           partialWarning,

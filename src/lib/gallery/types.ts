@@ -2,7 +2,7 @@ import {
   parseAiSettings,
   parseScrapingSettings,
 } from "@/lib/gallery/settings-schema";
-import { parseImageUrls } from "@/lib/gallery/image-urls";
+import { parseRowPictures } from "@/lib/gallery/image-urls";
 import { EMPTY_COLUMN_LAYOUT, type ColumnLayout } from "@/lib/sheet/column-layout";
 
 export type { ColumnLayout };
@@ -55,10 +55,10 @@ export function resolveGalleryRunPhase(params: {
   provider?: GalleryProvider | null;
 }): GalleryRunPhase {
   if (params.requested === "gallery" || params.provider === "ai") return "gallery";
-  const originalUrls = params.originalImageColumn
-    ? parseImageUrls(params.row.originalData?.[params.originalImageColumn])
-    : [];
-  return originalUrls.length > 0 ? "full" : "gallery";
+  const photos = params.originalImageColumn
+    ? parseRowPictures(params.row.originalData?.[params.originalImageColumn])
+    : { urls: [], storedPaths: [] };
+  return photos.urls.length + photos.storedPaths.length > 0 ? "full" : "gallery";
 }
 
 /**

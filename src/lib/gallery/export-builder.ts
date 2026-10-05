@@ -1,6 +1,7 @@
 import type { GalleryWorksheetJson } from "@/lib/gallery/types";
 import { imageRefsMatch } from "@/lib/gallery/image-refs";
 import { mapLimit } from "@/lib/async/map-limit";
+import { splitStoredImageRefs, storedImagePath } from "@/lib/stored-image-ref";
 import type { TableExport } from "@/lib/export/table-file";
 
 export function buildGalleryExportHeaders(worksheet: GalleryWorksheetJson): string[] {
@@ -52,6 +53,13 @@ export async function buildGalleryExportTable(
   for (const row of rows) {
     for (const path of [...rowMainPaths(row), ...row.galleryImagePaths]) uniquePaths.add(path);
   }
+  for (const row of rows) {
+    for (const col of worksheet.columns) {
+      for (const ref of splitStoredImageRefs(String(row.originalData[col] ?? ""))) {
+        uniquePaths.add(storedImagePath(ref));
+      }
+    }
+  }
   const signed = new Map<string, string | null>();
   await mapLimit([...uniquePaths], 20, async (path) => {
     signed.set(path, /^https?:\/\//i.test(path) ? path : await signedUrlForPath(path));
@@ -78,7 +86,10 @@ export async function buildGalleryExportTable(
         values.push(lines.some(Boolean) ? lines.join(",\n") : "");
       }
       for (const col of worksheet.columns) {
-        const raw = String(row.originalData[col] ?? "");
+        let raw = String(row.originalData[col] ?? "");
+        for (const ref of splitStoredImageRefs(raw)) {
+          raw = raw.split(ref).join(signed.get(storedImagePath(ref)) ?? "");
+        }
         values.push(
           hasOriginal && col === worksheet.originalImageColumn && !raw.trim() && mainPaths.length > 0
             ? urls(mainPaths)

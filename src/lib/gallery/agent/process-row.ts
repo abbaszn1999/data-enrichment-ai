@@ -8,7 +8,12 @@ import { researchGalleryImages } from "@/lib/gallery/agents/gallery-research-age
 import { GALLERY_SCRAPING_OPENAI_MODEL } from "@/lib/enrich/models";
 import { billedCostsOf } from "@/lib/enrich/openai";
 import { removeGalleryAssets } from "@/lib/gallery/storage-assets";
-import { downloadGalleryBytesAdmin } from "@/lib/gallery/storage-admin";
+import {
+  downloadGalleryBytesAdmin,
+  uploadGalleryBytesAdmin,
+} from "@/lib/gallery/storage-admin";
+import { getGalleryRowImagePath } from "@/lib/gallery/storage-paths";
+import { extensionForMime } from "@/lib/gallery/agents/ai-shared";
 import {
   getRowMainImagePaths,
   MISSING_ORIGINAL_IMAGE_MESSAGE,
@@ -23,7 +28,7 @@ import {
   galleryLog,
   galleryWarn,
 } from "@/lib/gallery/log";
-import { parseImageUrls } from "@/lib/gallery/image-urls";
+import { isGalleryPhotoPath, parseRowPictures } from "@/lib/gallery/image-urls";
 import { shouldChargeGalleryCredits } from "@/lib/gallery/pricing";
 import { settleProviderUsage, type UsageSettlement } from "@/lib/jobs/credits";
 
@@ -109,11 +114,16 @@ export async function processScrapingRow(params: {
   const previousGalleryPaths = [...row.galleryImagePaths];
   const previousMainPaths = getRowMainImagePaths(row);
 
-  const originalImageUrls = worksheet.originalImageColumn
-    ? parseImageUrls(row.originalData[worksheet.originalImageColumn])
-    : [];
+  const cellPhotos = worksheet.originalImageColumn
+    ? parseRowPictures(row.originalData[worksheet.originalImageColumn])
+    : { urls: [] as string[], storedPaths: [] as string[] };
+  const originalImageUrls = cellPhotos.urls;
+  const uploadedPaths = cellPhotos.storedPaths.filter((path) =>
+    isGalleryPhotoPath(path, workspaceId, sessionId)
+  );
   const hasUsableOriginal =
-    !!worksheet.originalImageColumn && originalImageUrls.length > 0;
+    !!worksheet.originalImageColumn &&
+    originalImageUrls.length + uploadedPaths.length > 0;
 
   const galleryCount = runGallery ? Math.max(1, settings.imagesPerRow || 4) : 0;
 
@@ -221,6 +231,35 @@ export async function processScrapingRow(params: {
     ensureTime(5_000, "original reference");
     trace.stage("main", "Keeping original image URL(s) as Main");
     await params.onCheckpoint?.({ generationStage: "main" });
+
+    // Photos uploaded from the user's computer are copied into Main as stored files.
+    for (const photoPath of uploadedPaths) {
+      const file = await downloadGalleryBytesAdmin(photoPath).catch(() => null);
+      if (!file) {
+        galleryWarn("row", "Uploaded photo could not be read", { rowId: row.id, photoPath });
+        continue;
+      }
+      const path = getGalleryRowImagePath(
+        workspaceId,
+        sessionId,
+        row.id,
+        "main",
+        extensionForMime(file.contentType)
+      );
+      await uploadGalleryBytesAdmin(path, file.buffer, file.contentType);
+      newlyStoredMainPaths.push(path);
+      mainPaths.push(path);
+      mainAttachments.push({ url: path, buffer: file.buffer, contentType: file.contentType });
+      sourceMetaImages.push({
+        ref: path,
+        url: path,
+        persistence: "internal",
+        sourceUrl: path,
+        pageUrl: path,
+        title: "uploaded photo",
+        role: "main",
+      });
+    }
 
     // Scraping stores public URLs only — OpenAI/Gemini fetch them later.
     for (const originalUrl of originalImageUrls) {
