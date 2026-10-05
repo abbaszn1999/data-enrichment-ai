@@ -1833,8 +1833,27 @@ export function Sidebar() {
                       >
                         <option value="exact">Exact matches only</option>
                         <option value="exact_and_visual">Exact, then similar if fewer than the limit</option>
+                        <option value="products">Products (shop listings)</option>
                       </select>
                     </div>
+                    <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
+                      <input
+                        type="checkbox"
+                        checked={lensColumn.lensProductPagesOnly !== false}
+                        onChange={(e) =>
+                          updateEnrichmentColumnConfig(lensColumn.id, { lensProductPagesOnly: e.target.checked })
+                        }
+                        disabled={isEnriching}
+                        className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                      />
+                      <span className="space-y-0.5">
+                        <span className="block text-[11px] font-semibold text-foreground">Product pages only</span>
+                        <span className="block text-[10px] leading-relaxed text-muted-foreground">
+                          Skip videos, social posts, review, category and stock-photo pages, and list pages with a
+                          price first.
+                        </span>
+                      </span>
+                    </label>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-medium text-muted-foreground">Pages to keep per row</label>
                       <select

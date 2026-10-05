@@ -57,6 +57,7 @@ export interface CatalogJobSettings extends JobRunSettings {
     allowedDomains?: string[];
     blockedDomains?: string[];
     lensMatchScope?: LensMatchScope;
+    lensProductPagesOnly?: boolean;
     writingTone?: string;
     contentLength?: string;
     isCustom?: boolean;

@@ -204,6 +204,7 @@ export async function processCatalogRow(params: {
           allowedDomains: c.allowedDomains,
           blockedDomains: c.blockedDomains,
           lensMatchScope: c.lensMatchScope,
+          lensProductPagesOnly: c.lensProductPagesOnly,
           writingTone: c.writingTone as WritingTone | undefined,
           contentLength: c.contentLength as ContentLength | undefined,
         })),

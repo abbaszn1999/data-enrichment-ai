@@ -10,7 +10,7 @@ vi.mock("./searchapi-lens", async (importOriginal) => ({
   callGoogleLens: callLensMock,
 }));
 
-const { findLensMatches, searchLensMatches, toLensSources } = await import("./agent");
+const { emptyLensDrops, findLensMatches, searchLensMatches, toLensSources } = await import("./agent");
 const { parseLensMatches } = await import("./searchapi-lens");
 const { detectLensImageColumn, lensImageForRow, lensImagesFromCell } = await import("./image-column");
 const { isLensRun, lensRunConflict } = await import("./run");
@@ -19,7 +19,10 @@ const { normalizeFinderOutputs } = await import("@/types");
 const IMAGE = "https://cdn.test/p.jpg";
 const NO_RULES = { allowedDomains: [], blockedDomains: [] };
 const match = (link: string, title = "") => ({ link, title });
-const answer = (searchType: "exact_matches" | "visual_matches", matches: Array<{ link: string; title: string }>) => ({
+const answer = (
+  searchType: "exact_matches" | "visual_matches" | "products",
+  matches: Array<{ link: string; title: string; price?: string }>
+) => ({
   matches,
   searchType,
   httpStatus: 200,
@@ -63,6 +66,52 @@ describe("toLensSources", () => {
   });
 });
 
+describe("toLensSources product filter", () => {
+  const open = { allowedDomains: [], blockedDomains: [] };
+
+  it("drops non-product pages, then lists priced pages, product-looking URLs and unknown ones in that order", () => {
+    const drops = emptyLensDrops();
+    const sources = toLensSources(
+      [
+        match("https://unknown.test/toy-123.html", "Unknown"),
+        match("https://shop.test/products/car", "Car"),
+        { ...match("https://priced.test/some-page", "Priced"), price: "€10" },
+        match("https://www.youtube.com/watch?v=1", "Video"),
+        match("https://alza.test/recenzie/car-1", "Review"),
+        match("https://shop.test/", "Home"),
+      ],
+      open,
+      10,
+      new Set(),
+      [],
+      { drops }
+    );
+    expect(sources.map((s) => s.title)).toEqual(["Priced", "Car", "Unknown"]);
+    expect(drops).toEqual({ site: 1, listing: 1, notPage: 1, rules: 0 });
+  });
+
+  it("fills the limit from the best pages first", () => {
+    const sources = toLensSources(
+      [match("https://a.test/some-page", "Unknown"), match("https://b.test/product/2", "Product")],
+      open,
+      1
+    );
+    expect(sources.map((s) => s.title)).toEqual(["Product"]);
+  });
+
+  it("keeps Google's order and every page when product pages only is off", () => {
+    const sources = toLensSources(
+      [match("https://shop.test/collections/toys", "List"), match("https://b.test/product/2", "Product")],
+      open,
+      10,
+      new Set(),
+      [],
+      { productsOnly: false }
+    );
+    expect(sources.map((s) => s.title)).toEqual(["List", "Product"]);
+  });
+});
+
 describe("searchLensMatches billing", () => {
   beforeEach(() => callLensMock.mockReset());
 
@@ -89,7 +138,40 @@ describe("searchLensMatches billing", () => {
     callLensMock.mockResolvedValueOnce(answer("exact_matches", [match("https://pin.test/p/1", "Pin")]));
     const result = await search({ rules: { allowedDomains: [], blockedDomains: ["pin.test"] } });
     expect(result.sources).toEqual([]);
-    expect(result.notFoundReason).toMatch(/none is on an allowed website/);
+    expect(result.notFoundReason).toMatch(/none is a product page you allow: 1 blocked by your website rules/);
+  });
+
+  it("says what was set aside when every page was not a product page", async () => {
+    callLensMock.mockResolvedValueOnce(
+      answer("exact_matches", [
+        match("https://www.youtube.com/watch?v=1", "Video"),
+        match("https://shop.test/collections/toys", "Toys"),
+        match("https://shop.test/", "Home"),
+      ])
+    );
+    const result = await search();
+    expect(result.sources).toEqual([]);
+    expect(result.notFoundReason).toMatch(/found 3 page\(s\), but none is a product page you allow/);
+    expect(result.notFoundReason).toMatch(/1 on video, social, reference or stock-photo sites/);
+    expect(result.notFoundReason).toMatch(/1 category, review or article page\(s\)/);
+    expect(result.notFoundReason).toMatch(/1 home page\(s\) or file\(s\)/);
+  });
+
+  it("keeps everything Google listed when product pages only is off", async () => {
+    callLensMock.mockResolvedValueOnce(answer("exact_matches", [match("https://shop.test/collections/toys", "Toys")]));
+    const result = await search({ productsOnly: false });
+    expect(result.sources.map((s) => s.uri)).toEqual(["https://shop.test/collections/toys"]);
+  });
+
+  it("runs one products search for the Products option and bills it once", async () => {
+    callLensMock.mockResolvedValueOnce(
+      answer("products", [{ ...match("https://www.walmart.com/ip/toy/123", "Toy"), price: "$20*" }])
+    );
+    const result = await search({ scope: "products" });
+    expect(callLensMock).toHaveBeenCalledTimes(1);
+    expect(callLensMock).toHaveBeenCalledWith(IMAGE, "products");
+    expect(result.sources.map((s) => s.uri)).toEqual(["https://www.walmart.com/ip/toy/123"]);
+    expect(result.costs).toHaveLength(1);
   });
 
   it("makes no call and bills nothing for a row without a picture", async () => {

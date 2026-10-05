@@ -65,7 +65,7 @@ export interface FaqItem {
 export type CategoryFormat = "collections" | "flat" | "depth2" | "depth3";
 
 /** Which Google Lens results fill the Lens founds column. */
-export type LensMatchScope = "exact" | "exact_and_visual";
+export type LensMatchScope = "exact" | "exact_and_visual" | "products";
 
 export interface EnrichmentColumn {
   id: string;
@@ -84,7 +84,8 @@ export interface EnrichmentColumn {
   customInstruction?: string; // Custom instruction for this column
   allowedDomains?: string[]; // Image Finder: only use these websites (max 100, subdomains included)
   blockedDomains?: string[]; // Image Finder: never use these websites (max 100)
-  lensMatchScope?: LensMatchScope; // Lens founds: exact matches only (default) or exact plus visual matches
+  lensMatchScope?: LensMatchScope; // Lens founds: exact matches only (default), exact plus visual matches, or shop listings
+  lensProductPagesOnly?: boolean; // Lens founds: drop videos, social, review and category pages (default on)
   writingTone?: WritingTone; // Per-column writing tone (for text columns)
   contentLength?: ContentLength; // Per-column content length (for text columns)
 }

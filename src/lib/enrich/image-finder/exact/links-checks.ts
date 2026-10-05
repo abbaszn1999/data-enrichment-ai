@@ -64,7 +64,7 @@ function fullProductUrl(raw: string, allowHttp = false): { ok: boolean; host?: s
   return { ok: true, host: url.hostname.toLowerCase().replace(/^www\./, "") };
 }
 
-function isNonProductHost(host: string): boolean {
+export function isNonProductHost(host: string): boolean {
   return NON_PRODUCT_HOST_PATTERNS.some((pattern) => pattern.test(host));
 }
 

@@ -12,13 +12,14 @@
  */
 import { createSearchApiCost, SEARCHAPI_GOOGLE_LENS_MODEL, type AiCallCost } from "@/lib/ai-pricing";
 import { hideProviderNames } from "@/lib/provider-names";
-import { LENS_FOUNDS_COLUMN_ID, type SourceUrl } from "@/types";
+import { LENS_FOUNDS_COLUMN_ID, type LensMatchScope, type SourceUrl } from "@/types";
 import { hostMatchesDomain, sanitizeDomainRules, type DomainRules } from "../domains";
 import { imageFinderNotFoundKey } from "../image-finder/not-found";
 import { isTransientSearchApiError, SearchApiCallError } from "../image-finder/exact/searchapi";
 import { EnrichBilledAttemptError, EnrichCancelledError } from "../openai";
 import { cleanPageTitle } from "../source-urls/skill";
 import type { EnrichAgentParams, EnrichAgentResult } from "../types";
+import { classifyLensLink } from "./product-links";
 import { callGoogleLens, type LensMatch, type LensSearchType } from "./searchapi-lens";
 
 export const LENS_PAGES_DEFAULT = 10;
@@ -29,9 +30,11 @@ const TRANSIENT_RETRY_DELAY_MS = 2_000;
 export interface FindLensMatchesInput {
   /** One public http(s) link to the picture. Omit when the row has none. */
   imageUrl?: string;
-  scope: "exact" | "exact_and_visual";
+  scope: LensMatchScope;
   limit: number;
   rules: DomainRules;
+  /** Keep only pages that look like product pages, best first. Default on. */
+  productsOnly?: boolean;
   shouldCancel?: () => Promise<boolean>;
   /** Wait before the one retry of a rate-limited or 5xx call (tests shorten it). */
   retryDelayMs?: number;
@@ -63,35 +66,92 @@ function pageKey(raw: string): string {
   }
 }
 
+/** How many listed pages were set aside, and why. */
+export interface LensDrops {
+  /** Video, social, reference and stock-photo websites. */
+  site: number;
+  /** Category, review, article and search pages. */
+  listing: number;
+  /** Home pages and files that are not a page about one product. */
+  notPage: number;
+  /** Blocked or not allowed by the owner's website rules. */
+  rules: number;
+}
+
+export const emptyLensDrops = (): LensDrops => ({ site: 0, listing: 0, notPage: 0, rules: 0 });
+
+interface ToLensSourcesOptions {
+  /** Drop what is clearly not a product page and list product-looking pages first. Default on. */
+  productsOnly?: boolean;
+  drops?: LensDrops;
+}
+
 /**
  * Lens matches as Source URLs: only websites the rules allow, no repeated page,
- * Google's order kept, cut at `limit`. `seen` carries the pages already kept so
- * a second list continues the first.
+ * cut at `limit`. With `productsOnly`, pages that are clearly not about one
+ * product are dropped and the rest are ordered priced pages, then product-looking
+ * URLs, then the unknown ones (Google's order kept inside each group). `seen`
+ * carries the pages already kept so a second list continues the first.
  */
 export function toLensSources(
   matches: LensMatch[],
   rules: DomainRules,
   limit: number,
   seen: Set<string> = new Set(),
-  kept: SourceUrl[] = []
+  kept: SourceUrl[] = [],
+  options: ToLensSourcesOptions = {}
 ): SourceUrl[] {
+  const productsOnly = options.productsOnly !== false;
+  const drops = options.drops;
+  const candidates: Array<{ match: LensMatch; key: string; host: string; tier: number }> = [];
+  const listed = new Set<string>();
+
   for (const match of matches) {
-    if (kept.length >= limit) break;
     const host = hostOf(match.link);
     if (!host) continue;
-    if (rules.blockedDomains.some((domain) => hostMatchesDomain(host, domain))) continue;
     if (
-      rules.allowedDomains.length > 0 &&
-      !rules.allowedDomains.some((domain) => hostMatchesDomain(host, domain))
+      rules.blockedDomains.some((domain) => hostMatchesDomain(host, domain)) ||
+      (rules.allowedDomains.length > 0 && !rules.allowedDomains.some((domain) => hostMatchesDomain(host, domain)))
     ) {
+      if (drops) drops.rules += 1;
       continue;
     }
+    let tier = 2;
+    if (productsOnly) {
+      const verdict = classifyLensLink(match);
+      if (verdict.drop) {
+        if (drops) {
+          if (verdict.drop === "site") drops.site += 1;
+          else if (verdict.drop === "listing") drops.listing += 1;
+          else drops.notPage += 1;
+        }
+        continue;
+      }
+      tier = verdict.tier;
+    }
     const key = pageKey(match.link);
-    if (seen.has(key)) continue;
+    if (seen.has(key) || listed.has(key)) continue;
+    listed.add(key);
+    candidates.push({ match, key, host, tier });
+  }
+
+  if (productsOnly) candidates.sort((a, b) => a.tier - b.tier);
+  for (const { match, key, host } of candidates) {
+    if (kept.length >= limit) break;
     seen.add(key);
     kept.push({ title: cleanPageTitle(match.title) || match.source || host, uri: match.link });
   }
   return kept;
+}
+
+/** "5 on video, social or reference sites, 3 category or review pages" — empty when nothing was set aside. */
+export function describeLensDrops(drops: LensDrops): string {
+  const parts: string[] = [];
+  if (drops.site > 0) parts.push(`${drops.site} on video, social, reference or stock-photo sites`);
+  if (drops.listing > 0) parts.push(`${drops.listing} category, review or article page(s)`);
+  if (drops.notPage > 0) parts.push(`${drops.notPage} home page(s) or file(s)`);
+  if (drops.rules > 0) parts.push(`${drops.rules} blocked by your website rules`);
+  return parts.join(", ");
 }
 
 export async function searchLensMatches(input: FindLensMatchesInput): Promise<FindLensMatchesResult> {
@@ -134,14 +194,16 @@ export async function searchLensMatches(input: FindLensMatchesInput): Promise<Fi
 
   const seen = new Set<string>();
   const sources: SourceUrl[] = [];
+  const drops = emptyLensDrops();
+  const listOptions = { productsOnly: input.productsOnly !== false, drops };
   let exactListed = 0;
   let visualListed = 0;
   let visualNote = "";
 
   try {
-    const exact = await run("exact_matches");
-    exactListed = exact.matches.length;
-    toLensSources(exact.matches, input.rules, input.limit, seen, sources);
+    const first = await run(input.scope === "products" ? "products" : "exact_matches");
+    exactListed = first.matches.length;
+    toLensSources(first.matches, input.rules, input.limit, seen, sources, listOptions);
   } catch (error) {
     if (costs.length > 0) {
       throw new EnrichBilledAttemptError(error instanceof Error ? error.message : String(error), costs);
@@ -158,7 +220,7 @@ export async function searchLensMatches(input: FindLensMatchesInput): Promise<Fi
     try {
       const visual = await run("visual_matches");
       visualListed = visual.matches.length;
-      toLensSources(visual.matches, input.rules, input.limit, seen, sources);
+      toLensSources(visual.matches, input.rules, input.limit, seen, sources, listOptions);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       visualNote = ` (the similar-pictures search failed: ${hideProviderNames(message.slice(0, 200))})`;
@@ -170,15 +232,17 @@ export async function searchLensMatches(input: FindLensMatchesInput): Promise<Fi
     exactListed,
     visualListed,
     kept: sources.length,
+    drops,
   });
 
   if (sources.length > 0) return { sources, costs, searches: costs.length, notFoundReason: "" };
 
   const listed = exactListed + visualListed;
+  const why = describeLensDrops(drops);
   const reason =
     listed === 0
       ? "Google Lens found no page for this picture."
-      : `Google Lens found ${listed} page(s), but none is on an allowed website.`;
+      : `Google Lens found ${listed} page(s), but none is a product page you allow${why ? `: ${why}` : ""}.`;
   return { sources: [], costs, searches: costs.length, notFoundReason: `${reason}${visualNote}` };
 }
 
@@ -189,7 +253,11 @@ export async function findLensMatches(params: EnrichAgentParams): Promise<Enrich
 
   const result = await searchLensMatches({
     imageUrl: (params.sourceImageUrls ?? []).find((url) => /^https?:\/\//i.test(url)),
-    scope: column?.lensMatchScope === "exact_and_visual" ? "exact_and_visual" : "exact",
+    scope:
+      column?.lensMatchScope === "exact_and_visual" || column?.lensMatchScope === "products"
+        ? column.lensMatchScope
+        : "exact",
+    productsOnly: column?.lensProductPagesOnly !== false,
     limit,
     rules: sanitizeDomainRules({ allowedDomains: column?.allowedDomains, blockedDomains: column?.blockedDomains }),
     shouldCancel: params.shouldCancel,

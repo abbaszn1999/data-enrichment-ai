@@ -35,6 +35,7 @@ export type EnrichColumnConfig = Pick<
   | "allowedDomains"
   | "blockedDomains"
   | "lensMatchScope"
+  | "lensProductPagesOnly"
   | "writingTone"
   | "contentLength"
 >;

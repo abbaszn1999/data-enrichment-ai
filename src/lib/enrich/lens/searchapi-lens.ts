@@ -6,12 +6,15 @@
  */
 import { requestSearchApi } from "../image-finder/exact/searchapi";
 
-export type LensSearchType = "exact_matches" | "visual_matches";
+export type LensSearchType = "exact_matches" | "visual_matches" | "products";
 
 export interface LensMatch {
   link: string;
   title: string;
   source?: string;
+  /** Price text Google shows for the listing, when it shows one. */
+  price?: string;
+  inStock?: string;
 }
 
 export interface GoogleLensResult {
@@ -25,6 +28,8 @@ interface LensApiMatch {
   link?: unknown;
   title?: unknown;
   source?: unknown;
+  price?: unknown;
+  stock_information?: unknown;
 }
 
 interface LensApiResponse {
@@ -41,7 +46,7 @@ const LENS_NO_RESULTS_ERROR = /didn't return any results/i;
  * Calls the Google Lens engine once. Exact matches come back as encrypted
  * Google redirects unless `link=resolved` is set; resolving costs no extra
  * search (measured live: one search either way, about the same latency), so it
- * is always on. Visual matches are already direct links.
+ * is always on for them. Visual and product matches are already direct links.
  *
  * Returns only for a billed call; the caller records that cost immediately,
  * even when no page matched.
@@ -54,8 +59,8 @@ export async function callGoogleLens(
     engine: "google_lens",
     search_type: searchType,
     url: imageUrl,
-    link: "resolved",
   });
+  if (searchType === "exact_matches") params.set("link", "resolved");
   const { data, httpStatus, elapsedMs } = await requestSearchApi<LensApiResponse>(
     params,
     "Google Lens",
@@ -79,7 +84,15 @@ export function parseLensMatches(items: LensApiMatch[] | undefined): LensMatch[]
     if (!/^https?:\/\//i.test(link) || isGoogleRedirect(link)) continue;
     const title = typeof item.title === "string" ? item.title.trim() : "";
     const source = typeof item.source === "string" ? item.source.trim() : "";
-    matches.push({ link, title, ...(source ? { source } : {}) });
+    const price = typeof item.price === "string" ? item.price.trim() : "";
+    const inStock = typeof item.stock_information === "string" ? item.stock_information.trim() : "";
+    matches.push({
+      link,
+      title,
+      ...(source ? { source } : {}),
+      ...(price ? { price } : {}),
+      ...(inStock ? { inStock } : {}),
+    });
   }
   return matches;
 }
