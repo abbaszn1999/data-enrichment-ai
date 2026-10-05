@@ -34,6 +34,9 @@ interface LensApiResponse {
   error?: unknown;
 }
 
+/** Lens answers "no exact page for this picture" as Success plus this error text; it is billed like any search. */
+const LENS_NO_RESULTS_ERROR = /didn't return any results/i;
+
 /**
  * Calls the Google Lens engine once. Exact matches come back as encrypted
  * Google redirects unless `link=resolved` is set; resolving costs no extra
@@ -53,7 +56,12 @@ export async function callGoogleLens(
     url: imageUrl,
     link: "resolved",
   });
-  const { data, httpStatus, elapsedMs } = await requestSearchApi<LensApiResponse>(params, "Google Lens");
+  const { data, httpStatus, elapsedMs } = await requestSearchApi<LensApiResponse>(
+    params,
+    "Google Lens",
+    undefined,
+    LENS_NO_RESULTS_ERROR
+  );
   return {
     matches: parseLensMatches(searchType === "exact_matches" ? data.exact_matches : data.visual_matches),
     searchType,

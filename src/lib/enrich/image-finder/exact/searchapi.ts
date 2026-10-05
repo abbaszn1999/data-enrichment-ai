@@ -166,11 +166,16 @@ export async function callGoogleAiMode(
  * One SearchApi GET. Returns only for a billed call (HTTP 200 with a Success
  * body); anything else throws a SearchApiCallError. `params` carries the
  * engine and its own parameters, the key is added here.
+ *
+ * `emptyResultPattern`: some engines report "found nothing" as a Success
+ * response with a top-level `error` text. SearchApi still bills it, so a match
+ * returns the (empty) body as a normal billed call instead of throwing.
  */
 export async function requestSearchApi<T extends { search_metadata?: { status?: string }; error?: unknown }>(
   params: URLSearchParams,
   engineLabel: string,
-  timeoutMs: number = REQUEST_TIMEOUT_MS
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+  emptyResultPattern?: RegExp
 ): Promise<{ data: T; httpStatus: number; elapsedMs: number }> {
   params.set("api_key", requireSearchApiKey());
 
@@ -217,6 +222,9 @@ export async function requestSearchApi<T extends { search_metadata?: { status?: 
     throw new SearchApiCallError("Web search returned a non-JSON body", false);
   }
   const status = data.search_metadata?.status;
+  if (status === "Success" && typeof data.error === "string" && emptyResultPattern?.test(data.error)) {
+    return { data: { ...data, error: undefined }, httpStatus: response.status, elapsedMs: Date.now() - startedAt };
+  }
   if (data.error || (typeof status === "string" && status !== "Success")) {
     // SearchApi charges Success responses only; an error body is not one.
     console.warn(`[${engineLabel}] ${engineLabel} returned an error body with HTTP 200`, {
