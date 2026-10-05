@@ -70,10 +70,12 @@ import {
   PRODUCT_MODE_COLUMN_IDS,
   IMAGE_SOURCES_COLUMN_ID,
   SOURCE_URLS_COLUMN_ID,
+  LENS_FOUNDS_COLUMN_ID,
   isProductModeColumn,
   catalogModeForRunColumns,
   DEFAULT_FINDER_OUTPUTS,
   type FinderOutput,
+  type LensMatchScope,
   type CatalogSidebarMode,
   type OutputLanguage,
   type EnrichmentPreset,
@@ -81,6 +83,7 @@ import {
 } from "@/types";
 import type { EnrichSettings } from "@/lib/enrich";
 import { IMAGE_FINDER_MAX_IMAGES } from "@/lib/enrich/image-finder/brief";
+import { detectLensImageColumn } from "@/lib/enrich/lens/image-column";
 import {
   categoryCountLabel,
   categoryFormatOption,
@@ -118,6 +121,7 @@ const SIDEBAR_MODES: { id: CatalogSidebarMode; label: string; icon: LucideIcon }
 
 /** The progress line of a running Source & Image Finder run, from the columns it generates. */
 function finderRunningLabel(columnIds: string[]): string {
+  if (columnIds.includes(LENS_FOUNDS_COLUMN_ID)) return "Finding Lens matches...";
   const sources = columnIds.includes(SOURCE_URLS_COLUMN_ID);
   const images = columnIds.includes(PRODUCT_MODE_COLUMN_IDS.images);
   if (sources && images) return "Finding sources & images...";
@@ -451,11 +455,13 @@ export function Sidebar() {
   const finderOutputs: FinderOutput[] = enrichmentSettings.finderOutputs ?? DEFAULT_FINDER_OUTPUTS;
   const runsSourceUrls = mode === "images" && !!sourceUrlsColumn && finderOutputs.includes("sourceUrls");
   const runsImages = mode === "images" && !!modeColumn && finderOutputs.includes("images");
+  const lensColumn =
+    mode === "images" ? enrichmentColumns.find((col) => col.id === LENS_FOUNDS_COLUMN_ID) ?? null : null;
+  const runsLens = mode === "images" && !!lensColumn && finderOutputs.includes("lens");
+  // Images, Source URLs and Lens never run together: switching one on replaces
+  // the others, and switching the one that is on turns everything off.
   const toggleFinderOutput = (output: FinderOutput) => {
-    const next = finderOutputs.includes(output)
-      ? finderOutputs.filter((o) => o !== output)
-      : [...finderOutputs, output];
-    updateSettings({ finderOutputs: next });
+    updateSettings({ finderOutputs: finderOutputs.includes(output) ? [] : [output] });
   };
   const toggleColumnExpanded = (id: string) =>
     setExpandedColumns((prev) => {
@@ -550,6 +556,45 @@ export function Sidebar() {
     return { columns, counts, total: scope.length, isSelection: selected.length > 0 };
   }, [activeSheet, enrichmentColumns, productGroupColumn, rows, selectedRowIds]);
   const enrichedColumnsWithData = aiSources.columns;
+
+  // Lens searches with one picture per row, so it has one image column instead of
+  // the multi-select source columns. A column the user picked wins; otherwise the
+  // first column that looks like it holds pictures is used, and nothing is
+  // assumed when none does.
+  const lensImageChoices = useMemo(
+    () => new Set([...originalColumns, ...enrichedColumnsWithData.map((col) => col.id)]),
+    [originalColumns, enrichedColumnsWithData]
+  );
+  const pickedLensImage =
+    enrichmentSettings.lensImageColumn && lensImageChoices.has(enrichmentSettings.lensImageColumn)
+      ? enrichmentSettings.lensImageColumn
+      : null;
+  const detectedLensImage = useMemo(() => {
+    if (!runsLens) return null;
+    const sheet = visibleCatalogRows(rows, { groupColumn: productGroupColumn, activeSheet });
+    const selected = sheet.filter((r) => selectedRowIds.has(r.id));
+    return detectLensImageColumn(
+      selected.length > 0 ? selected : sheet,
+      originalColumns,
+      enrichedColumnsWithData.map((col) => col.id)
+    );
+  }, [runsLens, rows, productGroupColumn, activeSheet, selectedRowIds, originalColumns, enrichedColumnsWithData]);
+  const lensImageColumn = runsLens ? (pickedLensImage ?? detectedLensImage) : null;
+  // Lens only offers AI columns that hold pictures (the Image URLs column Image Finder fills).
+  const sourceAiColumns = runsLens
+    ? enrichedColumnsWithData.filter((col) => col.id === PRODUCT_MODE_COLUMN_IDS.images)
+    : enrichedColumnsWithData;
+  const pickLensImageColumn = (column: string) => {
+    if (column === lensImageColumn) return;
+    const previous = lensImageColumn;
+    updateSettings({ lensImageColumn: column });
+    toast.info(`Lens will use "${column.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col")}" as the picture column`, {
+      description: "Make sure this column holds the product pictures. Lens reads one picture per row.",
+      ...(previous
+        ? { action: { label: "Undo", onClick: () => updateSettings({ lensImageColumn: previous }) } }
+        : {}),
+    });
+  };
 
   // The sources a run sends: only ones listed (and so visible) under Source
   // Columns. A preset can tick an AI column that has no values on this sheet
@@ -798,10 +843,11 @@ export function Sidebar() {
         ? enrichListColumns.filter((c) => c.enabled)
         : mode === "images"
           ? [
-              // Images (with its Image sources column) and/or Source URLs, as switched on in the tab.
+              // Exactly one of Images (with its Image sources column), Source URLs or Lens founds, as switched on in the tab.
               ...(runsImages && modeColumn ? [{ ...modeColumn, enabled: true }] : []),
               ...(imageSourcesColumn ? [{ ...imageSourcesColumn, enabled: true }] : []),
               ...(runsSourceUrls && sourceUrlsColumn ? [{ ...sourceUrlsColumn, enabled: true }] : []),
+              ...(runsLens && lensColumn ? [{ ...lensColumn, enabled: true }] : []),
             ]
           : modeColumn
           ? [
@@ -817,6 +863,8 @@ export function Sidebar() {
             ]
           : [];
     const runColumnIds = runColumns.map((c) => c.id);
+    // Lens sends the one picture column; every other run sends the ticked source columns.
+    const requestSourceColumns = runsLens ? (lensImageColumn ? [lensImageColumn] : []) : runSourceColumns;
     if (useSheetStore.getState().isStoppingEnrich) return;
     if ((isNewTab ? runColumnIds.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
     // Mode columns start hidden in the grid; show them once they are generated.
@@ -826,6 +874,9 @@ export function Sidebar() {
       }
       if (runsSourceUrls && sourceUrlsColumn && !sourceUrlsColumn.enabled) {
         updateEnrichmentColumnConfig(sourceUrlsColumn.id, { enabled: true });
+      }
+      if (runsLens && lensColumn && !lensColumn.enabled) {
+        updateEnrichmentColumnConfig(lensColumn.id, { enabled: true });
       }
     } else if (modeColumn && !modeColumn.enabled) {
       updateEnrichmentColumnConfig(modeColumn.id, { enabled: true });
@@ -915,10 +966,10 @@ export function Sidebar() {
           settings: enrichSettings,
           kind: sessionKind,
           cmsType: workspace?.cms_type || undefined,
-          sourceColumns: runSourceColumns,
+          sourceColumns: requestSourceColumns,
           sourceColumnLabels: Object.fromEntries(
             enrichedColumnsWithData
-              .filter((col) => runSourceColumns.includes(col.id))
+              .filter((col) => requestSourceColumns.includes(col.id))
               .map((col) => [col.id, col.label])
           ),
         }),
@@ -966,6 +1017,9 @@ export function Sidebar() {
     modeColumn,
     runsImages,
     runsSourceUrls,
+    runsLens,
+    lensColumn,
+    lensImageColumn,
     sourceUrlsColumn,
     enrichListColumns,
     enrichableRows,
@@ -1723,7 +1777,7 @@ export function Sidebar() {
                 {modeColumn && (
                   <FinderOutputCard
                     label="Images"
-                    description={`Finds the exact product on the web, starting from your Source URLs column when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
+                    description={`Finds the exact product on the web, starting from your Source URLs or Lens founds column when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
                     enabled={runsImages}
                     expanded={expandedColumns.has(modeColumn.id)}
                     disabled={isEnriching}
@@ -1731,7 +1785,7 @@ export function Sidebar() {
                     onExpand={() => toggleColumnExpanded(modeColumn.id)}
                   >
                     <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      For the best results, run Source URLs first, then tick the Source URLs column as a source
+                      For the best results, run Source URLs or Lens first, then tick that column as a source
                       column. The agent opens those pages first and searches further only if none shows the item.
                     </p>
                     <div className="space-y-1.5">
@@ -1755,9 +1809,68 @@ export function Sidebar() {
                     </div>
                   </FinderOutputCard>
                 )}
+                {lensColumn && (
+                  <FinderOutputCard
+                    label="Lens"
+                    description="Sends one picture per row to Google Lens and writes the pages that show the same item to the Lens founds column. Pick the picture column under Source Columns. Lens founds can then be a source for Images, Enrichment and Categories."
+                    enabled={runsLens}
+                    expanded={expandedColumns.has(lensColumn.id)}
+                    disabled={isEnriching}
+                    onToggle={() => toggleFinderOutput("lens")}
+                    onExpand={() => toggleColumnExpanded(lensColumn.id)}
+                  >
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Matches</label>
+                      <select
+                        value={lensColumn.lensMatchScope ?? "exact"}
+                        onChange={(e) =>
+                          updateEnrichmentColumnConfig(lensColumn.id, {
+                            lensMatchScope: e.target.value as LensMatchScope,
+                          })
+                        }
+                        disabled={isEnriching}
+                        className="w-full h-8 px-2.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 cursor-pointer disabled:opacity-50"
+                      >
+                        <option value="exact">Exact matches only</option>
+                        <option value="exact_and_visual">Exact, then similar if fewer than the limit</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Pages to keep per row</label>
+                      <select
+                        value={lensColumn.sourceCount ?? 10}
+                        onChange={(e) =>
+                          updateEnrichmentColumnConfig(lensColumn.id, { sourceCount: Number(e.target.value) })
+                        }
+                        disabled={isEnriching}
+                        className="w-full h-8 px-2.5 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50 cursor-pointer disabled:opacity-50"
+                      >
+                        {[3, 5, 10, 15, 20].map((n) => (
+                          <option key={n} value={n}>
+                            {n} pages
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-medium text-muted-foreground">Websites</label>
+                      <WebsiteRulesButton
+                        allowedDomains={lensColumn.allowedDomains}
+                        blockedDomains={lensColumn.blockedDomains}
+                        onSave={(rules) => updateEnrichmentColumnConfig(lensColumn.id, rules)}
+                        disabled={isEnriching}
+                      />
+                    </div>
+                  </FinderOutputCard>
+                )}
               </div>
-              {!runsSourceUrls && !runsImages && (
-                <p className="text-[10px] text-amber-600">Switch on at least one to run.</p>
+              {!runsSourceUrls && !runsImages && !runsLens && (
+                <p className="text-[10px] text-amber-600">Switch on one to run.</p>
+              )}
+              {runsLens && !lensImageColumn && (
+                <p className="text-[10px] text-amber-600">
+                  No picture column found. Pick the column that holds the product pictures under Source Columns.
+                </p>
               )}
             </div>
           )}
@@ -1912,37 +2025,37 @@ export function Sidebar() {
                 <Database className="h-4 w-4 text-blue-500" />
                 <span className="text-xs font-semibold">Source Columns</span>
               </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-[10px] h-5 px-1.5"
-                  onClick={() => setAllSourceColumns(true)}
-                >
-                  All
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-[10px] h-5 px-1.5"
-                  onClick={() => setAllSourceColumns(false)}
-                >
-                  None
-                </Button>
-              </div>
+              {!runsLens && (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-[10px] h-5 px-1.5"
+                    onClick={() => setAllSourceColumns(true)}
+                  >
+                    All
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-[10px] h-5 px-1.5"
+                    onClick={() => setAllSourceColumns(false)}
+                  >
+                    None
+                  </Button>
+                </div>
+              )}
             </div>
 
             {sourceSectionOpen && (
               <div className="mt-3 space-y-1 pl-6">
                 <p className="text-[10px] text-muted-foreground mb-2 leading-tight">
-                  Choose which columns are sent to the AI agent for context.
-                  AI Generated columns (including images found in Image Finder
-                  and categories) appear when a selected row has a value in
-                  them; each row sends only what it has. Image columns are sent
-                  to the AI as pictures.
+                  {runsLens
+                    ? "Pick the one column that holds the product pictures. Lens sends the first picture in it for each row."
+                    : "Choose which columns are sent to the AI agent for context. AI Generated columns (including images found in Image Finder and categories) appear when a selected row has a value in them; each row sends only what it has. Image columns are sent to the AI as pictures."}
                 </p>
                 {originalColumns.map((col) => {
-                  const isSource = sourceColumns.includes(col);
+                  const isSource = runsLens ? col === lensImageColumn : sourceColumns.includes(col);
                   const displayName = col
                     .replace("__EMPTY_", "Col ")
                     .replace("__EMPTY", "Col");
@@ -1954,7 +2067,7 @@ export function Sidebar() {
                           ? "bg-blue-50 dark:bg-blue-950/20 text-foreground"
                           : "hover:bg-muted/50 text-muted-foreground"
                       }`}
-                      onClick={() => toggleSourceColumn(col)}
+                      onClick={() => (runsLens ? pickLensImageColumn(col) : toggleSourceColumn(col))}
                     >
                       <div
                         className={`h-3 w-3 rounded-sm border-2 flex items-center justify-center transition-all shrink-0 ${
@@ -1975,7 +2088,7 @@ export function Sidebar() {
                 })}
 
                 {/* AI-Generated Columns (enriched columns that have data) */}
-                {enrichedColumnsWithData.length > 0 && (
+                {sourceAiColumns.length > 0 && (
                   <>
                     <div className="flex items-center gap-1.5 mt-3 mb-1">
                       <Sparkles className="h-3 w-3 text-primary/60" />
@@ -1983,8 +2096,8 @@ export function Sidebar() {
                         AI Generated
                       </span>
                     </div>
-                    {enrichedColumnsWithData.map((col) => {
-                      const isSource = sourceColumns.includes(col.id);
+                    {sourceAiColumns.map((col) => {
+                      const isSource = runsLens ? col.id === lensImageColumn : sourceColumns.includes(col.id);
                       return (
                         <label
                           key={`enriched-${col.id}`}
@@ -1993,7 +2106,7 @@ export function Sidebar() {
                               ? "bg-purple-50 dark:bg-purple-950/20 text-foreground"
                               : "hover:bg-muted/50 text-muted-foreground"
                           }`}
-                          onClick={() => toggleSourceColumn(col.id)}
+                          onClick={() => (runsLens ? pickLensImageColumn(col.id) : toggleSourceColumn(col.id))}
                         >
                           <div
                             className={`h-3 w-3 rounded-sm border-2 flex items-center justify-center transition-all shrink-0 ${
@@ -2196,14 +2309,14 @@ export function Sidebar() {
             onClick={handleEnrich}
             disabled={
               (mode === "images"
-                ? !runsImages && !runsSourceUrls
+                ? !runsImages && !runsSourceUrls && !runsLens
                 : mode !== "enrich"
                 ? !modeColumn
                 : enrichOutputTab === "new"
                   ? enabledColumns.length === 0
                   : existingColumnsToEnrich.length === 0) ||
               enrichableRows.length === 0 ||
-              runSourceColumns.length === 0
+              (runsLens ? !lensImageColumn : runSourceColumns.length === 0)
             }
             className="w-full gap-2 font-medium h-10 shadow-sm"
             size="sm"
@@ -2218,8 +2331,8 @@ export function Sidebar() {
             {mode === "categories"
               ? "Categorize"
               : mode === "images"
-                ? runsSourceUrls && runsImages
-                  ? "Find Sources & Images for"
+                ? runsLens
+                  ? "Find Lens Matches for"
                   : runsSourceUrls
                     ? "Find Source URLs for"
                     : "Find Images for"

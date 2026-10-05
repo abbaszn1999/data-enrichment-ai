@@ -13,6 +13,7 @@ import { loadProjectJsonAdmin } from "@/lib/jobs/project-json";
 import { collapseToPrimaryRowIds, resolveProductGroupColumn } from "@/lib/catalog/product-groups";
 import type { CatalogJobSettings } from "@/lib/jobs/types";
 import type { SessionKind } from "@/types";
+import { isLensRun, lensRunConflict } from "@/lib/enrich/lens/run";
 import { loadCategorySnapshot, runUsesCategories } from "@/lib/categories/snapshot";
 
 export const maxDuration = 60;
@@ -74,6 +75,11 @@ export async function POST(request: NextRequest) {
       { error: "No enrichment columns selected" },
       { status: 400 }
     );
+  }
+
+  const conflict = lensRunConflict(body.enabledColumns);
+  if (conflict) {
+    return NextResponse.json({ error: conflict }, { status: 400 });
   }
 
   const supabase = await createClient();
@@ -161,6 +167,12 @@ export async function POST(request: NextRequest) {
     ? await loadCategorySnapshot(workspaceId)
     : undefined;
   const sourceColumns = body.sourceColumns?.length ? body.sourceColumns : project.sourceColumns;
+  if (isLensRun(kind, body.enabledColumns) && (sourceColumns?.length ?? 0) !== 1) {
+    return NextResponse.json(
+      { error: "Pick the one column that holds the product pictures for Lens" },
+      { status: 400, headers }
+    );
+  }
   const settings: CatalogJobSettings = {
     workspaceSlug: workspace?.slug,
     sessionName: session.name,

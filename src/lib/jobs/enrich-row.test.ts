@@ -436,3 +436,84 @@ describe("chargeCatalogRow when the balance runs out (Image Finder)", () => {
     expect(result).toMatchObject({ ok: false, noCredits: false, error: "database unavailable" });
   });
 });
+
+describe("Lens rows (Google Lens)", () => {
+  const lensColumn = { id: "lensFounds", label: "Lens founds", description: "", type: "sourceUrls", enabled: true };
+  const lensSettings: CatalogJobSettings = {
+    ...settings,
+    enabledColumns: ["lensFounds"],
+    enrichmentColumns: [lensColumn],
+    sourceColumns: ["Picture"],
+  };
+  const lensRow = {
+    ...row,
+    originalData: { Name: "Widget", Picture: "https://cdn.test/img?id=7, https://cdn.test/img?id=8" },
+  } as unknown as ProjectRow;
+  const charge = (overrides: Record<string, unknown> = {}) =>
+    chargeCatalogRow({
+      runId: "run",
+      sessionId: "s",
+      workspaceId: "w",
+      rowId: "row-1",
+      rowIndex: 0,
+      credits: 0.04,
+      cost: 0.004,
+      tokens: 0,
+      settings: lensSettings,
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    enrichRowMock.mockReset();
+    vi.mocked(deductCreditsIdempotent).mockReset();
+    vi.mocked(isInsufficientCredits).mockReset();
+    vi.mocked(isInsufficientCredits).mockImplementation((error) => /insufficient/i.test(error ?? ""));
+  });
+
+  it("sends the first picture of the picked column, even a link without an image extension", async () => {
+    enrichRowMock.mockResolvedValueOnce({ data: {}, costs: [] });
+    await processCatalogRow({ sessionId: "s", workspaceId: "w", row: lensRow, settings: lensSettings });
+    expect(enrichRowMock.mock.calls[0]![0].sourceImageUrls).toEqual(["https://cdn.test/img?id=7"]);
+  });
+
+  it("charges exactly the billed Lens searches: 0.04 credits for one, 0.08 for two", async () => {
+    const lens = (n: number) => Array.from({ length: n }, () => createSearchApiCost(1, "searchapi-google-lens"));
+    enrichRowMock.mockResolvedValueOnce({ data: {}, costs: lens(1) });
+    const one = await processCatalogRow({ sessionId: "s", workspaceId: "w", row: lensRow, settings: lensSettings });
+    expect(one.ok && one.credits).toBe(0.04);
+    expect(one.ok && one.details).toMatchObject({ searchApiCalls: 1, openAiCost: 0 });
+
+    enrichRowMock.mockResolvedValueOnce({ data: {}, costs: lens(2) });
+    const two = await processCatalogRow({ sessionId: "s", workspaceId: "w", row: lensRow, settings: lensSettings });
+    expect(two.ok && two.credits).toBe(0.08);
+    expect(two.ok && two.billedAttempts).toBe(2);
+  });
+
+  it("charges a failed row for the search that was billed before it failed", async () => {
+    enrichRowMock.mockRejectedValue(
+      new EnrichBilledAttemptError("answered then broke", [createSearchApiCost(1, "searchapi-google-lens")])
+    );
+    const outcome = await processCatalogRow({ sessionId: "s", workspaceId: "w", row: lensRow, settings: lensSettings });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.billed?.credits).toBe(0.04);
+  });
+
+  it("records Lens as the provider with the charge", async () => {
+    vi.mocked(deductCreditsIdempotent).mockResolvedValueOnce({ success: true, remaining: 5 });
+    await charge({ details: { searchApiCalls: 1 } });
+    expect(vi.mocked(deductCreditsIdempotent).mock.calls[0]![0]).toMatchObject({
+      amount: 0.04,
+      idempotencyKey: "catalog_intelligence:run:row-1",
+      details: { model: "searchapi-google-lens", searchApiCalls: 1, totalCost: 0.004 },
+    });
+  });
+
+  it("keeps the found pages and takes what is left when the balance runs short", async () => {
+    vi.mocked(deductCreditsIdempotent)
+      .mockResolvedValueOnce({ success: false, error: "Insufficient credits", remaining: 0.02 })
+      .mockResolvedValueOnce({ success: true, remaining: 0 });
+    const result = await charge();
+    expect(result).toEqual({ ok: true, remaining: 0, outOfCredits: { fullCredits: 0.04, chargedCredits: 0.02 } });
+  });
+});

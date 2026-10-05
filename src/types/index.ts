@@ -64,6 +64,9 @@ export interface FaqItem {
  */
 export type CategoryFormat = "collections" | "flat" | "depth2" | "depth3";
 
+/** Which Google Lens results fill the Lens founds column. */
+export type LensMatchScope = "exact" | "exact_and_visual";
+
 export interface EnrichmentColumn {
   id: string;
   label: string;
@@ -81,6 +84,7 @@ export interface EnrichmentColumn {
   customInstruction?: string; // Custom instruction for this column
   allowedDomains?: string[]; // Image Finder: only use these websites (max 100, subdomains included)
   blockedDomains?: string[]; // Image Finder: never use these websites (max 100)
+  lensMatchScope?: LensMatchScope; // Lens founds: exact matches only (default) or exact plus visual matches
   writingTone?: WritingTone; // Per-column writing tone (for text columns)
   contentLength?: ContentLength; // Per-column content length (for text columns)
 }
@@ -168,6 +172,15 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     type: "sourceUrls",
     enabled: false,
     sourceCount: 10,
+  },
+  {
+    id: "lensFounds",
+    label: "Lens founds",
+    description: "Pages Google Lens found for the product picture. Filled by the Lens finder.",
+    type: "sourceUrls",
+    enabled: false,
+    sourceCount: 10,
+    lensMatchScope: "exact",
   },
 ];
 
@@ -341,9 +354,35 @@ export function isProductModeColumn(
     (id === PRODUCT_MODE_COLUMN_IDS.categories ||
       id === PRODUCT_MODE_COLUMN_IDS.images ||
       id === IMAGE_SOURCES_COLUMN_ID ||
+      id === LENS_FOUNDS_COLUMN_ID ||
       // Source URLs runs from the "Source & Image Finder" tab, not the Enrichment list.
       id === SOURCE_URLS_COLUMN_ID)
   );
+}
+
+/**
+ * The "Lens founds" column of the Source & Image Finder tab: the pages Google
+ * Lens matched to a sheet picture. Same `{uri, title}` shape as Source URLs,
+ * matched by this id.
+ */
+export const LENS_FOUNDS_COLUMN_ID = "lensFounds";
+
+/**
+ * Sessions saved before the Lens finder existed lack the column. Adds it,
+ * switched OFF, right after Image sources (or at the end); leaves PLP sessions
+ * and sheets that already have it alone.
+ */
+export function ensureLensFoundsColumn(
+  columns: EnrichmentColumn[],
+  kind: SessionKind | null | undefined
+): EnrichmentColumn[] {
+  if (kind === "plp" || columns.some((col) => col.id === LENS_FOUNDS_COLUMN_ID)) return columns;
+  const template = DEFAULT_ENRICHMENT_COLUMNS.find((col) => col.id === LENS_FOUNDS_COLUMN_ID);
+  if (!template) return columns;
+  const after = columns.findIndex((col) => col.id === IMAGE_SOURCES_COLUMN_ID);
+  const entry = { ...template, enabled: false };
+  if (after < 0) return [...columns, entry];
+  return [...columns.slice(0, after + 1), entry, ...columns.slice(after + 1)];
 }
 
 /**
@@ -399,13 +438,20 @@ export function catalogModeForRunColumns(
     return "categories";
   }
   // The "Source & Image Finder" tab: Images (with its Image sources column),
-  // Source URLs, or both together.
+  // Source URLs, or Lens founds. Runs made before the three became exclusive
+  // may hold Images and Source URLs together; they still belong to this tab.
   if (
     tab === "new" &&
-    columnIds.some((id) => id === PRODUCT_MODE_COLUMN_IDS.images || id === SOURCE_URLS_COLUMN_ID) &&
+    columnIds.some(
+      (id) =>
+        id === PRODUCT_MODE_COLUMN_IDS.images || id === SOURCE_URLS_COLUMN_ID || id === LENS_FOUNDS_COLUMN_ID
+    ) &&
     columnIds.every(
       (id) =>
-        id === PRODUCT_MODE_COLUMN_IDS.images || id === IMAGE_SOURCES_COLUMN_ID || id === SOURCE_URLS_COLUMN_ID
+        id === PRODUCT_MODE_COLUMN_IDS.images ||
+        id === IMAGE_SOURCES_COLUMN_ID ||
+        id === SOURCE_URLS_COLUMN_ID ||
+        id === LENS_FOUNDS_COLUMN_ID
     )
   ) {
     return "images";
@@ -459,14 +505,36 @@ export type WritingTone = "professional" | "persuasive" | "simple" | "technical"
 export type ContentLength = "short" | "medium" | "long";
 
 /** The outputs the "Source & Image Finder" tab can fill. */
-export type FinderOutput = "sourceUrls" | "images";
+export type FinderOutput = "sourceUrls" | "images" | "lens";
 
 /** What a new sheet's Source & Image Finder tab runs until the user switches something on or off. */
 export const DEFAULT_FINDER_OUTPUTS: FinderOutput[] = ["images"];
 
+const FINDER_OUTPUT_VALUES: readonly FinderOutput[] = ["sourceUrls", "images", "lens"];
+
+/**
+ * Images, Source URLs and Lens never run together. Keeps exactly one: a single
+ * saved value as is; an old Images + Source URLs combination becomes Images;
+ * nothing valid falls back to the default. An empty list stays empty (all off).
+ */
+export function normalizeFinderOutputs(outputs: readonly unknown[] | null | undefined): FinderOutput[] {
+  if (!Array.isArray(outputs)) return [...DEFAULT_FINDER_OUTPUTS];
+  const valid = outputs.filter((o): o is FinderOutput => FINDER_OUTPUT_VALUES.includes(o as FinderOutput));
+  if (valid.length === 0) return outputs.length === 0 ? [] : [...DEFAULT_FINDER_OUTPUTS];
+  if (valid.length === 1) return valid;
+  if (valid.includes("images")) return ["images"];
+  return [valid[0]];
+}
+
 export interface EnrichmentSettings {
   /** Source & Image Finder tab: which outputs to run. Missing means DEFAULT_FINDER_OUTPUTS. */
   finderOutputs?: FinderOutput[];
+  /**
+   * Lens finder: the one column that holds the product pictures. Kept apart
+   * from the multi-select source columns so switching Lens off leaves those
+   * choices as they were.
+   */
+  lensImageColumn?: string;
   outputLanguage: OutputLanguage;
   customLanguage: string;
   /** Enrichment: the owner's method for every column (how to research, what to trust). A column's own instruction wins on conflict. */

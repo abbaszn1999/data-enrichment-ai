@@ -4,6 +4,7 @@ import type {
   CategoryItem,
   ContentLength,
   EnrichmentColumnType,
+  LensMatchScope,
   SessionKind,
   WritingTone,
 } from "@/types";
@@ -55,6 +56,7 @@ export interface CatalogJobSettings extends JobRunSettings {
     customInstruction?: string;
     allowedDomains?: string[];
     blockedDomains?: string[];
+    lensMatchScope?: LensMatchScope;
     writingTone?: string;
     contentLength?: string;
     isCustom?: boolean;

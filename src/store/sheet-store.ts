@@ -10,13 +10,14 @@ import type {
   SessionKind,
   ColumnLayout,
   CatalogSidebarMode,
-  FinderOutput,
 } from "@/types";
 import {
   DEFAULT_ENRICHMENT_COLUMNS,
   DEFAULT_ENRICHMENT_SETTINGS,
   ensureImageSourcesColumn,
+  ensureLensFoundsColumn,
   ensureSourceUrlsColumn,
+  normalizeFinderOutputs,
   resolveEnrichmentModel,
 } from "@/types";
 import { saveSession, loadSession, clearSession, type PersistedSession } from "@/lib/persistence";
@@ -31,7 +32,7 @@ function normalizeEnrichmentSettings(
     ...(settings || {}),
   };
   const finderOutputs = Array.isArray(merged.finderOutputs)
-    ? merged.finderOutputs.filter((o): o is FinderOutput => o === "sourceUrls" || o === "images")
+    ? normalizeFinderOutputs(merged.finderOutputs)
     : undefined;
   return {
     ...merged,
@@ -747,8 +748,11 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         })),
         originalColumns: session.originalColumns,
         sourceColumns: session.sourceColumns,
-        enrichmentColumns: ensureSourceUrlsColumn(
-          ensureImageSourcesColumn(session.enrichmentColumns, get().sessionKind),
+        enrichmentColumns: ensureLensFoundsColumn(
+          ensureSourceUrlsColumn(
+            ensureImageSourcesColumn(session.enrichmentColumns, get().sessionKind),
+            get().sessionKind
+          ),
           get().sessionKind
         ),
         enrichmentSettings: normalizeEnrichmentSettings(session.enrichmentSettings),
@@ -779,8 +783,11 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         originalColumns: columns,
         rows: rows.map((r) => ({ ...r, selected: false })),
         sourceColumns,
-        enrichmentColumns: ensureSourceUrlsColumn(
-          ensureImageSourcesColumn(enrichmentColumns, sessionKind ?? "product"),
+        enrichmentColumns: ensureLensFoundsColumn(
+          ensureSourceUrlsColumn(
+            ensureImageSourcesColumn(enrichmentColumns, sessionKind ?? "product"),
+            sessionKind ?? "product"
+          ),
           sessionKind ?? "product"
         ),
         enrichmentSettings: normalizeEnrichmentSettings(enrichmentSettings),
@@ -858,12 +865,15 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
               return Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && val !== "";
             })
         );
-        next.enrichmentColumns = ensureSourceUrlsColumn(
-          ensureImageSourcesColumn(
-            [
-              ...enrichmentColumns.map((col) => ({ ...col })),
-              ...orphanCustom.map((col) => ({ ...col, enabled: false })),
-            ],
+        next.enrichmentColumns = ensureLensFoundsColumn(
+          ensureSourceUrlsColumn(
+            ensureImageSourcesColumn(
+              [
+                ...enrichmentColumns.map((col) => ({ ...col })),
+                ...orphanCustom.map((col) => ({ ...col, enabled: false })),
+              ],
+              state.sessionKind
+            ),
             state.sessionKind
           ),
           state.sessionKind
@@ -893,6 +903,7 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         next.enrichmentSettings = normalizeEnrichmentSettings({
           ...enrichmentSettings,
           finderOutputs: state.enrichmentSettings.finderOutputs,
+          lensImageColumn: state.enrichmentSettings.lensImageColumn,
         });
       }
 

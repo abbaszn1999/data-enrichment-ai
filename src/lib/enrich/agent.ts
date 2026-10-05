@@ -23,6 +23,8 @@ import { imageFinderNotFoundKey } from "./image-finder/not-found";
 import { classifyProductCategories, isCategoriesModeRun } from "./categories-agent";
 import { SOURCE_URLS_COLUMN_ID } from "@/types";
 import { findSourceUrls, usesGoogleSourceUrls } from "./source-urls/agent";
+import { findLensMatches } from "./lens/agent";
+import { isLensRun } from "./lens/run";
 
 /**
  * Enrich a single row with one OpenAI Responses call (hosted web_search +
@@ -37,6 +39,10 @@ export async function enrichRow(
 
   if (!enabledColumns.length) {
     throw new Error("No enrichment columns selected");
+  }
+  // The Lens switch of the Source & Image Finder tab runs alone: no OpenAI call.
+  if (isLensRun(kind, enabledColumns)) {
+    return findLensMatches(params);
   }
   if (isImageFinderRun(kind, enabledColumns)) {
     // The "Source & Image Finder" tab can run Source URLs next to Images. The

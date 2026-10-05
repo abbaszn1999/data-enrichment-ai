@@ -18,7 +18,7 @@ const defaultColumns = getDefaultEnrichmentColumns("product");
 // The four writing columns, switched on. Source URLs is answered by Google AI
 // Mode, not by this OpenAI call, so it is covered in source-urls/source-urls.test.ts.
 const columns = defaultColumns
-  .filter((c) => c.id !== "sourceUrls" && c.type !== "categories" && c.type !== "imageUrls" && c.id !== "imageSourceUrls")
+  .filter((c) => c.id !== "sourceUrls" && c.type !== "categories" && c.type !== "imageUrls" && c.id !== "imageSourceUrls" && c.id !== "lensFounds")
   .map((c) => ({
     ...c,
     enabled: true,

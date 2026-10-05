@@ -1,7 +1,7 @@
 import type { KnownPage } from "@/lib/enrich/types";
 import { splitStoredImageRefs } from "@/lib/stored-image-ref";
 import type { ProjectRow } from "@/lib/storage-helpers";
-import { IMAGE_SOURCES_COLUMN_ID, SOURCE_URLS_COLUMN_ID } from "@/types";
+import { IMAGE_SOURCES_COLUMN_ID, LENS_FOUNDS_COLUMN_ID, SOURCE_URLS_COLUMN_ID } from "@/types";
 
 /** A long description or spec sheet must reach the model whole. */
 export const MAX_SOURCE_FIELD_CHARS = 4000;
@@ -74,10 +74,10 @@ function enrichedToText(val: unknown): string {
   return String(val);
 }
 
-/** Pages found by the Source URLs and Image sources columns. */
-const PAGE_LIST_COLUMN_IDS = new Set([SOURCE_URLS_COLUMN_ID, IMAGE_SOURCES_COLUMN_ID]);
+/** Pages found by the Source URLs, Image sources and Lens founds columns. */
+const PAGE_LIST_COLUMN_IDS = new Set([SOURCE_URLS_COLUMN_ID, IMAGE_SOURCES_COLUMN_ID, LENS_FOUNDS_COLUMN_ID]);
 
-/** Pages held by a Source URLs / Image sources cell (`{ uri | pageUrl, title }[]`). */
+/** Pages held by a Source URLs / Image sources / Lens founds cell (`{ uri | pageUrl, title }[]`). */
 export function knownPagesFromEnriched(value: unknown): KnownPage[] {
   if (!Array.isArray(value)) return [];
   const pages: KnownPage[] = [];

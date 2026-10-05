@@ -29,9 +29,9 @@ describe("Source URLs default column", () => {
     for (const col of five) expect(col.customInstruction?.trim().length, col.id).toBeGreaterThan(20);
   });
 
-  it("is a different column from Image sources, which shares its type", () => {
+  it("is a different column from Image sources and Lens founds, which share its type", () => {
     const sources = DEFAULT_ENRICHMENT_COLUMNS.filter((c) => c.type === "sourceUrls").map((c) => c.id);
-    expect(sources).toEqual(["sourceUrls", "imageSourceUrls"]);
+    expect(sources).toEqual(["sourceUrls", "imageSourceUrls", "lensFounds"]);
   });
 
   it("leaves PLP defaults alone", () => {

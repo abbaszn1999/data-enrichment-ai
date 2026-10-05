@@ -132,17 +132,51 @@ export async function callGoogleAiMode(
     imageUrl?: string;
   } = {}
 ): Promise<GoogleAiModeResult> {
-  const apiKey = requireSearchApiKey();
   const params = new URLSearchParams({
     engine: "google_ai_mode",
     q: query,
-    api_key: apiKey,
   });
   if (options.imageUrl) params.set("url", options.imageUrl);
 
+  const { data, httpStatus, elapsedMs } = await requestSearchApi<GoogleAiModeApiResponse>(
+    params,
+    "Google AI Mode"
+  );
+
+  const texts = answerTexts(data);
+  const referenceLinks: GoogleAiModeReferenceLink[] = (data.reference_links ?? [])
+    .map((ref) => ({
+      link: String(ref?.link ?? "").trim(),
+      title: typeof ref?.title === "string" ? ref.title : undefined,
+      snippet: typeof ref?.snippet === "string" ? ref.snippet : undefined,
+      source: typeof ref?.source === "string" ? ref.source : undefined,
+    }))
+    .filter((ref) => /^https?:\/\//i.test(ref.link));
+
+  return {
+    text: texts[0] ?? "",
+    texts,
+    referenceLinks,
+    httpStatus,
+    elapsedMs,
+  };
+}
+
+/**
+ * One SearchApi GET. Returns only for a billed call (HTTP 200 with a Success
+ * body); anything else throws a SearchApiCallError. `params` carries the
+ * engine and its own parameters, the key is added here.
+ */
+export async function requestSearchApi<T extends { search_metadata?: { status?: string }; error?: unknown }>(
+  params: URLSearchParams,
+  engineLabel: string,
+  timeoutMs: number = REQUEST_TIMEOUT_MS
+): Promise<{ data: T; httpStatus: number; elapsedMs: number }> {
+  params.set("api_key", requireSearchApiKey());
+
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("timeout")), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
   let response: Response;
   try {
     response = await fetch(`${SEARCHAPI_BASE}?${params.toString()}`, {
@@ -176,37 +210,21 @@ export async function callGoogleAiMode(
     );
   }
 
-  let data: GoogleAiModeApiResponse;
+  let data: T;
   try {
-    data = JSON.parse(rawText) as GoogleAiModeApiResponse;
+    data = JSON.parse(rawText) as T;
   } catch {
     throw new SearchApiCallError("Web search returned a non-JSON body", false);
   }
   const status = data.search_metadata?.status;
   if (data.error || (typeof status === "string" && status !== "Success")) {
     // SearchApi charges Success responses only; an error body is not one.
-    console.warn("[Google AI Mode] Google AI Mode returned an error body with HTTP 200", {
+    console.warn(`[${engineLabel}] ${engineLabel} returned an error body with HTTP 200`, {
       status,
       error: String(data.error ?? "").slice(0, 200),
     });
     throw new SearchApiCallError(String(data.error ?? `Web search status ${status}`), false);
   }
 
-  const texts = answerTexts(data);
-  const referenceLinks: GoogleAiModeReferenceLink[] = (data.reference_links ?? [])
-    .map((ref) => ({
-      link: String(ref?.link ?? "").trim(),
-      title: typeof ref?.title === "string" ? ref.title : undefined,
-      snippet: typeof ref?.snippet === "string" ? ref.snippet : undefined,
-      source: typeof ref?.source === "string" ? ref.source : undefined,
-    }))
-    .filter((ref) => /^https?:\/\//i.test(ref.link));
-
-  return {
-    text: texts[0] ?? "",
-    texts,
-    referenceLinks,
-    httpStatus: response.status,
-    elapsedMs: Date.now() - startedAt,
-  };
+  return { data, httpStatus: response.status, elapsedMs: Date.now() - startedAt };
 }

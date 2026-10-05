@@ -1,4 +1,9 @@
-import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
+import {
+  SEARCHAPI_GOOGLE_AI_MODE_MODEL,
+  SEARCHAPI_GOOGLE_LENS_MODEL,
+  sumCosts,
+  type AiCallCost,
+} from "@/lib/ai-pricing";
 import {
   enrichRow,
   isImageFinderRun,
@@ -8,6 +13,8 @@ import {
 } from "@/lib/enrich";
 import { IMAGE_FINDER_OPENAI_MODEL } from "@/lib/enrich/models";
 import { usesGoogleSourceUrls } from "@/lib/enrich/source-urls/agent";
+import { lensImageForRow } from "@/lib/enrich/lens/image-column";
+import { isLensRun } from "@/lib/enrich/lens/run";
 import {
   billedCostsOf,
   isEnrichCancelledError,
@@ -102,7 +109,7 @@ function billedUsage(costs: AiCallCost[]): BilledUsage | undefined {
   };
 }
 
-const GOOGLE_AI_MODE_MODEL = "searchapi-google-ai-mode";
+const GOOGLE_AI_MODE_MODEL = SEARCHAPI_GOOGLE_AI_MODE_MODEL;
 
 export const PROVIDER_UNAVAILABLE_JOB_ERROR =
   "AI service temporarily unavailable. Unfinished rows were charged only for AI work already done; run them again later.";
@@ -154,7 +161,12 @@ export async function processCatalogRow(params: {
     aiColumnLabels,
     { pagesAsLeads: imageFinderRun }
   );
-  const sourceImageUrls = await resolveStoredImageUrls(sheetImageUrls);
+  // Lens searches with the one picture of the column the owner picked (a link
+  // without an image extension counts there), so it does not use the image
+  // list built for the model.
+  const lensRun = isLensRun(settings.kind ?? "product", settings.enabledColumns);
+  const lensPicture = lensRun ? lensImageForRow(row, settings.sourceColumns?.[0] ?? "") : null;
+  const sourceImageUrls = await resolveStoredImageUrls(lensRun ? (lensPicture ? [lensPicture] : []) : sheetImageUrls);
 
   let lastError = "Enrichment failed";
   // Every call OpenAI bills is charged to the row, whatever the outcome: a
@@ -166,7 +178,8 @@ export async function processCatalogRow(params: {
   const sourceUrlsMemo: { result?: EnrichAgentResult } = {};
   // A second whole-row Image Finder attempt would re-pay the search;
   // a failed row is simply run again.
-  const rowAttempts = imageFinderRun ? 1 : JOB_ROW_ATTEMPTS;
+  // The same goes for Lens: every search it ran is billed.
+  const rowAttempts = imageFinderRun || lensRun ? 1 : JOB_ROW_ATTEMPTS;
   for (let attempt = 1; attempt <= rowAttempts; attempt += 1) {
     try {
       const enriched = await enrichRow({
@@ -190,6 +203,7 @@ export async function processCatalogRow(params: {
           customInstruction: c.customInstruction,
           allowedDomains: c.allowedDomains,
           blockedDomains: c.blockedDomains,
+          lensMatchScope: c.lensMatchScope,
           writingTone: c.writingTone as WritingTone | undefined,
           contentLength: c.contentLength as ContentLength | undefined,
         })),
@@ -264,6 +278,8 @@ export async function processCatalogRow(params: {
 
 /** Which providers did the row's work, as recorded with its charge. */
 export function catalogChargeModel(settings: CatalogJobSettings, imageFinder: boolean): string {
+  // Lens is one SearchApi search per row and no model call.
+  if (isLensRun(settings.kind ?? "product", settings.enabledColumns)) return SEARCHAPI_GOOGLE_LENS_MODEL;
   if (imageFinder) {
     // Source URLs can run in the same Source & Image Finder run: its Google search is billed too.
     return usesGoogleSourceUrls(settings.kind ?? "product", settings.enabledColumns)
@@ -303,6 +319,10 @@ export async function chargeCatalogRow(params: {
 > {
   if (params.credits <= 0) return { ok: true };
   const imageFinder = isImageFinderRun(params.settings.kind ?? "product", params.settings.enabledColumns);
+  // The search is already done and billed to us (a Lens run has no other cost),
+  // so a short balance is handled like the Image Finder's: take what is left and pause.
+  const keepsResultOnShortBalance =
+    imageFinder || isLensRun(params.settings.kind ?? "product", params.settings.enabledColumns);
   const deduct = (amount: number, partial: boolean) =>
     deductCreditsIdempotent({
       ownerUserId: params.settings.ownerUserId,
@@ -338,7 +358,7 @@ export async function chargeCatalogRow(params: {
   // to us. Take whatever balance is left under the same idempotency key (a
   // retry after a crash finds it and does not charge twice), keep the
   // result, and let the run pause.
-  if (imageFinder && noCredits && /insufficient credits|insufficient_credits/i.test(result.error ?? "")) {
+  if (keepsResultOnShortBalance && noCredits && /insufficient credits|insufficient_credits/i.test(result.error ?? "")) {
     const available = Math.floor(Math.max(0, result.remaining ?? 0) * 1000) / 1000;
     if (available > 0) {
       const partial = await deduct(available, true);

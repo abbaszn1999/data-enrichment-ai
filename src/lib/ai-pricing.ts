@@ -657,14 +657,22 @@ export function createSerpApiCost(searchCount: number = 1): AiCallCost {
   };
 }
 
+export const SEARCHAPI_GOOGLE_AI_MODE_MODEL = "searchapi-google-ai-mode";
+export const SEARCHAPI_GOOGLE_LENS_MODEL = "searchapi-google-lens";
+export type SearchApiCostModel = typeof SEARCHAPI_GOOGLE_AI_MODE_MODEL | typeof SEARCHAPI_GOOGLE_LENS_MODEL;
+
 /**
- * Create an AiCallCost entry for a SearchApi.io Google AI Mode search — Image
- * Finder "Exact Match" mode's Agent 1 (finds exact-match product links).
+ * Create an AiCallCost entry for a SearchApi.io search (Google AI Mode by
+ * default, or Google Lens). SearchApi bills a flat price per successful
+ * search whatever the engine, so one entry is one billed call.
  */
-export function createSearchApiCost(searchCount: number = 1): AiCallCost {
+export function createSearchApiCost(
+  searchCount: number = 1,
+  model: SearchApiCostModel = SEARCHAPI_GOOGLE_AI_MODE_MODEL
+): AiCallCost {
   const cost = Math.max(0, searchCount) * SEARCHAPI_COST_PER_SEARCH;
   return {
-    model: "searchapi-google-ai-mode",
+    model,
     usage: {
       promptTokens: 0,
       candidatesTokens: 0,

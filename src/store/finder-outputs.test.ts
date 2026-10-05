@@ -12,14 +12,22 @@ describe("Source & Image Finder outputs in the sheet settings", () => {
   });
 
   it("keep what the user switched on, and drop anything unknown", () => {
-    useSheetStore.getState().updateSettings({ finderOutputs: ["sourceUrls", "images"] });
-    expect(useSheetStore.getState().enrichmentSettings.finderOutputs).toEqual(["sourceUrls", "images"]);
+    useSheetStore.getState().updateSettings({ finderOutputs: ["lens"] });
+    expect(useSheetStore.getState().enrichmentSettings.finderOutputs).toEqual(["lens"]);
 
     useSheetStore.getState().updateSettings({ finderOutputs: ["sourceUrls", "bogus"] as never });
     expect(useSheetStore.getState().enrichmentSettings.finderOutputs).toEqual(["sourceUrls"]);
 
     useSheetStore.getState().updateSettings({ finderOutputs: [] });
     expect(useSheetStore.getState().enrichmentSettings.finderOutputs).toEqual([]);
+  });
+
+  it("never hold Images, Source URLs and Lens together: an older combination keeps Images", () => {
+    useSheetStore.getState().updateSettings({ finderOutputs: ["sourceUrls", "images"] });
+    expect(useSheetStore.getState().enrichmentSettings.finderOutputs).toEqual(["images"]);
+
+    useSheetStore.getState().updateSettings({ finderOutputs: ["images", "sourceUrls", "lens"] });
+    expect(useSheetStore.getState().enrichmentSettings.finderOutputs).toEqual(["images"]);
   });
 
   it("are not changed by applying a saved Enrichment setting", () => {
