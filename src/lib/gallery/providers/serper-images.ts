@@ -7,10 +7,23 @@ import { galleryError, galleryLog, galleryWarn } from "@/lib/gallery/log";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import sharp from "sharp";
+import {
+  failureFromStatus,
+  isSlowOrigin,
+  lighterImageUrl,
+  type ImageDownloadFailure,
+} from "@/lib/gallery/image-download";
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 const MAX_DOWNLOAD_ATTEMPTS = 3;
+/**
+ * Shops that build a resized copy on the first request (or slow bot-protected
+ * ones) can take well over 20 seconds before the first byte.
+ */
+const ATTEMPT_TIMEOUT_MS = 30_000;
+/** A timed-out first request often warms the origin's cache, so one more try is worth it. */
+const MAX_TIMEOUT_ATTEMPTS = 2;
 
 /** Content-Type is a singleton; Fetch joins duplicate headers with ", ". */
 export function normalizeDeclaredContentType(raw: string | null): string {
@@ -407,10 +420,43 @@ export async function collectSerperImageCandidates(
   return { candidates: all, queryCount };
 }
 
+type DownloadedImage = { buffer: Buffer; contentType: string; ext: string };
+type DownloadConstraints = Pick<GalleryGoogleSettings, "minResolution" | "aspectRatio">;
+
 export async function downloadImageBytes(
   imageUrl: string,
-  constraints?: Pick<GalleryGoogleSettings, "minResolution" | "aspectRatio">
-): Promise<{ buffer: Buffer; contentType: string; ext: string } | null> {
+  constraints?: DownloadConstraints
+): Promise<DownloadedImage | null> {
+  return (await downloadImageBytesDetailed(imageUrl, constraints)).image;
+}
+
+/**
+ * Downloads one picture. When the shop is slow or unreachable, a lighter copy of
+ * the same link (a smaller `?size=` or `?width=`) is tried before giving up, and
+ * the result says why it failed so the row can tell the owner what to do.
+ */
+export async function downloadImageBytesDetailed(
+  imageUrl: string,
+  constraints?: DownloadConstraints
+): Promise<{ image: DownloadedImage | null; failure?: ImageDownloadFailure }> {
+  const first = await downloadOneImage(imageUrl, constraints);
+  if (first.image || !isSlowOrigin(first.failure)) return first;
+  const lighter = lighterImageUrl(imageUrl);
+  if (!lighter) return first;
+  galleryWarn("download", "Retrying with a lighter copy of the image", {
+    reasonCode: "lighter_variant",
+    imageUrl: imageUrl.slice(0, 200),
+    lighter: lighter.slice(0, 200),
+  });
+  const second = await downloadOneImage(lighter, constraints);
+  return second.image ? second : first;
+}
+
+async function downloadOneImage(
+  imageUrl: string,
+  constraints?: DownloadConstraints
+): Promise<{ image: DownloadedImage | null; failure?: ImageDownloadFailure }> {
+  let failure: ImageDownloadFailure | undefined;
   const isPrivateAddress = (address: string): boolean => {
     const value = address.toLowerCase();
     if (value === "::1" || value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd")) {
@@ -492,7 +538,7 @@ export async function downloadImageBytes(
     ext: string;
   } | null> => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
+    const timeout = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS);
     try {
       let currentUrl = (await assertSafeUrl(imageUrl)).toString();
       let res: Response | null = null;
@@ -516,6 +562,7 @@ export async function downloadImageBytes(
             imageUrl: imageUrl.slice(0, 200),
             status: res.status,
           });
+          failure = "other";
           return null;
         }
         currentUrl = (
@@ -528,6 +575,7 @@ export async function downloadImageBytes(
           imageUrl: imageUrl.slice(0, 200),
           status: res?.status ?? null,
         });
+        failure = failureFromStatus(res?.status);
         return null;
       }
 
@@ -538,6 +586,7 @@ export async function downloadImageBytes(
           imageUrl: imageUrl.slice(0, 200),
           declaredLength,
         });
+        failure = "too_large";
         return null;
       }
 
@@ -568,6 +617,7 @@ export async function downloadImageBytes(
             reasonCode: "body_size_exceeded",
             imageUrl: imageUrl.slice(0, 200),
           });
+          failure = "too_large";
           return null;
         }
         chunks.push(Buffer.from(value));
@@ -577,6 +627,7 @@ export async function downloadImageBytes(
           reasonCode: "empty_body",
           imageUrl: imageUrl.slice(0, 200),
         });
+        failure = "not_image";
         return null;
       }
 
@@ -589,6 +640,7 @@ export async function downloadImageBytes(
           declaredType,
           bytes: total,
         });
+        failure = "not_image";
         return null;
       }
       const dimensions = await sharp(buffer, {
@@ -604,6 +656,7 @@ export async function downloadImageBytes(
           width,
           height,
         });
+        failure = "not_image";
         return null;
       }
       if (
@@ -617,6 +670,7 @@ export async function downloadImageBytes(
           height,
           minResolution: constraints.minResolution,
         });
+        failure = "other";
         return null;
       }
       if (constraints?.aspectRatio && constraints.aspectRatio !== "any") {
@@ -630,6 +684,7 @@ export async function downloadImageBytes(
             bucket,
             required: constraints.aspectRatio,
           });
+          failure = "other";
           return null;
         }
       }
@@ -640,19 +695,25 @@ export async function downloadImageBytes(
   };
 
   let lastError: unknown = null;
+  let timeouts = 0;
   for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
     try {
-      return await attemptDownload();
+      const image = await attemptDownload();
+      return image ? { image } : { image: null, failure };
     } catch (error) {
       lastError = error;
+      const timedOut = error instanceof Error && error.name === "AbortError";
+      if (timedOut) timeouts += 1;
+      failure = classifyDownloadError(error);
       if (
-        !isRetryableDownloadError(error) ||
+        (!timedOut && !isRetryableDownloadError(error)) ||
+        timeouts >= MAX_TIMEOUT_ATTEMPTS ||
         attempt === MAX_DOWNLOAD_ATTEMPTS
       ) {
         break;
       }
       galleryWarn("download", "Image download retrying after network error", {
-        reasonCode: "download_retry",
+        reasonCode: timedOut ? "download_retry_timeout" : "download_retry",
         imageUrl: imageUrl.slice(0, 200),
         attempt,
         maxAttempts: MAX_DOWNLOAD_ATTEMPTS,
@@ -665,8 +726,20 @@ export async function downloadImageBytes(
   galleryWarn("download", "Image download threw", {
     reasonCode: "download_error",
     imageUrl: imageUrl.slice(0, 200),
+    failure,
     error:
       lastError instanceof Error ? lastError.message : String(lastError ?? "unknown"),
   });
-  return null;
+  return { image: null, failure };
+}
+
+function classifyDownloadError(error: unknown): ImageDownloadFailure {
+  if (!(error instanceof Error)) return "other";
+  if (error.name === "AbortError") return "timeout";
+  const message = error.message.toLowerCase();
+  if (message.includes("unsafe") || message.includes("private address") || message.includes("protocol")) {
+    return "unsafe";
+  }
+  if (message.includes("enotfound")) return "missing";
+  return "network";
 }

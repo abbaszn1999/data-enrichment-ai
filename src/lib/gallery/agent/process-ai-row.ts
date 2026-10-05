@@ -4,7 +4,14 @@ import { sumCosts, type AiCallCost } from "@/lib/ai-pricing";
 import { GALLERY_PLANNER_OPENAI_MODEL } from "@/lib/enrich/models";
 import { parseImageUrls } from "@/lib/gallery/image-urls";
 import { galleryError, galleryLog, galleryWarn } from "@/lib/gallery/log";
-import { downloadImageBytes } from "@/lib/gallery/providers/serper-images";
+import {
+  downloadImageBytes,
+  downloadImageBytesDetailed,
+} from "@/lib/gallery/providers/serper-images";
+import {
+  imageDownloadFailureMessage,
+  type ImageDownloadFailure,
+} from "@/lib/gallery/image-download";
 import {
   downloadGalleryBytesAdmin,
   removeGalleryPathsAdmin,
@@ -219,11 +226,13 @@ export async function processAiRow(params: {
         return await fail("Could not load the existing main image for gallery generation");
       }
     } else {
+      let downloadFailure: { url: string; failure?: ImageDownloadFailure } | null = null;
       for (const originalUrl of originalUrls) {
         if (!/^https?:\/\//i.test(originalUrl)) continue;
-        const original = await downloadImageBytes(originalUrl);
+        const { image: original, failure } = await downloadImageBytesDetailed(originalUrl);
         if (!original) {
-          galleryWarn("ai-image:row", "Skipping undownloadable original image", { rowId: row.id, originalUrl });
+          galleryWarn("ai-image:row", "Skipping undownloadable original image", { rowId: row.id, originalUrl, failure });
+          downloadFailure ??= { url: originalUrl, failure };
           continue;
         }
         const path = getGalleryRowImagePath(workspaceId, sessionId, row.id, "main", original.ext);
@@ -238,7 +247,7 @@ export async function processAiRow(params: {
       if (productRefs.length === 0) {
         return await fail(
           originalUrls.length > 0
-            ? "Could not download the image from the selected image column"
+            ? imageDownloadFailureMessage(downloadFailure?.url, downloadFailure?.failure)
             : MISSING_ORIGINAL_IMAGE_MESSAGE
         );
       }

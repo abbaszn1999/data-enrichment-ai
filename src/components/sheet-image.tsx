@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ImageOff } from "lucide-react";
+import { ImageOff, Loader2 } from "lucide-react";
 
 /** Storage links are already ours and signed; everything else goes through the cached proxy. */
 function needsProxy(url: string): boolean {
@@ -39,6 +39,7 @@ export function SheetImage({
   alt,
   className,
   tileClassName,
+  loadingClassName,
   linkOnFail = false,
 }: {
   url: string;
@@ -49,15 +50,19 @@ export function SheetImage({
   className?: string;
   /** Classes for the "Image unavailable" tile; defaults to filling the same box as the image. */
   tileClassName?: string;
+  /** Classes for a spinner tile shown until the image arrives (large previews of slow shops). */
+  loadingClassName?: string;
   /** Show the original link under the tile (for large previews). */
   linkOnFail?: boolean;
 }) {
   const key = `${url}|${fallbackUrl ?? ""}`;
   const [attempt, setAttempt] = useState(0);
+  const [loaded, setLoaded] = useState(false);
   const [forKey, setForKey] = useState(key);
   if (forKey !== key) {
     setForKey(key);
     setAttempt(0);
+    setLoaded(false);
   }
   const sources = buildSources(url, fallbackUrl);
 
@@ -87,16 +92,26 @@ export function SheetImage({
     );
   }
 
+  const waiting = !!loadingClassName && !loaded;
+
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={sources[attempt]}
-      alt={alt}
-      loading="lazy"
-      decoding="async"
-      referrerPolicy="no-referrer"
-      className={className}
-      onError={() => setAttempt((current) => current + 1)}
-    />
+    <>
+      {waiting && (
+        <span className={loadingClassName} role="status" aria-label="Loading image">
+          <Loader2 className="h-5 w-5 animate-spin opacity-60" aria-hidden />
+        </span>
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={sources[attempt]}
+        alt={alt}
+        loading={loadingClassName ? "eager" : "lazy"}
+        decoding="async"
+        referrerPolicy="no-referrer"
+        className={waiting ? "pointer-events-none absolute h-px w-px opacity-0" : className}
+        onLoad={() => setLoaded(true)}
+        onError={() => setAttempt((current) => current + 1)}
+      />
+    </>
   );
 }

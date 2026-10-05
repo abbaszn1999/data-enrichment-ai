@@ -3221,6 +3221,7 @@ export default function ProductsVisualizerPage() {
                               alt={active.alt}
                               className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
                               tileClassName="flex h-64 w-64 flex-col items-center justify-center rounded-lg bg-muted/40 text-xs text-muted-foreground"
+                              loadingClassName="flex h-64 w-64 items-center justify-center rounded-lg bg-muted/40 text-muted-foreground"
                             />
                             {dialogThumbs.length > 1 ? (
                               <>

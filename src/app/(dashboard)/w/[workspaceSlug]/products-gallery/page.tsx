@@ -4587,6 +4587,7 @@ export default function ProductsGalleryPage() {
                       linkOnFail
                       className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
                       tileClassName="flex h-64 w-full max-w-sm flex-col items-center justify-center gap-1 rounded-lg bg-muted/40 p-4 text-center text-xs text-muted-foreground"
+                      loadingClassName="flex h-64 w-full max-w-sm items-center justify-center rounded-lg bg-muted/40 text-muted-foreground"
                     />
                     {imageDialogPaths.length > 1 ? (
                       <>

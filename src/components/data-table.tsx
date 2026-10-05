@@ -1170,6 +1170,7 @@ function ImageUrlsCell({
                     alt={active.title || "Product"}
                     className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-sm"
                     tileClassName="flex h-48 w-64 flex-col items-center justify-center gap-1 rounded-lg bg-muted/40 p-3 text-center text-xs text-muted-foreground"
+                    loadingClassName="flex h-48 w-64 items-center justify-center rounded-lg bg-muted/40 text-muted-foreground"
                     linkOnFail
                   />
                   {list.length > 1 ? (
