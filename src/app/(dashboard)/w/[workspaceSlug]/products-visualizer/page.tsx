@@ -61,6 +61,8 @@ import { DeleteProjectDialog } from "@/components/media/delete-project-dialog";
 import { TableSelectHeader } from "@/components/table-select-header";
 import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
 import { SheetImage } from "@/components/sheet-image";
+import { StoredImageCell } from "@/components/stored-image";
+import { hasStoredImageRef } from "@/lib/stored-image-ref";
 import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
 import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
 import { ShareSheetButton } from "@/components/share/share-sheet-button";
@@ -2843,7 +2845,9 @@ export default function ProductsVisualizerPage() {
                                   key={column}
                                   className="px-3 py-2 align-top"
                                 >
-                                  {isImageCol ? (
+                                  {hasStoredImageRef(value) ? (
+                                    <StoredImageCell value={value} size="h-12 w-12" />
+                                  ) : isImageCol ? (
                                     <button
                                       type="button"
                                       onClick={openCell}

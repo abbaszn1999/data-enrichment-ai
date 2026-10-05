@@ -1,4 +1,5 @@
 import type { KnownPage } from "@/lib/enrich/types";
+import { splitStoredImageRefs } from "@/lib/stored-image-ref";
 import type { ProjectRow } from "@/lib/storage-helpers";
 import { IMAGE_SOURCES_COLUMN_ID, SOURCE_URLS_COLUMN_ID } from "@/types";
 
@@ -27,6 +28,10 @@ export function splitUrlList(value: string): string[] {
  * every URL in it looks like an image file.
  */
 export function imageUrlsFromText(name: string, value: string): string[] {
+  // Pictures pasted into the sheet are saved on upload; the job swaps each
+  // reference for a link the model can open (see stored-images.ts).
+  const stored = splitStoredImageRefs(value);
+  if (stored.length > 0) return stored;
   const urls = splitUrlList(value);
   if (urls.length === 0) return [];
   if (isImageColumnName(name)) return urls;

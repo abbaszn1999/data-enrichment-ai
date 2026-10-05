@@ -1,13 +1,8 @@
 import type { ProductRow, EnrichedData, EnrichmentColumn } from "@/types";
 import { enrichedValueToText } from "./export-values";
+import { extractSheetImages } from "./sheet-images";
 
 // --- Image extraction from xlsx ---
-
-interface ImageAnchor {
-  fromRow: number;
-  fromCol: number;
-  rId: string;
-}
 
 export type EmbeddedWorkbookImage = {
   sheetRow: number;
@@ -19,84 +14,8 @@ export type EmbeddedWorkbookImage = {
 export async function extractEmbeddedWorkbookImages(
   buffer: ArrayBuffer
 ): Promise<EmbeddedWorkbookImage[]> {
-  const images: EmbeddedWorkbookImage[] = [];
-  try {
-    const JSZip = (await import("jszip")).default;
-    const zip = await JSZip.loadAsync(buffer);
-    const rIdToFile = new Map<string, string>();
-    const relPaths = [
-      "xl/drawings/_rels/drawing1.xml.rels",
-      "xl/drawings/_rels/drawing2.xml.rels",
-    ];
-    for (const relPath of relPaths) {
-      const relsFile = zip.file(relPath);
-      if (!relsFile) continue;
-      const relsXml = await relsFile.async("text");
-      const relRegex = /Relationship\s+Id="(rId\d+)"[^>]*Target="([^"]+)"/g;
-      let match: RegExpExecArray | null;
-      while ((match = relRegex.exec(relsXml)) !== null) {
-        const rId = match[1];
-        let target = match[2];
-        if (target.startsWith("../")) {
-          target = "xl/" + target.slice(3);
-        } else if (!target.startsWith("xl/")) {
-          target = "xl/drawings/" + target;
-        }
-        rIdToFile.set(rId, target);
-      }
-    }
-    if (rIdToFile.size === 0) return images;
-
-    const anchors: ImageAnchor[] = [];
-    const drawingPaths = ["xl/drawings/drawing1.xml", "xl/drawings/drawing2.xml"];
-    for (const drawPath of drawingPaths) {
-      const drawFile = zip.file(drawPath);
-      if (!drawFile) continue;
-      const drawXml = await drawFile.async("text");
-      const anchorRegex =
-        /<xdr:(?:twoCellAnchor|oneCellAnchor)[^>]*>([\s\S]*?)<\/xdr:(?:twoCellAnchor|oneCellAnchor)>/g;
-      let anchorMatch: RegExpExecArray | null;
-      while ((anchorMatch = anchorRegex.exec(drawXml)) !== null) {
-        const block = anchorMatch[1];
-        const fromRowMatch = block.match(
-          /<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>[\s\S]*?<xdr:col>(\d+)<\/xdr:col>/
-        );
-        if (!fromRowMatch) continue;
-        const blipMatch = block.match(/<a:blip[^>]*r:embed="(rId\d+)"/);
-        if (!blipMatch) continue;
-        anchors.push({
-          fromRow: parseInt(fromRowMatch[1], 10),
-          fromCol: parseInt(fromRowMatch[2], 10),
-          rId: blipMatch[1],
-        });
-      }
-    }
-
-    for (const anchor of anchors) {
-      const filePath = rIdToFile.get(anchor.rId);
-      if (!filePath) continue;
-      const imageFile = zip.file(filePath);
-      if (!imageFile) continue;
-      const bytes = new Uint8Array(await imageFile.async("uint8array"));
-      const ext = filePath.split(".").pop()?.toLowerCase() || "png";
-      const mimeMap: Record<string, string> = {
-        png: "image/png",
-        jpg: "image/jpeg",
-        jpeg: "image/jpeg",
-        gif: "image/gif",
-        webp: "image/webp",
-      };
-      images.push({
-        sheetRow: anchor.fromRow,
-        bytes,
-        mime: mimeMap[ext] || "image/png",
-        ext: mimeMap[ext] ? ext.replace("jpeg", "jpg") : "png",
-      });
-    }
-  } catch (e) {
-    console.warn("Could not extract images from xlsx:", e);
-  }
-  return images;
+  const images = await extractSheetImages(buffer);
+  return images.map(({ row, bytes, mime, ext }) => ({ sheetRow: row, bytes, mime, ext }));
 }
 
 function cellToString(cell: unknown): string {
@@ -117,6 +36,8 @@ function cellToString(cell: unknown): string {
     if (value.text) return String(value.text).trim();
     if (value.result != null) return String(value.result).trim();
     if (value.hyperlink) return String(value.hyperlink).trim();
+    // A formula that failed (e.g. WPS in-cell pictures) is not a value.
+    if ("error" in value || "formula" in value || "sharedFormula" in value) return "";
   }
   return String(cell).trim();
 }
@@ -202,6 +123,10 @@ export async function parseExcelFile(buffer: ArrayBuffer): Promise<{
   columns: string[];
   rows: ProductRow[];
   headerRowIndex: number;
+  /** Header text per 0-based sheet column (`__EMPTY_n` when blank). */
+  headers: string[];
+  /** 0-based sheet row of each returned row. */
+  rowSheetIndexes: number[];
 }> {
   const rawData = await sheetToRawRows(buffer);
 
@@ -251,12 +176,16 @@ export async function parseExcelFile(buffer: ArrayBuffer): Promise<{
   // Embedded pictures are extracted as binary and uploaded to Storage by the
   // products import path. Inlining them as data: URLs here would bloat the
   // catalog blob and the browser heap.
+  const rowSheetIndexes: number[] = [];
   const rows: ProductRow[] = jsonData
-    .filter(row => {
+    .map((row, position) => ({ row, sheetIndex: headerRowIndex + 1 + position }))
+    .filter(({ row, sheetIndex }) => {
       // Skip completely empty rows
-      return columns.some(col => row[col] && String(row[col]).trim() !== "");
+      const keep = columns.some(col => row[col] && String(row[col]).trim() !== "");
+      if (keep) rowSheetIndexes.push(sheetIndex);
+      return keep;
     })
-    .map((row, index) => {
+    .map(({ row }, index) => {
       const cleanData: Record<string, string> = {};
       columns.forEach(col => {
         const value = String(row[col] || "").trim();
@@ -273,7 +202,7 @@ export async function parseExcelFile(buffer: ArrayBuffer): Promise<{
       };
     });
 
-  return { columns, rows, headerRowIndex };
+  return { columns, rows, headerRowIndex, headers, rowSheetIndexes };
 }
 
 export async function exportToExcel(

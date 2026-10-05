@@ -1,3 +1,5 @@
+import { splitStoredImageRefs } from "@/lib/stored-image-ref";
+
 export function parseImageUrls(value: unknown): string[] {
   const text = String(value ?? "").trim();
   if (!text) return [];
@@ -18,6 +20,15 @@ export function parseImageUrls(value: unknown): string[] {
   return urls;
 }
 
+/** A cell that holds only pictures saved from the uploaded sheet. */
+export function isStoredPictureCell(text: string): boolean {
+  const refs = splitStoredImageRefs(text);
+  if (refs.length === 0) return false;
+  let remainder = text;
+  for (const ref of refs) remainder = remainder.split(ref).join("");
+  return remainder.replace(/[\s,|;]+/g, "").length === 0;
+}
+
 /** Cheap gate before full URL parsing. */
 export function cellContainsHttpUrl(value: unknown): boolean {
   const text = String(value ?? "").trim();
@@ -31,6 +42,7 @@ export function cellContainsHttpUrl(value: unknown): boolean {
  */
 export function cellIsPrimarilyHttpUrl(value: unknown): boolean {
   const text = String(value ?? "").trim();
+  if (isStoredPictureCell(text)) return true;
   if (!cellContainsHttpUrl(text)) return false;
   const urls = parseImageUrls(text);
   if (urls.length === 0) return false;

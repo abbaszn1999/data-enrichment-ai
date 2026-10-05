@@ -1,4 +1,5 @@
 import { parseExcelFile } from "@/lib/excel";
+import { attachSheetImages, extractSheetImages, type SheetImage } from "@/lib/sheet-images";
 import { createEmptyVisualizerWorksheet } from "@/lib/visualizer/types";
 import type { VisualizerWorksheetJson } from "@/lib/visualizer/types";
 import { assertRowCount } from "@/lib/upload-limits";
@@ -12,9 +13,25 @@ function newRowId(): string {
 
 export async function parseVisualizerWorksheetFile(
   buffer: ArrayBuffer,
-  sessionId: string
+  sessionId: string,
+  options: {
+    /** Saves a picture found inside the sheet and returns its Storage path. */
+    storePicture?: (image: SheetImage) => Promise<string>;
+  } = {}
 ): Promise<VisualizerWorksheetJson> {
-  const { columns, rows } = await parseExcelFile(buffer);
+  const parsed = await parseExcelFile(buffer);
+  let { columns } = parsed;
+  let rows = parsed.rows;
+  if (options.storePicture) {
+    const images = await extractSheetImages(buffer);
+    if (images.length > 0) {
+      const attached = await attachSheetImages({ images, parsed, upload: options.storePicture });
+      if (attached.imageCount > 0) {
+        columns = attached.columns;
+        rows = rows.map((row, index) => ({ ...row, originalData: attached.rows[index] }));
+      }
+    }
+  }
   if (columns.length === 0 || columns.length > 250) {
     throw new Error("Worksheet must contain between 1 and 250 columns");
   }

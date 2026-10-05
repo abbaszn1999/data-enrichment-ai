@@ -62,6 +62,15 @@ describe("buildImageFinderBrief", () => {
     expect(brief.imageCount).toBe(IMAGE_FINDER_MAX_IMAGES);
   });
 
+  it("attaches the sheet's image-column pictures as reference images, capped and deduped", () => {
+    const brief = buildImageFinderBrief({
+      rowData: { Title: "Widget", PIC: "[1 image attached]" },
+      sheetImageUrls: ["https://s/1", "https://s/1", "https://s/2", "https://s/3", "https://s/4", "https://s/5"],
+    });
+    expect(brief.referenceImageUrls).toEqual(["https://s/1", "https://s/2", "https://s/3", "https://s/4"]);
+    expect(brief.text).toContain("4 reference images are attached");
+  });
+
   it("omits the custom instruction section when it is empty", () => {
     const brief = buildImageFinderBrief({
       rowData: { Title: "Widget" },

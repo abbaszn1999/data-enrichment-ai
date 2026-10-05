@@ -1,4 +1,5 @@
 import { listColumnsWithHttpUrls, parseImageUrls } from "@/lib/gallery/image-urls";
+import { hasStoredImageRef, splitStoredImageRefs } from "@/lib/stored-image-ref";
 import type {
   VisualizerProjectSettings,
   VisualizerRow,
@@ -55,10 +56,12 @@ export function mappedProductFields(
     if (value) product[column] = value;
   }
   if (settings.productImageColumn) {
-    const urls = parseImageUrls(
-      row.originalData[settings.productImageColumn]
-    );
+    const cell = row.originalData[settings.productImageColumn];
+    const urls = parseImageUrls(cell);
     if (urls[0]) product.productImage = urls[0];
+    else if (splitStoredImageRefs(String(cell ?? "")).length > 0) {
+      product.productImage = "Picture from the uploaded sheet";
+    }
   }
   return product;
 }
@@ -72,7 +75,7 @@ export function productDisplayName(
     : Object.keys(row.originalData);
   for (const column of selected) {
     const value = String(row.originalData[column] ?? "").trim();
-    if (value && !/^https?:\/\//i.test(value)) return value;
+    if (value && !/^https?:\/\//i.test(value) && !hasStoredImageRef(value)) return value;
   }
   return `Row ${row.rowIndex + 1}`;
 }

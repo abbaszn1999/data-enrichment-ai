@@ -112,6 +112,8 @@ import {
 const ROW_HEADER_COLUMNS = new Set(["select", "rowNum"]);
 import type { ProductRow, EnrichmentColumn } from "@/types";
 import { FileSpreadsheet, Package, Cloud, CloudOff } from "lucide-react";
+import { StoredImageCell } from "@/components/stored-image";
+import { hasStoredImageRef } from "@/lib/stored-image-ref";
 import {
   buildProductGroupIndex,
   visibleCatalogRows,
@@ -563,6 +565,10 @@ function EditableCell({
         {dialog}
       </>
     );
+  }
+
+  if (hasStoredImageRef(value)) {
+    return <StoredImageCell value={value} />;
   }
 
   // Detect base64 image data URL
@@ -1578,7 +1584,9 @@ function RowPreviewPanel({
               return (
                 <div key={col} className="border rounded-lg p-2.5 bg-muted/20">
                   <div className="text-[10px] font-semibold text-muted-foreground mb-1">{col}</div>
-                  {isImage ? (
+                  {hasStoredImageRef(val) ? (
+                    <StoredImageCell value={val} size="h-16 w-16" />
+                  ) : isImage ? (
                     <img src={val} alt={col} className="h-16 w-16 object-contain rounded border bg-white" />
                   ) : (
                     <div className="text-xs leading-relaxed break-words">{val || <span className="text-muted-foreground/40">—</span>}</div>

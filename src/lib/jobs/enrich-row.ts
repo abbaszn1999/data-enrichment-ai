@@ -30,6 +30,7 @@ import { isJobCancelRequested, loadJobRun } from "./repo";
 import type { CatalogJobSettings } from "./types";
 import type { ProjectRow } from "@/lib/storage-helpers";
 import { buildRowSources } from "./row-sources";
+import { resolveStoredImageUrls } from "./stored-images";
 
 export { buildRowSources } from "./row-sources";
 
@@ -146,13 +147,14 @@ export async function processCatalogRow(params: {
   const aiColumnLabels: Record<string, string> = { ...(settings.sourceColumnLabels ?? {}) };
   for (const col of settings.enrichmentColumns) if (col.label) aiColumnLabels[col.id] ??= col.label;
   const imageFinderRun = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns);
-  const { productData, sourceImageUrls, knownPages } = buildRowSources(
+  const { productData, sourceImageUrls: sheetImageUrls, knownPages } = buildRowSources(
     row,
     settings.sourceColumns,
     enrichmentColumnIds,
     aiColumnLabels,
     { pagesAsLeads: imageFinderRun }
   );
+  const sourceImageUrls = await resolveStoredImageUrls(sheetImageUrls);
 
   let lastError = "Enrichment failed";
   // Every call OpenAI bills is charged to the row, whatever the outcome: a

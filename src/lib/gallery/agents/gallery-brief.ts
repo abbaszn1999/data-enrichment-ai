@@ -5,7 +5,7 @@
  * pages, everything else is product data.
  */
 import type { GalleryScrapingSettings } from "@/lib/gallery/types";
-import { parseImageUrls } from "@/lib/gallery/image-urls";
+import { isStoredPictureCell, parseImageUrls } from "@/lib/gallery/image-urls";
 
 /** New gallery images are requested with a few reserves that the guards may drop. */
 export const GALLERY_RESERVE_CANDIDATES = 3;
@@ -74,6 +74,7 @@ export function classifyRowValues(
     const raw = String(rowData[column] ?? "").trim();
     if (!raw) continue;
     if (raw.startsWith("data:image/")) continue;
+    if (isStoredPictureCell(raw)) continue;
     const urls = parseImageUrls(raw);
     if (urls.length > 0 && isPrimarilyUrls(raw, urls)) {
       for (const url of urls) {

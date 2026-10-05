@@ -23,6 +23,17 @@ describe("buildRowSources", () => {
     expect(productData.Name).toBe("Widget");
   });
 
+  it("attaches pictures saved from the sheet as images, whatever the column is called", () => {
+    const { productData, sourceImageUrls } = buildRowSources(
+      row({ Name: "Widget", Photo: "vz-storage:ws/catalog/images/a.png", Col9: "vz-storage:ws/b.jpg\nvz-storage:ws/c.jpg" }),
+      ["Name", "Photo", "Col9"],
+      new Set()
+    );
+    expect(sourceImageUrls).toEqual(["vz-storage:ws/catalog/images/a.png", "vz-storage:ws/b.jpg", "vz-storage:ws/c.jpg"]);
+    expect(productData.Photo).toBe("[1 image attached]");
+    expect(productData.Col9).toBe("[2 images attached]");
+  });
+
   it("finds AI columns from other tools even when they are not in the run's column list", () => {
     const { productData } = buildRowSources(
       row({ Name: "Widget" }, { categories: ["Tools", "Hand tools"] }),

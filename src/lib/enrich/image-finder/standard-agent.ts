@@ -95,6 +95,7 @@ export async function findProductImagesStandard(params: EnrichAgentParams): Prom
   });
   const brief = buildImageFinderBrief({
     rowData: params.productData,
+    sheetImageUrls: params.sourceImageUrls,
     customInstruction: column?.customInstruction,
     allowedDomains: domainRules.allowedDomains,
     blockedDomains: domainRules.blockedDomains,

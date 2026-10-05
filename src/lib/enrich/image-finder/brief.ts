@@ -32,6 +32,8 @@ export interface ImageFinderBriefInput {
   learnedDomains?: string[];
   /** Final re-check of a row that ended Not found in the first pass. */
   recheck?: boolean;
+  /** Pictures of the item from the sheet's image columns (links or pasted pictures), attached as reference. */
+  sheetImageUrls?: string[];
 }
 
 export interface ImageFinderBrief {
@@ -76,7 +78,11 @@ export function buildImageFinderBrief(input: ImageFinderBriefInput): ImageFinder
       continue;
     }
     const plain = toPlainText(value);
-    if (plain) fieldLines.push(`- ${displayKey(key)}: ${plain.slice(0, FIELD_VALUE_CHARS)}`);
+    if (plain)     fieldLines.push(`- ${displayKey(key)}: ${plain.slice(0, FIELD_VALUE_CHARS)}`);
+  }
+  for (const url of input.sheetImageUrls ?? []) {
+    if (referenceImageUrls.length >= MAX_REFERENCE_IMAGES) break;
+    if (url && !referenceImageUrls.includes(url)) referenceImageUrls.push(url);
   }
 
   const referenceLine =

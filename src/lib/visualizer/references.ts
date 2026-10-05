@@ -3,6 +3,7 @@ import { MAX_PRODUCT_REFERENCES, orderReferences } from "@/lib/ai-images/referen
 import type { AiReferenceImage, AiReferenceRole } from "@/lib/gallery/agents/ai-shared";
 import { classifyRowValues } from "@/lib/gallery/agents/gallery-brief";
 import { parseImageUrls } from "@/lib/gallery/image-urls";
+import { isStoredImageRef, splitStoredImageRefs, storedImagePath } from "@/lib/stored-image-ref";
 import { downloadImageBytes } from "@/lib/gallery/providers/serper-images";
 import { visualizerWarn } from "@/lib/visualizer/log";
 import { downloadVisualizerBytesAdmin } from "@/lib/visualizer/storage-admin";
@@ -52,7 +53,10 @@ export function productImageUrls(
     if (/^https?:\/\//i.test(trimmed) && !urls.includes(trimmed)) urls.push(trimmed);
   };
   if (settings.productImageColumn) {
-    for (const url of parseImageUrls(row.originalData[settings.productImageColumn])) push(url);
+    const cell = String(row.originalData[settings.productImageColumn] ?? "");
+    // Pictures pasted into the sheet are saved on upload and loaded by path.
+    for (const ref of splitStoredImageRefs(cell)) if (!urls.includes(ref)) urls.push(ref);
+    for (const url of parseImageUrls(cell)) push(url);
   }
   const classified = classifyRowValues(row.originalData, settings.selectedColumns);
   for (const url of classified.imageUrls) push(url);
@@ -88,6 +92,11 @@ export async function loadVisualizerReferences(params: {
   const products: AiReferenceImage[] = [];
   for (const url of productImageUrls(row, settings)) {
     if (products.length >= MAX_PRODUCT_REFERENCES) break;
+    if (isStoredImageRef(url)) {
+      const stored = await loadStoredReference(storedImagePath(url), "product");
+      if (stored) products.push(stored);
+      continue;
+    }
     const downloaded = await downloadImageBytes(url).catch(() => null);
     if (!downloaded) {
       visualizerWarn("references", "Skipping undownloadable product image", { url });

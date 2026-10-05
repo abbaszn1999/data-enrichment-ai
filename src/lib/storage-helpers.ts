@@ -273,6 +273,13 @@ export async function getImageSignedUrl(storagePath: string, expiresInSec = 3600
   return data?.signedUrl ?? null;
 }
 
+export async function downloadStoredImage(storagePath: string): Promise<Blob | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.storage.from(BUCKET).download(storagePath);
+  if (error || !data) return null;
+  return data;
+}
+
 // ─── Master Products JSON ────────────────────────────────
 
 export interface MasterProductJson {

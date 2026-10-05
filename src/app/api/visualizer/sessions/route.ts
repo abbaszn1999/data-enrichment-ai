@@ -6,7 +6,10 @@ import {
   getVisualizerSourcePath,
   getVisualizerWorksheetPath,
 } from "@/lib/visualizer/storage-paths";
-import { saveVisualizerWorksheetAdmin } from "@/lib/visualizer/storage-admin";
+import {
+  saveVisualizerWorksheetAdmin,
+  uploadVisualizerBytesAdmin,
+} from "@/lib/visualizer/storage-admin";
 import { parseVisualizerWorksheetFile } from "@/lib/visualizer/worksheet-parser";
 import {
   getVisualizerProjectSettingsFromWorksheet,
@@ -112,7 +115,13 @@ export async function POST(request: NextRequest) {
 
   let worksheet;
   try {
-    worksheet = await parseVisualizerWorksheetFile(buffer, sessionId);
+    worksheet = await parseVisualizerWorksheetFile(buffer, sessionId, {
+      storePicture: async (image) => {
+        const path = `${getVisualizerPrefix(workspaceId, sessionId)}/sheet-pictures/${crypto.randomUUID()}.${image.ext}`;
+        await uploadVisualizerBytesAdmin(path, Buffer.from(image.bytes), image.mime);
+        return path;
+      },
+    });
   } catch (err: unknown) {
     return NextResponse.json(
       {

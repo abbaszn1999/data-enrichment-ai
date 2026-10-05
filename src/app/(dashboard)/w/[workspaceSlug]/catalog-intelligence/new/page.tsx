@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { motion } from "motion/react";
 import {
@@ -25,8 +25,9 @@ import {
   updateImportSession,
 } from "@/lib/supabase";
 import { uploadWorkspaceFile } from "@/lib/supabase-storage";
-import { saveProjectJson, saveSuppliersJson, loadSuppliersJson, type ProjectJson, type ProjectRow, type SupplierJson } from "@/lib/storage-helpers";
+import { saveProjectJson, saveSuppliersJson, loadSuppliersJson, uploadImageToStorage, type ProjectJson, type ProjectRow, type SupplierJson } from "@/lib/storage-helpers";
 import { parseExcelFile } from "@/lib/excel";
+import { attachSheetImages, extractSheetImages, type ParsedSheetForImages, type SheetImage } from "@/lib/sheet-images";
 import {
   UploadLimitError,
   assertRowCount,
@@ -96,6 +97,8 @@ export default function NewImportPage() {
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [fileData, setFileData] = useState<{ columns: string[]; rows: Record<string, string>[]; totalRows: number } | null>(null);
+  const sheetPicturesRef = useRef<{ parsed: ParsedSheetForImages; images: SheetImage[] } | null>(null);
+  const [pictureCount, setPictureCount] = useState(0);
   const [fullRows, setFullRows] = useState<Record<string, any>[]>([]);
   const [loading, setLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -137,11 +140,25 @@ export default function NewImportPage() {
       setSessionName(name.charAt(0).toUpperCase() + name.slice(1));
     }
 
+    sheetPicturesRef.current = null;
+    setPictureCount(0);
     try {
       const buffer = await selectedFile.arrayBuffer();
       const parsed = await parseExcelFile(buffer);
       if (parsed && parsed.rows.length > 0) {
         assertRowCount(parsed.rows.length, "catalogIntelligence");
+        const images = await extractSheetImages(buffer);
+        if (images.length > 0) {
+          sheetPicturesRef.current = { parsed, images };
+          const dataRows = new Set(parsed.rowSheetIndexes);
+          setPictureCount(
+            new Set(
+              images
+                .filter((image) => image.row > parsed.headerRowIndex && dataRows.has(image.row))
+                .map((image) => `${image.row}:${image.col}`)
+            ).size
+          );
+        }
         // Store all rows for import_rows insertion
         const allRows = parsed.rows.map((r) => {
           const obj: Record<string, any> = {};
@@ -198,8 +215,31 @@ export default function NewImportPage() {
         kind,
       });
 
-      // 4. Build project JSON and save to Storage
-      const projectRows: ProjectRow[] = fullRows.map((row, index) => ({
+      // 4. Pictures pasted into the sheet are saved to Storage and the cell
+      // keeps a reference, so every feature can use them as image input.
+      let projectColumns = fileData.columns;
+      let sheetRows = fullRows;
+      const sheet = sheetPicturesRef.current;
+      if (sheet && pictureCount > 0) {
+        const attached = await attachSheetImages({
+          images: sheet.images,
+          parsed: sheet.parsed,
+          upload: async (image) => {
+            const path = `${workspace.id}/catalog/images/${crypto.randomUUID()}.${image.ext}`;
+            await uploadImageToStorage(path, new Blob([image.bytes as BlobPart], { type: image.mime }));
+            return path;
+          },
+        });
+        if (attached.imageCount > 0) {
+          projectColumns = attached.columns;
+          sheetRows = attached.rows.map((row) =>
+            Object.fromEntries(attached.columns.map((col) => [col, row[col] ?? ""]))
+          );
+        }
+      }
+
+      // 5. Build project JSON and save to Storage
+      const projectRows: ProjectRow[] = sheetRows.map((row, index) => ({
         id: crypto.randomUUID(),
         rowIndex: index,
         status: "pending" as const,
@@ -214,9 +254,9 @@ export default function NewImportPage() {
       // user always supplies the categories to enrich in this very upload.
       const projectJson: ProjectJson = {
         kind,
-        columns: fileData.columns,
+        columns: projectColumns,
         rows: projectRows,
-        sourceColumns: [...fileData.columns],
+        sourceColumns: [...projectColumns],
         enrichmentColumns: getDefaultEnrichmentColumns(kind),
         enrichmentSettings: {},
         columnVisibility: {},
@@ -225,7 +265,7 @@ export default function NewImportPage() {
 
       const storagePath = await saveProjectJson(workspace.id, session.id, projectJson);
 
-      // 5. Update session with storage path (PLP also skips straight to Review)
+      // 6. Update session with storage path (PLP also skips straight to Review)
       await updateImportSession(session.id, {
         storage_path: storagePath,
         ...(isPlp ? { status: "review", new_count: fileData.totalRows, existing_count: 0 } : {}),
@@ -466,6 +506,19 @@ export default function NewImportPage() {
                       <div className="text-[9px] text-muted-foreground">Encoding</div>
                     </div>
                   </div>
+
+                  {pictureCount > 0 && (
+                    <div className="flex items-start gap-1.5 rounded-xl border border-green-500/30 bg-green-50/40 p-3 text-xs dark:bg-green-950/10">
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600" />
+                      <span>
+                        <strong>
+                          {pictureCount} picture{pictureCount === 1 ? "" : "s"}
+                        </strong>{" "}
+                        found inside the sheet. They are saved with the project and can be used as image input
+                        (Image Finder, Source URLs, enrichment) by picking their column as a source.
+                      </span>
+                    </div>
+                  )}
 
                   {detected && (
                     <div
