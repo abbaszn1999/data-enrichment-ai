@@ -1849,8 +1849,8 @@ export function Sidebar() {
                       <span className="space-y-0.5">
                         <span className="block text-[11px] font-semibold text-foreground">Product pages only</span>
                         <span className="block text-[10px] leading-relaxed text-muted-foreground">
-                          Skip videos, social posts, review, category and stock-photo pages, and list pages with a
-                          price first.
+                          Removes videos, review, category and stock-photo pages, puts the best product pages first
+                          and keeps at most two per website. The rest stay in the cell under Also found.
                         </span>
                       </span>
                     </label>

@@ -13,7 +13,7 @@ import {
 } from "@/lib/enrich";
 import { IMAGE_FINDER_OPENAI_MODEL } from "@/lib/enrich/models";
 import { usesGoogleSourceUrls } from "@/lib/enrich/source-urls/agent";
-import { lensImageForRow } from "@/lib/enrich/lens/image-column";
+import { lensImageForRow, lensRowText } from "@/lib/enrich/lens/image-column";
 import { isLensRun } from "@/lib/enrich/lens/run";
 import {
   billedCostsOf,
@@ -167,6 +167,9 @@ export async function processCatalogRow(params: {
   const lensRun = isLensRun(settings.kind ?? "product", settings.enabledColumns);
   const lensPicture = lensRun ? lensImageForRow(row, settings.sourceColumns?.[0] ?? "") : null;
   const sourceImageUrls = await resolveStoredImageUrls(lensRun ? (lensPicture ? [lensPicture] : []) : sheetImageUrls);
+  // Lens ranks pages by how well their title fits the row, so it gets every
+  // text column of the row (not only the picture column the owner ticked).
+  const lensRowData = lensRun ? lensRowText(row, settings.sourceColumns?.[0]) : productData;
 
   let lastError = "Enrichment failed";
   // Every call OpenAI bills is charged to the row, whatever the outcome: a
@@ -183,7 +186,7 @@ export async function processCatalogRow(params: {
   for (let attempt = 1; attempt <= rowAttempts; attempt += 1) {
     try {
       const enriched = await enrichRow({
-        productData,
+        productData: lensRowData,
         sourceImageUrls,
         knownPages,
         enabledColumns: settings.enabledColumns,

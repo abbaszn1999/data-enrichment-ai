@@ -36,6 +36,16 @@ export function lensImageForRow(row: LensRowLike, column: string): string | null
   return lensImagesFromCell(fromAi)[0] ?? null;
 }
 
+/** Every text cell of the sheet row except the picture column, for ranking Lens pages against the row. */
+export function lensRowText(row: LensRowLike, pictureColumn: string | undefined): Record<string, string> {
+  const text: Record<string, string> = {};
+  for (const [column, value] of Object.entries(row.originalData)) {
+    if (column === pictureColumn || value === undefined || value === null) continue;
+    text[column] = String(value);
+  }
+  return text;
+}
+
 /**
  * The first column that looks like it holds the product pictures: a sheet
  * column where most filled cells hold a pasted picture or an image link, then

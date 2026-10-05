@@ -10,7 +10,7 @@ vi.mock("./searchapi-lens", async (importOriginal) => ({
   callGoogleLens: callLensMock,
 }));
 
-const { emptyLensDrops, findLensMatches, searchLensMatches, toLensSources } = await import("./agent");
+const { findLensMatches, searchLensMatches } = await import("./agent");
 const { parseLensMatches } = await import("./searchapi-lens");
 const { detectLensImageColumn, lensImageForRow, lensImagesFromCell } = await import("./image-column");
 const { isLensRun, lensRunConflict } = await import("./run");
@@ -43,72 +43,6 @@ describe("parseLensMatches", () => {
       ])
     ).toEqual([{ link: "https://shop.test/p/1", title: "Widget", source: "Shop" }]);
     expect(parseLensMatches(undefined)).toEqual([]);
-  });
-});
-
-describe("toLensSources", () => {
-  it("applies the website rules, drops repeated pages and stops at the limit", () => {
-    const matches = [
-      match("https://a.test/p/1?utm=1", "A one"),
-      match("https://www.a.test/p/1/", "A one again"),
-      match("https://blocked.test/p/2", "Blocked"),
-      match("https://sub.b.test/p/3", ""),
-      match("https://c.test/p/4", "C"),
-    ];
-    expect(toLensSources(matches, { allowedDomains: [], blockedDomains: ["blocked.test"] }, 3)).toEqual([
-      { title: "A one", uri: "https://a.test/p/1?utm=1" },
-      { title: "sub.b.test", uri: "https://sub.b.test/p/3" },
-      { title: "C", uri: "https://c.test/p/4" },
-    ]);
-    expect(toLensSources(matches, { allowedDomains: ["b.test"], blockedDomains: [] }, 10).map((s) => s.uri)).toEqual([
-      "https://sub.b.test/p/3",
-    ]);
-  });
-});
-
-describe("toLensSources product filter", () => {
-  const open = { allowedDomains: [], blockedDomains: [] };
-
-  it("drops non-product pages, then lists priced pages, product-looking URLs and unknown ones in that order", () => {
-    const drops = emptyLensDrops();
-    const sources = toLensSources(
-      [
-        match("https://unknown.test/toy-123.html", "Unknown"),
-        match("https://shop.test/products/car", "Car"),
-        { ...match("https://priced.test/some-page", "Priced"), price: "€10" },
-        match("https://www.youtube.com/watch?v=1", "Video"),
-        match("https://alza.test/recenzie/car-1", "Review"),
-        match("https://shop.test/", "Home"),
-      ],
-      open,
-      10,
-      new Set(),
-      [],
-      { drops }
-    );
-    expect(sources.map((s) => s.title)).toEqual(["Priced", "Car", "Unknown"]);
-    expect(drops).toEqual({ site: 1, listing: 1, notPage: 1, rules: 0 });
-  });
-
-  it("fills the limit from the best pages first", () => {
-    const sources = toLensSources(
-      [match("https://a.test/some-page", "Unknown"), match("https://b.test/product/2", "Product")],
-      open,
-      1
-    );
-    expect(sources.map((s) => s.title)).toEqual(["Product"]);
-  });
-
-  it("keeps Google's order and every page when product pages only is off", () => {
-    const sources = toLensSources(
-      [match("https://shop.test/collections/toys", "List"), match("https://b.test/product/2", "Product")],
-      open,
-      10,
-      new Set(),
-      [],
-      { productsOnly: false }
-    );
-    expect(sources.map((s) => s.title)).toEqual(["List", "Product"]);
   });
 });
 
@@ -145,12 +79,13 @@ describe("searchLensMatches billing", () => {
     callLensMock.mockResolvedValueOnce(
       answer("exact_matches", [
         match("https://www.youtube.com/watch?v=1", "Video"),
-        match("https://shop.test/collections/toys", "Toys"),
+        match("https://shop.test/reviews/toys", "Toys"),
         match("https://shop.test/", "Home"),
       ])
     );
     const result = await search();
     expect(result.sources).toEqual([]);
+    expect(result.setAside.map((page) => page.reason)).toEqual(["site", "listing", "not_page"]);
     expect(result.notFoundReason).toMatch(/found 3 page\(s\), but none is a product page you allow/);
     expect(result.notFoundReason).toMatch(/1 on video, social, reference or stock-photo sites/);
     expect(result.notFoundReason).toMatch(/1 category, review or article page\(s\)/);
@@ -259,11 +194,43 @@ describe("findLensMatches", () => {
       ],
     });
     expect(result.data.lensFounds).toEqual([
-      { title: "A", uri: "https://a.test/p/1" },
-      { title: "C", uri: "https://c.test/p/3" },
+      { title: "A", uri: "https://a.test/p/1", note: "Product page" },
+      { title: "C", uri: "https://c.test/p/3", note: "Product page" },
     ]);
     expect(result.data["lensFounds__notFoundReason"]).toBe("");
+    expect(result.data["lensFounds__alsoFound"]).toEqual([]);
+    expect(result.data["lensFounds__setAside"]).toEqual([]);
     expect(result.costs).toHaveLength(1);
+  });
+
+  it("keeps two pages per website, puts the rest under also found, and lists what was set aside", async () => {
+    callLensMock.mockResolvedValueOnce(
+      answer("exact_matches", [
+        match("https://www.ebay.co.uk/sch/i.html?_nkw=gun", "Toy Guns - eBay UK"),
+        match("https://www.ebay.co.uk/itm/1", "Gun one - eBay UK"),
+        match("https://www.ebay.co.uk/itm/2", "Gun two - eBay UK"),
+        match("https://www.ebay.com/itm/3", "Gun three - eBay"),
+        match("https://shop.test/products/gun", "Gun - Shop"),
+      ])
+    );
+    const result = await findLensMatches({
+      productData: { DESC: "Spiderman Toy Gun M416" },
+      enabledColumns: ["lensFounds"],
+      sourceImageUrls: [IMAGE],
+      enrichmentColumns: [
+        { id: "lensFounds", label: "Lens founds", description: "", type: "sourceUrls", enabled: true, sourceCount: 10 },
+      ],
+    });
+    const kept = result.data.lensFounds as Array<{ uri: string }>;
+    expect(kept.map((page) => page.uri).sort()).toEqual(
+      ["https://shop.test/products/gun", "https://www.ebay.co.uk/itm/1", "https://www.ebay.co.uk/itm/2"].sort()
+    );
+    expect(result.data["lensFounds__alsoFound"]).toEqual([
+      expect.objectContaining({ uri: "https://www.ebay.com/itm/3" }),
+    ]);
+    expect(result.data["lensFounds__setAside"]).toEqual([
+      { uri: "https://www.ebay.co.uk/sch/i.html?_nkw=gun", reason: "listing" },
+    ]);
   });
 });
 

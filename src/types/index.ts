@@ -17,6 +17,8 @@ export interface EnrichedData {
 export interface SourceUrl {
   title: string;
   uri: string;
+  /** Short label shown next to the link, e.g. "Price €24" or "Check" (Lens founds). */
+  note?: string;
 }
 
 export interface ImageUrl {

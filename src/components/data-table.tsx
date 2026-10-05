@@ -80,6 +80,13 @@ import {
   imageMatchLabel,
   isApproximateImageMatch,
 } from "@/lib/enrich/image-finder/not-found";
+import {
+  isLensSetAside,
+  LENS_SET_ASIDE_LABELS,
+  lensAlsoFoundKey,
+  lensSetAsideKey,
+  type LensSetAside,
+} from "@/lib/enrich/lens/side-keys";
 import { useSheetStore } from "@/store/sheet-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {
@@ -623,11 +630,56 @@ function EditableCell({
 }
 
 // --- Source URLs Cell ---
-function SourceUrlsCell({ sources, isEditable, rowId, enrichKey }: { sources: { title: string; uri: string }[]; isEditable: boolean; rowId: string; enrichKey: string }) {
+type SourceLink = { title: string; uri: string; note?: string };
+
+function SourceNote({ note }: { note?: string }) {
+  if (!note) return null;
+  const warn = note === "Check";
+  return (
+    <span
+      className={`shrink-0 rounded-full px-1.5 py-px text-[9px] font-medium leading-4 ${
+        warn ? "bg-amber-500/15 text-amber-600" : "bg-emerald-500/10 text-emerald-600"
+      }`}
+    >
+      {note}
+    </span>
+  );
+}
+
+function SourceUrlsCell({
+  sources,
+  isEditable,
+  rowId,
+  enrichKey,
+  alsoFound,
+  setAside,
+}: {
+  sources: SourceLink[];
+  isEditable: boolean;
+  rowId: string;
+  enrichKey: string;
+  /** Lens founds: good pages that did not fit the limit. */
+  alsoFound?: SourceLink[];
+  /** Lens founds: pages removed as not a product page, with the reason. */
+  setAside?: LensSetAside[];
+}) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [draft, setDraft] = useState<{ title: string; uri: string }[]>([]);
+  const [draft, setDraft] = useState<SourceLink[]>([]);
+  const extras = alsoFound ?? [];
+  const removed = setAside ?? [];
+
+  const addFromAlsoFound = (index: number) => {
+    const page = extras[index];
+    if (!page) return;
+    updateEnrichedCellValue(rowId, enrichKey, [...sources, page]);
+    updateEnrichedCellValue(
+      rowId,
+      lensAlsoFoundKey(enrichKey),
+      extras.filter((_, i) => i !== index)
+    );
+  };
   // The default row only fits three lines. With more than three sources, show two
   // links and use the third line for the "+N more" chip, so it is never cropped.
   const previewCount = sources.length > 3 ? 2 : sources.length;
@@ -751,9 +803,62 @@ function SourceUrlsCell({ sources, isEditable, rowId, enrichKey }: { sources: { 
                   className="flex items-start gap-2 text-sm text-blue-500 hover:underline p-2 rounded-md hover:bg-muted/50 transition-colors"
                 >
                   <ExternalLink className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                  <span className="break-all leading-snug">{source.title || source.uri}</span>
+                  <span className="break-all leading-snug min-w-0 flex-1">{source.title || source.uri}</span>
+                  <SourceNote note={source.note} />
                 </a>
               ))}
+              {extras.length > 0 && (
+                <details className="rounded-md border bg-muted/20">
+                  <summary className="cursor-pointer select-none px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                    Also found ({extras.length})
+                  </summary>
+                  <div className="flex flex-col gap-1 p-1.5">
+                    {extras.map((source, i) => (
+                      <div key={i} className="flex items-start gap-2 rounded-md px-1.5 py-1 hover:bg-muted/50">
+                        <a
+                          href={source.uri}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex min-w-0 flex-1 items-start gap-2 text-xs text-blue-500 hover:underline"
+                        >
+                          <ExternalLink className="h-3 w-3 shrink-0 mt-0.5" />
+                          <span className="break-all leading-snug">{source.title || source.uri}</span>
+                        </a>
+                        <SourceNote note={source.note} />
+                        {isEditable && (
+                          <button
+                            onClick={() => addFromAlsoFound(i)}
+                            className="shrink-0 text-[10px] font-medium text-primary hover:underline"
+                          >
+                            Add
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {removed.length > 0 && (
+                <details className="rounded-md border bg-muted/20">
+                  <summary className="cursor-pointer select-none px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                    Set aside ({removed.length})
+                  </summary>
+                  <div className="flex flex-col gap-1 p-1.5">
+                    {removed.map((page, i) => (
+                      <a
+                        key={i}
+                        href={page.uri}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex flex-col rounded-md px-1.5 py-1 hover:bg-muted/50"
+                      >
+                        <span className="break-all text-xs leading-snug text-blue-500 hover:underline">{page.uri}</span>
+                        <span className="text-[10px] text-muted-foreground">{LENS_SET_ASIDE_LABELS[page.reason]}</span>
+                      </a>
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
           )}
         </DialogContent>
@@ -1391,6 +1496,8 @@ function EditableEnrichedCell({
   notFoundReason,
   matchBasis,
   matchNote,
+  alsoFound,
+  setAside,
 }: {
   value: unknown;
   rowId: string;
@@ -1403,6 +1510,8 @@ function EditableEnrichedCell({
   notFoundReason?: string;
   matchBasis?: string;
   matchNote?: string;
+  alsoFound?: SourceLink[];
+  setAside?: LensSetAside[];
 }) {
   const { updateEnrichedCellValue } = useSheetStore();
   const [open, setOpen] = useState(false);
@@ -1489,8 +1598,17 @@ function EditableEnrichedCell({
 
     // Source URLs - show as links with dialog for all sources
     if (value[0] && typeof value[0] === "object" && "uri" in value[0]) {
-      const sources = value as { title: string; uri: string }[];
-      return <SourceUrlsCell sources={sources} isEditable={isEditable} rowId={rowId} enrichKey={enrichKey} />;
+      const sources = value as SourceLink[];
+      return (
+        <SourceUrlsCell
+          sources={sources}
+          isEditable={isEditable}
+          rowId={rowId}
+          enrichKey={enrichKey}
+          alsoFound={alsoFound}
+          setAside={setAside}
+        />
+      );
     }
 
     // FAQ - question/answer pairs get their own editor
@@ -2213,6 +2331,8 @@ export function DataTable({
             row.original.enrichedData[imageFinderMatchBasisKey(enrichCol.id)];
           const matchNote =
             row.original.enrichedData[imageFinderMatchNoteKey(enrichCol.id)];
+          const alsoFound = row.original.enrichedData[lensAlsoFoundKey(enrichCol.id)];
+          const setAside = row.original.enrichedData[lensSetAsideKey(enrichCol.id)];
           return (
             <EditableEnrichedCell
               value={row.original.enrichedData[enrichCol.id]}
@@ -2226,6 +2346,8 @@ export function DataTable({
               }
               matchBasis={typeof matchBasis === "string" ? matchBasis : undefined}
               matchNote={typeof matchNote === "string" ? hideProviderNames(matchNote) : undefined}
+              alsoFound={Array.isArray(alsoFound) ? (alsoFound as SourceLink[]) : undefined}
+              setAside={isLensSetAside(setAside) ? setAside : undefined}
             />
           );
         },
