@@ -447,6 +447,8 @@ export default function ProductsGalleryPage() {
   const currentSettingsSignatureRef = useRef("");
   const worksheetRevisionRef = useRef(0);
   const settingsSaveInFlightRef = useRef(false);
+  /** Settings that failed to save; autosave waits for a change before trying again. */
+  const failedSettingsSignatureRef = useRef<string | null>(null);
   const flushSettingsRef = useRef<() => void>(() => undefined);
   const settingsRevisionRef = useRef(0);
   const worksheetRef = useRef<GalleryWorksheetJson | null>(null);
@@ -794,6 +796,7 @@ export default function ProductsGalleryPage() {
       }
       settingsRevisionRef.current = Number(result.session.settings_revision);
       lastSavedSettingsSignatureRef.current = signature;
+      failedSettingsSignatureRef.current = null;
       setActiveSession(result.session);
       setSessions((current) =>
         current.map((session) =>
@@ -822,6 +825,7 @@ export default function ProductsGalleryPage() {
       if (!options?.silent) toast.success("Settings saved");
       return worksheet;
     } catch (error) {
+      failedSettingsSignatureRef.current = signature;
       setSaveStatus("error");
       throw error;
     } finally {
@@ -849,10 +853,16 @@ export default function ProductsGalleryPage() {
       setSaveStatus("saved");
       return;
     }
-    if (saveStatus !== "saving") {
-      setSaveStatus(
-        signature === lastSavedSettingsSignatureRef.current ? "saved" : "dirty"
-      );
+    if (saveStatus === "saving") return;
+    if (signature === lastSavedSettingsSignatureRef.current) {
+      setSaveStatus("saved");
+    } else if (
+      saveStatus === "error" &&
+      signature === failedSettingsSignatureRef.current
+    ) {
+      return;
+    } else {
+      setSaveStatus("dirty");
     }
   }, [
     buildSettingsPatch,
@@ -876,7 +886,11 @@ export default function ProductsGalleryPage() {
       return;
     }
     const timer = setTimeout(() => {
-      void persistSettings({ silent: true }).catch(() => undefined);
+      void persistSettings({ silent: true }).catch((error) => {
+        toast.error(
+          error instanceof Error ? error.message : "Could not save settings"
+        );
+      });
     }, 800);
     return () => clearTimeout(timer);
   }, [
@@ -2924,46 +2938,49 @@ export default function ProductsGalleryPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Button
-              type="button"
-              variant={saveStatus === "dirty" ? "default" : "outline"}
-              size="sm"
-              disabled={
-                !canEdit ||
-                saveStatus === "saving" ||
-                saveStatus === "saved" ||
-                !!generationRun ||
-                isGenerating ||
-                isStoppingGeneration ||
-                !!editingRowId
-              }
-              onClick={() => {
-                void persistSettings().catch((error) => {
-                  toast.error(
-                    error instanceof Error ? error.message : "Save failed"
-                  );
-                });
-              }}
-              className={`h-8 gap-1.5 rounded-lg text-[10px] ${saveStatus === "dirty" ? "bg-[#400095] text-white dark:bg-[#F76D01]" : ""}`}
-              aria-live="polite"
-            >
-              {saveStatus === "saving" ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : saveStatus === "error" ? (
+            {canEdit && saveStatus === "error" ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={
+                  !!generationRun ||
+                  isGenerating ||
+                  isStoppingGeneration ||
+                  !!editingRowId
+                }
+                onClick={() => {
+                  void persistSettings().catch((error) => {
+                    toast.error(
+                      error instanceof Error ? error.message : "Save failed"
+                    );
+                  });
+                }}
+                className="h-8 gap-1.5 rounded-lg text-[10px] text-destructive"
+                aria-live="polite"
+              >
                 <AlertCircle className="h-3.5 w-3.5" />
-              ) : saveStatus === "saved" ? (
-                <CloudCheck className="h-3.5 w-3.5 text-emerald-600" />
-              ) : (
-                <Cloud className="h-3.5 w-3.5" />
-              )}
-              {saveStatus === "saving"
-                ? "Saving…"
-                : saveStatus === "dirty"
-                  ? "Save"
-                  : saveStatus === "error"
-                    ? "Retry save"
-                    : "Saved"}
-            </Button>
+                Couldn&apos;t save · Retry
+              </Button>
+            ) : canEdit && saveStatus !== "idle" ? (
+              <span
+                className="flex items-center gap-1.5 text-[10px] text-muted-foreground"
+                aria-live="polite"
+              >
+                {saveStatus === "saved" ? (
+                  <CloudCheck className="h-3.5 w-3.5 text-emerald-600" />
+                ) : saveStatus === "saving" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Cloud className="h-3.5 w-3.5" />
+                )}
+                {saveStatus === "saved"
+                  ? "Saved"
+                  : saveStatus === "saving"
+                    ? "Saving…"
+                    : "Unsaved changes"}
+              </span>
+            ) : null}
           </div>
         </header>
 
