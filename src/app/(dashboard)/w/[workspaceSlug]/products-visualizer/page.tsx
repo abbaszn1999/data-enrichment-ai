@@ -63,6 +63,7 @@ import { WorksheetPaginationBar } from "@/components/worksheet-pagination-bar";
 import { SheetImage } from "@/components/sheet-image";
 import { StoredImageCell } from "@/components/stored-image";
 import { hasStoredImageRef } from "@/lib/stored-image-ref";
+import { parseImageUrls } from "@/lib/gallery/image-urls";
 import { ColumnLayoutPanel, type ColumnLayoutItem } from "@/components/sheet/column-layout-panel";
 import { ColumnFilterButton } from "@/components/sheet/column-filter-popover";
 import { ShareSheetButton } from "@/components/share/share-sheet-button";
@@ -353,6 +354,7 @@ export default function ProductsVisualizerPage() {
   );
   const [imageDialogRowId, setImageDialogRowId] = useState<string | null>(null);
   const [imagePreviewKey, setImagePreviewKey] = useState<string | null>(null);
+  const [imageDialogOriginal, setImageDialogOriginal] = useState(false);
   const [layoutDialogOpen, setLayoutDialogOpen] = useState(false);
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
   const [generationRun, setGenerationRun] = useState<{
@@ -1340,12 +1342,14 @@ export default function ProductsVisualizerPage() {
       const row = rows.find((item) => item.id === imageDialogRowId);
       if (!row) return;
       // Match the dialog list: only paths that can actually be previewed.
-      const keys = (row.imagePlaceholders ?? [])
-        .map((item) => item.storagePath)
-        .filter((path): path is string => {
-          if (!path) return false;
-          return !!signedUrls[path] || /^https?:\/\//i.test(path);
-        });
+      const keys = imageDialogOriginal
+        ? parseImageUrls(row.originalData[settings.productImageColumn ?? ""])
+        : (row.imagePlaceholders ?? [])
+            .map((item) => item.storagePath)
+            .filter((path): path is string => {
+              if (!path) return false;
+              return !!signedUrls[path] || /^https?:\/\//i.test(path);
+            });
       if (keys.length < 2) return;
 
       const currentKey =
@@ -1361,7 +1365,14 @@ export default function ProductsVisualizerPage() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [imageDialogRowId, imagePreviewKey, rows, signedUrls]);
+  }, [
+    imageDialogRowId,
+    imageDialogOriginal,
+    imagePreviewKey,
+    rows,
+    signedUrls,
+    settings.productImageColumn,
+  ]);
 
   const columnLabel = (column: string) => {
     if (column === RESULT_DESCRIPTION) return "AI Description";
@@ -2770,6 +2781,7 @@ export default function ProductsVisualizerPage() {
                                     } => !!item
                                   );
                                 const openImageDialog = (key: string) => {
+                                  setImageDialogOriginal(false);
                                   setImageDialogRowId(row.id);
                                   setImagePreviewKey(key);
                                 };
@@ -2836,10 +2848,17 @@ export default function ProductsVisualizerPage() {
                                 );
                               }
                               const value = row.originalData[column] ?? "";
-                              const isImageCol =
-                                column === settings.productImageColumn &&
-                                /^https?:\/\//i.test(value.trim());
+                              const originalUrls =
+                                column === settings.productImageColumn
+                                  ? parseImageUrls(value)
+                                  : [];
+                              const isImageCol = originalUrls.length > 0;
                               const openCell = () => setCellDialog({ rowId: row.id, column });
+                              const openOriginalViewer = (url: string) => {
+                                setImageDialogOriginal(true);
+                                setImageDialogRowId(row.id);
+                                setImagePreviewKey(url);
+                              };
                               return (
                                 <td
                                   key={column}
@@ -2848,19 +2867,35 @@ export default function ProductsVisualizerPage() {
                                   {hasStoredImageRef(value) ? (
                                     <StoredImageCell value={value} size="h-12 w-12" />
                                   ) : isImageCol ? (
-                                    <button
-                                      type="button"
-                                      onClick={openCell}
-                                      title={value}
-                                      className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                                    >
-                                      <SheetImage
-                                        url={value.trim()}
-                                        alt=""
-                                        className="h-12 w-12 rounded border object-cover"
-                                        tileClassName="flex h-12 w-12 flex-col items-center justify-center rounded border bg-muted/40 text-[8px] leading-tight text-muted-foreground"
-                                      />
-                                    </button>
+                                    <div className="flex items-center gap-1">
+                                      {originalUrls.slice(0, 3).map((url, idx) => (
+                                        <button
+                                          key={`${row.id}:original:${idx}:${url}`}
+                                          type="button"
+                                          onClick={() => openOriginalViewer(url)}
+                                          title={url}
+                                          aria-label={`Preview image ${idx + 1}`}
+                                          className="block shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                        >
+                                          <SheetImage
+                                            url={url}
+                                            alt=""
+                                            className="h-12 w-12 rounded border object-cover"
+                                            tileClassName="flex h-12 w-12 flex-col items-center justify-center rounded border bg-muted/40 text-[8px] leading-tight text-muted-foreground"
+                                          />
+                                        </button>
+                                      ))}
+                                      {originalUrls.length > 3 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => openOriginalViewer(originalUrls[0]!)}
+                                          className="flex h-12 items-center gap-1 rounded border bg-muted/30 px-2 text-[10px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                                        >
+                                          <Maximize2 className="h-3 w-3" />
+                                          +{originalUrls.length - 3}
+                                        </button>
+                                      )}
+                                    </div>
                                   ) : (
                                     <div
                                       onClick={openCell}
@@ -3110,26 +3145,35 @@ export default function ProductsVisualizerPage() {
                 ? rows.find((row) => row.id === imageDialogRowId) ?? null
                 : null;
               if (!imageDialogRow) return null;
-              const dialogThumbs = (imageDialogRow.imagePlaceholders ?? [])
-                .map((item) => {
-                  const path = item.storagePath;
-                  if (!path) return null;
-                  const src =
-                    signedUrls[path] ||
-                    (/^https?:\/\//i.test(path) ? path : null);
-                  return src
-                    ? {
-                        key: path,
-                        src,
-                        alt: item.alt || `Image ${item.index}`,
-                      }
-                    : null;
-                })
-                .filter(
-                  (
-                    item
-                  ): item is { key: string; src: string; alt: string } => !!item
-                );
+              const dialogThumbs = imageDialogOriginal
+                ? parseImageUrls(
+                    imageDialogRow.originalData[settings.productImageColumn ?? ""]
+                  ).map((url, index) => ({
+                    key: url,
+                    src: url,
+                    alt: `Image ${index + 1}`,
+                  }))
+                : (imageDialogRow.imagePlaceholders ?? [])
+                    .map((item) => {
+                      const path = item.storagePath;
+                      if (!path) return null;
+                      const src =
+                        signedUrls[path] ||
+                        (/^https?:\/\//i.test(path) ? path : null);
+                      return src
+                        ? {
+                            key: path,
+                            src,
+                            alt: item.alt || `Image ${item.index}`,
+                          }
+                        : null;
+                    })
+                    .filter(
+                      (
+                        item
+                      ): item is { key: string; src: string; alt: string } =>
+                        !!item
+                    );
               const active =
                 dialogThumbs.find((item) => item.key === imagePreviewKey) ??
                 dialogThumbs[0] ??
@@ -3159,7 +3203,7 @@ export default function ProductsVisualizerPage() {
                     <DialogHeader className="border-b px-6 py-4">
                       <DialogTitle className="flex items-center gap-2">
                         <ImageIcon className="h-4 w-4 text-primary" />
-                        Generated images
+                        {imageDialogOriginal ? "Product images" : "Generated images"}
                       </DialogTitle>
                       <DialogDescription>
                         {`${rowProductLabel(imageDialogRow, settings)} · ${dialogThumbs.length} image${dialogThumbs.length === 1 ? "" : "s"}`}
