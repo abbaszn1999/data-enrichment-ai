@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
+import { checkFunctionBodySafety } from "@/lib/safe-function-body";
+import { runRowFunctionSandboxed } from "@/lib/sandboxed-row-function";
 import {
   Calculator,
   Type,
@@ -581,16 +583,6 @@ function buildRowObj(
   return obj;
 }
 
-function runFnOnRow(fn: (row: Record<string, string>) => Record<string, string>, rowObj: Record<string, string>): Record<string, string> {
-  try {
-    const result = fn(rowObj);
-    if (!result || typeof result !== "object") return {};
-    return result;
-  } catch {
-    return {};
-  }
-}
-
 function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) => void }) {
   const { rows, originalColumns, enrichmentColumns, selectedRowIds } = useSheetStore();
   const { workspace } = useWorkspaceStore();
@@ -625,14 +617,10 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
     return rows.slice(0, 5).map((r) => buildRowObj(r, allColumns, enrichmentColumns));
   }, [rows, allColumns, enrichmentColumns]);
 
-  // Build the JS function from plan
+  // The generated function is only ever run inside the sandboxed iframe
   const builtFn = useMemo(() => {
     if (!plan?.functionBody) return null;
-    try {
-      return new Function("row", plan.functionBody) as (row: Record<string, string>) => Record<string, string>;
-    } catch {
-      return null;
-    }
+    return checkFunctionBodySafety(plan.functionBody) ? null : plan.functionBody;
   }, [plan]);
 
   // Only the selected rows
@@ -640,14 +628,34 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
     return rows.filter((r) => selectedRowIds.has(r.id));
   }, [rows, selectedRowIds]);
 
-  // Run preview: execute function on first 4 selected rows to show before/after
+  // Sandbox output for every selected row, keyed by row id
+  const [changesById, setChangesById] = useState<Map<string, Record<string, string>> | null>(null);
+  useEffect(() => {
+    setChangesById(null);
+    if (!builtFn) return;
+    let cancelled = false;
+    const rowObjs = selectedRows.map((r) => buildRowObj(r, allColumns, enrichmentColumns));
+    runRowFunctionSandboxed(builtFn, rowObjs)
+      .then((results) => {
+        if (cancelled) return;
+        setChangesById(new Map(selectedRows.map((r, i) => [r.id, results[i] ?? {}])));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err?.message || "Failed to run function");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [builtFn, selectedRows, allColumns, enrichmentColumns]);
+
+  // Preview: first 4 selected rows before/after
   const preview = useMemo(() => {
-    if (!plan || !builtFn) return null;
+    if (!plan || !builtFn || !changesById) return null;
     const targetCol = plan.newColumn || plan.targetColumn;
     const previewRows = selectedRows.slice(0, 4);
     const items = previewRows.map((r) => {
       const rowObj = buildRowObj(r, allColumns, enrichmentColumns);
-      const changes = runFnOnRow(builtFn, rowObj);
+      const changes = changesById.get(r.id) ?? {};
       const hasChanges = Object.keys(changes).length > 0;
       const before = plan.newColumn ? "" : (rowObj[targetCol] || "");
       const after = hasChanges ? (changes[targetCol] || "") : before;
@@ -662,13 +670,11 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
     // Count how many selected rows will actually be affected
     let totalAffected = 0;
     for (const r of selectedRows) {
-      const rowObj = buildRowObj(r, allColumns, enrichmentColumns);
-      const changes = runFnOnRow(builtFn, rowObj);
-      if (Object.keys(changes).length > 0) totalAffected++;
+      if (Object.keys(changesById.get(r.id) ?? {}).length > 0) totalAffected++;
     }
 
     return { items, totalAffected, targetCol };
-  }, [plan, builtFn, selectedRows, allColumns, enrichmentColumns]);
+  }, [plan, builtFn, changesById, selectedRows, allColumns, enrichmentColumns]);
 
   const handleSend = async (overrideCommand?: string) => {
     const cmd = overrideCommand ?? command.trim();
@@ -717,11 +723,9 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
 
       const data = await res.json();
 
-      // Validate the function can be built
-      try {
-        new Function("row", data.plan.functionBody);
-      } catch (syntaxErr: any) {
-        throw new Error(`AI generated invalid function: ${syntaxErr.message}`);
+      const unsafe = checkFunctionBodySafety(data.plan?.functionBody);
+      if (unsafe) {
+        throw new Error(`AI generated invalid function: ${unsafe}`);
       }
 
       setPlan(data.plan);
@@ -778,10 +782,14 @@ function AiFunctionChat({ onOperationDone }: { onOperationDone: (msg: string) =>
 
       // Apply ONLY to selected rows
       const currentRows = useSheetStore.getState().rows.filter((r) => selectedRowIds.has(r.id));
+      const results = await runRowFunctionSandboxed(
+        builtFn,
+        currentRows.map((row) => buildRowObj(row, allColumns, enrichmentColumns))
+      );
 
-      for (const row of currentRows) {
-        const rowObj = buildRowObj(row, allColumns, enrichmentColumns);
-        const changes = runFnOnRow(builtFn, rowObj);
+      for (let i = 0; i < currentRows.length; i++) {
+        const row = currentRows[i];
+        const changes = results[i] ?? {};
         if (Object.keys(changes).length === 0) continue;
 
         for (const [col, newVal] of Object.entries(changes)) {

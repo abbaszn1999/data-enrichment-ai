@@ -16,7 +16,8 @@ export async function GET(request: NextRequest) {
 
     // Get user from session (no network call — reads cookies)
     const supabase = await createClient();
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    const session = authUser ? { user: authUser } : null;
     if (!session?.user) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
@@ -43,9 +44,14 @@ export async function GET(request: NextRequest) {
       .eq("user_id", userId)
       .single();
 
+    if (!member) {
+      // Non-members get the same response as a missing workspace.
+      return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
+    }
+
     return NextResponse.json({
       workspace,
-      role: member?.role ?? null,
+      role: member.role ?? null,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || "Internal error" }, { status: 500 });

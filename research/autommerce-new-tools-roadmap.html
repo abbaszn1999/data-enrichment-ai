@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>الإضافات الجديدة المقترحة لـ Autommerce</title>
+<style>
+  :root {
+    --bg: #fafafa; --surface: #ffffff; --muted: #f3f3f5; --stroke: #e4e4e8;
+    --text: #18181b; --text2: #52525b; --text3: #8a8a93;
+    --accent: #f76d01; --accent-soft: #fff1e6;
+    --p1: #16a34a; --p2: #2563eb; --p3: #d97706; --p4: #9ca3af;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", Tahoma, "Noto Kufi Arabic", sans-serif; font-size: 14px; line-height: 1.6; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 36px 28px 64px; }
+  .eyebrow { color: var(--text3); font-size: 12px; font-weight: 600; }
+  h1 { font-size: 26px; margin: 4px 0 8px; }
+  h2 { font-size: 18px; margin: 0 0 6px; }
+  .lead { color: var(--text2); max-width: 900px; margin: 0; }
+  section { margin-top: 36px; }
+  .stats { display: flex; gap: 40px; flex-wrap: wrap; margin-top: 24px; }
+  .stat b { display: block; font-size: 26px; line-height: 1.1; }
+  .stat span { color: var(--text3); font-size: 12px; }
+  .wave { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+  .wave-card { background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; padding: 14px; cursor: pointer; }
+  .wave-card:hover, .wave-card.sel { border-color: var(--accent); }
+  .wave-card small { color: var(--text3); display: block; }
+  .wave-card strong { display: block; margin: 4px 0; }
+  .wave-card p { margin: 0; color: var(--text2); font-size: 12px; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+  .pill { border: 1px solid var(--stroke); background: var(--surface); border-radius: 999px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: 12px; color: var(--text2); }
+  .pill.on { background: var(--text); color: #fff; border-color: var(--text); }
+  select, input[type=search] { font: inherit; font-size: 13px; padding: 5px 10px; border: 1px solid var(--stroke); border-radius: 6px; background: var(--surface); }
+  input[type=search] { min-width: 240px; }
+  .count { color: var(--text3); font-size: 12px; }
+  .table-wrap { background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; overflow: auto; max-height: 720px; }
+  table { border-collapse: collapse; width: 100%; min-width: 1200px; }
+  th { position: sticky; top: 0; background: var(--muted); text-align: right; font-size: 12px; color: var(--text2); padding: 10px 12px; border-bottom: 1px solid var(--stroke); white-space: nowrap; }
+  td { padding: 12px; border-bottom: 1px solid var(--stroke); vertical-align: top; font-size: 13px; }
+  tr:nth-child(even) td { background: #fcfcfd; }
+  tr.sel td { background: var(--accent-soft) !important; }
+  td.c { text-align: center; white-space: nowrap; }
+  .name { cursor: pointer; font-weight: 600; }
+  .name:hover { color: var(--accent); }
+  .name small { display: block; font-weight: 400; color: var(--text3); font-size: 11px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; }
+  .meter { display: inline-flex; gap: 2px; }
+  .meter i { width: 8px; height: 8px; border-radius: 2px; background: var(--muted); border: 1px solid var(--stroke); }
+  .meter i.f { background: var(--accent); border-color: var(--accent); }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: #fff; }
+  .sec { color: var(--text2); }
+  .ter { color: var(--text3); }
+  .note { color: var(--text3); font-size: 12px; margin-top: 8px; }
+  .detail { background: var(--surface); border: 1px solid var(--stroke); border-radius: 12px; padding: 22px; display: grid; grid-template-columns: 3fr 2fr; gap: 28px; }
+  .detail h3 { margin: 0 0 4px; font-size: 18px; }
+  .lbl { color: var(--text3); font-size: 12px; font-weight: 700; margin: 16px 0 4px; }
+  .detail ul { margin: 0; padding-right: 18px; }
+  .detail a { color: var(--p2); display: block; font-size: 12px; margin: 2px 0; }
+  .two { display: grid; grid-template-columns: 3fr 2fr; gap: 28px; }
+  .bar-row { display: grid; grid-template-columns: 210px 1fr 32px; gap: 10px; align-items: center; margin: 5px 0; font-size: 12px; }
+  .bar { height: 12px; background: var(--muted); border-radius: 3px; overflow: hidden; }
+  .bar span { display: block; height: 100%; }
+  .callout { border: 1px solid var(--stroke); border-radius: 10px; padding: 12px 14px; background: var(--surface); margin-top: 12px; font-size: 13px; }
+  .callout b { display: block; margin-bottom: 2px; }
+  .deferred { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  @media (max-width: 1000px) { .wave, .deferred { grid-template-columns: 1fr 1fr; } .detail, .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Autommerce · بحث السوق · أكتوبر 2026</div>
+  <h1>الإضافات الجديدة المقترحة لـ Autommerce</h1>
+  <p class="lead">20 أداة جديدة غير موجودة في المنصة اليوم، مبنية على بحث في 18 فئة من أدوات التجارة الإلكترونية بالذكاء الاصطناعي. كل إضافة مقيّمة حسب أثرها في السوق، وملاءمتها لما بنيناه، وحجم العمل المطلوب.</p>
+  <div class="stats" id="stats"></div>
+
+  <section>
+    <h2>الموجة الأولى المقترحة</h2>
+    <p class="lead">خمس إضافات مترابطة تشكّل محوراً واحداً: جعل منتجات العميل قابلة للاكتشاف والشراء في كل قناة جديدة (Google Shopping، ChatGPT، Gemini) مع توسيع المدخلات (PDF) والمخرجات (فيديو).</p>
+    <div class="wave" id="wave"></div>
+  </section>
+
+  <section>
+    <h2>الجدول الكامل</h2>
+    <div class="note">اضغط على اسم أي إضافة لعرض تفاصيلها الكاملة ومصادرها أسفل الجدول.</div>
+    <div class="toolbar" id="cats"></div>
+    <div class="toolbar">
+      <select id="prio">
+        <option value="all">كل الأولويات</option>
+        <option value="1">الآن</option><option value="2">التالي</option>
+        <option value="3">لاحقاً</option><option value="4">مؤجل</option>
+      </select>
+      <select id="sort">
+        <option value="priority">الترتيب: حسب الأولوية</option>
+        <option value="score">الترتيب: حسب الدرجة</option>
+        <option value="effort">الترتيب: الأسهل تنفيذاً أولاً</option>
+      </select>
+      <input type="search" id="q" placeholder="بحث في الإضافات والمنافسين…" />
+      <span class="count" id="count"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>الإضافة</th><th>الفئة</th><th>بماذا تُستخدم</th><th>لماذا هي مهمة</th><th>المنافسون</th>
+          <th>الأثر</th><th>الملاءمة</th><th>الجهد</th><th>الدرجة</th><th>الأولوية</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="note">الدرجة = (الأثر × 2) + الملاءمة − الجهد (صغير 0، متوسط 1، كبير 2)، والحد الأقصى 15. الأولوية النهائية تراعي أيضاً الترابط بين الإضافات؛ مثلاً إعلانات الكتالوج تأتي بعد Feed Studio لأنها تعتمد عليه.</div>
+  </section>
+
+  <section>
+    <h2>تفاصيل الإضافة المحددة</h2>
+    <div class="detail" id="detail"></div>
+  </section>
+
+  <section class="two">
+    <div>
+      <h2>ترتيب الإضافات حسب الدرجة (من 15)</h2>
+      <div id="chart"></div>
+      <div class="note">المصدر: تقييم داخلي مبني على بحث السوق، أكتوبر 2026.</div>
+    </div>
+    <div>
+      <h2>خارطة الطريق المقترحة</h2>
+      <div id="roadmap"></div>
+      <div class="callout"><b>لماذا هذا الترتيب</b>الموجة الأولى تبني على أصول جاهزة عندنا (قوالب التصدير، Gallery، Catalog Intelligence) وتفتح سوقاً ينمو بسرعة. الموجة الثانية تحتاج بنية جديدة على واجهة المتجر أو تكاملات خارجية كبيرة.</div>
+      <div class="callout"><b>ملاحظة على الأرقام</b>كثير من نسب التحسن المذكورة مصدرها الموردون أنفسهم وليست دراسات مستقلة. أرقام Shopify عن نمو زيارات الـ AI هي الأقوى لأنها من المنصة نفسها.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>المؤجل ولماذا</h2>
+    <div class="deferred" id="deferred"></div>
+  </section>
+</div>
+
+<script>
+const PRIO = { 1: "الآن", 2: "التالي", 3: "لاحقاً", 4: "مؤجل" };
+const PRIO_COLOR = { 1: "var(--p1)", 2: "var(--p2)", 3: "var(--p3)", 4: "var(--p4)" };
+const EFFORT = { S: "صغير", M: "متوسط", L: "كبير" };
+const EFFORT_DETAIL = { S: "صغير (2–4 أسابيع تقديرياً)", M: "متوسط (1–2 شهر تقديرياً)", L: "كبير (3 أشهر أو أكثر تقديرياً)" };
+const EFFORT_COST = { S: 0, M: 1, L: 2 };
+const score = (a) => a.impact * 2 + a.fit - EFFORT_COST[a.effort];
+
+const DATA = [
+  { id: "feed", name: "Feed Studio — إدارة feeds القنوات", en: "Feed Studio", cat: "القنوات والـ Feeds",
+    what: "يبني ويزامن feeds لـ Google Merchant Center وMeta وTikTok وChatGPT من الكتالوج المُثرى، مع supplemental feed، وكشف أسباب رفض المنتجات وإصلاحها، وتحسين العناوين حسب سلوك البحث.",
+    uses: ["نشر الكتالوج على Google Shopping بدون منتجات مرفوضة", "تحسين عناوين إعلانات Shopping لرفع الظهور والنقرات", "feed واحد يخدم عدة قنوات بمواصفات كل قناة", "مراقبة يومية لأخطاء الـ feed قبل أن تُخفى المنتجات"],
+    why: "كل قناة إعلانية وكل محرك AI للتسوق يعتمد على الـ feed. هذه من أكثر الفئات المدفوعة رسوخاً في السوق، وهي الأساس الذي تقوم عليه إضافات GEO والتجارة الوكيلية وإعلانات الكتالوج.",
+    evidence: "Feedonomics: عملاؤه قللوا وقت إدارة الـ feeds بنسبة 43%. Producthero (أصبح ضمن Channable) يبيع تحسين العناوين بالـ AI كمنتج مستقل.",
+    comp: "Feedonomics، Producthero / Channable، Productsup",
+    reuse: "قوالب التصدير الجاهزة وغير المستخدمة في export-formats.ts (Shopify، Woo، Salla، Zid، Amazon، Noon) + مخرجات Catalog Intelligence",
+    pricing: "اشتراك شهري حسب عدد المنتجات في الـ feed", impact: 5, fit: 5, effort: "M", prio: 1,
+    src: [["Feedonomics — One Catalog, Every Channel", "https://feedonomics.com/blog/one-catalog-every-channel/"], ["Producthero — Products AI", "https://www.producthero.com/products-ai"]] },
+  { id: "geo", name: "متتبع الظهور في محركات الذكاء الاصطناعي", en: "AI Visibility / GEO Tracker", cat: "SEO والظهور",
+    what: "يرسل أسئلة شراء حقيقية بشكل دوري إلى ChatGPT وGemini وPerplexity وGoogle AI Mode، ويسجل: هل يُذكر المتجر ومنتجاته؟ أي منافس يُذكر بدلاً منه؟ وما المصادر التي استُشهد بها؟",
+    uses: ["معرفة الأسئلة التي يظهر فيها المنافس ولا يظهر فيها المتجر", "قياس أثر المحتوى الذي تنشره Autommerce على الظهور في الـ AI", "استضافة وتحديث ملف llms.txt للمتجر تلقائياً", "تتبع زيارات بوتات GPTBot وClaudeBot وPerplexityBot"],
+    why: "هذه أسرع قناة نمو في التجارة الإلكترونية الآن، وليس عندنا فيها أي أداة. وهي تعطي العميل سبباً ليعود كل أسبوع لرؤية تطور ظهوره.",
+    evidence: "حسب بيانات Shopify للربع الأول 2026: جلسات الإحالة من الشات بوتات تضاعفت أكثر من 8 مرات خلال سنة، والطلبات المحالة نحو 13 مرة، وزوار الـ AI يتحولون إلى مشترين بمعدل أعلى بنحو 50% من البحث العضوي.",
+    comp: "RankTail، Profound، Goodie، Azoma، Peec AI، AIclicks",
+    reuse: "Market Research (الكلمات والنية)، Analytics (GSC)، Customize (widget.js للحقن)",
+    pricing: "المحفظة: سعر لكل سؤال يُتتبع شهرياً", impact: 5, fit: 4, effort: "M", prio: 1,
+    src: [["Shopify — The GEO Playbook (2026)", "https://www.shopify.com/enterprise/blog/generative-engine-optimization"], ["RankTail", "https://www.ranktail.ai/"], ["AIclicks — 8 Best GEO Tools for Ecommerce", "https://aiclicks.io/blog/generative-engine-optimization-tools-ecommerce"]] },
+  { id: "acp", name: "جاهزية التجارة الوكيلية (ACP / UCP)", en: "Agentic Commerce Readiness", cat: "القنوات والـ Feeds",
+    what: "يفحص المتجر مقابل متطلبات الشراء عبر وكلاء الـ AI: ملف ‎/.well-known/ucp‎، واكتمال Product JSON-LD، وسماح robots.txt لبوتات الـ AI، وصحة الـ feeds. ثم يولّد الإصلاحات أو ينفذها.",
+    uses: ["درجة جاهزية للمتجر ولكل منتج", "توليد feed بمواصفات OpenAI للشراء من داخل ChatGPT", "إكمال GTIN وMPN وسياسات الإرجاع الناقصة", "تقرير جاهزية يُرسل لإدارة العميل"],
+    why: "الشراء من داخل ChatGPT وGoogle AI Mode بدأ فعلاً، والمنتجات ذات البيانات الناقصة يتخطاها الوكيل. والفحص المجاني أداة جذب قوية لعملاء جدد.",
+    evidence: "بروتوكول UCP من Google يتطلب Merchant Center بلا منتجات مرفوضة وملف ‎/.well-known/ucp‎، وهو في مرحلة تجريبية منذ منتصف 2026. ChatGPT يقرأ feeds المتاجر كل 15 دقيقة.",
+    comp: "Agentic Readiness Grader، UCP Radar",
+    reuse: "Catalog Intelligence يكمل الحقول الناقصة، وFeed Studio يولد الـ feeds",
+    pricing: "فحص مجاني كأداة جذب، والإصلاح بالكريدت", impact: 4, fit: 5, effort: "S", prio: 1,
+    src: [["Google — UCP Merchant Center guide", "https://developers.google.com/merchant/ucp/guides/overview/merchant-center"], ["Agentic Readiness Grader", "https://ecommerceinsights.ai/tools/agentic-readiness-grader/"], ["ChatGPT Shopping feed guide", "https://ucpradar.com/blog/chatgpt-shopping-merchant-guide/"]] },
+  { id: "supplier", name: "استقبال بيانات الموردين من PDF", en: "Supplier Intake", cat: "البيانات والكتالوج",
+    what: "يقرأ ملفات الموردين بأي شكل (PDF، datasheets، كتالوجات، قوائم أسعار ممسوحة، روابط مصنّعين)، ويستخرج المنتجات والمواصفات مع رابط إلى صفحة المصدر لكل قيمة، ثم يدخلها في Catalog Intelligence.",
+    uses: ["إدخال مورد جديد خلال أيام بدل أسابيع", "استخراج المواصفات الفنية من datasheets", "تحويل قائمة أسعار PDF إلى شيت جاهز", "مطابقة منتجات المورد مع الكتالوج الحالي"],
+    why: "اليوم نقبل Excel وCSV فقط، وأغلب الموردين يرسلون PDF. هذه أول خطوة في السلسلة، ومنها ينتقل العميل إلى بقية أدواتنا.",
+    evidence: "Docxi وopenProd وRastro وClaro شركات قائمة على حل هذه المشكلة وحدها، أي أن السوق يدفع لها بشكل منفصل.",
+    comp: "Docxi، openProd، Rastro، Claro، dypsis",
+    reuse: "Catalog Intelligence (قواعد المطابقة، الإثراء، المراجعة، الـ presets)",
+    pricing: "كريدت لكل صفحة PDF", impact: 4, fit: 5, effort: "M", prio: 1,
+    src: [["Docxi", "https://docxi.ai/"], ["openProd", "https://openprod.io/"], ["Claro — Supplier onboarding", "https://getclaro.ai/by-use-case/supplier-onboarding"]] },
+  { id: "video", name: "استوديو فيديو المنتجات", en: "Products Video Studio", cat: "المحتوى المرئي",
+    what: "يحوّل صور المنتج إلى فيديوهات قصيرة بنموذج Veo (صفحة المنتج 1:1، وسوشيال 9:16) بالجملة من شيت، ويرفعها على المتجر.",
+    uses: ["فيديو لكل منتج في صفحة المنتج", "فيديوهات لإعلانات كتالوج Meta", "محتوى Reels وTikTok", "فيديو دوران 360 درجة حول المنتج"],
+    why: "الطلب على الفيديو يرتفع، وMeta تدفع نحو إعلانات كتالوج بالفيديو. بنيتنا في Gallery (مشاريع، شيت، planner، براندنج، مهام في الخلفية) جاهزة تقريباً لذلك.",
+    evidence: "VEOit يبيع هذه الخدمة بين 59$ و119$ شهرياً. Marpipe يقدم دعماً مالياً من Meta لتجربة فيديو الكتالوج. حسب ادعاءات الموردين، فيديو صفحة المنتج يرفع التحويل 6–18%.",
+    comp: "VEOit، UGCad، Supra UGC Maker، Marpipe",
+    reuse: "Products Gallery (خط المعالجة كاملاً) + Google Gemini المستخدم أصلاً",
+    pricing: "كريدت لكل ثانية فيديو", impact: 4, fit: 5, effort: "M", prio: 1,
+    src: [["VEOit — Shopify App Store", "https://apps.shopify.com/veoit-ai-bulk-videos-generator"], ["Marpipe x Meta Subsidy", "https://www.marpipe.com/meta"], ["UGCad AI for Shopify", "https://ugcad.ai/solutions/ai-ugc-for-shopify/"]] },
+  { id: "ads", name: "استوديو إعلانات الكتالوج", en: "Catalog Ads Studio", cat: "التسويق والإعلانات",
+    what: "يحوّل كل منتج إلى تصميم إعلان ببراند المتجر (سعر، خصم، شارات) ويرسله إلى كتالوج Meta وTikTok كإعلانات ديناميكية.",
+    uses: ["إعلانات DPA بتصميم البراند بدل الصورة الخام", "اختبار عدة قوالب إعلانية", "حملات المواسم والتخفيضات", "فيديو كتالوج مع استوديو الفيديو"],
+    why: "إعلانات الكتالوج من أكبر بنود الإنفاق عند المتاجر، وصورها عادة خام وغير مميزة.",
+    evidence: "Marpipe: متوسط تحسن 20% في أداء إعلانات الكتالوج عبر أكثر من 650 حساباً إعلانياً (بيانات المورّد).",
+    comp: "Marpipe، AdCreative.ai، Pencil",
+    reuse: "Gallery، Visualizer، إعدادات البراند، Feed Studio لإرسال الكتالوج",
+    pricing: "اشتراك شهري", impact: 4, fit: 4, effort: "M", prio: 2,
+    src: [["Marpipe", "https://www.marpipe.com/"], ["AdCreative.ai", "https://www.adcreative.ai/"]] },
+  { id: "mcp", name: "Autommerce MCP + API عام", en: "MCP Server & Public API", cat: "المنصة",
+    what: "يفتح أدوات Autommerce لوكلاء الـ AI (Claude وChatGPT) ولأنظمة العميل عبر MCP server وAPI عام.",
+    uses: ["تشغيل الإثراء والصور من داخل Claude أو ChatGPT", "ربط مع ERP وPIM لدى العميل", "أتمتة عبر Zapier وn8n", "وكالات تدير عدة متاجر من مكان واحد"],
+    why: "المنافسون بدأوا يكشفون أدواتهم للوكلاء، والعملاء الكبار يطلبون API قبل التعاقد.",
+    evidence: "Matrixify وIntelligems وTrueGradient أطلقوا MCP، وأمازون أطلقت plugin للبائعين داخل Claude.",
+    comp: "Matrixify MCP، Intelligems MCP، Amazon Selling Partner plugin",
+    reuse: "كل الـ API routes الحالية ونظام الكريدت",
+    pricing: "ضمن خطتي Pro وEnterprise", impact: 3, fit: 5, effort: "S", prio: 2,
+    src: [["Matrixify — Shopify App Store", "https://apps.shopify.com/excel-export-import"], ["Amazon Seller Assistant plugin", "https://www.aboutamazon.com/news/innovation-at-amazon/seller-assistant-plugin-amazon-quick-claude"]] },
+  { id: "radar", name: "رادار المنافسين", en: "Competitor Radar", cat: "الذكاء التنافسي",
+    what: "يزحف دورياً على كتالوج المنافسين، ويطابق منتجاتهم مع منتجاتنا بالـ AI حتى لو اختلفت الأسماء، ويرصد الأسعار والمخزون والمنتجات الجديدة والفجوات في التشكيلة.",
+    uses: ["اكتشاف أصناف يبيعها المنافس ولا يبيعها المتجر", "تنبيهات عند تغيّر أسعار المنافسين", "مقارنة شرائح الأسعار حسب التصنيف", "تغذية Market Research بفرص collections جديدة"],
+    why: "يحوّل الأداة من تحسين داخلي إلى أداة قرار تجاري، ويعطي العميل سبباً يومياً لفتح المنصة.",
+    evidence: "فئة راسخة: Prisync وCompetRadar وShopVision وRivalSweeper كلها تبيع مطابقة SKU بالـ AI وتحليل فجوات التشكيلة.",
+    comp: "Prisync، CompetRadar، ShopVision، RivalSweeper",
+    reuse: "embeddings في Market Research، والبحث على الويب في Image Finder، وجدولة Growth Sync",
+    pricing: "اشتراك حسب عدد المنافسين والـ SKUs المتتبعة", impact: 4, fit: 4, effort: "L", prio: 2,
+    src: [["Prisync — Assortment Analysis", "https://prisync.com/assortment-analysis/"], ["CompetRadar", "https://www.competradar.com/"], ["ShopVision", "https://www.shopvision.ai/assortment-and-catalog-intelligence"]] },
+  { id: "marketplace", name: "النشر على Amazon وNoon", en: "Marketplace Publisher", cat: "القنوات والـ Feeds",
+    what: "يحوّل الكتالوج إلى listings متوافقة مع قواعد كل منصة (حدود الأحرف، الحقول الإلزامية، تصنيفات المنصة، مقاسات الصور) بالعربية والإنجليزية، وينشرها.",
+    uses: ["فتح قناة بيع جديدة بسرعة", "listings على Noon ثنائية اللغة", "تحديث جماعي للـ listings الموجودة", "التحقق من التوافق قبل النشر"],
+    why: "Noon وAmazon.sa وAmazon.ae قنوات رئيسية في الخليج، والأدوات الحالية إما خاصة بـ Amazon فقط أو غربية لا تخدم العربية.",
+    evidence: "Sellenvo يبيع تكامل Noon بالـ AI، وCatalister وWillow للأسواق المتعددة. أداة Amazon الداخلية لا تدعم التحسين الجماعي.",
+    comp: "Sellenvo، Catalister، Willow Commerce، Helium 10",
+    reuse: "قوالب Amazon وNoon الموجودة في export-formats.ts + Catalog Intelligence",
+    pricing: "اشتراك حسب عدد القنوات", impact: 4, fit: 4, effort: "L", prio: 2,
+    src: [["Sellenvo — Noon integration", "https://sellenvo.com/noon/"], ["Epinium — Amazon listing tools 2026", "https://epinium.com/en/blog/amazon-listing-tools/"]] },
+  { id: "storefront", name: "مساعد تسوق على واجهة المتجر", en: "Storefront Shopping Assistant", cat: "تجربة المتسوق",
+    what: "ويدجت محادثة على واجهة المتجر يعرف الكتالوج، ويقترح المنتجات، ويجيب عن الأسئلة، ويتدخل عند تردد الزائر، ويدعم العربية.",
+    uses: ["توصيات منتجات بالمحادثة", "الإجابة عن أسئلة ما قبل الشراء", "استرجاع السلات المتروكة", "حالة الطلب وسياسة الإرجاع"],
+    why: "ينقل Autommerce من أدوات خلفية إلى أداة تولّد مبيعات مباشرة يمكن قياسها بالإيراد.",
+    evidence: "Rep AI وManifest وZipchat يبيعون هذه الفئة. ادعاءات الموردين أن 16% من المحادثات تتحول إلى بيع، والأدلة المستقلة محدودة.",
+    comp: "Rep AI، Manifest AI، Zipchat، Tidio، Gorgias",
+    reuse: "widget.js وembed API من Customize، ومحتوى FAQ المولّد، ومحرك Store Assistant",
+    pricing: "لكل محادثة", impact: 4, fit: 4, effort: "L", prio: 2,
+    src: [["Rep AI — Shopify App Store", "https://apps.shopify.com/rep-ai-sales-associate"], ["Zipchat — comparison", "https://www.zipchat.ai/integrations/shopify"]] },
+  { id: "translation", name: "ترجمة وتوطين المتجر", en: "Store Localization", cat: "المحتوى",
+    what: "يترجم المنتجات والـ collections والمقالات وحقول الـ SEO إلى لغات متعددة مع قاموس مصطلحات البراند، ويكتبها مباشرة في Shopify Translations وWooCommerce، مع روابط مترجمة وhreflang.",
+    uses: ["فتح أسواق ولغات جديدة", "نسخة عربية كاملة لمتجر إنجليزي", "ترجمة المحتوى الجديد تلقائياً", "حماية أسماء البراند والمصطلحات من الترجمة"],
+    why: "التوسع لأسواق جديدة من أكثر ما يدفع له التجار، والعربية مدعومة بشكل ضعيف في أدوات السوق.",
+    evidence: "Langify لا يدرج العربية ضمن لغاته. Transcy وWeglot يدعمانها. RTL Master يبيع تحويل اتجاه الواجهة للعربية بـ 59.95$ شهرياً.",
+    comp: "Transcy، Weglot، Langify، RTL Master",
+    reuse: "إعدادات اللغة في Catalog Intelligence، وطبقة الـ providers",
+    pricing: "كريدت لكل كلمة", impact: 3, fit: 5, effort: "M", prio: 2,
+    src: [["Transcy — Shopify App Store", "https://apps.shopify.com/transcy-multiple-languages"], ["Reveni — 7 translation apps compared", "https://www.reveni.com/blog/top-7-translations-apps-for-shopify"], ["RTL Master", "https://apps.shopify.com/rtlmaster"]] },
+  { id: "whatsapp", name: "وكيل البيع على واتساب", en: "WhatsApp Commerce Agent", cat: "تجربة المتسوق",
+    what: "وكيل مبيعات عربي على واتساب يعرف الكتالوج والمخزون والسياسات، يجيب ويقترح ويكمل الطلب داخل المحادثة، ويتابع الشحن والدفع عند الاستلام.",
+    uses: ["البيع وإكمال الطلب داخل المحادثة", "تأكيد طلبات الدفع عند الاستلام (COD)", "تتبع الشحنات", "حملات بث مقسّمة حسب اللهجة"],
+    why: "في الخليج قرار الشراء يحدث غالباً على واتساب بالعربية، لا على واجهة المتجر. يتطلب الالتزام بنظام حماية البيانات الشخصية السعودي (PDPL).",
+    evidence: "في الإمارات، معدل فتح رسائل واتساب ضعف الإيميل، وعائد الإعلان ثلاثة أضعاف الـ SMS. Popcorn وZellio وWhatsLoop يستهدفون سلة وزد تحديداً.",
+    comp: "Popcorn، Zellio، WhatsLoop",
+    reuse: "نفس محرك مساعد التسوق على المتجر",
+    pricing: "لكل محادثة", impact: 4, fit: 3, effort: "L", prio: 2,
+    src: [["Popcorn for Salla", "https://trypopcorn.ai/salla/"], ["Zellio — Zid integration", "https://www.zellio.ai/integrations/stores/zid"], ["WhatsApp use cases in the Middle East", "https://whatsable.app/blog/middle-east-whatsapp-business-use-cases-in-2026"]] },
+  { id: "reviews", name: "ذكاء المراجعات", en: "Reviews Intelligence", cat: "المحتوى",
+    what: "يستورد مراجعات العملاء، ويستخرج المواضيع والمشاعر لكل منتج، ويحوّلها إلى FAQ ونقاط قوة في الوصف وردود مقترحة.",
+    uses: ["معرفة أسباب الشكاوى لكل منتج", "تحويل المراجعات إلى محتوى في صفحة المنتج", "ردود جاهزة على المراجعات", "تغذية محتوى GEO بإشارات ثقة"],
+    why: "وكلاء الـ AI يعتمدون على المراجعات بشدة عند التوصية. قيمتنا ليست في جمع المراجعات (رخيص في السوق) بل في تحويلها إلى محتوى.",
+    evidence: "Judge.me يقدم ملخصات وردود AI بـ 15$ شهرياً، وYotpo يقدم Smart Topics في الخطط العليا.",
+    comp: "Judge.me، Yotpo",
+    reuse: "عمود FAQ في Catalog Intelligence، وويدجت FAQ في Customize",
+    pricing: "كريدت", impact: 3, fit: 4, effort: "S", prio: 3,
+    src: [["Judge.me AI features", "https://judge.me/app/ai-review-features"], ["Yotpo — Reviews AI", "https://www.yotpo.com/blog/reviews-ai/"]] },
+  { id: "bundles", name: "مولّد الباقات والمنتجات المكمّلة", en: "Bundles & Cross-sell Generator", cat: "تجربة المتسوق",
+    what: "يقترح باقات ومنتجات مكمّلة من الكتالوج والطلبات، وينشئ منتجات الباقات على المتجر، ويعرض ويدجت 'اشترِه مع'.",
+    uses: ["رفع متوسط قيمة الطلب", "باقات هدايا للمواسم", "تصريف المخزون البطيء", "اقتراحات 'يكمل الإطلالة'"],
+    why: "أثر سريع على الإيراد، ويستفيد من بنية الـ embeddings الموجودة عندنا.",
+    evidence: "Wiser يذكر زيادة 8–15% في عدد القطع لكل طلب (بيانات المورّد). السوق مزدحم بتطبيقات صغيرة رخيصة.",
+    comp: "AOV.ai، Wiser، Athenix، CBB",
+    reuse: "embeddings، widget.js، أداة إنشاء collections في Store Assistant",
+    pricing: "ضمن الاشتراك", impact: 3, fit: 4, effort: "M", prio: 3,
+    src: [["AOV.ai Bundle", "https://aov.ai/bundle/"], ["Wiser — Frequently Bought Together", "https://www.getwiser.ai/personalized-recommendations/frequently-bought-together"]] },
+  { id: "tryon", name: "التجربة الافتراضية للملابس", en: "Virtual Try-On", cat: "تجربة المتسوق",
+    what: "ويدجت في صفحة المنتج يتيح للمتسوق رفع صورته ورؤية القطعة عليه، مع اقتراح المقاس حسب جدول المقاسات.",
+    uses: ["رفع التحويل في متاجر الأزياء", "تقليل المرتجعات بسبب المقاس", "جمع إيميلات المتسوقين", "محتوى UGC بموافقة المتسوق"],
+    why: "مهم جداً لعملاء الأزياء فقط، ويمكن تقديمه كإضافة لهذا القطاع.",
+    evidence: "حسب أرقام موردين: رفع التحويل 12–22% وتقليل المرتجعات 18–30%. السوق مزدحم: TryPoint وTuck وFigur وGaru.",
+    comp: "TryPoint، Tuck، Figur، Garu، TryOnCloud",
+    reuse: "Nano Banana المستخدم في Gallery، وwidget.js",
+    pricing: "لكل تجربة", impact: 3, fit: 3, effort: "M", prio: 3,
+    src: [["TryPoint", "https://apps.shopify.com/trypoint"], ["Tuck", "https://apps.shopify.com/tuck-hyper-realistic-try-on"]] },
+  { id: "social", name: "النشر التلقائي على السوشيال", en: "Social Autopilot", cat: "التسويق والإعلانات",
+    what: "يبني تقويم محتوى من الكتالوج، ويولد الصور والفيديو والنصوص لكل منصة، وينشر على Instagram وTikTok وPinterest بعد الموافقة.",
+    uses: ["نشر يومي بدون مسوّق", "إعلان المنتجات الجديدة تلقائياً", "حملات المواسم", "نصوص مختلفة لكل منصة"],
+    why: "يستهلك مخرجات Gallery واستوديو الفيديو مباشرة، لكنه فئة رخيصة السعر.",
+    evidence: "Xyla وTrigglo وNuelink يبيعون هذه الخدمة للمتاجر الصغيرة بأسعار منخفضة.",
+    comp: "Xyla، Trigglo، Nuelink، PostEverywhere",
+    reuse: "Gallery، استوديو الفيديو، إعدادات البراند",
+    pricing: "اشتراك", impact: 2, fit: 4, effort: "M", prio: 3,
+    src: [["Xyla", "https://www.xyla.ai/"], ["Trigglo", "https://trigglo.com/"]] },
+  { id: "cro", name: "اختبار A/B للمحتوى المولّد", en: "AI Content A/B Testing", cat: "تجربة المتسوق",
+    what: "يختبر نسخاً مختلفة من المحتوى المولّد (عناوين، أوصاف، صور) على الزوار الحقيقيين، ويعتمد الفائز تلقائياً.",
+    uses: ["إثبات أثر محتوى Autommerce بالأرقام", "اختيار أفضل وصف وعنوان", "اختبار الصور الرئيسية"],
+    why: "يغلق الحلقة بين التوليد والنتيجة، لكنه يحتاج بنية تتبع وإحصاءات على واجهة المتجر.",
+    evidence: "Shoplift وIntelligems وCoframe منتجات ناضجة ومتخصصة في هذا.",
+    comp: "Shoplift، Intelligems، Coframe",
+    reuse: "widget.js، والنسخ المتعددة التي نولدها أصلاً",
+    pricing: "ضمن الخطط العليا", impact: 3, fit: 2, effort: "L", prio: 3,
+    src: [["Shoplift", "https://www.shoplift.ai/"], ["Shoplift vs Intelligems", "https://eevy.ai/blog/shoplift-vs-intelligems"]] },
+  { id: "email", name: "محتوى الإيميلات التسويقية", en: "Lifecycle Email Content", cat: "التسويق والإعلانات",
+    what: "يولد محتوى إيميلات إطلاق المنتجات والحملات من الكتالوج ويصدّره إلى Klaviyo.",
+    uses: ["إيميلات إطلاق المنتجات", "حملات المواسم"],
+    why: "أولوية منخفضة لأن Klaviyo نفسه يفعل هذا داخلياً.",
+    evidence: "Klaviyo Composer يولد flows كاملة (إيميل، SMS، push) من وصف بسطر واحد.",
+    comp: "Klaviyo Composer", reuse: "Catalog Intelligence", pricing: "كريدت",
+    impact: 2, fit: 3, effort: "S", prio: 4,
+    src: [["Klaviyo Composer", "https://www.klaviyo.com/blog/composer-flows-segments-push"]] },
+  { id: "search", name: "بحث ذكي على واجهة المتجر", en: "AI Site Search", cat: "تجربة المتسوق",
+    what: "بحث دلالي على واجهة المتجر يفهم نية المتسوق.",
+    uses: ["تقليل نتائج البحث الفارغة", "فهم الأسئلة الطويلة"],
+    why: "بنية ثقيلة (فهرسة وزمن استجابة)، ومنافسون أقوياء، وبديل مجاني من Shopify (Search & Discovery).",
+    evidence: "Algolia من 200$ إلى أكثر من 5000$ شهرياً، وSearchanise من 19$.",
+    comp: "Algolia، Nosto، Klevu، Searchanise، Boost", reuse: "embeddings", pricing: "—",
+    impact: 3, fit: 2, effort: "L", prio: 4,
+    src: [["Searchanise vs Algolia vs Boost (2026)", "https://shopexperts.com/help/searchanise-algolia-boost-shopify"]] },
+  { id: "forecast", name: "توقع الطلب والتسعير الديناميكي", en: "Demand Forecasting & Pricing", cat: "العمليات",
+    what: "توقع الطلب، وتوصيات الشراء من الموردين، وتغيير الأسعار حسب المخزون والطلب.",
+    uses: ["منع نفاد المخزون", "تصريف المخزون الزائد"],
+    why: "بعيد عن جوهر المنصة (المحتوى والكتالوج والظهور) ويحتاج بيانات طلبات ومخزون عميقة.",
+    evidence: "Prediko من 49$ شهرياً، وTrueGradient وPricing.AI؛ فئة مستقلة فيها منتجات ناضجة.",
+    comp: "Prediko، TrueGradient، Pricing.AI، Intelligems", reuse: "قليل", pricing: "—",
+    impact: 3, fit: 1, effort: "L", prio: 4,
+    src: [["Prediko", "https://www.prediko.io/"], ["TrueGradient", "https://apps.shopify.com/truegradient"]] },
+];
+
+const state = { cat: "all", prio: "all", sort: "priority", q: "", sel: "feed" };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const meter = (v) => `<span class="meter">${[1, 2, 3, 4, 5].map((i) => `<i class="${i <= v ? "f" : ""}"></i>`).join("")}</span>`;
+const tag = (p) => `<span class="tag" style="background:${PRIO_COLOR[p]}">${PRIO[p]}</span>`;
+
+function renderStatic() {
+  const counts = [1, 2, 3, 4].map((p) => DATA.filter((a) => a.prio === p).length);
+  $("stats").innerHTML = [
+    [DATA.length, "إضافة جديدة", "var(--text)"],
+    [counts[0], "أولوية: الآن", "var(--p1)"],
+    [counts[1], "أولوية: التالي", "var(--p2)"],
+    [counts[2], "أولوية: لاحقاً", "var(--p3)"],
+    [counts[3], "مؤجل / لا ننصح الآن", "var(--p4)"],
+  ].map(([v, l, c]) => `<div class="stat"><b style="color:${c}">${v}</b><span>${l}</span></div>`).join("");
+
+  const cats = ["all", ...new Set(DATA.map((a) => a.cat))];
+  $("cats").innerHTML = cats.map((c) => `<button class="pill" data-cat="${esc(c)}">${c === "all" ? "كل الفئات" : esc(c)}</button>`).join("");
+  $("cats").onclick = (e) => { const c = e.target.dataset.cat; if (c) { state.cat = c; render(); } };
+
+  const byScore = [...DATA].sort((x, y) => score(y) - score(x));
+  $("chart").innerHTML = byScore.map((a) =>
+    `<div class="bar-row"><span>${esc(a.en)}</span><div class="bar"><span style="width:${(score(a) / 15) * 100}%;background:${PRIO_COLOR[a.prio]}"></span></div><b>${score(a)}</b></div>`).join("");
+
+  const themes = { 1: "الظهور والقنوات", 2: "التوسع والمبيعات المباشرة", 3: "تعميق تجربة المتسوق" };
+  $("roadmap").innerHTML = [1, 2, 3].map((p) =>
+    `<div style="margin:12px 0"><div>${tag(p)} <span class="ter" style="font-size:12px">الموجة ${p} · ${themes[p]}</span></div><div style="font-size:13px;margin-top:4px">${DATA.filter((a) => a.prio === p).map((a) => esc(a.en)).join(" ← ")}</div></div>`).join("");
+
+  $("deferred").innerHTML = DATA.filter((a) => a.prio === 4).map((a) =>
+    `<div><strong>${esc(a.name)}</strong><div class="sec" style="font-size:13px">${esc(a.why)}</div><div class="ter" style="font-size:12px">${esc(a.evidence)}</div></div>`).join("");
+
+  ["prio", "sort"].forEach((k) => ($(k).onchange = (e) => { state[k] = e.target.value; render(); }));
+  $("q").oninput = (e) => { state.q = e.target.value; render(); };
+}
+
+function select(id) { state.sel = id; render(); $("detail").scrollIntoView({ behavior: "smooth", block: "start" }); }
+
+function render() {
+  document.querySelectorAll("#cats .pill").forEach((b) => b.classList.toggle("on", b.dataset.cat === state.cat));
+
+  $("wave").innerHTML = DATA.filter((a) => a.prio === 1).map((a, i) =>
+    `<div class="wave-card ${a.id === state.sel ? "sel" : ""}" onclick="select('${a.id}')"><small>${i + 1} · ${esc(a.cat)}</small><strong>${esc(a.name)}</strong><p>${esc(a.uses[0])}</p></div>`).join("");
+
+  const q = state.q.trim().toLowerCase();
+  const list = DATA.filter((a) =>
+    (state.cat === "all" || a.cat === state.cat) &&
+    (state.prio === "all" || String(a.prio) === state.prio) &&
+    (!q || `${a.name} ${a.en} ${a.what} ${a.comp} ${a.uses.join(" ")}`.toLowerCase().includes(q))
+  ).sort((x, y) => {
+    if (state.sort === "score") return score(y) - score(x);
+    if (state.sort === "effort") return EFFORT_COST[x.effort] - EFFORT_COST[y.effort] || score(y) - score(x);
+    return x.prio - y.prio || score(y) - score(x);
+  });
+  $("count").textContent = `${list.length} من ${DATA.length}`;
+
+  $("rows").innerHTML = list.map((a) => `
+    <tr class="${a.id === state.sel ? "sel" : ""}">
+      <td><span class="dot" style="background:${PRIO_COLOR[a.prio]}"></span><span class="name" onclick="select('${a.id}')">${esc(a.name)}<small>${esc(a.en)}</small></span></td>
+      <td class="sec">${esc(a.cat)}</td>
+      <td>${a.uses.slice(0, 2).map(esc).join(" · ")}</td>
+      <td class="sec">${esc(a.why)}</td>
+      <td class="ter">${esc(a.comp)}</td>
+      <td class="c">${meter(a.impact)}</td>
+      <td class="c">${meter(a.fit)}</td>
+      <td class="c">${EFFORT[a.effort]}</td>
+      <td class="c"><b>${score(a)}</b></td>
+      <td class="c">${tag(a.prio)}</td>
+    </tr>`).join("");
+
+  const a = DATA.find((x) => x.id === state.sel) || DATA[0];
+  $("detail").innerHTML = `
+    <div>
+      <div>${tag(a.prio)} <span class="ter" style="font-size:12px">${esc(a.cat)}</span></div>
+      <h3 style="margin-top:8px">${esc(a.name)} <span class="ter" style="font-weight:400;font-size:14px">· ${esc(a.en)}</span></h3>
+      <div class="lbl">ماذا تفعل</div><div>${esc(a.what)}</div>
+      <div class="lbl">بماذا تُستخدم</div><ul>${a.uses.map((u) => `<li>${esc(u)}</li>`).join("")}</ul>
+      <div class="lbl">لماذا هي مهمة</div><div>${esc(a.why)}</div>
+      <div class="lbl">الدليل من السوق</div><div class="sec">${esc(a.evidence)}</div>
+    </div>
+    <div>
+      <div class="stats" style="margin-top:0;gap:28px">
+        <div class="stat"><b style="color:var(--p2)">${score(a)}/15</b><span>درجة الأولوية</span></div>
+        <div class="stat"><b>${EFFORT[a.effort]}</b><span>حجم العمل</span></div>
+      </div>
+      <div class="lbl">الأثر في السوق</div>${meter(a.impact)}
+      <div class="lbl">الملاءمة لبنيتنا</div>${meter(a.fit)}
+      <div class="ter" style="font-size:12px;margin-top:6px">${EFFORT_DETAIL[a.effort]}</div>
+      <div class="lbl">المنافسون</div><div style="font-size:13px">${esc(a.comp)}</div>
+      <div class="lbl">ما نعيد استخدامه من الأداة الحالية</div><div style="font-size:13px">${esc(a.reuse)}</div>
+      <div class="lbl">نموذج التسعير المقترح</div><div style="font-size:13px">${esc(a.pricing)}</div>
+      <div class="lbl">المصادر</div>${a.src.map(([l, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(l)}</a>`).join("")}
+    </div>`;
+}
+
+renderStatic();
+render();
+</script>
+</body>
+</html>

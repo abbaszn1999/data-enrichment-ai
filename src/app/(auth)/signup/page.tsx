@@ -12,12 +12,13 @@ import { signUp } from "@/lib/auth";
 import {
   isAccountExistsError,
   loginUrlForExistingAccount,
+  safeRedirectPath,
 } from "@/lib/auth/auth-entry";
 
 function SignupForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/workspaces";
+  const redirect = safeRedirectPath(searchParams.get("redirect"));
   const prefillEmail = searchParams.get("email") || "";
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState(prefillEmail);

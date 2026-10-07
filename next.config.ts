@@ -5,6 +5,22 @@ const adminPublicPath =
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  poweredByHeader: false,
+  async headers() {
+    // Conservative hardening headers. CSP is intentionally omitted until it can
+    // be rolled out in report-only mode (inline scripts / third-party widgets).
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        ],
+      },
+    ];
+  },
   serverExternalPackages: ["@renderinc/sdk"],
   // Skill prompts are read from disk at runtime (path.join(process.cwd(), …)),
   // which Next.js cannot trace on its own — without these the .md files are

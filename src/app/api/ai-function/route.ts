@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { calculateCallCost, costToCredits } from "@/lib/ai-pricing";
 import { createClient } from "@/lib/supabase-server";
+import { compileSafeRowFunction } from "@/lib/safe-function-body";
 import { chargeCompletedCall } from "@/lib/jobs/credits";
 import {
   getWorkspaceContext,
@@ -150,7 +151,7 @@ Command: "replace Samsung with SAMSUNG in DESCRIPTION"
 
     // Validate function by trying to construct it
     try {
-      new Function("row", plan.functionBody);
+      compileSafeRowFunction(plan.functionBody);
     } catch (syntaxErr: any) {
       return NextResponse.json({ error: `AI generated invalid function: ${syntaxErr.message}` }, { status: 500 });
     }

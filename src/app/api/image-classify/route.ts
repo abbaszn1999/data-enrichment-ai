@@ -20,6 +20,7 @@ import {
 } from "@/lib/storage-helpers";
 import { saveJsonToStorageServer } from "@/lib/storage-helpers-server";
 import { mapLimit } from "@/lib/async/map-limit";
+import { hideProviderNames } from "@/lib/provider-names";
 import { requireGeminiApiKey } from "@/lib/sync/agent/ai-utils";
 
 export const maxDuration = 300;
@@ -442,7 +443,8 @@ async function runClassificationJob(params: {
 
     const result: ImageClassificationJson = {
       sessionId,
-      model: MODEL,
+      // result.json is downloaded by the browser; never store the provider model id.
+      model: "standard",
       thinkingLevel: thinkingLevel || "medium",
       createdAt: new Date().toISOString(),
       totalImages: validImages.length,
@@ -493,7 +495,7 @@ async function runClassificationJob(params: {
     const message = (err as Error).message || "Classification failed";
     await admin
       .from("image_classification_sessions")
-      .update({ status: "failed", error_message: message })
+      .update({ status: "failed", error_message: hideProviderNames(message) })
       .eq("id", sessionId);
     console.error("[image-classify] failed:", message);
   }

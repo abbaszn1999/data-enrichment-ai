@@ -13,6 +13,13 @@ export function isSignupAliasPath(pathname: string): boolean {
 
 /** Signed-in visitors hitting login/signup go to workspaces, unless they are
  *  completing an invite. */
+/** Same-site path only: blocks `https://evil`, `//evil`, `/\evil` and `javascript:`. */
+export function safeRedirectPath(raw: string | null | undefined, fallback = "/workspaces"): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return fallback;
+  if (/[\u0000-\u001f]/.test(raw)) return fallback;
+  return raw;
+}
+
 export function signedInAuthEntryDestination(
   pathname: string,
   redirectParam: string | null | undefined

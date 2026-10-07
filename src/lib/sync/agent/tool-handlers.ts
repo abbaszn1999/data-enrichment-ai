@@ -17,6 +17,7 @@ import type {
   SyncSheetRow,
   SyncWorkingMemoryV2,
 } from "@/lib/sync/core/types";
+import { runRowFilterIsolated } from "@/lib/safe-function-vm";
 import type { ToolName } from "./tool-catalog";
 import type { SyncBillingTracker, SyncMode } from "./ai-utils";
 import {
@@ -1624,30 +1625,18 @@ async function handleSheetProgram(
     billingTracker: ctx.billingTracker,
   });
 
-  // Execute the filter on every row safely
-  let filterFn: (row: Record<string, unknown>) => boolean;
+  // Execute the filter on every row in an isolated context (rows that throw are skipped)
+  let matchedIndexes: number[];
   try {
-    filterFn = new Function("row", filterFnBody) as (row: Record<string, unknown>) => boolean;
+    const normalizedRows = ctx.sheet.rows.map((row) =>
+      Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v ?? "")]))
+    );
+    matchedIndexes = runRowFilterIsolated(filterFnBody, normalizedRows);
   } catch (e) {
     return {
       assistantMessage: `Failed to compile filter: ${(e as Error).message}`,
       output: { goal: args.goal, error: "compile_error" },
     };
-  }
-
-  const matchedIndexes: number[] = [];
-  for (let i = 0; i < ctx.sheet.rows.length; i++) {
-    try {
-      const row = ctx.sheet.rows[i];
-      const normalized = Object.fromEntries(
-        Object.entries(row).map(([k, v]) => [k, String(v ?? "")])
-      );
-      if (filterFn(normalized)) {
-        matchedIndexes.push(i);
-      }
-    } catch {
-      // Skip rows that cause runtime errors in the filter
-    }
   }
 
   // Update working memory with the matched row indexes

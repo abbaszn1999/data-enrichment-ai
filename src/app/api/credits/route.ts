@@ -18,8 +18,7 @@ export async function GET(request: Request) {
     }
 
     const supabase = await createClient();
-    const { data: { session } } = await supabase.auth.getSession();
-    const user = session?.user;
+    const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -88,7 +87,7 @@ export async function GET(request: Request) {
     const totalDbMs = Date.now() - startQueries;
     headers["Server-Timing"] = `ctx;dur=${ctx.durationMs.toFixed(1)}, db;dur=${totalDbMs.toFixed(1)}`;
 
-    const mapped = (transactions || []).map((tx: any) => ({
+    const mapped = (transactions || []).map(({ details: _details, ...tx }: any) => ({
       ...tx,
       user_name: tx.user_id ? profilesById.get(tx.user_id) || null : null,
     }));
@@ -147,6 +146,7 @@ export async function GET(request: Request) {
       totalTransactions: Number(totals.total_count ?? 0),
     }, { headers });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || "Internal server error" }, { status: 500 });
+    console.error("[credits] GET failed:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

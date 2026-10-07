@@ -38,8 +38,7 @@ export async function GET(request: NextRequest) {
 
     // Auth check (reads cookies — no network call)
     const supabase = await createClient();
-    const { data: { session }, error: authError } = await supabase.auth.getSession();
-    const user = session?.user;
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
@@ -114,8 +113,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const supabase = await createClient();
-    const { data: { session } } = await supabase.auth.getSession();
-    const user = session?.user;
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
     const admin = createAdminClient();
@@ -180,8 +178,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     const supabase = await createClient();
-    const { data: { session } } = await supabase.auth.getSession();
-    const user = session?.user;
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
     const admin = createAdminClient();

@@ -6,11 +6,18 @@ import {
   ADMIN_SESSION_MAX_AGE_SECONDS,
 } from "./config";
 
-function credentials() {
-  return {
-    email: (process.env.PLATFORM_ADMIN_EMAIL || "admin@autommerce.com").trim().toLowerCase(),
-    password: process.env.PLATFORM_ADMIN_PASSWORD || "autommerce-ops",
-  };
+function credentials(): { email: string; password: string } | null {
+  const email = process.env.PLATFORM_ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.PLATFORM_ADMIN_PASSWORD;
+  if (email && password) return { email, password };
+  // Local development only: never fall back to known defaults in production.
+  if (process.env.NODE_ENV !== "production") {
+    return {
+      email: email || "admin@autommerce.com",
+      password: password || "autommerce-ops",
+    };
+  }
+  return null;
 }
 
 function signingSecret(): string {
@@ -43,6 +50,7 @@ function tokenValid(token: string | undefined): boolean {
 
 export function passwordsMatch(email: string, password: string): boolean {
   const expected = credentials();
+  if (!expected) return false;
   const emailOk = email.trim().toLowerCase() === expected.email;
   const left = Buffer.from(password);
   const right = Buffer.from(expected.password);

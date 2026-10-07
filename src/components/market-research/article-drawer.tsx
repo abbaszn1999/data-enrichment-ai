@@ -190,14 +190,12 @@ export function ArticleDrawer({
 
           <div className="mt-5 border-t border-border/60 pt-4">
             <p className="text-[11px] font-medium text-foreground">Article</p>
-            <div
-              className={cn(
-                "prose prose-sm dark:prose-invert mt-2 max-w-none",
-                "prose-headings:font-semibold prose-img:rounded-lg"
-              )}
-              dangerouslySetInnerHTML={{
-                __html: previewHtml(article.bodyHtml, storeUrl),
-              }}
+            {/* Generated HTML: rendered in a script-less sandbox, never in the app origin. */}
+            <iframe
+              title="Article preview"
+              sandbox="allow-popups allow-popups-to-escape-sandbox"
+              srcDoc={`<!doctype html><html><head><meta charset="utf-8"/><base target="_blank"/><style>body{font-family:ui-sans-serif,system-ui,sans-serif;font-size:14px;line-height:1.6;color:#111;margin:0;padding:4px}h1,h2,h3{font-weight:600;line-height:1.3}img{max-width:100%;height:auto;border-radius:8px}a{color:#2563eb}</style></head><body dir="auto">${previewHtml(article.bodyHtml, storeUrl)}</body></html>`}
+              className={cn("mt-2 h-[60vh] w-full rounded-md border bg-white")}
             />
           </div>
         </div>

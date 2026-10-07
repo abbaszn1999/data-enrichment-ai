@@ -24,7 +24,7 @@ export default function DemoSettingsPage() {
   const [wsDescription, setWsDescription] = useState("Main electronics store product management");
   const [cmsType, setCmsType] = useState("shopify");
   const [language, setLanguage] = useState("English");
-  const [model, setModel] = useState("gemini-3.1-pro-preview");
+  const [model, setModel] = useState("pro");
   const [thinking, setThinking] = useState("low");
   const [saved, setSaved] = useState(false);
 
@@ -129,8 +129,8 @@ export default function DemoSettingsPage() {
               onChange={(e) => setModel(e.target.value)}
               className="w-full h-9 px-3 text-xs rounded-lg border bg-background"
             >
-              <option value="gemini-3.1-pro-preview">Pro (Best Quality)</option>
-              <option value="gemini-3.5-flash-lite">Flash Lite (Fastest)</option>
+              <option value="pro">Pro (Best Quality)</option>
+              <option value="flash-lite">Flash Lite (Fastest)</option>
             </select>
           </div>
 

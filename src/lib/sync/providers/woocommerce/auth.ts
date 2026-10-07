@@ -1,4 +1,5 @@
 import type { ProviderTestResult } from "../../core/types";
+import { isPublicHttpUrl } from "@/lib/net/public-host";
 
 export function normalizeWooCommerceStoreUrl(input: string) {
   const trimmed = (input ?? "").trim();
@@ -41,6 +42,9 @@ export async function testWooCommerceConnection(config: Record<string, any>): Pr
   }
   if (!normalizedStoreUrl.startsWith("https://")) {
     throw new Error("WordPress Application Password authentication requires an HTTPS store URL.");
+  }
+  if (!(await isPublicHttpUrl(new URL(normalizedStoreUrl)))) {
+    throw new Error("Store URL must be a public internet address.");
   }
 
   const authHeader = buildWooCommerceAuthHeader(username, applicationPassword);

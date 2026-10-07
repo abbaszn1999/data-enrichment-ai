@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase-server";
+import { createAdminClient } from "@/lib/supabase-admin";
+import { requireWorkspaceMember } from "@/lib/auth/workspace-access";
 import { getOwnerSubscription, calculateCreditBalance } from "@/lib/stripe";
 
 export async function GET(request: Request) {
@@ -11,12 +12,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "workspaceId is required" }, { status: 400 });
     }
 
+    const denied = await requireWorkspaceMember(workspaceId);
+    if (denied) return denied;
+
     // Get owner's subscription (per-user model)
     const ownerSub = await getOwnerSubscription(workspaceId);
     const bal = calculateCreditBalance(ownerSub?.subscription ?? null);
     const plan = ownerSub?.plan;
 
-    const supabase = await createClient();
+    // Membership already verified above; the RPC is service_role-only.
+    const supabase = createAdminClient();
     const { data: totals } = await supabase.rpc("credit_usage_totals", {
       p_workspace_id: workspaceId,
     });

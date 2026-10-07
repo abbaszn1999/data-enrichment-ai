@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>أحدث ما وصلت إليه التجارة الإلكترونية — أكتوبر 2026</title>
+<style>
+  :root {
+    --bg: #fafafa; --surface: #ffffff; --muted: #f3f3f5; --stroke: #e4e4e8;
+    --text: #18181b; --text2: #52525b; --text3: #8a8a93;
+    --accent: #f76d01; --accent-soft: #fff1e6;
+    --green: #16a34a; --blue: #2563eb; --amber: #d97706; --red: #dc2626; --gray: #9ca3af;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", Tahoma, "Noto Kufi Arabic", sans-serif; font-size: 14px; line-height: 1.7; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 36px 28px 72px; }
+  .eyebrow { color: var(--text3); font-size: 12px; font-weight: 600; }
+  h1 { font-size: 28px; margin: 4px 0 8px; line-height: 1.3; }
+  h2 { font-size: 20px; margin: 0 0 4px; }
+  h3 { font-size: 15px; margin: 0 0 6px; }
+  .lead { color: var(--text2); max-width: 920px; margin: 0; }
+  section { margin-top: 44px; }
+  .sub { color: var(--text3); font-size: 13px; margin: 0 0 14px; }
+  nav { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  nav a { font-size: 12px; color: var(--text2); text-decoration: none; border: 1px solid var(--stroke); background: var(--surface); padding: 4px 12px; border-radius: 999px; }
+  nav a:hover { border-color: var(--accent); color: var(--accent); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 14px; }
+  .stat { background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; padding: 16px; }
+  .stat b { display: block; font-size: 28px; line-height: 1.1; color: var(--accent); }
+  .stat span { display: block; font-size: 13px; margin-top: 6px; }
+  .stat small { color: var(--text3); font-size: 11px; }
+  .callout { border: 1px solid var(--stroke); border-inline-start: 3px solid var(--accent); border-radius: 8px; padding: 12px 16px; background: var(--surface); margin-top: 14px; font-size: 13px; }
+  .callout.warn { border-inline-start-color: var(--amber); }
+  .callout.ok { border-inline-start-color: var(--green); }
+  .callout b { display: block; margin-bottom: 2px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; padding: 16px 18px; }
+  .card .who { color: var(--text3); font-size: 11px; font-weight: 700; }
+  .card p { margin: 4px 0 0; color: var(--text2); font-size: 13px; }
+  .card ul { margin: 6px 0 0; padding-right: 18px; color: var(--text2); font-size: 13px; }
+  .card a { color: var(--blue); font-size: 12px; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: #fff; vertical-align: middle; }
+  .layer { display: grid; grid-template-columns: 48px 1fr; gap: 16px; margin-top: 18px; }
+  .layer .num { width: 40px; height: 40px; border-radius: 10px; background: var(--text); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
+  .pill { border: 1px solid var(--stroke); background: var(--surface); border-radius: 999px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: 12px; color: var(--text2); }
+  .pill.on { background: var(--text); color: #fff; border-color: var(--text); }
+  .timeline { position: relative; padding-right: 22px; }
+  .timeline::before { content: ""; position: absolute; right: 6px; top: 6px; bottom: 6px; width: 2px; background: var(--stroke); }
+  .ev { position: relative; margin-bottom: 14px; }
+  .ev::before { content: ""; position: absolute; right: -21px; top: 7px; width: 10px; height: 10px; border-radius: 50%; background: var(--dot, var(--accent)); border: 2px solid var(--bg); }
+  .ev .d { font-size: 12px; color: var(--text3); font-weight: 700; }
+  .ev .t { font-weight: 600; }
+  .ev .x { color: var(--text2); font-size: 13px; }
+  .table-wrap { background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  th { background: var(--muted); text-align: right; font-size: 12px; color: var(--text2); padding: 10px 12px; border-bottom: 1px solid var(--stroke); white-space: nowrap; }
+  td { padding: 11px 12px; border-bottom: 1px solid var(--stroke); vertical-align: top; font-size: 13px; }
+  td.sec { color: var(--text2); }
+  td.ter { color: var(--text3); }
+  .bar-row { display: grid; grid-template-columns: 260px 1fr 60px; gap: 10px; align-items: center; margin: 7px 0; font-size: 13px; }
+  .bar { height: 14px; background: var(--muted); border-radius: 3px; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--accent); }
+  .sources { columns: 2; column-gap: 28px; font-size: 12px; }
+  .sources a { display: block; color: var(--blue); margin: 3px 0; break-inside: avoid; text-decoration: none; }
+  .sources a:hover { text-decoration: underline; }
+  .opp td:first-child { font-weight: 600; }
+  footer { margin-top: 48px; color: var(--text3); font-size: 12px; border-top: 1px solid var(--stroke); padding-top: 14px; }
+  @media (max-width: 1000px) { .stats, .grid3 { grid-template-columns: 1fr 1fr; } .grid2 { grid-template-columns: 1fr; } .sources { columns: 1; } .bar-row { grid-template-columns: 160px 1fr 50px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Autommerce · تقرير السوق · 5 أكتوبر 2026</div>
+  <h1>أحدث ما وصلت إليه التجارة الإلكترونية</h1>
+  <p class="lead">التجارة الإلكترونية تتحول من <b>متجر يزوره البشر</b> إلى <b>متجر يقرؤه ويشتري منه وكلاء الذكاء الاصطناعي</b>. في 2026 بنت Google وShopify وOpenAI وMeta وAmazon وVisa وMastercard وStripe البنية التحتية لهذا التحول: قنوات بيع جديدة، وبروتوكولات، وطرق دفع، وأدوات للتاجر. وفشلت بعض المحاولات في الطريق. هذا التقرير يجمع كل الجديد في مكان واحد.</p>
+  <nav>
+    <a href="#numbers">الأرقام</a><a href="#timeline">الجدول الزمني</a><a href="#channels">القنوات الجديدة</a>
+    <a href="#protocols">البروتوكولات</a><a href="#payments">الدفع والثقة</a><a href="#failed">ما الذي فشل</a>
+    <a href="#platforms">أدوات المنصات</a><a href="#content">المحتوى والبيانات</a><a href="#control">التحكم في الوصول</a>
+    <a href="#region">منطقتنا</a><a href="#autommerce">ماذا يعني لنا</a><a href="#sources">المصادر</a>
+  </nav>
+
+  <!-- ================= NUMBERS ================= -->
+  <section id="numbers">
+    <h2>أين وصلنا بالأرقام</h2>
+    <p class="sub">بيانات Adobe Analytics لأكثر من تريليون زيارة لمتاجر أمريكية، يوليو 2026، ما لم يُذكر غير ذلك.</p>
+    <div class="stats">
+      <div class="stat"><b>+1,219%</b><span>نمو زيارات المتاجر القادمة من أدوات الذكاء الاصطناعي منذ أكتوبر 2024</span><small>و+62% خلال آخر سنة</small></div>
+      <div class="stat"><b>+60%</b><span>معدل تحوّل هذه الزيارات إلى مشتريات مقارنة بباقي الزيارات</span><small>للشهر الحادي عشر على التوالي</small></div>
+      <div class="stat"><b>+53%</b><span>إيراد أعلى لكل زيارة قادمة من الذكاء الاصطناعي</span><small>و+28% إضافات أكثر إلى السلة</small></div>
+      <div class="stat"><b>39%</b><span>من الصفحات الرئيسية للمتاجر لا يستطيع الذكاء الاصطناعي قراءتها</span><small>أي فجوة ظهور واضحة</small></div>
+    </div>
+    <div class="grid2" style="margin-top:14px">
+      <div class="card">
+        <h3>مؤشرات الأداء مقارنة بالزيارات العادية</h3>
+        <div class="bar-row"><span>معدل التحويل</span><div class="bar"><span style="width:60%"></span></div><b>+60%</b></div>
+        <div class="bar-row"><span>الوقت على الموقع</span><div class="bar"><span style="width:59%"></span></div><b>+59%</b></div>
+        <div class="bar-row"><span>الإيراد لكل زيارة</span><div class="bar"><span style="width:53%"></span></div><b>+53%</b></div>
+        <div class="bar-row"><span>معدل الارتداد (أقل)</span><div class="bar"><span style="width:33%"></span></div><b>−33%</b></div>
+        <div class="bar-row"><span>الإضافة إلى السلة</span><div class="bar"><span style="width:28%"></span></div><b>+28%</b></div>
+        <div class="bar-row"><span>التفاعل</span><div class="bar"><span style="width:14%"></span></div><b>+14%</b></div>
+      </div>
+      <div class="card">
+        <h3>قابلية قراءة الصفحات الرئيسية للذكاء الاصطناعي حسب الفئة</h3>
+        <div class="bar-row"><span>الأزياء</span><div class="bar"><span style="width:76%"></span></div><b>76%</b></div>
+        <div class="bar-row"><span>الإلكترونيات</span><div class="bar"><span style="width:70%"></span></div><b>70%</b></div>
+        <div class="bar-row"><span>مستحضرات التجميل</span><div class="bar"><span style="width:68%"></span></div><b>68%</b></div>
+        <div class="bar-row"><span>الأدوات الرياضية</span><div class="bar"><span style="width:67%"></span></div><b>67%</b></div>
+        <div class="bar-row"><span>الأثاث والمنزل</span><div class="bar"><span style="width:64%"></span></div><b>64%</b></div>
+        <div class="bar-row"><span>البقالة</span><div class="bar"><span style="width:59%"></span></div><b>59%</b></div>
+      </div>
+    </div>
+    <div class="callout warn"><b>التحفظ المهم</b>الحجم ما زال صغيراً. أقل من 17% من الأمريكيين يستخدمون الذكاء الاصطناعي للتسوق أسبوعياً (eMarketer)، و56% غير مهتمين أو لا يعرفون ما هو. وShopify تقول إن البحث العادي ما زال يجلب زيارات أكثر من كل منصات الذكاء الاصطناعي مجتمعة. القناة صغيرة لكنها الأسرع نمواً والأعلى قيمة.</div>
+  </section>
+
+  <!-- ================= TIMELINE ================= -->
+  <section id="timeline">
+    <h2>الجدول الزمني لأهم أحداث 2026</h2>
+    <p class="sub">اضغط على الفئة لتصفية الأحداث.</p>
+    <div class="toolbar" id="tl-filter"></div>
+    <div class="timeline" id="tl"></div>
+  </section>
+
+  <!-- ================= CHANNELS ================= -->
+  <section id="channels">
+    <div class="layer"><div class="num">1</div><div>
+      <h2>قنوات بيع جديدة داخل المساعدات الذكية</h2>
+      <p class="sub">المتسوق صار يكتشف المنتج ويشتريه دون أن يزور المتجر.</p>
+    </div></div>
+    <div class="grid2">
+      <div class="card"><div class="who">GOOGLE</div><h3>AI Mode وGemini وUniversal Cart</h3>
+        <ul>
+          <li>الشراء المباشر داخل AI Mode وGemini مفعّل تلقائياً لمتاجر Shopify المؤهلة في أمريكا، والدفع عبر Google Pay. التاجر يبقى البائع المسؤول.</li>
+          <li><b>Universal Cart</b> (مؤتمر I/O 2026): سلة واحدة عبر Search وGemini وYouTube وGmail. تراقب الأسعار، وتنبّه عند عودة المنتج للمخزون، وتختار أفضل بطاقة دفع.</li>
+          <li><b>Business Agent:</b> وكيل باسم البراند داخل بحث Google، يفعّله التاجر من Merchant Center.</li>
+          <li><b>التجربة الافتراضية:</b> يرفع المتسوق صورته ويرى الملابس عليه.</li>
+        </ul>
+        <a href="https://blog.google/products-and-platforms/products/shopping/google-shopping-cart/" target="_blank">المصدر: Google</a></div>
+      <div class="card"><div class="who">META</div><h3>Muse: وكيل شخصي داخل واتساب</h3>
+        <ul>
+          <li>أُطلق في 8 سبتمبر 2026 في أمريكا، ويعمل في تطبيقه الخاص وداخل واتساب.</li>
+          <li>منتجات كل متاجر Shopify ظهرت فيه تلقائياً في نفس اليوم دون أي إعداد، والدفع عبر Shop Pay.</li>
+          <li>يحضّر الطلب ويعرض "بطاقة موافقة" قبل الدفع.</li>
+          <li>شراكات مع Walmart وSephora وBest Buy وWayfair وGap.</li>
+        </ul>
+        <a href="https://www.cnbc.com/2026/10/03/meta-muse-shopping-ai-agent.html" target="_blank">المصدر: CNBC</a></div>
+      <div class="card"><div class="who">AMAZON</div><h3>Alexa for Shopping (بديل Rufus)</h3>
+        <ul>
+          <li>في 13 مايو 2026 دُمج Rufus مع Alexa+. استخدم Rufus أكثر من 300 مليون عميل في 2025.</li>
+          <li><b>Buy for Me:</b> يشتري لك من مواقع أخرى غير Amazon.</li>
+          <li><b>Auto-Buy:</b> يشتري تلقائياً عندما يصل السعر إلى حد تحدده، بتوفير يبلغ في المتوسط 20%.</li>
+          <li>تاريخ أسعار لسنة كاملة، وأدلة شراء، ومقارنات.</li>
+        </ul>
+        <a href="https://www.aboutamazon.com/news/retail/alexa-for-shopping-ai-assistant" target="_blank">المصدر: Amazon</a></div>
+      <div class="card"><div class="who">MICROSOFT · OPENAI</div><h3>Copilot Checkout وChatGPT</h3>
+        <ul>
+          <li><b>Copilot Checkout:</b> الدفع داخل المحادثة، ومتاجر Shopify مسجلة فيه تلقائياً.</li>
+          <li>Microsoft Merchant Center يدعم feeds متوافقة مع بروتوكول UCP.</li>
+          <li><b>ChatGPT:</b> تحوّل إلى قناة اكتشاف وإعلانات، والشراء انتقل إلى تطبيقات التجار داخله، مثل تطبيقي Walmart وSephora.</li>
+        </ul>
+        <a href="https://www.marketingtechnews.net/news/ai-shopping-agents-retailers/" target="_blank">المصدر: MarketingTech</a></div>
+    </div>
+  </section>
+
+  <!-- ================= PROTOCOLS ================= -->
+  <section id="protocols">
+    <div class="layer"><div class="num">2</div><div>
+      <h2>البروتوكولات: اللغة المشتركة بين الوكيل والمتجر</h2>
+      <p class="sub">بدل أن يبني كل متجر ربطاً منفصلاً مع كل وكيل، ظهرت معايير مفتوحة.</p>
+    </div></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>البروتوكول</th><th>من وراءه</th><th>ماذا يفعل</th><th>الحالة في أكتوبر 2026</th></tr></thead>
+        <tbody>
+          <tr><td><b>UCP</b> — Universal Commerce Protocol</td><td class="sec">Google + Shopify</td><td class="sec">لغة موحدة للرحلة كاملة: اكتشاف، سلة، دفع، ما بعد البيع. يعمل عبر API وMCP وA2A.</td><td><span class="tag" style="background:var(--green)">الأقوى</span> مفعّل افتراضياً في كل متاجر Shopify، وتدعمه Microsoft وMastercard وVisa</td></tr>
+          <tr><td><b>ACP</b> — Agentic Commerce Protocol</td><td class="sec">OpenAI + Stripe</td><td class="sec">نشر المنتجات للوكلاء، وجلسات الدفع (إنشاء، تحديث، إتمام).</td><td><span class="tag" style="background:var(--amber)">تغيّر دوره</span> صار للاكتشاف والتطبيقات بعد التراجع عن Instant Checkout</td></tr>
+          <tr><td><b>AP2</b> — Agent Payments Protocol</td><td class="sec">Google</td><td class="sec">تفويضات موقّعة لا يمكن التلاعب بها، تثبت ما وافق عليه المستخدم، وتبقى سجلاً عند النزاع.</td><td><span class="tag" style="background:var(--blue)">قيد الإطلاق</span> يبدأ في منتجات Google مع Gemini Spark</td></tr>
+          <tr><td><b>WebMCP</b></td><td class="sec">Google Chrome (مسودة معيار W3C)</td><td class="sec">الموقع يعلن للوكيل أدوات واضحة مثل <code>search_products</code> و<code>add_to_cart</code> و<code>checkout</code> بدل أن يخمّن الوكيل وظيفة الأزرار.</td><td><span class="tag" style="background:var(--blue)">تجريبي</span> Chrome 149. كل متاجر Shopify تقدّم أدوات المتجر والسلة منذ 5 أغسطس، والدفع منذ 28 سبتمبر</td></tr>
+          <tr><td><b>MCP</b> — Model Context Protocol</td><td class="sec">Anthropic (معيار مفتوح)</td><td class="sec">يربط وكلاء الذكاء الاصطناعي بالأدوات والبيانات. Shopify أطلقت Catalog وCart وCheckout كأدوات MCP.</td><td><span class="tag" style="background:var(--green)">منتشر</span> Worldline وMastercard وAmazon وShopify أطلقوا أدوات MCP</td></tr>
+          <tr><td><b>TAP / MPP / x402</b></td><td class="sec">Visa / مجموعات دفع</td><td class="sec">التحقق من هوية الوكيل، والمدفوعات الصغيرة جداً بين الآلات.</td><td><span class="tag" style="background:var(--gray)">متخصص</span> طبقة دفع تحت البروتوكولات الأخرى</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>ماذا يعني هذا عملياً</b>للظهور والشراء داخل AI Mode وGemini، يحتاج المتجر: حساب Merchant Center بلا منتجات مرفوضة، وملف <code>/.well-known/ucp</code>، وخاصية <code>native_commerce</code> لكل منتج قابل للشراء، وثلاث نقاط API للدفع. أي أن بيانات المنتج الكاملة والمنظمة هي الشرط الأول.</div>
+  </section>
+
+  <!-- ================= PAYMENTS ================= -->
+  <section id="payments">
+    <div class="layer"><div class="num">3</div><div>
+      <h2>الدفع والثقة: أين يقف التحدي الآن</h2>
+      <p class="sub">البروتوكولات لم تعد هي العائق. العائق الآن هو: هل هذا وكيل حقيقي؟ هل وافق المستخدم فعلاً؟ ومن يتحمل المسؤولية عند النزاع؟</p>
+    </div></div>
+    <div class="grid3">
+      <div class="card"><div class="who">VISA</div><h3>Intelligent Commerce Connect</h3><p>ربط واحد يجعل المتجر يقبل الشراء عبر كل البروتوكولات (TAP وMPP وACP وUCP)، ببطاقات Visa وغيرها. أصبح يعمل فعلياً في متاجر أوروبية منذ يوليو 2026 (lastminute.com وFrasers) مع أكثر من 30 بنكاً.</p></div>
+      <div class="card"><div class="who">MASTERCARD</div><h3>Agent Pay و"درجة الاحتمال"</h3><p>بطاقات رمزية مربوطة بوكيل محدد، وبسقف إنفاق وتاجر محدد، ويمكن إلغاؤها من تطبيق البنك. أطلقت Agent Pay for Machines في يونيو. وفي 30 سبتمبر أعلنت درجة تقيّم: هل نفّذ العملية وكيل ذكاء اصطناعي فعلاً؟</p></div>
+      <div class="card"><div class="who">STRIPE</div><h3>Agentic Commerce Suite</h3><p>ربط واحد للبيع عبر كل الوكلاء، مع رموز دفع مقيّدة بالتاجر والمبلغ والمدة. أضافت إليها Klarna وAffirm وبطاقات Visa وMastercard الخاصة بالوكلاء. تستخدمها Etsy وURBN وCoach.</p></div>
+    </div>
+    <div class="callout ok"><b>أول عملية شراء حقيقية كاملة بوكيل في أوروبا</b>نفّذتها Worldline وING وMastercard في هولندا. وكيل وجد تذاكر حفل ضمن ميزانية محددة، وعرض الخيارات، وأتمّ الشراء بعد موافقة صريحة من المستخدم.</div>
+    <div class="callout warn"><b>نقطة غير محسومة</b>التاجر ما زال البائع المسؤول، ويتحمل مخاطر الاحتيال واسترجاع المبالغ أياً كان من بدأ العملية. لذلك عليه الاحتفاظ بسجلات التفويض لكل عملية.</div>
+  </section>
+
+  <!-- ================= FAILED ================= -->
+  <section id="failed">
+    <div class="layer"><div class="num">4</div><div>
+      <h2>ما الذي فشل، وماذا حلّ مكانه</h2>
+      <p class="sub">أهم درس في السنة: الناس يستخدمون الذكاء الاصطناعي للبحث والمقارنة أكثر مما يستخدمونه لإتمام الشراء.</p>
+    </div></div>
+    <div class="grid2">
+      <div class="card"><div class="who">فشل</div><h3>Instant Checkout في ChatGPT</h3>
+        <p>أُطلق في أكتوبر 2025، وتراجعت عنه OpenAI في مارس 2026. الأسباب: المستخدمون يبحثون ولا يشترون داخل المحادثة. صعوبة ضم التجار. بيانات منتجات غير دقيقة. لا سلة بعدة منتجات. لا ربط ببرامج الولاء. والتجار رفضوا التخلي عن صفحة الدفع الخاصة بهم.</p>
+        <p style="margin-top:8px"><b>الرقم:</b> 64% من المستهلكين يستخدمون أدوات الذكاء الاصطناعي للبحث عن المنتجات، لا لإتمام الشراء (eMarketer).</p>
+        <a href="https://www.modernretail.co/technology/what-went-wrong-with-chatgpts-instant-checkout/" target="_blank">المصدر: Modern Retail</a></div>
+      <div class="card"><div class="who">البديل</div><h3>إعلانات ChatGPT</h3>
+        <ul>
+          <li>9 فبراير: تجربة الإعلانات. 5 مايو: الخدمة الذاتية والدفع بالنقرة. 2 يونيو: ربط feeds المنتجات تلقائياً.</li>
+          <li>6 يونيو: الإطلاق في بريطانيا. 18 أغسطس: التوسع إلى 31 دولة أوروبية.</li>
+          <li><b>النتائج متفاوتة:</b> عائد الإعلانات بين 1.5 و4.8 ضعف الإنفاق، وتكلفة النقرة بين 1.7 و5 دولارات. Newegg حققت 3 أضعاف.</li>
+          <li>كل التقارير تتفق على نقطة واحدة: جودة بيانات المنتج والأوصاف هي العامل الحاسم. نحو 80% من التجار غير جاهزين.</li>
+        </ul>
+        <a href="https://blog.lengow.com/chatgpt-ads-first-results-are-in" target="_blank">المصدر: Lengow</a></div>
+    </div>
+  </section>
+
+  <!-- ================= PLATFORMS ================= -->
+  <section id="platforms">
+    <div class="layer"><div class="num">5</div><div>
+      <h2>المنصات تبتلع فئات التطبيقات</h2>
+      <p class="sub">Shopify أطلقت أكثر من 150 تحديثاً في كل من نسختي Spring وSummer '26. كثير مما كان يُباع كتطبيقات منفصلة صار مدمجاً في المنصة.</p>
+    </div></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>الميزة الجديدة</th><th>ماذا تفعل</th><th>الفئة التي تهددها</th></tr></thead>
+        <tbody>
+          <tr><td><b>Agentic Storefronts</b></td><td class="sec">نشر المنتجات تلقائياً في ChatGPT وCopilot وAI Mode وGemini وMeta Muse، مع لوحة أداء لكل قناة.</td><td class="ter">أدوات الـ feeds للقنوات الذكية</td></tr>
+          <tr><td><b>Shopify Catalog</b></td><td class="sec">يوحّد بيانات المنتجات ويثريها تلقائياً. تقول Shopify إن البيانات التي تنشرها هي تحقق تحويلاً أعلى بضعفين في محادثات الذكاء الاصطناعي. ويقبل حتى متاجر من خارج Shopify.</td><td class="ter">أدوات إثراء الكتالوج</td></tr>
+          <tr><td><b>SimGym</b></td><td class="sec">متسوقون افتراضيون بالذكاء الاصطناعي يتصفحون المتجر ويقارنون تصميمين. السعر 0.75 دولار للمحاكاة، ويوافق سلوك المتسوقين الحقيقيين بنسبة 77%، وتنتهي التجربة في دقائق بدل أسابيع.</td><td class="ter">أدوات اختبار A/B</td></tr>
+          <tr><td><b>AI Sales Associate</b></td><td class="sec">مساعد مبيعات على واجهة المتجر داخل Shopify Inbox، يعرف الكتالوج والمخزون والسياسات.</td><td class="ter">شات بوتات المتاجر</td></tr>
+          <tr><td><b>Campaign Autopilot</b></td><td class="sec">حملات تسويقية تلقائية على Facebook وInstagram والإيميل، وقريباً ChatGPT Ads وSnapchat.</td><td class="ter">أدوات أتمتة التسويق</td></tr>
+          <tr><td><b>AI Merchandising</b></td><td class="sec">ترتيب المنتجات حسب احتمال الشراء، واقتراحات منتجات مكمّلة داخل السلة، ولوحة تشرح سبب الترتيب.</td><td class="ter">تطبيقات الـ upsell والترتيب</td></tr>
+          <tr><td><b>AI Search</b></td><td class="sec">بحث ذكي يتنبأ بما يقصده المتسوق ويتحمّل الأخطاء الإملائية.</td><td class="ter">أدوات البحث داخل المتجر</td></tr>
+          <tr><td><b>Shopify Magic + Sidekick</b></td><td class="sec">أوصاف تحافظ على أسلوب البراند. وتوليد أقسام في الثيم بوصف نصي. وSidekick يحلل بيانات المتجر ويرتبط بـ Klaviyo وغيره.</td><td class="ter">أدوات كتابة المحتوى</td></tr>
+          <tr><td><b>المتجر من داخل الذكاء الاصطناعي</b></td><td class="sec">إدارة المتجر من Claude وChatGPT وPerplexity، والتطوير من Cursor وClaude Code.</td><td class="ter">لوحات الإدارة التقليدية</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= CONTENT ================= -->
+  <section id="content">
+    <h2>المحتوى وبيانات المنتجات</h2>
+    <p class="sub">بيانات المنتج صارت أهم شيء في هذا العالم الجديد.</p>
+    <div class="grid3">
+      <div class="card"><div class="who">GOOGLE MERCHANT CENTER · مايو 2026</div><h3>ست خصائص "محادثية" جديدة</h3>
+        <ul>
+          <li><code>question_and_answer</code>: حتى 30 سؤالاً وجواباً لكل منتج</li>
+          <li><code>related_product</code>: المنتجات المكمّلة والبدائل</li>
+          <li><code>document_link</code>: أدلة الاستخدام والمواصفات</li>
+          <li><code>variant_option</code> و<code>item_group_title</code></li>
+          <li><code>popularity_rank</code>: ترتيب شعبية المنتج</li>
+        </ul>
+        <p>مخصصة لـ AI Mode وBusiness Agent، ولا تؤثر على قبول المنتجات.</p>
+        <a href="https://support.google.com/merchants/answer/17085370?hl=en" target="_blank">المصدر: Google</a></div>
+      <div class="card"><div class="who">GOOGLE ADS</div><h3>Veo وNano Banana داخل Asset Studio</h3>
+        <p>ترفع حتى 3 صور، فيولّد Veo من كل صورة فيديو مدته حتى 10 ثوانٍ، جاهز لحملات Performance Max وDemand Gen وYouTube Shorts. والهدف: المنتجات التي لم يكن لها ميزانية فيديو أصلاً.</p>
+        <a href="https://dev.to/alifar/google-ads-adds-veo-image-to-video-for-faster-demand-gen-and-pmax-creative-23le" target="_blank">المصدر</a></div>
+      <div class="card"><div class="who">نتائج حقيقية</div><h3>صور وفيديو المنتجات بالذكاء الاصطناعي</h3>
+        <p><b>GANT:</b> اعتمدت الـ 3D لـ 274 منتجاً في 13 سوقاً، فارتفع التحويل 6.3%. ثم أنتجت 392 فيديو من 196 منتجاً لإعلانات Meta، فارتفع معدل النقر 30% والعائد على الإعلانات 14%.</p>
+        <p style="margin-top:6px">طريقة العمل الشائعة: صورة حقيقية، ثم Nano Banana لصور الاستخدام، ثم Veo للفيديو، ثم مراجعة بشرية.</p>
+        <a href="https://fibbl.com/ai-product-photography-trends/" target="_blank">المصدر: Fibbl</a></div>
+    </div>
+  </section>
+
+  <!-- ================= CONTROL ================= -->
+  <section id="control">
+    <h2>التحكم في الوصول: من يُسمح له بقراءة متجرك</h2>
+    <div class="grid3">
+      <div class="card"><div class="who">CLOUDFLARE · 15 سبتمبر 2026</div><h3>تصنيف البوتات إلى ثلاث فئات</h3><p>بحث، ووكيل يعمل في الوقت الحقيقي، وتدريب. كل موقع يختار من يسمح له. والدفع مقابل الزحف (Pay Per Crawl) ما زال في نسخة تجريبية مغلقة. <b>تحذير:</b> خيار الحجب الكامل يُخرج المتجر من Google وBing أيضاً.</p>
+        <a href="https://blog.cloudflare.com/content-independence-day-ai-options/" target="_blank">المصدر: Cloudflare</a></div>
+      <div class="card"><div class="who">AMAZON · 20 سبتمبر 2026</div><h3>Amazon تحجب وكيل Muse</h3><p>بعد أن رفضت Meta إزالة Amazon من الوكيل. Amazon تقول إن الوكلاء الذين يشترون نيابة عن العملاء يجب أن يحترموا رغبة المتجر في المشاركة. أي أن المنصات الكبرى لن تفتح أبوابها لكل الوكلاء.</p></div>
+      <div class="card"><div class="who">الانقسام</div><h3>التجار منقسمون</h3><p>Target فتحت متجرها لكل المساعدات. Walmart بنت وكيلها Sparky داخل ChatGPT وGemini. Wayfair اعتمدت UCP. Amazon اختارت الحجب. لا يوجد نموذج واحد متفق عليه بعد.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= REGION ================= -->
+  <section id="region">
+    <h2>منطقتنا: السعودية والإمارات</h2>
+    <div class="stats">
+      <div class="stat"><b>43%</b><span>من المتسوقين في السعودية والإمارات يستخدمون الذكاء الاصطناعي لاتخاذ قرار الشراء</span><small>Tabby، استبيان 20,000 متسوق</small></div>
+      <div class="stat"><b>30%</b><span>فقط يثقون بتوصياته بالكامل</span><small>يريدون الشفافية والتحكم</small></div>
+      <div class="stat"><b>79%</b><span>من المستهلكين في الإمارات مرتاحون لأن يكمل وكيل الشراء عنهم</span><small>Checkout.com 2026</small></div>
+      <div class="stat"><b>64%</b><span>في الإمارات يثقون بوكيل التسوق أكثر من عائلاتهم</span><small>مقابل 27% في أمريكا</small></div>
+    </div>
+    <div class="grid3" style="margin-top:14px">
+      <div class="card"><div class="who">سلة</div><h3>مؤتمر LEAP 2026</h3><p>أطلقت مسرّعة <b>سبّاق</b> لمنتجات التجارة بالذكاء الاصطناعي، وشراكة مع <b>Sawt</b> لقناة تواصل ذكية تسترجع السلات المتروكة، واستحوذت على PayLink.</p>
+        <a href="https://salla.com/en-ae/blog/salla-leap-2026" target="_blank">المصدر: سلة</a></div>
+      <div class="card"><div class="who">زد</div><h3>شراكة مع Sellenvo</h3><p>إدارة المخزون والطلبات والنشر على عدة قنوات (Noon وAmazon) بالذكاء الاصطناعي، مع listings جاهزة للوكلاء. تقول الشركة إن رفع المنتجات أسرع بثلاث مرات.</p></div>
+      <div class="card"><div class="who">واتساب</div><h3>وكلاء البيع العرب</h3><p>Zellio وسند وPopcorn وWhatsLoop: وكلاء يبيعون ويدعمون العملاء بالعربية على واتساب، ويؤكدون طلبات الدفع عند الاستلام، مربوطون بسلة وزد.</p></div>
+    </div>
+    <div class="callout"><b>الملاحظة الأهم للمنطقة</b>كل الشراء عبر الوكلاء (Google UCP وMeta Muse وCopilot) ما زال محصوراً في أمريكا، وأحياناً كندا وأستراليا، وفي متاجر Shopify غالباً. لا يوجد حتى الآن من يجهّز متاجر سلة وزد وWooCommerce بالعربية لهذا العالم، رغم أن المستهلك الخليجي من أكثر المستهلكين تقبلاً له.</div>
+  </section>
+
+  <!-- ================= AUTOMMERCE ================= -->
+  <section id="autommerce">
+    <h2>ماذا يعني هذا لـ Autommerce</h2>
+    <div class="grid2">
+      <div class="callout ok" style="margin-top:0"><b>الفرصة</b>كل مصدر في هذا التقرير يقول إن جودة بيانات المنتج هي ما يحدد الظهور والبيع داخل المساعدات الذكية. وهذا هو مجال Autommerce الأساسي: الإثراء، والمحتوى، والصور، والـ SEO.</div>
+      <div class="callout warn" style="margin-top:0"><b>الخطر</b>Shopify تبني الإثراء والمساعد والترتيب والاختبار بالذكاء الاصطناعي داخل المنصة مجاناً. تميّزنا يجب أن يكون في المنصات التي لا تخدمها Shopify (سلة، زد، WooCommerce)، وفي العربية والخليج.</div>
+    </div>
+    <h3 style="margin-top:22px">فرص مباشرة تكمل ما بنيناه</h3>
+    <div class="table-wrap">
+      <table class="opp">
+        <thead><tr><th>الفرصة</th><th>المرتبطة بأي تطور</th><th>ما نعيد استخدامه عندنا</th><th>الحجم</th></tr></thead>
+        <tbody>
+          <tr><td>توليد خاصية <code>question_and_answer</code> لـ Google Merchant Center</td><td class="sec">الخصائص المحادثية الجديدة (مايو 2026)</td><td class="sec">عمود الأسئلة الشائعة في Catalog Intelligence</td><td><span class="tag" style="background:var(--green)">صغير</span></td></tr>
+          <tr><td>فحص جاهزية المتجر لـ UCP وACP مع الإصلاح</td><td class="sec">UCP مفعّل افتراضياً + 39% من الصفحات غير قابلة للقراءة</td><td class="sec">Catalog Intelligence وقوالب التصدير</td><td><span class="tag" style="background:var(--green)">صغير</span></td></tr>
+          <tr><td>Feed Studio لـ Google وMeta وChatGPT Ads</td><td class="sec">إعلانات ChatGPT تعتمد على الـ feeds + 80% من التجار غير جاهزين</td><td class="sec">قوالب التصدير الموجودة في <code>export-formats.ts</code></td><td><span class="tag" style="background:var(--blue)">متوسط</span></td></tr>
+          <tr><td>متتبع الظهور في ChatGPT وGemini وAI Mode</td><td class="sec">نمو زيارات الذكاء الاصطناعي 1,219%</td><td class="sec">Market Research وAnalytics</td><td><span class="tag" style="background:var(--blue)">متوسط</span></td></tr>
+          <tr><td>تحويل الـ widget الحالي إلى أدوات WebMCP</td><td class="sec">WebMCP في Chrome 149</td><td class="sec"><code>widget.js</code> في Customize</td><td><span class="tag" style="background:var(--blue)">متوسط</span></td></tr>
+          <tr><td>استوديو فيديو المنتجات بـ Veo</td><td class="sec">Veo داخل Google Ads + نتائج GANT</td><td class="sec">Products Gallery بالكامل</td><td><span class="tag" style="background:var(--blue)">متوسط</span></td></tr>
+          <tr><td>محاكاة متسوقين (على طريقة SimGym) لمتاجر سلة وزد</td><td class="sec">SimGym متاح لـ Shopify فقط</td><td class="sec">مهام الخلفية في Render Workflows</td><td><span class="tag" style="background:var(--amber)">كبير</span></td></tr>
+          <tr><td>وكيل بيع عربي على واتساب</td><td class="sec">Muse داخل واتساب + المستهلك الخليجي متقبل</td><td class="sec">محرك Store Assistant</td><td><span class="tag" style="background:var(--amber)">كبير</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>ملاحظة على المصادر</b>كثير من نسب التحسن مصدرها الموردون أنفسهم. الأرقام الأقوى هي أرقام Adobe وShopify وGoogle الرسمية. أما نتائج إعلانات ChatGPT فمصدرها وكالات، وتتفاوت كثيراً.</div>
+  </section>
+
+  <!-- ================= SOURCES ================= -->
+  <section id="sources">
+    <h2>المصادر</h2>
+    <div class="sources" id="src"></div>
+  </section>
+
+  <footer>أُعد هذا التقرير في 5 أكتوبر 2026 بالاعتماد على بحث على الويب. المعلومات تتغير بسرعة في هذا المجال، فيُنصح بالتحقق من المصدر قبل أي قرار.</footer>
+</div>
+
+<script>
+const CAT = {
+  channel: ["قنوات", "var(--accent)"], protocol: ["بروتوكولات", "var(--blue)"], pay: ["دفع وثقة", "var(--green)"],
+  platform: ["منصات", "var(--text)"], content: ["محتوى", "var(--amber)"], control: ["تحكم", "var(--red)"], region: ["المنطقة", "var(--gray)"],
+};
+const EVENTS = [
+  ["يناير 2026", "protocol", "Google تطلق بروتوكول UCP", "معيار مفتوح مع Shopify للتجارة عبر الوكلاء، من الاكتشاف إلى الدفع."],
+  ["فبراير 2026", "platform", "SimGym من Shopify وNVIDIA", "متسوقون افتراضيون يختبرون المتجر. أصبح متاحاً لكل التجار المؤهلين في 11 مارس."],
+  ["9 فبراير 2026", "channel", "أول تجربة لإعلانات ChatGPT", "مع Target وWilliams-Sonoma وغيرهما في أمريكا."],
+  ["فبراير 2026", "region", "سلة في مؤتمر LEAP 2026", "إطلاق مسرّعة سبّاق، وشراكة Sawt، والاستحواذ على PayLink."],
+  ["مارس 2026", "channel", "OpenAI تتراجع عن Instant Checkout", "الشراء ينتقل إلى تطبيقات التجار، وACP يصبح للاكتشاف."],
+  ["أبريل 2026", "protocol", "إصدار UCP 2026-04-08", "نسخة جديدة من واجهة الدفع المباشر مع معالجة أفضل للأخطاء."],
+  ["أبريل 2026", "pay", "Visa تطلق Intelligent Commerce Connect", "ربط واحد يقبل الشراء عبر كل بروتوكولات الوكلاء."],
+  ["مايو 2026", "content", "خصائص Google المحادثية", "ست خصائص جديدة في Merchant Center، منها 30 سؤالاً وجواباً لكل منتج."],
+  ["مايو 2026", "channel", "Universal Cart في مؤتمر Google I/O", "سلة واحدة عبر Search وGemini وYouTube وGmail، مع AP2."],
+  ["5 مايو 2026", "channel", "إعلانات ChatGPT بالخدمة الذاتية", "Ads Manager مع الدفع بالنقرة."],
+  ["13 مايو 2026", "channel", "Amazon تطلق Alexa for Shopping", "دمج Rufus مع Alexa+، مع Buy for Me والشراء التلقائي."],
+  ["2 يونيو 2026", "content", "ربط feeds المنتجات بإعلانات ChatGPT", "تلقائياً، مما يجعل جودة الـ feed حاسمة."],
+  ["9 يونيو 2026", "protocol", "WebMCP يدخل مرحلة التجربة في Chrome 149", "الموقع يعلن للوكيل أدوات واضحة بدل التخمين."],
+  ["10 يونيو 2026", "pay", "Mastercard Agent Pay for Machines", "مدفوعات صغيرة جداً بين الآلات، مع أكثر من 30 شريكاً."],
+  ["17 يونيو 2026", "platform", "Shopify Editions Summer '26", "أكثر من 150 تحديثاً، منها UCP مفعّل افتراضياً والـ AI Merchandising."],
+  ["يوليو 2026", "pay", "Visa تعمل فعلياً في متاجر أوروبية", "lastminute.com وFrasers، مع أكثر من 30 بنكاً."],
+  ["5 أغسطس 2026", "protocol", "كل متاجر Shopify تقدّم أدوات WebMCP", "أدوات للمتجر والسلة، ثم للدفع في 28 سبتمبر."],
+  ["18 أغسطس 2026", "channel", "إعلانات ChatGPT في 31 دولة أوروبية", "أكبر توسع جغرافي منذ الإطلاق."],
+  ["8 سبتمبر 2026", "channel", "Meta تطلق Muse", "وكيل شخصي في تطبيقه وداخل واتساب، ومتاجر Shopify ظهرت فيه تلقائياً."],
+  ["15 سبتمبر 2026", "control", "Cloudflare تصنّف البوتات", "بحث، ووكيل، وتدريب، مع إعدادات افتراضية جديدة."],
+  ["20 سبتمبر 2026", "control", "Amazon تحجب Muse", "بعد رفض Meta إزالة Amazon من الوكيل."],
+  ["22 سبتمبر 2026", "channel", "الشراء في AI Mode وGemini مفعّل افتراضياً", "لمتاجر Shopify المؤهلة في أمريكا."],
+  ["23 سبتمبر 2026", "channel", "شراكة Shopify وMeta", "الشراء عبر Shop Pay في Muse لكل متاجر Shopify."],
+  ["30 سبتمبر 2026", "pay", "Mastercard تعلن درجة الاحتمال", "تقيّم هل نفّذ العملية وكيل ذكاء اصطناعي حقيقي."],
+];
+
+const state = { cat: "all" };
+const tlf = document.getElementById("tl-filter");
+tlf.innerHTML = `<button class="pill" data-c="all">الكل</button>` +
+  Object.entries(CAT).map(([k, [l]]) => `<button class="pill" data-c="${k}">${l}</button>`).join("");
+tlf.onclick = (e) => { const c = e.target.dataset.c; if (c) { state.cat = c; renderTl(); } };
+
+function renderTl() {
+  tlf.querySelectorAll(".pill").forEach((b) => b.classList.toggle("on", b.dataset.c === state.cat));
+  document.getElementById("tl").innerHTML = EVENTS.filter((e) => state.cat === "all" || e[1] === state.cat).map(([d, c, t, x]) =>
+    `<div class="ev" style="--dot:${CAT[c][1]}"><div class="d">${d} · <span style="color:${CAT[c][1]}">${CAT[c][0]}</span></div><div class="t">${t}</div><div class="x">${x}</div></div>`).join("");
+}
+renderTl();
+
+const SOURCES = [
+  ["Adobe: AI-referral traffic July 2026 (Digital Commerce 360)", "https://www.digitalcommerce360.com/2026/08/19/adobe-ai-referral-traffic-data-july-2026/"],
+  ["eMarketer: AI referrals outperform traditional traffic", "https://www.emarketer.com/content/ai-referrals-outperform-traditional-traffic"],
+  ["Shopify Editions Spring '26", "https://www.shopify.com/editions/spring2026"],
+  ["Shopify Spring '26 Edition — news", "https://www.shopify.com/news/spring-26-edition-merchant"],
+  ["Shopify Editions Summer '26 summary", "https://shopappy.com/ecommerce/shopify-editions-summer-26-what-shopify-actually-announced"],
+  ["Shopify Engineering — SimGym", "https://shopify.engineering/simgym"],
+  ["SimGym research paper (arXiv)", "https://arxiv.org/html/2605.19219"],
+  ["Google — Universal Cart (I/O 2026)", "https://blog.google/products-and-platforms/products/shopping/google-shopping-cart/"],
+  ["Google — UCP developer guide", "https://developers.google.com/merchant/ucp"],
+  ["Google Merchant Center — UCP checkout", "https://support.google.com/merchants/answer/16837055?hl=en"],
+  ["Google — Conversational attributes", "https://support.google.com/merchants/answer/17085370?hl=en"],
+  ["Google — New tools for agentic shopping era", "https://blog.google/products/ads-commerce/agentic-commerce-ai-tools-protocol-retailers-platforms/"],
+  ["Search Engine Land — Google native AI checkout for Shopify", "https://searchengineland.com/google-opens-native-ai-checkout-to-eligible-shopify-merchants-490407"],
+  ["Chrome — WebMCP", "https://developer.chrome.com/docs/ai/webmcp"],
+  ["Chrome — WebMCP origin trial", "https://developer.chrome.com/blog/ai-webmcp-origin-trial"],
+  ["Agentic Commerce Brief — What is an agentic storefront", "https://acbrief.com/blog/what-is-an-agentic-storefront/"],
+  ["CNBC — Meta Muse shopping", "https://www.cnbc.com/2026/10/03/meta-muse-shopping-ai-agent.html"],
+  ["Retail Insight Network — Shopify & Meta deal", "https://www.retail-insight-network.com/news/shopify-meta-deal-ai-agent-shopping/"],
+  ["MarketingTech — Retailers divided over AI agents", "https://www.marketingtechnews.net/news/ai-shopping-agents-retailers/"],
+  ["Amazon — Alexa for Shopping", "https://www.aboutamazon.com/news/retail/alexa-for-shopping-ai-assistant"],
+  ["Axios — Alexa+ and Rufus", "https://www.axios.com/2026/05/13/amazon-alexa-ai-shopping-assistant"],
+  ["Modern Retail — What went wrong with Instant Checkout", "https://www.modernretail.co/technology/what-went-wrong-with-chatgpts-instant-checkout/"],
+  ["InternetRetailing — OpenAI retreats from Instant Checkout", "https://internetretailing.net/openai-retreats-from-instant-checkout-signalling-a-major-reset-in-ai-commerce/"],
+  ["OpenAI — Agentic Checkout Spec", "https://developers.openai.com/commerce/specs/checkout"],
+  ["Lengow — ChatGPT Ads first results", "https://blog.lengow.com/chatgpt-ads-first-results-are-in"],
+  ["Core dna — ChatGPT Ads and eCommerce", "https://www.coredna.com/blogs/chatgpt-ads-ecommerce"],
+  ["Opascope — ChatGPT Ads benchmarks", "https://opascope.com/insights/chatgpt-ads-benchmarks/"],
+  ["Visa — Intelligent Commerce Connect", "https://corporate.visa.com/en/sites/visa-perspectives/newsroom/visa-intelligent-commerce-connect-ai-shopping-for-businesses.html"],
+  ["Mastercard — Agent Pay for Machines", "https://investor.mastercard.com/investor-news/investor-news-details/2026/Mastercard-Launches-Agent-Pay-for-Machines-to-Unlock-Super-Fast-Always-On-Payments/default.aspx"],
+  ["Forkast — Mastercard probability score", "https://forkast.news/mastercards-probability-score-shifts-the-agent-commerce-question-from-identity-to-trust/"],
+  ["The Agent Report — Europe's first live agent payments", "https://the-agent-report.com/2026/10/agentic-commerce-production-rails-2026/"],
+  ["Stripe — Agentic Commerce Suite", "https://stripe.com/blog/agentic-commerce-suite"],
+  ["Stripe — Additional payment methods for agentic commerce", "https://stripe.com/blog/supporting-additional-payment-methods-for-agentic-commerce"],
+  ["Cloudflare — New AI traffic options", "https://blog.cloudflare.com/content-independence-day-ai-options/"],
+  ["Cloudflare — Pay per crawl", "https://developers.cloudflare.com/ai-crawl-control/features/pay-per-crawl/what-is-pay-per-crawl/"],
+  ["Google Ads — Veo image-to-video", "https://dev.to/alifar/google-ads-adds-veo-image-to-video-for-faster-demand-gen-and-pmax-creative-23le"],
+  ["Fibbl — AI product photography trends 2026", "https://fibbl.com/ai-product-photography-trends/"],
+  ["Tabby — Middle East Shopping Survey 2026", "https://tabby.ai/en-AE/newsroom/shopping-survey-2026"],
+  ["Checkout.com — Agentic commerce in the UAE (Zawya)", "https://www.zawya.com/en/press-release/research-and-studies/consumer-demand-for-ai-shopping-is-forming-fast-but-trust-for-agentic-commerce-is-still-catching-up-tin0j3s0"],
+  ["Checkout.com — Consumers welcome agentic commerce in MENA", "https://www.checkout.com/blog/consumers-agentic-commerce-mena"],
+  ["Salla at LEAP 2026", "https://salla.com/en-ae/blog/salla-leap-2026"],
+  ["Zid & Sellenvo partnership", "https://menastartupdigest.com/saudi-arabias-zid-and-sellenvo-partner-to-streamline-multi-channel-operations-for-regional-e-commerce-merchants/"],
+  ["Zellio — Salla integration", "https://www.zellio.ai/integrations/stores/salla"],
+];
+document.getElementById("src").innerHTML = SOURCES.map(([l, u]) => `<a href="${u}" target="_blank" rel="noopener">${l}</a>`).join("");
+</script>
+</body>
+</html>

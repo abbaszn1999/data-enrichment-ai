@@ -7,7 +7,7 @@ import {
   loadWrProjects,
   updateWrProjectState,
 } from "@/lib/website-restructure/server-persist";
-import { WR_STORAGE_BUCKET } from "@/lib/website-restructure/storage";
+import { WR_STORAGE_BUCKET, wrProjectPath } from "@/lib/website-restructure/storage";
 import { getWrProjectLimit, type WrProjectRow } from "@/lib/website-restructure/types";
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour — regenerated on every state load
@@ -95,6 +95,23 @@ export async function PUT(request: NextRequest) {
 
   const auth = await requireWrAuth({ workspaceId: parsed.data.workspaceId, requireWrite: true });
   if (!auth.ok) return auth.response;
+
+  // Paths are later signed/downloaded with the service role, so they must stay
+  // inside this project's own folder.
+  const projectPrefix = `${wrProjectPath(parsed.data.workspaceId, parsed.data.projectId)}/`;
+  const { state } = parsed.data;
+  const paths = [
+    ...state.images.map((i) => i.storagePath),
+    ...(state.logo ? [state.logo.storagePath] : []),
+    ...state.chat.flatMap((m) => (m.attachments ?? []).map((a) => a.storagePath)),
+  ];
+  if (
+    paths.some(
+      (p) => !p.startsWith(projectPrefix) || p.includes("..") || p.includes("\\")
+    )
+  ) {
+    return jsonError("Invalid asset path", 400);
+  }
 
   try {
     const ok = await updateWrProjectState(

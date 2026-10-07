@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Autommerce Studio — خطة المنتج</title>
+<style>
+  :root {
+    --bg: #fafafa; --surface: #ffffff; --muted: #f3f3f5; --stroke: #e4e4e8;
+    --text: #18181b; --text2: #52525b; --text3: #8a8a93;
+    --accent: #f76d01; --accent-soft: #fff1e6;
+    --green: #16a34a; --blue: #2563eb; --amber: #d97706; --red: #dc2626; --gray: #9ca3af; --violet: #7c3aed;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", Tahoma, "Noto Kufi Arabic", sans-serif; font-size: 14px; line-height: 1.75; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 36px 28px 80px; }
+  .eyebrow { color: var(--text3); font-size: 12px; font-weight: 600; }
+  h1 { font-size: 30px; margin: 4px 0 8px; line-height: 1.3; }
+  h2 { font-size: 21px; margin: 0 0 4px; }
+  h3 { font-size: 15px; margin: 0 0 6px; }
+  .lead { color: var(--text2); max-width: 940px; margin: 0; font-size: 15px; }
+  section { margin-top: 48px; }
+  .sub { color: var(--text3); font-size: 13px; margin: 0 0 14px; max-width: 940px; }
+  nav { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  nav a { font-size: 12px; color: var(--text2); text-decoration: none; border: 1px solid var(--stroke); background: var(--surface); padding: 4px 12px; border-radius: 999px; }
+  nav a:hover { border-color: var(--accent); color: var(--accent); }
+  .hero { background: var(--text); color: #fff; border-radius: 14px; padding: 28px 30px; margin-top: 22px; }
+  .hero h2 { color: #fff; font-size: 22px; }
+  .hero p { color: #d4d4d8; margin: 6px 0 0; max-width: 900px; }
+  .hero .k { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 20px; }
+  .hero .k b { display: block; font-size: 24px; color: var(--accent); line-height: 1.2; }
+  .hero .k span { font-size: 12px; color: #d4d4d8; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; padding: 16px 18px; }
+  .card .who { color: var(--text3); font-size: 11px; font-weight: 700; letter-spacing: .2px; }
+  .card p { margin: 4px 0 0; color: var(--text2); font-size: 13px; }
+  .card ul { margin: 6px 0 0; padding-right: 18px; color: var(--text2); font-size: 13px; }
+  .tag { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; color: #fff; vertical-align: middle; white-space: nowrap; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 11px; background: var(--muted); color: var(--text2); margin: 2px 0 2px 4px; }
+  .callout { border: 1px solid var(--stroke); border-inline-start: 3px solid var(--accent); border-radius: 8px; padding: 12px 16px; background: var(--surface); margin-top: 14px; font-size: 13px; }
+  .callout.warn { border-inline-start-color: var(--amber); }
+  .callout.ok { border-inline-start-color: var(--green); }
+  .callout.info { border-inline-start-color: var(--blue); }
+  .callout b { display: block; margin-bottom: 2px; }
+  .table-wrap { background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 880px; }
+  th { background: var(--muted); text-align: right; font-size: 12px; color: var(--text2); padding: 10px 12px; border-bottom: 1px solid var(--stroke); white-space: nowrap; }
+  td { padding: 11px 12px; border-bottom: 1px solid var(--stroke); vertical-align: top; font-size: 13px; }
+  td.sec { color: var(--text2); }
+  td.ter { color: var(--text3); }
+  td.c { text-align: center; }
+  .yes { color: var(--green); font-weight: 700; }
+  .no { color: var(--gray); }
+  .part { color: var(--amber); font-weight: 700; }
+  /* modules */
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 14px; }
+  .tab { border: 1px solid var(--stroke); background: var(--surface); border-radius: 8px; padding: 7px 12px; cursor: pointer; font: inherit; font-size: 13px; color: var(--text2); }
+  .tab.on { background: var(--text); color: #fff; border-color: var(--text); }
+  .module { background: var(--surface); border: 1px solid var(--stroke); border-radius: 12px; padding: 22px 24px; }
+  .module .head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .module h3 { font-size: 19px; margin: 2px 0; }
+  .module .en { color: var(--text3); font-size: 13px; }
+  .module .cols { display: grid; grid-template-columns: 3fr 2fr; gap: 28px; margin-top: 10px; }
+  .lbl { color: var(--text3); font-size: 12px; font-weight: 700; margin: 16px 0 4px; }
+  .wow { background: var(--accent-soft); border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-top: 12px; }
+  .wow b { color: var(--accent); }
+  ol.flow { margin: 0; padding-right: 20px; font-size: 13px; color: var(--text2); }
+  ol.flow li { margin: 3px 0; }
+  /* pipeline */
+  .pipe { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-top: 10px; }
+  .step { background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; padding: 12px; position: relative; }
+  .step .n { font-size: 11px; color: var(--accent); font-weight: 700; }
+  .step b { display: block; font-size: 13px; margin: 2px 0 4px; }
+  .step p { margin: 0; font-size: 12px; color: var(--text2); line-height: 1.6; }
+  .step.new { border-color: var(--accent); }
+  .legend { font-size: 12px; color: var(--text3); margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; border: 1px solid var(--accent); vertical-align: middle; margin-left: 4px; }
+  /* roadmap */
+  .phase { display: grid; grid-template-columns: 170px 1fr; gap: 18px; padding: 16px 0; border-bottom: 1px solid var(--stroke); }
+  .phase:last-child { border-bottom: none; }
+  .phase .when b { display: block; font-size: 15px; }
+  .phase .when span { font-size: 12px; color: var(--text3); }
+  .story { background: var(--surface); border: 1px solid var(--stroke); border-radius: 12px; padding: 6px 22px; }
+  .story .row { display: grid; grid-template-columns: 90px 1fr; gap: 14px; padding: 12px 0; border-bottom: 1px dashed var(--stroke); font-size: 13px; }
+  .story .row:last-child { border-bottom: none; }
+  .story .t { color: var(--accent); font-weight: 700; }
+  code { background: var(--muted); padding: 0 5px; border-radius: 4px; font-size: 12px; }
+  footer { margin-top: 52px; color: var(--text3); font-size: 12px; border-top: 1px solid var(--stroke); padding-top: 14px; }
+  @media (max-width: 1050px) { .grid3, .grid4, .hero .k { grid-template-columns: 1fr 1fr; } .grid2, .module .cols { grid-template-columns: 1fr; } .pipe { grid-template-columns: 1fr 1fr; } .phase { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Autommerce · خطة منتج · 5 أكتوبر 2026 · مسودة أولى للنقاش</div>
+  <h1>Autommerce Studio</h1>
+  <p class="lead">قسم إبداعي كامل بالذكاء الاصطناعي يعمل من الكتالوج مباشرة. التاجر يرفع منتجاته مرة واحدة، فيحصل على جلسات تصوير بموديلات، وفيديوهات، وإعلانات بصانع محتوى يتحدث بلهجته، وحملات موسمية، ونماذج ثلاثية الأبعاد. كل ذلك بهوية براند واحدة، ويُنشر مباشرة على المتجر وقنوات الإعلان.</p>
+  <nav>
+    <a href="#why">لماذا الآن</a><a href="#foundation">ما نملكه اليوم</a><a href="#dna">قلب Studio: Brand DNA</a>
+    <a href="#modules">الاستوديوهات السبعة</a><a href="#ideas">أفكار جديدة</a><a href="#story">رحلة تاجر</a>
+    <a href="#arch">البنية التقنية</a><a href="#data">نموذج البيانات</a><a href="#pricing">التسعير</a>
+    <a href="#compete">المنافسون</a><a href="#roadmap">خطة التنفيذ</a><a href="#kpi">مؤشرات النجاح</a><a href="#risks">المخاطر</a>
+  </nav>
+
+  <div class="hero">
+    <h2>الفكرة في جملة واحدة</h2>
+    <p>المنافسون يبيعون أداة واحدة لكل مهمة، ويعالجون منتجاً واحداً في كل مرة، وبالإنجليزية. Autommerce Studio يجمع كل ما يحتاجه التاجر من محتوى مرئي في مكان واحد، ويعالج الكتالوج كاملاً من الشيت، ويحافظ على هوية البراند في كل صورة وفيديو، ويتحدث العربية بلهجات الخليج.</p>
+    <div class="k">
+      <div><b>+10,000$</b><span>تكلفة جلسة تصوير أزياء تقليدية واحدة (Botika)</span></div>
+      <div><b>150–500$</b><span>تكلفة إعلان واحد من صانع محتوى حقيقي، ويحتاج أسبوعين</span></div>
+      <div><b>1.9–5.5$</b><span>تكلفة نفس الإعلان بالذكاء الاصطناعي (Creatify وArcads)</span></div>
+      <div><b>+30% · +14%</b><span>ارتفاع النقر والعائد على الإعلانات عند GANT بعد 392 فيديو مولّد</span></div>
+    </div>
+  </div>
+
+  <!-- ================= WHY ================= -->
+  <section id="why">
+    <h2>لماذا الآن</h2>
+    <div class="grid3" style="margin-top:12px">
+      <div class="card"><div class="who">النماذج نضجت</div><h3>الجودة صارت صالحة للبيع</h3><p>Nano Banana للصور، وVeo لتحويل الصورة إلى فيديو. Google نفسها أدخلتهما في Google Ads في 2026. المحتوى المولّد لم يعد تجربة، بل صار بنية عمل أساسية عند العلامات التجارية الكبرى (Nike وASOS وGANT).</p></div>
+      <div class="card"><div class="who">الطلب على الفيديو</div><h3>كل القنوات تريد فيديو</h3><p>Performance Max وDemand Gen وإعلانات كتالوج Meta وTikTok وSnap كلها تفضّل الفيديو. أغلب منتجات المتاجر لم يكن لها فيديو أصلاً، لأن تكلفته لا تستحق لكل منتج.</p></div>
+      <div class="card"><div class="who">الفراغ العربي</div><h3>لا أحد يخدم الخليج</h3><p>Botika وCreatify وArcads أدوات إنجليزية. موديلاتها ليست بمظهر خليجي، ولهجاتها ضعيفة، والنص العربي في صورها مكسور غالباً، ولا تعرف رمضان واليوم الوطني، ولا تتكامل مع سلة وزد.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= FOUNDATION ================= -->
+  <section id="foundation">
+    <h2>ما نملكه اليوم في الكود</h2>
+    <p class="sub">Studio ليس مشروعاً من الصفر. نحو نصف ما يحتاجه موجود فعلاً في Products Gallery وVisualizer.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>القدرة</th><th>الحالة</th><th>أين في الكود</th><th>ماذا يحتاج Studio منها</th></tr></thead>
+        <tbody>
+          <tr><td><b>وكيل "المدير الفني"</b> الذي يخطط لكل لقطة ويكتب أمر Nano Banana</td><td class="yes">موجود</td><td class="ter"><code>src/lib/gallery/skills/01-planner.md</code> و<code>agents/ai-planner-agent.ts</code></td><td class="sec">نفس الوكيل يصبح مخطط Studio، مع مهارات جديدة للفيديو والإعلانات والمواسم.</td></tr>
+          <tr><td><b>صورة موديل أو مشهد مرجعي</b> تظهر في كل الصور</td><td class="yes">موجود</td><td class="ter">قواعد Model direction في الـ planner</td><td class="sec">أساس "وجه البراند". نحتاج حفظه كأصل دائم بدل رفعه في كل جلسة.</td></tr>
+          <tr><td><b>دليل البراند والشعار والألوان</b></td><td class="yes">موجود</td><td class="ter">قواعد Branding في الـ planner</td><td class="sec">ينتقل إلى Brand DNA كمصدر واحد لكل الاستوديوهات.</td></tr>
+          <tr><td><b>توليد الصور بـ Nano Banana</b> مع إعادة المحاولة وحساب التكلفة</td><td class="yes">موجود</td><td class="ter"><code>src/lib/ai-images/nano-banana.ts</code></td><td class="sec">يُستخدم كما هو.</td></tr>
+          <tr><td><b>العمل بالجملة من الشيت</b> مع قفل الصفوف والمهام في الخلفية</td><td class="yes">موجود</td><td class="ter"><code>gallery/worksheet-lock.ts</code> و<code>lib/jobs/dispatch.ts</code> وRender Workflows</td><td class="sec">نفس الآلية لكل استوديو.</td></tr>
+          <tr><td><b>الكريدت والفوترة لكل صف</b></td><td class="yes">موجود</td><td class="ter"><code>gallery/agent/ai-row-billing.ts</code> و<code>visualizer/billing.ts</code></td><td class="sec">إضافة أسعار للفيديو والصوت والـ 3D.</td></tr>
+          <tr><td><b>روابط مشاركة للعميل</b></td><td class="yes">موجود</td><td class="ter"><code>app/share/[token]</code></td><td class="sec">تتحول إلى روابط موافقة للوكالات والعملاء.</td></tr>
+          <tr><td><b>النشر على المتجر</b></td><td class="part">جزئي</td><td class="ter"><code>lib/sync/providers/shopify</code> و<code>woocommerce</code></td><td class="sec">Shopify وWooCommerce فقط. سلة وزد غير موجودين، وهما ضروريان للخليج.</td></tr>
+          <tr><td><b>الفيديو</b> (Veo)</td><td class="no">غير موجود</td><td class="ter">—</td><td class="sec">مزود جديد بالكامل.</td></tr>
+          <tr><td><b>الصوت العربي ومزامنة الشفاه</b></td><td class="no">غير موجود</td><td class="ter">—</td><td class="sec">مزود جديد لاستوديو صانع المحتوى.</td></tr>
+          <tr><td><b>كتابة النص العربي على الصور والفيديو</b></td><td class="no">غير موجود</td><td class="ter">—</td><td class="sec">محرك تركيب جديد (انظر الأفكار الجديدة).</td></tr>
+          <tr><td><b>النشر على Meta وTikTok وSnap</b></td><td class="no">غير موجود</td><td class="ter">—</td><td class="sec">ربط بواجهات منصات الإعلان.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= BRAND DNA ================= -->
+  <section id="dna">
+    <h2>قلب Studio: هوية البراند (Brand DNA)</h2>
+    <p class="sub">يُعدّها التاجر مرة واحدة، وتقرؤها كل الاستوديوهات. هذا ما يجعل 500 صورة و50 فيديو تبدو كأنها من جلسة تصوير واحدة. ومن دونه يصبح Studio مجرد مولّد صور آخر.</p>
+    <div class="grid4">
+      <div class="card"><div class="who">بصري</div><h3>الشعار والألوان والخطوط</h3><p>الشعار، ولوحة ألوان رئيسية وثانوية، والخط العربي والإنجليزي، وأماكن ظهور الشعار المسموحة.</p></div>
+      <div class="card"><div class="who">وجه البراند</div><h3>موديلات ثابتة</h3><p>1 إلى 5 موديلات افتراضية ثابتة الملامح، يختارها التاجر أو يولّدها: العمر، والمظهر، وأسلوب اللباس، ومستوى الحشمة. نفس الوجه في كل الصور والفيديوهات.</p></div>
+      <div class="card"><div class="who">أسلوب التصوير</div><h3>الإضاءة والخلفيات والمزاج</h3><p>استوديو أبيض أم حياة يومية، وإضاءة ناعمة أم درامية، ومشاهد مرجعية (صالة، شاطئ، مجلس، صحراء).</p></div>
+      <div class="card"><div class="who">الصوت</div><h3>النبرة واللهجة</h3><p>رسمي أم ودّي، وفصحى أم لهجة (سعودية نجدية أو حجازية، إماراتية، كويتية، مصرية)، وكلمات ممنوعة، وصوت ثابت لصانع المحتوى.</p></div>
+    </div>
+    <div class="callout info"><b>قواعد ممنوعات البراند</b>يكتبها التاجر مرة واحدة، مثل "لا موديلات بدون حجاب" أو "لا خلفيات حمراء" أو "لا ذكر للمنافسين". يطبقها المخطط قبل التوليد، ويتحقق منها مراقب الجودة بعده.</div>
+  </section>
+
+  <!-- ================= MODULES ================= -->
+  <section id="modules">
+    <h2>الاستوديوهات السبعة</h2>
+    <p class="sub">كل استوديو يعمل منفرداً، وكلها تشترك في Brand DNA ومكتبة الأصول. اختر استوديو لعرض تفاصيله.</p>
+    <div class="tabs" id="tabs"></div>
+    <div class="module" id="module"></div>
+  </section>
+
+  <!-- ================= NEW IDEAS ================= -->
+  <section id="ideas">
+    <h2>أفكار جديدة تجعل Studio مختلفاً</h2>
+    <p class="sub">هذه ليست استوديوهات منفصلة، بل طبقات فوقها. هي ما يصعب على المنافسين تقليده.</p>
+    <div class="grid2">
+      <div class="card"><div class="who">فكرة 1 · الأهم تقنياً</div><h3>محرك النص العربي</h3>
+        <p>نماذج الصور تكتب العربية بحروف مكسورة ومقلوبة، وهذه أكبر نقطة ضعف في كل الأدوات العالمية. الحل: لا نطلب من النموذج كتابة أي نص أبداً. نولّد الصورة نظيفة، ثم نضيف النص (العنوان، والسعر، والخصم، والشارات) كطبقة منفصلة بخط البراند الحقيقي، مع تشكيل صحيح واتجاه من اليمين لليسار.</p>
+        <p style="margin-top:6px"><b>النتيجة:</b> بانرات وإعلانات عربية مثالية 100%، ويمكن تعديل النص أو السعر دون إعادة توليد الصورة.</p></div>
+      <div class="card"><div class="who">فكرة 2 · الجودة</div><h3>مراقب الجودة (QA Agent)</h3>
+        <p>وكيل يفحص كل صورة وفيديو قبل أن يراها التاجر:</p>
+        <ul><li>هل المنتج مطابق للأصل في اللون والشكل والشعار؟</li><li>هل في الصورة أيدٍ أو وجوه مشوهة؟</li><li>هل التزمت بممنوعات البراند؟</li><li>هل الحشمة مناسبة للسوق؟</li></ul>
+        <p>إذا فشلت صورة، يعيد توليدها تلقائياً. التاجر لا يرى إلا النتائج الصالحة.</p></div>
+      <div class="card"><div class="who">فكرة 3 · لحظة الإبهار</div><h3>المدير الإبداعي بالمحادثة</h3>
+        <p>يكتب التاجر: "أبي حملة رمضان لعطوراتنا العشرة، ميزانيتي 500 كريدت، وأبيها على سناب وتيك توك". فيرد الوكيل بخطة: 30 صورة موديل، و10 فيديوهات، و6 إعلانات بصانع محتوى سعودي، وبانرات بكل المقاسات، مع التكلفة. وبعد الموافقة ينفّذ الخطة كاملة.</p></div>
+      <div class="card"><div class="who">فكرة 4 · التعلّم</div><h3>حلقة الأداء</h3>
+        <p>نربط حسابات Meta وTikTok وSnap، ونقرأ أداء كل إعلان. فيتعلم Studio ما يحقق نتائج أفضل لهذا البراند تحديداً: أي موديل، وأي زاوية، وأي جملة افتتاحية، وأي لهجة. ثم يولّد المزيد من الأنماط الفائزة ويوقف الخاسرة.</p>
+        <p style="margin-top:6px"><b>النتيجة:</b> تتحول الأداة من "مولّد محتوى" إلى "محتوى يتحسن مع الوقت".</p></div>
+      <div class="card"><div class="who">فكرة 5 · المبيعات</div><h3>معاينة "قبل وبعد" للمتجر</h3>
+        <p>قبل النشر، يرى التاجر صفحة منتجه الحقيقية بالصور والفيديو الجديدين، مع شريط سحب يقارنها بالصفحة الحالية. هذا أقوى أداة بيع لـ Studio نفسه في العروض التجريبية.</p></div>
+      <div class="card"><div class="who">فكرة 6 · الأسواق</div><h3>توطين الحملة لكل سوق</h3>
+        <p>نفس الحملة بنقرة واحدة في نسخ متعددة: سعودية (موديل بمظهر سعودي، ولهجة نجدية، والسعر بالريال)، وإماراتية، ومصرية، وإنجليزية. مفيد للعلامات التي تبيع في أكثر من دولة خليجية.</p></div>
+      <div class="card"><div class="who">فكرة 7 · الإلهام</div><h3>"اصنع لي مثل هذا"</h3>
+        <p>يلصق التاجر رابط إعلان أعجبه أو فيديو منتشر على TikTok، فيحلل Studio بنيته: الجملة الافتتاحية، وتسلسل اللقطات، والإيقاع، والدعوة للشراء. ثم يصنع إعلاناً جديداً بنفس البنية لمنتج التاجر. ننسخ البنية فقط، لا المحتوى ولا الوجوه.</p></div>
+      <div class="card"><div class="who">فكرة 8 · التنظيم</div><h3>مكتبة الأصول الذكية</h3>
+        <p>كل صورة وفيديو يُحفظ مع وسوم: المنتج، والموسم، والقناة، والموديل، والمقاس، والأداء. مع سجل يوضح أنه مولّد بالذكاء الاصطناعي، وأي نسخة نُشرت أين. والبحث بالعربية: "كل فيديوهات العيد للعبايات السوداء".</p></div>
+    </div>
+  </section>
+
+  <!-- ================= STORY ================= -->
+  <section id="story">
+    <h2>رحلة تاجر: متجر عطور في الرياض يستعد لرمضان</h2>
+    <p class="sub">مثال يوضح كيف تعمل الاستوديوهات معاً.</p>
+    <div class="story">
+      <div class="row"><div class="t">اليوم 1</div><div>يربط التاجر متجره (سلة)، فتُستورد 40 عطراً. يُعدّ Brand DNA في 15 دقيقة: الشعار، واللون الذهبي والأسود، وموديل رجل سعودي بشماغ، وموديل امرأة بعباية، واللهجة نجدية ودّية.</div></div>
+      <div class="row"><div class="t">اليوم 1</div><div>يكتب للمدير الإبداعي: "حملة رمضان لأفضل 10 عطور على سناب وتيك توك". تصله الخطة والتكلفة، فيوافق.</div></div>
+      <div class="row"><div class="t">بعد ساعة</div><div><b>استوديو الموديلات:</b> 30 صورة للموديلين مع العطور في مجلس رمضاني. <b>استوديو الفيديو:</b> 10 فيديوهات 9:16 لدخان البخور حول الزجاجة. <b>استوديو صانع المحتوى:</b> 6 إعلانات لشاب يقول: "والله هذا العطر ثباته خرافي، جربته في التراويح...". مراقب الجودة أعاد توليد 4 صور تلقائياً.</div></div>
+      <div class="row"><div class="t">بعد ساعة</div><div><b>استوديو المواسم:</b> كل صور الـ 40 عطراً في المتجر تتحول إلى نسخة رمضانية بزخرفة ذهبية. <b>محرك النص العربي</b> يضيف "خصم 20% بمناسبة رمضان" بخط البراند.</div></div>
+      <div class="row"><div class="t">اليوم 2</div><div>يراجع التاجر معاينة "قبل وبعد" للمتجر، ويوافق، فيُنشر كل شيء على سلة. وتُرسل الإعلانات إلى Snap وTikTok.</div></div>
+      <div class="row"><div class="t">الأسبوع 2</div><div><b>حلقة الأداء</b> تكتشف أن الإعلانات بصانع المحتوى الشاب تحقق نقرات أكثر بضعفين من الفيديوهات الصامتة. فيقترح Studio خمسة إعلانات جديدة بنفس الأسلوب.</div></div>
+      <div class="row"><div class="t">بعد العيد</div><div>بنقرة واحدة تعود صور المتجر إلى نسختها العادية.</div></div>
+    </div>
+    <div class="callout ok"><b>المقارنة</b>نفس العمل بالطريقة التقليدية يحتاج مصوراً، وموديلين، واستوديو، وصانع محتوى، ومصمماً، ونحو 3 أسابيع، وأكثر من 15,000 دولار. في Studio يحتاج يومين وبضع مئات من الكريدت. التكلفة الدقيقة تُحسب بعد اختبار المزودين.</div>
+  </section>
+
+  <!-- ================= ARCH ================= -->
+  <section id="arch">
+    <h2>البنية التقنية: خط إنتاج واحد لكل الاستوديوهات</h2>
+    <p class="sub">كل استوديو يمر بنفس المراحل السبع، ويختلف فقط في المولّد والمخرجات. المراحل المحاطة بالبرتقالي جديدة، والباقي موجود اليوم أو يُوسَّع.</p>
+    <div class="pipe">
+      <div class="step"><div class="n">1</div><b>المدخلات</b><p>الشيت، أو مزامنة المتجر، أو رفع صور، أو محادثة مع المدير الإبداعي.</p></div>
+      <div class="step"><div class="n">2</div><b>المخطط</b><p>وكيل المدير الفني الحالي، مع مهارات جديدة لكل استوديو، ويقرأ Brand DNA.</p></div>
+      <div class="step new"><div class="n">3</div><b>المولّدات</b><p>Nano Banana (موجود)، وVeo للفيديو، والصوت العربي ومزامنة الشفاه، والتحويل إلى 3D.</p></div>
+      <div class="step new"><div class="n">4</div><b>مراقب الجودة</b><p>نموذج رؤية يقارن النتيجة بالأصل وبالقواعد، ويعيد التوليد عند الفشل.</p></div>
+      <div class="step new"><div class="n">5</div><b>التركيب</b><p>النص العربي، والمقاسات لكل قناة، والترجمة النصية، والموسيقى، والشعار.</p></div>
+      <div class="step new"><div class="n">6</div><b>المكتبة</b><p>تخزين Supabase، والوسوم، والنسخ، وسجل التوليد بالذكاء الاصطناعي.</p></div>
+      <div class="step"><div class="n">7</div><b>النشر</b><p>Shopify وWooCommerce (موجودان)، وسلة وزد، وMeta وTikTok وSnap، والتحميل.</p></div>
+    </div>
+    <div class="legend"><i></i> مرحلة جديدة · كل المراحل تعمل كمهام خلفية على Render Workflows، مع خصم الكريدت لكل مخرج.</div>
+
+    <h3 style="margin-top:24px">المزودون المطلوبون</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>القدرة</th><th>المزود المقترح</th><th>البديل</th><th>ملاحظات</th></tr></thead>
+        <tbody>
+          <tr><td>الصور</td><td>Nano Banana 2 / Pro (موجود)</td><td class="sec">—</td><td class="sec">نفس المسار الحالي.</td></tr>
+          <tr><td>تحويل الصورة إلى فيديو</td><td>Google Veo عبر Gemini API</td><td class="sec">Kling، Sora</td><td class="sec">نفس حساب Google الحالي. Veo يقبل صورة فيها شخص كبداية للفيديو، وهذا ضروري لثبات وجه البراند.</td></tr>
+          <tr><td>الصوت العربي باللهجات</td><td>يُحدَّد بعد اختبار</td><td class="sec">—</td><td class="sec">يجب اختبار 3 مزودين على اللهجات النجدية والحجازية والإماراتية قبل الاختيار. هذه نقطة الجودة الحرجة لاستوديو صانع المحتوى.</td></tr>
+          <tr><td>مزامنة الشفاه / صانع المحتوى الافتراضي</td><td>Veo مع الحوار، أو مزود متخصص</td><td class="sec">—</td><td class="sec">يُحسم بعد مقارنة الواقعية والتكلفة.</td></tr>
+          <tr><td>التحويل إلى 3D</td><td>مزود image-to-3D بصيغتي GLB وUSDZ</td><td class="sec">Hyper3D، Sloyd</td><td class="sec">العرض في صفحة المنتج عبر <code>widget.js</code> ومكوّن model-viewer.</td></tr>
+          <tr><td>تركيب النص والفيديو</td><td>محرك داخلي (قوالب HTML/SVG، وFFmpeg للفيديو)</td><td class="sec">Remotion</td><td class="sec">عندنا خبرة Remotion في مشروع الفيديو الترويجي.</td></tr>
+          <tr><td>منصات الإعلان</td><td>Meta Marketing API، وTikTok Ads API، وSnap Marketing API</td><td class="sec">التحميل اليدوي أولاً</td><td class="sec">في البداية نكتفي بالتحميل بالمقاسات الصحيحة، والربط المباشر في مرحلة لاحقة.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= DATA ================= -->
+  <section id="data">
+    <h2>نموذج البيانات المقترح</h2>
+    <p class="sub">جداول جديدة في Supabase، كلها محمية بـ RLS حسب مساحة العمل مثل الجداول الحالية.</p>
+    <div class="grid3">
+      <div class="card"><h3><code>brand_kits</code></h3><p>الشعار، والألوان، والخطوط، وأسلوب التصوير، والنبرة، واللهجة، والممنوعات. واحد أو أكثر لكل مساحة عمل.</p></div>
+      <div class="card"><h3><code>brand_personas</code></h3><p>موديلات البراند: الصور المرجعية، والوصف، والصوت المرتبط، ومستوى الحشمة، وحالة الموافقة.</p></div>
+      <div class="card"><h3><code>studio_projects</code></h3><p>المشروع أو الحملة: الاستوديو، والموسم، والقنوات، والميزانية بالكريدت، والخطة، والحالة.</p></div>
+      <div class="card"><h3><code>studio_assets</code></h3><p>كل مخرج: النوع (صورة، فيديو، 3D، بانر)، والمنتج، والمقاس، والقناة، والنسخة، ونتيجة فحص الجودة، والوسوم.</p></div>
+      <div class="card"><h3><code>studio_jobs</code></h3><p>مهام التوليد في الخلفية: المزود، والمحاولات، والتكلفة الفعلية، والأخطاء. تمتد من نظام المهام الحالي.</p></div>
+      <div class="card"><h3><code>asset_performance</code></h3><p>أداء كل أصل منشور: الظهور، والنقر، والتحويل، والعائد. هذا الجدول يغذّي حلقة الأداء.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= PRICING ================= -->
+  <section id="pricing">
+    <h2>التسعير المقترح</h2>
+    <p class="sub">بنفس نظام الكريدت الحالي (10 كريدت = 1 دولار). الأرقام أولية للنقاش، وتُثبَّت بعد قياس التكلفة الفعلية لكل مزود، بهامش ربح مستهدف لا يقل عن 60%.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>المخرج</th><th>السعر المقترح</th><th>بالدولار</th><th>البديل في السوق</th></tr></thead>
+        <tbody>
+          <tr><td>صورة موديل أو صورة موسمية</td><td>4 كريدت</td><td>0.40$</td><td class="sec">مصور وموديل: أكثر من 10,000$ للجلسة</td></tr>
+          <tr><td>بانر إعلاني بالنص العربي (كل المقاسات)</td><td>3 كريدت</td><td>0.30$</td><td class="sec">مصمم: 20–50$ للتصميم</td></tr>
+          <tr><td>فيديو منتج 8 ثوانٍ</td><td>25 كريدت</td><td>2.50$</td><td class="sec">VEOit: اشتراك 59–119$ شهرياً</td></tr>
+          <tr><td>إعلان صانع محتوى 15–30 ثانية بلهجة خليجية</td><td>50 كريدت</td><td>5$</td><td class="sec">Creatify وArcads: 1.9–5.5$ (بدون لهجة خليجية). صانع محتوى حقيقي: 150–500$</td></tr>
+          <tr><td>نموذج 3D مع AR</td><td>30 كريدت</td><td>3$</td><td class="sec">ARDisplay: 19–100$ شهرياً</td></tr>
+          <tr><td>تحويل منتج كامل إلى نسخة موسمية</td><td>8 كريدت</td><td>0.80$</td><td class="sec">لا يوجد بديل مباشر</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="grid3" style="margin-top:14px">
+      <div class="card"><div class="who">باقة</div><h3>Studio Starter</h3><p>كريدت شهري يكفي نحو 100 صورة و10 فيديوهات. للمتاجر الصغيرة.</p></div>
+      <div class="card"><div class="who">باقة</div><h3>Studio Pro</h3><p>كريدت أكبر، و3 موديلات للبراند، وإعلانات صانع المحتوى، واستوديو المواسم، والنشر المباشر.</p></div>
+      <div class="card"><div class="who">باقة</div><h3>Studio Agency</h3><p>عدة براندات، وروابط موافقة للعملاء، وحلقة الأداء، وتصدير بالجملة.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= COMPETE ================= -->
+  <section id="compete">
+    <h2>المقارنة مع المنافسين</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>القدرة</th><th>Botika</th><th>Creatify / Arcads</th><th>ARDisplay / Sloyd</th><th>Shopify Magic</th><th>Autommerce Studio</th></tr></thead>
+        <tbody>
+          <tr><td>صور الموديلات</td><td class="c yes">✓</td><td class="c part">جزئي</td><td class="c no">—</td><td class="c no">—</td><td class="c yes">✓</td></tr>
+          <tr><td>فيديو المنتج</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td><td class="c yes">✓</td></tr>
+          <tr><td>صانع محتوى يتحدث</td><td class="c no">—</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td><td class="c yes">✓</td></tr>
+          <tr><td>3D وAR</td><td class="c no">—</td><td class="c no">—</td><td class="c yes">✓</td><td class="c no">—</td><td class="c yes">✓</td></tr>
+          <tr><td>الكتالوج كاملاً من الشيت</td><td class="c part">جزئي</td><td class="c no">—</td><td class="c no">—</td><td class="c part">جزئي</td><td class="c yes">✓</td></tr>
+          <tr><td>هوية براند موحدة لكل المخرجات</td><td class="c yes">✓</td><td class="c part">جزئي</td><td class="c no">—</td><td class="c part">جزئي</td><td class="c yes">✓</td></tr>
+          <tr><td>نص عربي صحيح على الصور</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c yes">✓</td></tr>
+          <tr><td>لهجات خليجية وموديلات بمظهر محلي</td><td class="c no">—</td><td class="c part">ضعيف</td><td class="c no">—</td><td class="c no">—</td><td class="c yes">✓</td></tr>
+          <tr><td>مواسم الخليج</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c yes">✓</td></tr>
+          <tr><td>النشر على سلة وزد</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c yes">✓ (مرحلة 2)</td></tr>
+          <tr><td>إثراء الكتالوج والـ SEO في نفس المنصة</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c part">جزئي</td><td class="c yes">✓ (موجود)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>نقطة صراحة</b>Botika أقوى منا اليوم في دقة الملابس على الموديل، وCreatify أقوى في واقعية صانع المحتوى. نحن لن نتفوق عليهم في كل أداة منفردة في البداية. ميزتنا هي الجمع، والعربية، والكتالوج، والنشر. ولذلك يجب أن تكون جودة كل استوديو "جيدة بما يكفي للبيع" منذ اليوم الأول، وإلا سقطت الفكرة.</div>
+  </section>
+
+  <!-- ================= ROADMAP ================= -->
+  <section id="roadmap">
+    <h2>خطة التنفيذ</h2>
+    <p class="sub">المدد تقديرية لفريق صغير، وتُراجع بعد المرحلة الأولى.</p>
+    <div class="card" style="padding:4px 22px">
+      <div class="phase"><div class="when"><b>المرحلة 0</b><span>أسبوعان · الأساس</span></div><div>
+        <h3>Brand DNA ومحرك النص العربي</h3>
+        <ul><li>شاشة إعداد هوية البراند، مع حفظ الموديلات كأصول دائمة.</li><li>نقل قواعد البراند والموديل الحالية في Gallery لتقرأ من Brand DNA.</li><li>محرك تركيب النص العربي على الصور بالقوالب.</li><li>اختبار مزودي الفيديو والصوت العربي على 20 منتجاً حقيقياً.</li></ul>
+        <p class="ter" style="font-size:12px;margin-top:6px">النتيجة: قرار نهائي بالمزودين، وتكلفة فعلية لكل مخرج.</p></div></div>
+      <div class="phase"><div class="when"><b>المرحلة 1</b><span>4–6 أسابيع · الإطلاق الأول</span></div><div>
+        <h3>استوديو الموديلات + استوديو الفيديو + مراقب الجودة</h3>
+        <ul><li>صور الموديلات بالجملة من الشيت، مع "وجه البراند" الثابت.</li><li>فيديو 8 ثوانٍ بمقاسي 1:1 و9:16 بـ Veo لكل منتج.</li><li>مراقب الجودة مع إعادة التوليد التلقائية.</li><li>مكتبة الأصول الأساسية، والنشر على Shopify وWooCommerce.</li></ul>
+        <p class="ter" style="font-size:12px;margin-top:6px">النتيجة: نسخة تجريبية مع 10 عملاء حاليين.</p></div></div>
+      <div class="phase"><div class="when"><b>المرحلة 2</b><span>6–8 أسابيع · الإبهار</span></div><div>
+        <h3>استوديو الإعلانات + استوديو المواسم + استوديو صانع المحتوى</h3>
+        <ul><li>بانرات بكل المقاسات بالنص العربي، ونصوص إعلانية.</li><li>تحويل الكتالوج إلى نسخة موسمية والعودة منها. <b>يجب أن يكون جاهزاً قبل رمضان القادم.</b></li><li>إعلانات صانع المحتوى باللهجات الخليجية.</li><li>المدير الإبداعي بالمحادثة، ومعاينة "قبل وبعد".</li><li>مزامنة سلة وزد.</li></ul></div></div>
+      <div class="phase"><div class="when"><b>المرحلة 3</b><span>بعد ذلك · التوسع</span></div><div>
+        <h3>3D وAR + مختبر ما قبل الإنتاج + حلقة الأداء</h3>
+        <ul><li>نماذج 3D وعرض AR في صفحة المنتج.</li><li>صور لمنتجات لم تُصنع بعد لاختبار الطلب.</li><li>الربط المباشر مع Meta وTikTok وSnap، وقراءة الأداء.</li><li>"اصنع لي مثل هذا"، وتوطين الحملات لعدة أسواق.</li></ul></div></div>
+    </div>
+    <div class="callout"><b>الموعد الحاسم</b>رمضان هو أعلى موسم بيع في الخليج، ويحتاج التجار محتواه قبل بدايته بنحو شهر. إطلاق المرحلة 2، وخاصة استوديو المواسم، قبل هذا الموعد هو أفضل فرصة تسويقية لـ Studio.</div>
+  </section>
+
+  <!-- ================= KPI ================= -->
+  <section id="kpi">
+    <h2>مؤشرات النجاح</h2>
+    <div class="grid4">
+      <div class="card"><div class="who">السرعة</div><h3>أقل من 10 دقائق</h3><p>من التسجيل إلى أول صورة موديل جاهزة للتاجر.</p></div>
+      <div class="card"><div class="who">الجودة</div><h3>أكثر من 85%</h3><p>نسبة المخرجات التي يقبلها التاجر دون إعادة توليد.</p></div>
+      <div class="card"><div class="who">الاستخدام</div><h3>أكثر من 60%</h3><p>نسبة المخرجات التي تُنشر فعلاً على المتجر أو في إعلان.</p></div>
+      <div class="card"><div class="who">الإيراد</div><h3>متوسط الكريدت لكل عميل</h3><p>يُقارن بباقي أدوات Autommerce، والهدف أن يصبح Studio أعلى مصدر إيراد.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= RISKS ================= -->
+  <section id="risks">
+    <h2>المخاطر وكيف نتعامل معها</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>الخطر</th><th>لماذا مهم</th><th>المعالجة</th></tr></thead>
+        <tbody>
+          <tr><td><b>المنتج في الصورة لا يطابق الحقيقة</b></td><td class="sec">يؤدي إلى مرتجعات وفقدان ثقة المتسوق، وقد يُعد تضليلاً.</td><td class="sec">مراقب الجودة يقارن بالصورة الأصلية، وقاعدة المخطط الحالية "لا تغيّر المنتج أبداً"، وموافقة التاجر قبل النشر.</td></tr>
+          <tr><td><b>حقوق الوجوه والأصوات</b></td><td class="sec">استخدام وجه أو صوت شخص حقيقي دون إذن مشكلة قانونية.</td><td class="sec">موديلات افتراضية بالكامل افتراضياً. واستنساخ وجه أو صوت حقيقي فقط بموافقة موقعة ومحفوظة.</td></tr>
+          <tr><td><b>وسم المحتوى المولّد</b></td><td class="sec">منصات الإعلان تطلب وسم المحتوى الواقعي المولّد بالذكاء الاصطناعي.</td><td class="sec">سجل توليد لكل أصل، وخيار وسم تلقائي عند النشر. يجب التحقق من سياسة كل منصة قبل الإطلاق.</td></tr>
+          <tr><td><b>أنظمة الإعلان في السعودية والإمارات</b></td><td class="sec">إعلانات صانع المحتوى قد تخضع لأنظمة المؤثرين والإعلان المحلية.</td><td class="sec">مراجعة قانونية قبل إطلاق استوديو صانع المحتوى. هذه نقطة يجب التحقق منها، لا افتراضها.</td></tr>
+          <tr><td><b>الحشمة والملاءمة الثقافية</b></td><td class="sec">صورة غير مناسبة قد تضر البراند في الخليج.</td><td class="sec">مستوى حشمة في Brand DNA، وفحص إلزامي في مراقب الجودة.</td></tr>
+          <tr><td><b>تكلفة الفيديو ووقته</b></td><td class="sec">الفيديو أغلى وأبطأ بكثير من الصور، وقد يأكل الهامش.</td><td class="sec">قياس التكلفة في المرحلة 0، وتسعير بهامش واضح، ومعاينة صورة قبل توليد الفيديو.</td></tr>
+          <tr><td><b>الاعتماد على مزود واحد</b></td><td class="sec">تغيير أسعار Google أو سياساتها يؤثر علينا مباشرة.</td><td class="sec">طبقة مزودين قابلة للتبديل، كما هو الحال اليوم في الإثراء.</td></tr>
+          <tr><td><b>Shopify تبني أدوات مشابهة</b></td><td class="sec">قد تقدم توليد الصور والفيديو مجاناً داخل المنصة.</td><td class="sec">التركيز على ما لا تقدمه: العربية، والخليج، وسلة وزد، والجمع بين الإثراء والمحتوى المرئي.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>Autommerce Studio — مسودة أولى للنقاش، 5 أكتوبر 2026. الأسعار والمدد تقديرية، وتُثبَّت بعد المرحلة 0. أرقام المنافسين من صفحاتهم ومن مواقع مقارنة، وقد تتغير.</footer>
+</div>
+
+<script>
+const MODULES = [
+  { id: "models", name: "استوديو الموديلات", en: "Model Studio", phase: 1, tag: "var(--green)",
+    what: "يحوّل صورة المنتج (مفرودة، أو على مانيكان، أو تغليف) إلى جلسة تصوير احترافية على موديل البراند الثابت، بزوايا ووضعيات وخلفيات مختلفة، لكل الكتالوج دفعة واحدة.",
+    wow: "500 منتج، ونفس الوجه، ونفس الإضاءة، كأنها جلسة تصوير واحدة. وكله في ساعة.",
+    input: ["صور المنتجات من الشيت أو المتجر", "موديل أو أكثر من Brand DNA", "عدد الصور والزوايا لكل منتج"],
+    output: ["صور على الموديل بمقاسات المتجر", "صور تفصيلية للخامة والقطعة", "صور لنمط حياة يستخدم فيه المنتج"],
+    flow: ["يختار التاجر المنتجات والموديل", "المخطط يضع قائمة لقطات لكل منتج حسب فئته", "Nano Banana يولّد الصور مع تثبيت المنتج والوجه", "مراقب الجودة يفحص ويعيد ما فشل", "يراجع التاجر ثم ينشر"],
+    reuse: "وكيل المدير الفني، ودعم صورة الموديل المرجعية، وNano Banana، والشيت، والمهام في الخلفية. أي نحو 80% موجود.",
+    needs: "حفظ الموديلات كأصول دائمة، ومولّد موديلات افتراضية جديدة، ومراقب الجودة.",
+    categories: "الأزياء، والعبايات، والمجوهرات، والساعات، والحقائب، والعطور، ومستحضرات التجميل.",
+    price: "4 كريدت للصورة" },
+  { id: "video", name: "استوديو الفيديو", en: "Video Studio", phase: 1, tag: "var(--green)",
+    what: "يحوّل صور المنتج إلى فيديوهات قصيرة: دوران حول المنتج، وحركة كاميرا سينمائية، وموديل يتحرك بالقطعة، ودخان وماء وإضاءة. بمقاس 1:1 لصفحة المنتج و9:16 للسوشيال.",
+    wow: "كل منتج في المتجر صار له فيديو، حتى المنتجات التي لم يكن لها ميزانية تصوير أصلاً.",
+    input: ["صورة أو أكثر لكل منتج (أو صور استوديو الموديلات)", "أسلوب الحركة", "المدة والمقاس"],
+    output: ["فيديو 8 ثوانٍ لصفحة المنتج", "فيديو 9:16 لـ Reels وTikTok وSnap", "صورة متحركة خفيفة للبانرات"],
+    flow: ["يختار التاجر المنتجات والأسلوب", "المخطط يكتب أمر الحركة لكل منتج", "Veo يولّد الفيديو من الصورة", "مراقب الجودة يتحقق من ثبات المنتج", "التركيب يضيف الشعار والموسيقى عند الحاجة"],
+    reuse: "صور Gallery كنقطة بداية، وحساب Google الحالي، ونظام المهام والكريدت.",
+    needs: "ربط Veo، وتخزين الفيديو، ومشغّل فيديو في المعاينة، وتركيب بـ FFmpeg.",
+    categories: "كل الفئات، وأقواها العطور والمجوهرات والإلكترونيات والأزياء.",
+    price: "25 كريدت لفيديو 8 ثوانٍ" },
+  { id: "creator", name: "استوديو صانع المحتوى", en: "Creator Studio (UGC)", phase: 2, tag: "var(--blue)",
+    what: "صانع محتوى افتراضي يمسك منتج التاجر ويتحدث عنه أمام الكاميرا بلهجة خليجية، بأسلوب مراجعات TikTok وSnap: جملة افتتاحية تشد الانتباه، ثم تجربة المنتج، ثم دعوة للشراء.",
+    wow: "20 إعلاناً مختلفاً لنفس المنتج: 5 وجوه، و4 جمل افتتاحية، ولهجتان. جاهزة للاختبار قبل الغداء.",
+    input: ["المنتج وبياناته المُثراة من Catalog Intelligence", "الشخصية واللهجة من Brand DNA", "زاوية البيع: الجودة، أو السعر، أو الهدية، أو الموسم"],
+    output: ["إعلان 15–30 ثانية بمقاس 9:16", "ترجمة نصية عربية مدمجة", "عدة نسخ بجمل افتتاحية مختلفة"],
+    flow: ["وكيل كتابة يكتب النص باللهجة من بيانات المنتج الحقيقية", "Nano Banana يولّد صورة الشخصية ممسكة بالمنتج", "الصوت العربي ومزامنة الشفاه", "التركيب يضيف الترجمة النصية والشعار", "مراقب الجودة يتحقق من صحة النطق وعدم المبالغة في ادعاءات المنتج"],
+    reuse: "بيانات المنتج المُثراة (ادعاءات حقيقية فقط)، وNano Banana، واستوديو الفيديو.",
+    needs: "مزود صوت عربي باللهجات، ومزامنة الشفاه، ووكيل كتابة إعلانات، ومراجعة قانونية.",
+    categories: "العطور، والتجميل، والعناية، والإلكترونيات، والمنتجات المنزلية.",
+    price: "50 كريدت للإعلان" },
+  { id: "ads", name: "استوديو الإعلانات", en: "Ad Studio", phase: 2, tag: "var(--blue)",
+    what: "حزمة إعلانية كاملة لكل منتج أو حملة: بانرات بكل مقاسات Meta وTikTok وSnap وGoogle، مع نصوص إعلانية بالعربية والإنجليزية. النص العربي يُكتب بمحرك النص لا بنموذج الصور، فيخرج مثالياً.",
+    wow: "منتج واحد يتحول إلى 12 مقاساً و3 أفكار تصميم في دقيقة، والسعر والخصم قابلان للتعديل دون إعادة التوليد.",
+    input: ["المنتجات، والعرض (الخصم أو السعر)، والقنوات", "صور من استوديو الموديلات أو الفيديو"],
+    output: ["بانرات بكل المقاسات", "نصوص إعلانية: عنوان، ووصف، ودعوة للشراء", "ملف جاهز للرفع، أو نشر مباشر لاحقاً"],
+    flow: ["يختار التاجر المنتجات والعرض والقنوات", "المخطط يختار القوالب وأفكار التصميم", "توليد الخلفية والمشهد بدون نص", "محرك النص العربي يضيف العنوان والسعر بخط البراند", "التصدير بالمقاسات"],
+    reuse: "Gallery، وVisualizer (القوالب والأوصاف)، وBrand DNA.",
+    needs: "محرك النص العربي، ومكتبة قوالب، ومواصفات مقاسات كل منصة.",
+    categories: "كل الفئات.",
+    price: "3 كريدت للبانر بكل مقاساته" },
+  { id: "season", name: "استوديو المواسم", en: "Season Studio", phase: 2, tag: "var(--blue)",
+    what: "يختار التاجر موسماً، فيتحول المتجر كاملاً إلى نسخة موسمية: صور المنتجات، والبانرات، والفيديوهات، والأوصاف القصيرة. وبعد انتهاء الموسم يعود كل شيء بنقرة.",
+    wow: "متجر كامل يرتدي ثوب رمضان في ساعة واحدة، ويخلعه بعد العيد بنقرة.",
+    input: ["الموسم: رمضان، أو عيد الفطر، أو عيد الأضحى، أو اليوم الوطني السعودي أو الإماراتي، أو يوم التأسيس، أو الجمعة البيضاء، أو العودة للمدارس، أو الصيف", "المنتجات المشمولة", "شدة التحول: لمسة خفيفة أم تحول كامل"],
+    output: ["صور منتجات موسمية", "بانرات الصفحة الرئيسية والمجموعات", "نصوص موسمية قصيرة", "خطة نشر واسترجاع"],
+    flow: ["تقويم مواسم الخليج مدمج، مع تنبيه قبل كل موسم بشهر", "المخطط يطبق عناصر الموسم بهوية البراند", "التوليد بالجملة", "معاينة المتجر قبل وبعد", "النشر، ثم الاسترجاع التلقائي في تاريخ محدد"],
+    reuse: "Gallery، وVisualizer، ومزامنة المتجر (حفظ النسخة الأصلية لاسترجاعها).",
+    needs: "تقويم المواسم، ونسخ الأصول مع الاسترجاع، وجدولة النشر.",
+    categories: "كل الفئات، وأقواها العطور والهدايا والأزياء والحلويات.",
+    price: "8 كريدت لتحويل المنتج الواحد" },
+  { id: "3d", name: "استوديو 3D والواقع المعزز", en: "3D & AR Studio", phase: 3, tag: "var(--amber)",
+    what: "من صورة واحدة إلى أربع صور يُولَّد نموذج ثلاثي الأبعاد. يدوّره المتسوق 360 درجة في صفحة المنتج، ويضعه في غرفته بحجمه الحقيقي بكاميرا الجوال.",
+    wow: "المتسوق يرى الكنبة في صالته، أو زجاجة العطر على طاولته، قبل أن يشتري.",
+    input: ["1 إلى 4 صور للمنتج", "الأبعاد الحقيقية (من بيانات الكتالوج)"],
+    output: ["ملف GLB للويب وAndroid", "ملف USDZ لـ iPhone", "عارض 360 درجة في صفحة المنتج", "فيديو دوران للسوشيال"],
+    flow: ["رفع الصور", "التحويل إلى 3D", "ضبط الحجم من أبعاد الكتالوج", "مراجعة في العارض", "النشر في صفحة المنتج عبر widget.js"],
+    reuse: "الأبعاد من Catalog Intelligence، و widget.js للعرض في المتجر.",
+    needs: "مزود image-to-3D، ومكوّن عارض 3D وAR.",
+    categories: "الأثاث، والديكور، والعطور، والإلكترونيات، والأحذية، والحقائب.",
+    price: "30 كريدت للنموذج" },
+  { id: "concept", name: "مختبر ما قبل الإنتاج", en: "Concept Lab", phase: 3, tag: "var(--amber)",
+    what: "يصف التاجر منتجاً لم يُصنع بعد، أو يرفع رسماً أولياً، فيحصل على صور وفيديو احترافية له. يعرضها كإعلان أو كطلب مسبق ليقيس الطلب قبل أن يطلب البضاعة من المصنع.",
+    wow: "التاجر يعرف أي لون عباية سيبيع أكثر قبل أن يخيط قطعة واحدة.",
+    input: ["وصف المنتج أو رسم أو صورة عينة", "الألوان والخيارات المراد اختبارها"],
+    output: ["صور وفيديو لكل خيار", "صفحة طلب مسبق", "مقارنة الطلب بين الخيارات"],
+    flow: ["وصف المنتج", "توليد الخيارات", "نشر صفحة طلب مسبق أو إعلان اختبار", "قياس النقر والطلبات لكل خيار"],
+    reuse: "استوديو الموديلات والفيديو، والنشر على المتجر.",
+    needs: "صفحات طلب مسبق، وقياس الأداء، ووسم واضح بأن المنتج قيد التصنيع.",
+    categories: "الأزياء، والعطور، والإكسسوارات، ومنتجات العلامات الخاصة.",
+    price: "حسب المخرجات" },
+];
+
+const state = { id: "models" };
+const tabs = document.getElementById("tabs");
+tabs.innerHTML = MODULES.map((m, i) => `<button class="tab" data-id="${m.id}">${i + 1}. ${m.name}</button>`).join("");
+tabs.onclick = (e) => { const id = e.target.dataset.id; if (id) { state.id = id; render(); } };
+
+function list(a) { return `<ul>${a.map((x) => `<li>${x}</li>`).join("")}</ul>`; }
+
+function render() {
+  tabs.querySelectorAll(".tab").forEach((b) => b.classList.toggle("on", b.dataset.id === state.id));
+  const m = MODULES.find((x) => x.id === state.id);
+  document.getElementById("module").innerHTML = `
+    <div class="head">
+      <div><h3>${m.name}</h3><div class="en">${m.en}</div></div>
+      <div><span class="tag" style="background:${m.tag}">المرحلة ${m.phase}</span> <span class="chip">${m.price}</span></div>
+    </div>
+    <div class="wow"><b>لحظة الإبهار:</b> ${m.wow}</div>
+    <div class="cols">
+      <div>
+        <div class="lbl">ماذا يفعل</div><div>${m.what}</div>
+        <div class="lbl">كيف يعمل</div><ol class="flow">${m.flow.map((x) => `<li>${x}</li>`).join("")}</ol>
+        <div class="lbl">الفئات الأنسب</div><div class="sec" style="font-size:13px">${m.categories}</div>
+      </div>
+      <div>
+        <div class="lbl">المدخلات</div>${list(m.input)}
+        <div class="lbl">المخرجات</div>${list(m.output)}
+        <div class="lbl">ما نعيد استخدامه</div><div style="font-size:13px">${m.reuse}</div>
+        <div class="lbl">ما نحتاج بناءه</div><div style="font-size:13px">${m.needs}</div>
+      </div>
+    </div>`;
+}
+render();
+</script>
+</body>
+</html>

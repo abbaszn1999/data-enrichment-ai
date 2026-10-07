@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
+import { requireWorkspaceMember } from "@/lib/auth/workspace-access";
 import {
   getOwnerSubscription,
   getActiveSubscriptionPlans,
@@ -19,6 +20,9 @@ export async function GET(request: Request) {
     if (!workspaceId) {
       return NextResponse.json({ error: "workspaceId is required" }, { status: 400 });
     }
+
+    const denied = await requireWorkspaceMember(workspaceId);
+    if (denied) return denied;
 
     const [ownerSub, plans, auth] = await Promise.all([
       getOwnerSubscription(workspaceId),

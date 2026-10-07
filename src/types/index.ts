@@ -162,7 +162,7 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
   {
     id: "imageUrls",
     label: "Image URLs",
-    description: "Find product images from the web using OpenAI web image search.",
+    description: "Find product images from the web using AI image search.",
     type: "imageUrls",
     enabled: false,
     imageCount: 3,
@@ -179,7 +179,7 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
   {
     id: "lensFounds",
     label: "Lens founds",
-    description: "Pages Google Lens found for the product picture. Filled by the Lens finder.",
+    description: "Pages found by visual search for the product picture. Filled by the Lens finder.",
     type: "sourceUrls",
     enabled: false,
     sourceCount: 10,
@@ -489,11 +489,8 @@ export type EnrichmentModel = "standard" | "premium" | "exact";
 export function resolveEnrichmentModel(
   model: string | null | undefined
 ): EnrichmentModel {
-  if (
-    model === "premium" ||
-    model === "gemini-3.1-pro-preview" ||
-    model === "gpt-5.6-sol"
-  ) {
+  // Legacy premium ids, matched by suffix so provider names are not shipped to the browser.
+  if (model === "premium" || /(?:-pro-preview|\.6-sol)$/.test(model ?? "")) {
     return "premium";
   }
   // standard | gemini flash | terra | unknown → standard

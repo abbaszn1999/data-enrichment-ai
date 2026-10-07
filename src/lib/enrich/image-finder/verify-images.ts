@@ -1,4 +1,5 @@
 import { mapLimit } from "@/lib/async/map-limit";
+import { isPublicHttpUrl } from "@/lib/net/public-host";
 import type { ImageUrl } from "@/types";
 
 const VERIFY_TIMEOUT_MS = 6_000;
@@ -75,6 +76,12 @@ async function classify(response: Response): Promise<Probe> {
 }
 
 async function probeOnce(url: string, pageUrl: string | undefined, timeoutMs: number): Promise<Probe> {
+  try {
+    if (!(await isPublicHttpUrl(new URL(url)))) return "blocked";
+  } catch {
+    return "blocked";
+  }
+
   try {
     const head = await fetch(url, {
       method: "HEAD",

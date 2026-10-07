@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { resolveShareToken } from "@/lib/share/links";
+import { hideProviderNames } from "@/lib/provider-names";
 import { sanitizeShareView } from "@/lib/share/view";
 import { loadProjectJsonAdmin } from "@/lib/jobs/project-json";
 import { resolveProductGroupColumn } from "@/lib/catalog/product-groups";
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest, context: Ctx) {
         rowIndex: r.rowIndex ?? idx,
         selected: false,
         status: r.status as ProductRow["status"],
-        errorMessage: r.errorMessage,
+        errorMessage: hideProviderNames(r.errorMessage),
         originalData: r.originalData || {},
         enrichedData: r.enrichedData || {},
         matchType: (r.matchType as "existing" | "new" | null) || "new",

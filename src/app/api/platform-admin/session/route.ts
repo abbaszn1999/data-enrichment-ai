@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientIp, rateLimit } from "@/lib/simple-rate-limit";
 import {
   clearPlatformAdminSession,
   hasPlatformAdminSession,
@@ -12,6 +13,13 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const rl = rateLimit(`admin-login:${clientIp(req)}`, 5, 15 * 60 * 1000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "Too many attempts. Try again later." },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSeconds) } }
+    );
+  }
   const body = await req.json().catch(() => ({}));
   const email = String(body.email || "");
   const password = String(body.password || "");

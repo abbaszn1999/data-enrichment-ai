@@ -9,12 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { signIn, signInWithGoogle } from "@/lib/auth";
+import { safeRedirectPath } from "@/lib/auth/auth-entry";
 import { PageLoader } from "@/components/brand/page-loader";
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/workspaces";
+  const redirect = safeRedirectPath(searchParams.get("redirect"));
   const prefillEmail = searchParams.get("email") || "";
   const [email, setEmail] = useState(prefillEmail);
   const [password, setPassword] = useState("");

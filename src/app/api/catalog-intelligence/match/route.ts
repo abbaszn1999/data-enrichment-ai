@@ -38,6 +38,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+    const { data: member } = await supabase
+      .from("workspace_members")
+      .select("role")
+      .eq("workspace_id", session.workspace_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!member || member.role === "viewer") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     // 2. Load project rows from Storage JSON
     const project = await loadProjectJsonServer(session.workspace_id, sessionId);
     if (!project || project.rows.length === 0) {

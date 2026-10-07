@@ -8,6 +8,14 @@ import {
 } from "@/lib/workspace-context";
 
 export async function POST(request: Request) {
+  // SEC-12: credits are charged only by server-side jobs after work is done.
+  // Browser-chosen amounts are no longer accepted. (No in-app caller exists.)
+  if (process.env.ALLOW_CLIENT_CREDIT_DEDUCT !== "true") {
+    return NextResponse.json(
+      { error: "Client-side credit deduction is disabled" },
+      { status: 403 }
+    );
+  }
   try {
     const { workspaceId, amount, operation, entityType, entityId, details } = await request.json();
 

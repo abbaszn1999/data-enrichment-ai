@@ -8,6 +8,7 @@ import {
   saveProjectJsonAdmin,
 } from "@/lib/jobs/project-json";
 import type { ProjectJson, ProjectRow } from "@/lib/storage-helpers";
+import { resolveEnrichmentModel } from "@/types";
 
 /** Rows one delta save may carry; a bigger change is a full save. */
 const MAX_DELTA_ROWS = 2000;
@@ -57,6 +58,12 @@ export async function GET(request: NextRequest) {
     const project = await loadProjectJsonAdmin(workspaceId, sessionId, auth.admin);
     if (!project) {
       return NextResponse.json({ error: "Project data not found" }, { status: 404 });
+    }
+    // Old sessions may still hold a provider model id; send only the tier.
+    const settings = (project as { enrichmentSettings?: { enrichmentModel?: string } })
+      .enrichmentSettings;
+    if (settings && typeof settings.enrichmentModel === "string") {
+      settings.enrichmentModel = resolveEnrichmentModel(settings.enrichmentModel);
     }
     return NextResponse.json({ project });
   } catch (error) {
