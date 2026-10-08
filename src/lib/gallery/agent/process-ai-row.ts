@@ -560,8 +560,6 @@ export async function processAiRow(params: {
         sourceMeta: {
           provider: "ai",
           pipeline: "gallery-generate",
-          model: imageModel,
-          plannerModel: GALLERY_PLANNER_OPENAI_MODEL,
           runPhase,
           usedOriginalImage: originalUrls.length > 0 || uploadedPhotoKey.length > 0,
           uploadedPhotos: uploadedPhotoKey,

@@ -18,6 +18,7 @@ import {
   type GalleryWorksheetJson,
 } from "@/lib/gallery/types";
 import { galleryWarn } from "@/lib/gallery/log";
+import { hideProviderNames } from "@/lib/provider-names";
 import { loadActiveJobForSession } from "@/lib/jobs/repo";
 import { withGalleryWorksheetLock } from "@/lib/gallery/worksheet-lock";
 import { imageRefsMatch } from "@/lib/gallery/image-refs";
@@ -71,6 +72,21 @@ function pruneImageProvenance(row: GalleryWorksheetJson["rows"][number], path: s
     images: images.filter(
       (image) => !imageRefsMatch(image.ref || image.url || "", path)
     ),
+  };
+}
+
+/** Rows saved by older runs carry model ids in sourceMeta; customers never see them. */
+function withoutProviderDetails(worksheet: GalleryWorksheetJson): GalleryWorksheetJson {
+  return {
+    ...worksheet,
+    rows: worksheet.rows.map((row) => {
+      const { model: _model, plannerModel: _plannerModel, ...meta } = row.sourceMeta ?? {};
+      return {
+        ...row,
+        errorMessage: hideProviderNames(row.errorMessage),
+        sourceMeta: row.sourceMeta ? meta : row.sourceMeta,
+      };
+    }),
   };
 }
 
@@ -239,7 +255,11 @@ export async function GET(request: NextRequest, context: Ctx) {
       : hydratedWorksheet && includeSignedUrls
         ? await signGalleryWorksheetImages(hydratedWorksheet)
         : {};
-  const body = { session, worksheet: hydratedWorksheet, signedUrls };
+  const body = {
+    session: { ...session, error_message: hideProviderNames(session.error_message ?? undefined) ?? null },
+    worksheet: hydratedWorksheet ? withoutProviderDetails(hydratedWorksheet) : hydratedWorksheet,
+    signedUrls,
+  };
   recordResponseBytes("gallery.session", jsonByteLength(body));
   return NextResponse.json(body, { headers: auth.headers });
 }

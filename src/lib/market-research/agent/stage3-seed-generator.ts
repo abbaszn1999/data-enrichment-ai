@@ -207,7 +207,7 @@ function seedRowsFromReply(
     const canonical = item.canonicalNicheSeed || sourceCol.name;
     item.variations.forEach((variation, index) => {
       seedRows.push({
-        id: `${sourceCol.id}-gemini-${index + 1}-${slugifyTerm(variation.term)}`,
+        id: `${sourceCol.id}-v-${index + 1}-${slugifyTerm(variation.term)}`,
         collectionId: sourceCol.id,
         broadSeedVariation: variation.term,
         canonicalNicheSeed: canonical,

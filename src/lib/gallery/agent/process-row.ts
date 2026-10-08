@@ -535,7 +535,6 @@ export async function processScrapingRow(params: {
       sourceMeta: {
         provider: "scraping",
         pipeline: "gallery-research",
-        model: GALLERY_SCRAPING_OPENAI_MODEL,
         researchStats,
         ...(unverifiedNote ? { unverifiedNote } : {}),
         runPhase,

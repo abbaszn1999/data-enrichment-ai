@@ -34,6 +34,25 @@ describe("hideProviderNames", () => {
     );
   });
 
+  it("hides lower-case model ids and provider billing links", () => {
+    expect(hideProviderNames("Image model gemini-3.1-flash-image failed")).toBe("Image model AI failed");
+    expect(
+      hideProviderNames(
+        "You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/."
+      )
+    ).toBe("You have no credits remaining. Add credits to continue using the API.");
+    expect(
+      hideProviderNames(
+        "401 Incorrect API key provided: sk-proj-abc123XYZ. You can find your API key at https://platform.openai.com/account/api-keys."
+      )
+    ).toBe("401 Incorrect API key provided: [key]. You can find your API key.");
+    expect(
+      hideProviderNames(
+        "[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/x: [429 Too Many Requests]"
+      )
+    ).toBe("Error fetching from [429 Too Many Requests]");
+  });
+
   it("leaves other text and empty values alone", () => {
     expect(hideProviderNames("Best match by title and brand.")).toBe("Best match by title and brand.");
     expect(hideProviderNames("")).toBe("");
