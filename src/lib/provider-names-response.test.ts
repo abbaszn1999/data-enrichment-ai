@@ -10,11 +10,25 @@ describe("scrubErrorFields", () => {
     });
   });
 
+  it("reaches nested error fields and leaves content alone", () => {
+    const body = {
+      session: { error_message: "Serper failed", name: "Gemini shop" },
+      rows: [{ id: "a", errorMessage: "gpt-6.1-sol timed out", title: "OpenAI mug" }, { id: "b" }],
+      warnings: ["OpenAI slow"],
+    };
+    const out = scrubErrorFields(body);
+    expect(out).toEqual({
+      session: { error_message: "image search failed", name: "Gemini shop" },
+      rows: [{ id: "a", errorMessage: "the AI agent timed out", title: "OpenAI mug" }, { id: "b" }],
+      warnings: ["AI slow"],
+    });
+    expect(out.rows[1]).toBe(body.rows[1]);
+    expect(body.session.error_message).toBe("Serper failed");
+  });
+
   it("returns the same object when nothing changes", () => {
-    const body = { error: "Not found" };
+    const body = { error: "Not found", rows: [{ errorMessage: "Row not found" }] };
     expect(scrubErrorFields(body)).toBe(body);
-    const list = [{ error: "OpenAI" }];
-    expect(scrubErrorFields(list)).toBe(list);
   });
 });
 

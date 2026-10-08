@@ -231,7 +231,7 @@ export async function runStage3SeedGeneration(input: {
     return runHeuristicStage3SeedGeneration(input);
   }
 
-  const systemInstruction = `You are the Market Research Stage 3 Broad Niche Seed Variation Agent powered by Gemini 3.8 Flash.
+  const systemInstruction = `You are the Market Research Stage 3 Broad Niche Seed Variation Agent.
 Your job is to analyze the commercial catalog PLPs (collections/categories/brand pages) selected by the user and generate a structured family of broad niche seed variations for each one.
 
 ## Input shape

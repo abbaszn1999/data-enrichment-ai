@@ -9,6 +9,7 @@ import {
 } from "@/lib/jobs/project-json";
 import type { ProjectJson, ProjectRow } from "@/lib/storage-helpers";
 import { resolveEnrichmentModel } from "@/types";
+import { hideProviderNames } from "@/lib/provider-names";
 
 /** Rows one delta save may carry; a bigger change is a full save. */
 const MAX_DELTA_ROWS = 2000;
@@ -64,6 +65,11 @@ export async function GET(request: NextRequest) {
       .enrichmentSettings;
     if (settings && typeof settings.enrichmentModel === "string") {
       settings.enrichmentModel = resolveEnrichmentModel(settings.enrichmentModel);
+    }
+    for (const column of project.enrichmentColumns ?? []) {
+      if (column && typeof column.description === "string") {
+        column.description = hideProviderNames(column.description);
+      }
     }
     return NextResponse.json({ project });
   } catch (error) {

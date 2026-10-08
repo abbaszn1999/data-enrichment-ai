@@ -200,7 +200,7 @@ async function generateBatchStage6(
     })),
   });
 
-  const systemInstruction = `You are the Autommerce On-Page Copywriting Agent powered by Gemini 3.7 Flash.
+  const systemInstruction = `You are the Autommerce On-Page Copywriting Agent.
 Your task is Stage 6 of Market Research:
 Generate compelling, high-converting, and SEO-optimized collection page copy for each collection provided.
 

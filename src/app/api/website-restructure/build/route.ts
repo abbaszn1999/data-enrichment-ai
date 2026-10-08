@@ -3,6 +3,7 @@
 // of the three calls is running. Edits after this initial build go through
 // /api/website-restructure/chat instead.
 
+import { scrubErrorFields } from "@/lib/provider-names-response";
 import { NextRequest } from "next/server";
 import { requireWrAuth } from "@/lib/website-restructure/auth";
 import { buildBodySchema, jsonError } from "@/lib/website-restructure/api-schema";
@@ -41,7 +42,7 @@ function createNdjsonStream(
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const push = (event: StreamEvent) => {
-        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        controller.enqueue(encoder.encode(`${JSON.stringify(scrubErrorFields(event))}\n`));
       };
       try {
         await executor(push);

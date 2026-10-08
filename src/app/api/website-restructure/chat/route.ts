@@ -2,6 +2,7 @@
 // to the model, which returns the full updated html/css/js. Counts against
 // the 10-message edit budget only when generation actually succeeds.
 
+import { scrubErrorFields } from "@/lib/provider-names-response";
 import { NextRequest } from "next/server";
 import { requireWrAuth } from "@/lib/website-restructure/auth";
 import { chatEditBodySchema, jsonError } from "@/lib/website-restructure/api-schema";
@@ -55,7 +56,7 @@ function createNdjsonStream(
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const push = (event: StreamEvent) => {
-        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        controller.enqueue(encoder.encode(`${JSON.stringify(scrubErrorFields(event))}\n`));
       };
       try {
         await executor(push);

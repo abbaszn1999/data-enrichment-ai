@@ -11,6 +11,7 @@
 //
 // The legacy route.ts was moved to route.legacy.txt for reference.
 
+import { scrubErrorFields } from "@/lib/provider-names-response";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase-server";
@@ -239,7 +240,7 @@ function createNdjsonStream(
         }
       }, 10_000);
       const push = (event: StreamEvent) => {
-        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        controller.enqueue(encoder.encode(`${JSON.stringify(scrubErrorFields(event))}\n`));
       };
       try {
         await executor(push);

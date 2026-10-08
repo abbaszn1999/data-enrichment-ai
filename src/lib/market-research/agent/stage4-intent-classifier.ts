@@ -218,7 +218,7 @@ export async function runStage4IntentClassification(input: {
   const BATCH_MAX_ATTEMPTS = 3;
   const batches: KeywordToClassify[][] = chunk(input.keywords, BATCH_SIZE);
 
-  const systemInstruction = `You are the Autommerce Intent Classification Agent powered by Gemini 3.7 Flash.
+  const systemInstruction = `You are the Autommerce Intent Classification Agent.
 You receive bare keywords — no store name, no niche list, no collections, no volume, no
 difficulty. Classify each one strictly into one of three sheets, using only ordinary world
 knowledge of how shopping and search work — never store-specific context you were not given:
