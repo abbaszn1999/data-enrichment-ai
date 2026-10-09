@@ -46,14 +46,14 @@ const FILL_TONES = [
 
 function PageChrome({ children }: { children: ReactNode }) {
   return (
-    <div className="mx-auto w-full max-w-[560px] overflow-hidden rounded-xl border border-border bg-card shadow-[0_24px_60px_-28px_rgba(0,0,0,0.35)] dark:shadow-[0_24px_60px_-28px_rgba(0,0,0,0.75)]">
-      <div className="flex items-center gap-1.5 border-b border-border bg-muted/60 px-3 py-2">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-border bg-card shadow-[0_24px_60px_-28px_rgba(0,0,0,0.35)] dark:shadow-[0_24px_60px_-28px_rgba(0,0,0,0.75)]">
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-muted/60 px-3 py-2">
         <span className="h-2 w-2 rounded-full bg-muted-foreground/25" />
         <span className="h-2 w-2 rounded-full bg-muted-foreground/25" />
         <span className="h-2 w-2 rounded-full bg-muted-foreground/25" />
         <span className="ml-2 h-1.5 flex-1 rounded-full bg-muted-foreground/10" />
       </div>
-      <div className="max-h-[min(52vh,520px)] overflow-y-auto bg-card p-5 sm:p-6">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-card p-6 sm:p-8">
         {children}
       </div>
     </div>
@@ -139,7 +139,7 @@ function LiveLayoutPreview({
   return (
     <PageChrome>
       {/* Only template output with constant sample text may be rendered here. */}
-      <div className="text-[12px] text-foreground" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="text-[13px] text-foreground sm:text-[14px]" dangerouslySetInnerHTML={{ __html: html }} />
     </PageChrome>
   );
 }
@@ -335,7 +335,7 @@ export function DescriptionLayoutDialog({
 
             <div
               key={`${draftLayout}-${clamped}-${previewMode}`}
-              className="relative z-10 flex min-h-0 flex-1 items-start justify-center overflow-y-auto px-4 py-4 sm:px-8 animate-in fade-in-0 zoom-in-95 duration-200"
+              className="relative z-10 min-h-0 flex-1 overflow-hidden px-4 py-3 sm:px-6 animate-in fade-in-0 zoom-in-95 duration-200"
             >
               <LiveLayoutPreview
                 layoutId={draftLayout}
