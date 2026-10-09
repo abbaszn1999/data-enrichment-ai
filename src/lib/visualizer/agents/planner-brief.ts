@@ -101,7 +101,7 @@ export function buildVisualizerPlannerBrief(input: VisualizerPlannerBriefInput):
     "The system builds the page from a fixed template; you write the text only. Every field is plain text: no HTML, no markdown, no image markers.",
     layout.copyGuide(count),
     showcase
-      ? `Lengths: headline up to ${limits.headline} characters; intro up to ${limits.intro}; closing up to ${limits.closing} or empty; tagline up to ${limits.tagline}; badge up to ${limits.badge}; ${limits.highlightsMin} to ${limits.highlightsMax} highlights with a value up to ${limits.highlightValue} and a label up to ${limits.highlightLabel}; promise up to ${limits.promise}.`
+      ? `Lengths: headline up to ${limits.headline} characters; intro up to ${limits.showcaseIntro} (it shows as two lines only, so one or two short sentences); closing up to ${limits.closing} or empty; tagline up to ${limits.tagline}; badge up to ${limits.badge}; ${limits.highlightsMin} to ${limits.highlightsMax} highlights with a value up to ${limits.highlightValue} and a label up to ${limits.highlightLabel}; promise up to ${limits.promise}.`
       : `Lengths: headline up to ${limits.headline} characters; intro up to ${limits.intro}; closing up to ${limits.closing} or empty; each slot heading up to ${limits.heading}; ${bodyLimits}; 0 to ${limits.bullets} bullets of up to ${limits.bullet} characters each.`
   );
   if (showcase) {

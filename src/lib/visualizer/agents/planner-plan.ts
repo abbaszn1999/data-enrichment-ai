@@ -133,7 +133,9 @@ export function buildVisualizerPlannerSchema(layoutId: VisualizerLayoutId, image
     },
     intro: {
       type: "string",
-      description: `Opening hook paragraph. Plain text, at most ${limits.intro} characters.`,
+      description: showcase
+        ? `Opening hook of one or two short sentences that fit two lines. Plain text, at most ${limits.showcaseIntro} characters.`
+        : `Opening hook paragraph. Plain text, at most ${limits.intro} characters.`,
     },
     closing: {
       type: "string",
@@ -355,7 +357,7 @@ export function guardVisualizerPlan(
 
   const headline = clampText(toPlainText(record.headline), limits.headline);
   if (!headline) throw new Error("Planner returned an empty headline");
-  const intro = clampText(toPlainText(record.intro), limits.intro);
+  const intro = clampText(toPlainText(record.intro), isShowcase ? limits.showcaseIntro : limits.intro);
   if (intro.length < INTRO_MIN_CHARS) throw new Error("Planner returned an empty or too short intro");
   const closing = clampText(toPlainText(record.closing), limits.closing);
   const showcase = isShowcase ? showcaseCopy(record, n - 2) : undefined;

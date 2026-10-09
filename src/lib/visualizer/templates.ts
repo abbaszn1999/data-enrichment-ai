@@ -50,6 +50,8 @@ export interface VisualizerTemplateOptions {
 export const VISUALIZER_COPY_LIMITS = {
   headline: 90,
   intro: 600,
+  /** Showcase card intro: two lines beside the packshot. */
+  showcaseIntro: 140,
   closing: 280,
   heading: 80,
   body: 480,
@@ -298,7 +300,7 @@ function renderShowcase(copy: VisualizerPageCopy, showcase: VisualizerShowcaseCo
     `</div>`,
     `<div style="flex:1 1 300px;min-width:0">`,
     `<h2 style="margin:0 0 0.6rem;font-size:1.7em;line-height:1.2;color:${dark}">${escapeHtml(copy.headline)}</h2>`,
-    `<p style="margin:0">${escapeHtml(copy.intro)}</p>`,
+    `<p style="margin:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escapeHtml(copy.intro)}</p>`,
     `<div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:stretch;margin:1.1rem 0">${tiles}</div>`,
     `<div style="display:inline-block;background:${dark};color:${onDark};padding:0.7rem 1.2rem;border-radius:6px;font-weight:700">${escapeHtml(showcase.promise)}</div>`,
     `</div>`,
