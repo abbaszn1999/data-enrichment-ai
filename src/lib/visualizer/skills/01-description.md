@@ -35,7 +35,11 @@ The runtime message lists the attached images in order and says what each is.
   markings and any logo already on the product. Put the facts that matter in
   `productIdentity` (one short paragraph). If the sheet text and the photos
   disagree, trust the photos and say so in `notes`. If several photos are
-  attached, they show the same item from other sides or in detail.
+  attached, they show the same item from other sides or in detail: combine
+  them into one understanding of its full shape. If the photos disagree with
+  each other (a part is brown in one and red in the others), follow what most
+  photos show, write that colour in `mustKeep`, and mention the conflict in
+  `notes`.
 
 ### The identity lock (the most common failure is a product that changes)
 
@@ -50,16 +54,23 @@ product, so write it as an inspector's checklist:
   centred on the front, a third of the way down, never on the back", "body
   tapers slightly toward the base". Measurable words (count, position,
   proportion, finish) beat adjectives ("premium", "sleek"). Only what the
-  photos show.
+  photos show. Describe identity, never pose: "two white arms with red
+  hands", not "arms down at the sides".
 - `views` - which side each product photo shows, and which sides no photo
   shows ("image 1 front three-quarter; image 2 cap from above; back and base
   not shown").
 
-Angles cause most drift: when a shot needs a side no photo shows, the model
-invents it. Plan camera angles that the product photos cover, and for each slot
-set `viewImage` to the photo whose view is closest. When a story moment needs
-the product from an unseen side, turn the product so its known sides face the
-camera instead.
+Lock the identity, not the pose. A set where every image repeats the angle and
+pose of image 1 with a new background is a failure. Across the slots, vary the
+camera angle (front, three-quarter, profile, high, low) and, for a product with
+movable parts (a robot, doll or figure, a lid, a strap, a folding stand), give
+it a different natural pose in each slot that the real product allows: walking,
+waving, mid-action, opened, folded. Spread `viewImage` over the product photos
+so each slot uses the photo closest to its own angle, not always image 1. The
+packshot shows the product from a clean angle or pose of its own, not a copy of
+a product photo. Drift happens only on sides no photo shows: keep such a side
+(often the back) turned away or in shadow; three-quarter, higher and lower
+views of a photographed side are fine.
 - **Brand guide** (when attached) shows the mood, palette and photography style
   of the brand.
 - **Logo** (when attached) is the brand mark.
@@ -143,6 +154,8 @@ For every product slot, decide and write down:
   material). Three or more product slots never share one distance.
 - Camera angle and height - eye level, high three-quarter, low angle, top
   down, profile - different from the slot before.
+- Pose - for a product with movable parts, a different natural pose or state
+  in each slot (see the identity lock in Step 1).
 - Light and time - change the direction and, where it fits, the time of day
   (morning window light, midday shade, golden hour, evening lamp) inside the
   theme.
@@ -188,9 +201,12 @@ keyword lists. The identity lock is sent before it, so do not repeat the whole
 checklist; reference roles and the shot come first. Use this order:
 
 1. **References and their roles.** Name every attached image and what it
-   controls before describing the scene: "Image 1 is the exact product and the
-   view to follow; image 2 shows the cap from above; keep both unchanged." The
-   product is placed into a new scene; it is never redesigned.
+   controls before describing the scene: "Images 1 to 3 show the exact product
+   from different sides; image 2 is closest to this three-quarter angle; keep
+   its colours, parts and markings, not the photo's pose or framing." The
+   product is placed into a new scene, angle and pose; it is never redesigned.
+   Then state the pose ("right arm raised in a wave, left arm forward") when
+   the product has movable parts.
 2. **The claim to prove.** State it in the scene: the claim from `specClaim`
    made visible, not named on a label.
 3. **The shot.** Camera position, height and distance (matching `shotSize`
@@ -264,8 +280,9 @@ the same coloured backdrop in every slot.
 - Each prompt names the product image and its role first, proves its claim,
   has camera, setting, light and composition, refers only to images attached
   to it, and ends with the no-text finish.
-- Every camera angle is one the product photos cover; `viewImage` points to
-  the closest photo.
+- No image copies the angle and pose of a product photo; angles (and poses, for
+  movable products) vary across the set; `viewImage` points to the closest
+  photo and is spread over the photos; no slot reveals a side no photo shows.
 - No two product slots share a `setting`; camera distances, angles and backdrop
   colours vary across the set, so the images read as a story.
 - Custom instructions are honoured, or `notes` says which were adjusted and why.

@@ -121,7 +121,7 @@ export function buildVisualizerPlannerBrief(input: VisualizerPlannerBriefInput):
       : `Plan exactly ${count} distinct image${count === 1 ? "" : "s"}, indexes 1 to ${count}. Each slot's heading, body and bullets sit beside that slot's image, so they must be about the same claim the image proves, and each image must show something the others do not.`,
     ...slotRoleLines(layout.id, count),
     "Shot list: the product shots read as one story told from different moments, never the same set-up twice. Each product slot has its own `setting` (place, surface and backdrop colour), its own camera angle and height, and the set mixes camera distances (wide, medium, close, macro). Change the props, the backdrop colour and, where it fits, the time of day between slots; keep only the colour grade and the level of finish shared.",
-    "Identity: fill `identityLock` from the product photos and set each slot's `viewImage`. Choose camera angles the product photos actually show; the system sends `identityLock` first with every image of the product."
+    "Identity: fill `identityLock` from the product photos and set each slot's `viewImage`. Lock the identity, not the pose: vary the camera angle (front, three-quarter, profile, high, low) and, for products with movable parts, the pose across slots, and spread `viewImage` over the product photos instead of always image 1. No slot, the packshot included, copies the angle and pose of a product photo. Avoid only sides no photo shows; the system sends `identityLock` first with every image of the product."
   );
 
   const custom = input.customInstructions.trim();

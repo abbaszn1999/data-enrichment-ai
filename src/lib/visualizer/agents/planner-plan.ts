@@ -273,14 +273,14 @@ export function buildIdentityLock(facts: string[], views: string, viewImage: num
   if (facts.length === 0) return "";
   return [
     "PRODUCT IDENTITY LOCK (mandatory; it overrides every other instruction):",
-    "The product is the exact physical item in the attached product photos. It must be identical in this shot, whatever the angle, distance, pose, hand or light.",
+    "The product is the exact physical item in the attached product photos. Its identity (colours, materials, parts, markings, proportions) must be identical in this shot.",
     "Reproduce exactly:",
     ...facts.map((fact) => `- ${fact}`),
     views ? `Views in the product photos: ${views}` : "",
-    viewImage > 0
-      ? `For this camera angle follow image ${viewImage} most closely; use the other product photos only to confirm details.`
-      : "",
-    "Never: change any colour, shade or finish; change the silhouette, proportions or thickness; add, remove, move or resize any part, seam, button, strap, cap or hardware; redraw, move, add or remove any logo or printed text; simplify fine details; show a second unit unless the prompt asks for it. If the angle would reveal a side no photo shows, turn the product so its known sides face the camera instead of inventing the hidden side.",
+    "All product photos show this same item from different sides: combine them to understand its full 3D shape.",
+    viewImage > 0 ? `Image ${viewImage} is the photo closest to this shot's camera angle.` : "",
+    "Pose and angle are not locked: do not copy the camera angle, framing or pose of any product photo; shoot the angle and pose this prompt describes. Movable parts (arms, legs, head, lid, strap, wheels) may take any natural position the real product allows; rigid parts never bend or change shape.",
+    "Never: change any colour, shade or finish; change the silhouette, proportions or thickness; add, remove or resize any part, seam, button, strap, cap or hardware; redraw, move, add or remove any logo or printed text; simplify fine details; show a second unit unless the prompt asks for it; invent detail on a side no photo shows (keep such a side turned away or in shadow; three-quarter and higher or lower views of photographed sides are fine).",
   ]
     .filter(Boolean)
     .join("\n");

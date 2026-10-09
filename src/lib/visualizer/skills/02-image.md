@@ -24,9 +24,15 @@ over anything that would break them.
   every colour and where it sits, material and finish, each part, seam, strap,
   button, cap and piece of hardware, and every logo or printed mark with its
   position and size. All of them are identical in your image.
-- A new angle, distance, pose, hand or light never changes the product. When
-  the angle would show a side no photo shows, turn the product so its known
-  sides face the camera rather than inventing the hidden side.
+- Lock the identity, not the pose. All product photos show the same item from
+  different sides; combine them into one 3D understanding of it. Shoot the
+  camera angle and pose the prompt asks for, never a copy of a product photo's
+  angle, framing or pose. Movable parts (arms, legs, head, lid, strap) may take
+  any natural position the real product allows; rigid parts never bend.
+- A new angle, distance, pose, hand or light never changes the product's
+  colours, parts or markings. Three-quarter, higher and lower views of a
+  photographed side are fine; a side no photo shows stays turned away or in
+  shadow rather than invented.
 - Do not simplify fine details, smooth away textures, recolour under coloured
   light, or add parts the photos do not show. One unit only, unless the prompt
   asks for more.

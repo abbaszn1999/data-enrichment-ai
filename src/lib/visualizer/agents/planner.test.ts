@@ -376,8 +376,9 @@ describe("identity lock and shot variety", () => {
     expect(first).toMatch(/^PRODUCT IDENTITY LOCK/);
     expect(first).toContain("- Black Vibram outsole");
     expect(first).toContain("Views in the product photos: image 1 outer side; inner side not shown");
-    expect(first).toContain("follow image 1 most closely");
-    expect(first).toContain("turn the product so its known sides face the camera");
+    expect(first).toContain("Image 1 is the photo closest to this shot's camera angle");
+    expect(first).toContain("Pose and angle are not locked");
+    expect(first).toContain("invent detail on a side no photo shows");
   });
 
   it("falls back to the identity paragraph when no checklist is given", () => {
