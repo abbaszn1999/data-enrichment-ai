@@ -318,6 +318,24 @@ describe("showcase plan", () => {
     }
   });
 
+  it("colours the banner from the product unless the store has brand colours", () => {
+    const fromProduct = guardVisualizerPlan(
+      showcasePlan({ palette: { dark: "#556B2F", accent: "#F4A261" } }),
+      5,
+      { hasLogo: false, layoutId: "showcase" }
+    );
+    expect(fromProduct.description).toContain("background:#F4A261");
+    expect(fromProduct.description).not.toContain("#F6D04D");
+    expect(fromProduct.description).not.toContain("#1F3D2E");
+    const branded = guardVisualizerPlan(
+      showcasePlan({ palette: { dark: "#556B2F", accent: "#F4A261" } }),
+      5,
+      { hasLogo: false, layoutId: "showcase", brandColors: ["#111827", "#2563EB", "#F59E0B"] }
+    );
+    expect(branded.description).toContain("background:#F59E0B");
+    expect(branded.description).toContain("color:#111827");
+  });
+
   it("rejects a showcase plan without banner copy", () => {
     expect(() =>
       guardVisualizerPlan(showcasePlan({ highlights: [] }), 5, { hasLogo: false, layoutId: "showcase" })

@@ -172,8 +172,27 @@ export function buildVisualizerPlannerSchema(layoutId: VisualizerLayoutId, image
         type: "string",
         description: `One reassurance line shown as a label (warranty, care, what is included), only if the data supports it; otherwise the product's main benefit. At most ${limits.promise} characters.`,
       },
+      palette: {
+        type: "object",
+        additionalProperties: false,
+        required: ["dark", "accent"],
+        description:
+          "Two page colours taken from the product itself, as #RRGGBB. Used only when the store has no brand colours.",
+        properties: {
+          dark: {
+            type: "string",
+            description:
+              "A deep shade of the product's main colour (or its darkest prominent colour) for headings, the badge and the promise label. Dark enough for white text.",
+          },
+          accent: {
+            type: "string",
+            description:
+              "The product's most lively colour (a trim, a part, the packaging), or a colour that complements it, for the top strip and one highlight tile.",
+          },
+        },
+      },
     });
-    required.push("tagline", "badge", "highlights", "promise");
+    required.push("tagline", "badge", "highlights", "promise", "palette");
   }
   properties.imagePlaceholders = {
     type: "array",
@@ -295,6 +314,13 @@ function varietyProblem(
   return null;
 }
 
+/** Showcase colours picked from the product, in brand-colour order (primary, secondary, accent). */
+function productPalette(record: Record<string, unknown>): string[] | undefined {
+  const palette = record.palette && typeof record.palette === "object" ? (record.palette as Record<string, unknown>) : {};
+  const colors = [String(palette.dark ?? "").trim(), "", String(palette.accent ?? "").trim()];
+  return colors[0] || colors[2] ? colors : undefined;
+}
+
 export type GuardedVisualizerPlan = {
   productIdentity: string;
   /** The page HTML, rendered from the layout template with every marker placed by code. */
@@ -407,7 +433,7 @@ export function guardVisualizerPlan(
   ]);
   const description = renderVisualizerPage(layoutId, copy, {
     direction,
-    brandColors: options.brandColors,
+    brandColors: options.brandColors?.length ? options.brandColors : isShowcase ? productPalette(record) : undefined,
   });
 
   const notes = String(record.notes ?? "").trim();

@@ -17,6 +17,7 @@ import {
   VISUALIZER_LAYOUTS,
   VISUALIZER_MAX_IMAGES,
   visualizerSlotRole,
+  visualizerUserCount,
   type VisualizerLayoutId,
 } from "@/lib/visualizer/layouts";
 import {
@@ -418,7 +419,7 @@ export function DescriptionLayoutDialog({
                   {activeTheme.name}
                 </button>
                 <span className="text-[11px] text-muted-foreground">
-                  {draftLayout === "showcase" ? "Images" : "Squares"}
+                  {layout.countLabel ?? "Squares"}
                 </span>
                 <button
                   type="button"
@@ -430,8 +431,11 @@ export function DescriptionLayoutDialog({
                   <Minus className="h-3.5 w-3.5" />
                 </button>
                 <span className="min-w-6 text-center text-sm font-semibold tabular-nums">
-                  {clamped}
+                  {visualizerUserCount(draftLayout, clamped)}
                 </span>
+                {layout.fixedSlots ? (
+                  <span className="text-[10px] text-muted-foreground">+ scene &amp; product shot</span>
+                ) : null}
                 <button
                   type="button"
                   disabled={disabled || atMax}
@@ -467,10 +471,9 @@ export function DescriptionLayoutDialog({
                       type="button"
                       disabled={disabled}
                       onClick={() => {
+                        const shown = visualizerUserCount(draftLayout, clampVisualizerImageCount(draftLayout, draftCount));
                         setDraftLayout(id);
-                        setDraftCount((current) =>
-                          clampVisualizerImageCount(id, current)
-                        );
+                        setDraftCount(clampVisualizerImageCount(id, shown + (item.fixedSlots ?? 0)));
                       }}
                       className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors disabled:opacity-60 ${
                         selected
@@ -497,7 +500,7 @@ export function DescriptionLayoutDialog({
                           ) : null}
                         </span>
                         <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
-                          {item.minImages}–{item.maxImages} ·{" "}
+                          {visualizerUserCount(id, item.minImages)}–{visualizerUserCount(id, item.maxImages)} ·{" "}
                           {item.shortDescription}
                         </span>
                       </span>
@@ -569,7 +572,9 @@ export function LayoutSettingsButton({
           Layout
         </span>
         <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
-          {layoutId === "showcase" ? `${imageCount} images` : `${imageCount}× 1:1`}
+          {layout.fixedSlots
+            ? `${visualizerUserCount(layoutId, imageCount)} + ${layout.fixedSlots} images`
+            : `${imageCount}× 1:1`}
         </span>
       </div>
       <button

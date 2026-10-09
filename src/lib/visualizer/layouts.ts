@@ -52,6 +52,13 @@ export type VisualizerLayoutDefinition = {
   copyGuide: (imageCount: number) => string;
   /** Role of every slot, slot 1 first. Layouts without it use "feature" everywhere. */
   slotRoles?: (imageCount: number) => VisualizerSlotRole[];
+  /**
+   * Slots always generated on top of the ones the user counts (Showcase: the
+   * scene and the packshot). Image counts stored in settings include them.
+   */
+  fixedSlots?: number;
+  /** What the user counts in the layout picker. */
+  countLabel?: string;
 };
 
 export const VISUALIZER_LAYOUTS: Record<
@@ -137,10 +144,12 @@ export const VISUALIZER_LAYOUTS: Record<
     name: "Showcase",
     shortDescription: "Banner card over a scene + photo gallery",
     constraintHint:
-      "Showcase uses 1 background scene + 1 product shot + 2–6 gallery photos.",
+      "Pick 2–6 gallery photos. The background scene and the product shot are always added on top.",
     minImages: 4,
     maxImages: 8,
-    defaultImages: 5,
+    defaultImages: 6,
+    fixedSlots: 2,
+    countLabel: "Gallery photos",
     copyGuide: (n) =>
       `A strip with a short tagline, then a wide background scene (slot 1) behind a white card. The card holds the product on white (slot 2) with a small badge, and the headline, intro, 2–3 highlight tiles and one promise line. Below, a swipeable gallery of ${n - 2} lifestyle photos (slots 3 to ${n}) with no copy.`,
     slotRoles: (n) => ["scene", "packshot", ...Array.from({ length: Math.max(0, n - 2) }, () => "gallery" as const)],
@@ -184,6 +193,11 @@ export function clampVisualizerImageCount(
   const layout = getVisualizerLayout(layoutId);
   const n = Number.isFinite(count) ? Math.floor(count) : layout.defaultImages;
   return Math.min(layout.maxImages, Math.max(layout.minImages, n));
+}
+
+/** The count the user sees and picks for a stored total (Showcase hides its fixed slots). */
+export function visualizerUserCount(layoutId: VisualizerLayoutId | string | null | undefined, total: number): number {
+  return total - (getVisualizerLayout(layoutId).fixedSlots ?? 0);
 }
 
 export function resolveVisualizerLayoutSettings(input: {

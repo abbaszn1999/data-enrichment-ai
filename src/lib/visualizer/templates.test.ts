@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VISUALIZER_LAYOUT_IDS, VISUALIZER_LAYOUTS } from "./layouts";
+import { VISUALIZER_LAYOUT_IDS, VISUALIZER_LAYOUTS, visualizerUserCount } from "./layouts";
 import {
   clampText,
   detectTextDirection,
@@ -77,6 +77,13 @@ describe("renderVisualizerPage", () => {
     expect(html).not.toMatch(/<script|<button|onclick/);
   });
 
+  it("deepens a light showcase colour instead of replacing it", () => {
+    const html = renderVisualizerPage("showcase", showcaseCopy(5), { direction: "ltr", brandColors: ["#A3C585", "", "#FFD6A5"] });
+    expect(html).not.toContain("#1F3D2E");
+    expect(html).not.toContain("color:#A3C585");
+    expect(html).toContain("background:#FFD6A5");
+  });
+
   it("rejects showcase without banner copy or with a gallery that does not fit", () => {
     expect(() => renderVisualizerPage("showcase", copy(5), { direction: "ltr" })).toThrow();
     const tooMany = showcaseCopy(5);
@@ -140,6 +147,15 @@ describe("renderVisualizerPage", () => {
 
   it("rejects a section count the layout cannot hold", () => {
     expect(() => renderVisualizerPage("spotlight", copy(5), { direction: "ltr" })).toThrow(/cannot hold 5/);
+  });
+});
+
+describe("visualizerUserCount", () => {
+  it("counts only the gallery photos for Showcase", () => {
+    expect(visualizerUserCount("showcase", 6)).toBe(4);
+    expect(visualizerUserCount("showcase", VISUALIZER_LAYOUTS.showcase.minImages)).toBe(2);
+    expect(visualizerUserCount("showcase", VISUALIZER_LAYOUTS.showcase.maxImages)).toBe(6);
+    expect(visualizerUserCount("zigzag", 4)).toBe(4);
   });
 });
 

@@ -106,7 +106,10 @@ export function buildVisualizerPlannerBrief(input: VisualizerPlannerBriefInput):
   );
   if (showcase) {
     sections.push(
-      "Highlights and the badge use only facts from the product data or photos. A number appears only when the data states it; otherwise use one strong word (Waterproof, Foldable). Never write a price, discount or stock claim."
+      "Highlights and the badge use only facts from the product data or photos. A number appears only when the data states it; otherwise use one strong word (Waterproof, Foldable). Never write a price, discount or stock claim.",
+      images.brandingEnabled && images.brandGuideMode === "colors" && images.brandColors.length > 0
+        ? "Page colours come from the brand palette; still fill `palette` from the product."
+        : "Page colours: fill `palette` from the product photos, so the strip, tiles and labels match this product (for an olive and cream play kitchen: a deep olive and a warm cream or a complementary coral; never a default yellow and green)."
     );
   }
 

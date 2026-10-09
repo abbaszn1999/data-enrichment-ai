@@ -253,9 +253,24 @@ function renderBody(layoutId: VisualizerLayoutId, sections: VisualizerSectionCop
 const SHOWCASE_DARK = "#1F3D2E";
 const SHOWCASE_ACCENT = "#F6D04D";
 
+/** Luminance at which white text keeps a 4.5:1 contrast. */
+const WHITE_TEXT_MAX_LUMINANCE = 0.18;
+
+/** The colour itself when white text reads on it, else the same hue mixed toward black. */
+function deepen(hex: string): string {
+  if (hexLuminance(hex) <= WHITE_TEXT_MAX_LUMINANCE) return hex;
+  const full = hex.length === 4 ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}` : hex;
+  const rgb = [1, 3, 5].map((offset) => parseInt(full.slice(offset, offset + 2), 16));
+  for (let factor = 0.95; factor > 0.05; factor -= 0.05) {
+    const next = `#${rgb.map((value) => Math.round(value * factor).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+    if (hexLuminance(next) <= WHITE_TEXT_MAX_LUMINANCE) return next;
+  }
+  return SHOWCASE_DARK;
+}
+
 function renderShowcase(copy: VisualizerPageCopy, showcase: VisualizerShowcaseCopy, rtl: boolean, colors?: string[]): string {
   const primary = validHex(colors?.[0]);
-  const dark = primary && hexLuminance(primary) < 0.4 ? primary : SHOWCASE_DARK;
+  const dark = primary ? deepen(primary) : SHOWCASE_DARK;
   const accent = validHex(colors?.[2]) ?? validHex(colors?.[1]) ?? SHOWCASE_ACCENT;
   const onDark = textOn(dark);
   const onAccent = textOn(accent);

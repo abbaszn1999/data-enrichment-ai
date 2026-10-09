@@ -277,6 +277,9 @@ the same coloured backdrop in every slot.
 - `headline`, `intro`, `closing` - the page copy around the slots.
 - Showcase only: `tagline`, `badge`, `highlights` (value + label) and
   `promise`, using only facts the data or photos support; never a price.
+  `palette` holds two #RRGGBB colours taken from the product photos: `dark`
+  (a deep shade for headings and labels) and `accent` (its most lively colour
+  for the strip and one tile).
 - `imagePlaceholders` - exactly N items, `index` 1 to N:
   - `perspective` - one of the allowed values.
   - `specClaim` - the one buying reason this image proves (short).
