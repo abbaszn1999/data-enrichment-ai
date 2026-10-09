@@ -1,5 +1,5 @@
 import { prepareReferenceImage } from "@/lib/ai-images/reference-image";
-import { MAX_PRODUCT_REFERENCES, orderReferences } from "@/lib/ai-images/reference-set";
+import { orderReferences } from "@/lib/ai-images/reference-set";
 import type { AiReferenceImage, AiReferenceRole } from "@/lib/gallery/agents/ai-shared";
 import { classifyRowValues } from "@/lib/gallery/agents/gallery-brief";
 import { parseImageUrls } from "@/lib/gallery/image-urls";
@@ -8,6 +8,12 @@ import { downloadImageBytes } from "@/lib/gallery/providers/serper-images";
 import { visualizerWarn } from "@/lib/visualizer/log";
 import { downloadVisualizerBytesAdmin } from "@/lib/visualizer/storage-admin";
 import type { VisualizerProjectSettings, VisualizerRow } from "@/lib/visualizer/types";
+
+/**
+ * The image models accept at most 14 reference images per request; the brand
+ * guide and the logo take one each, so every product photo up to 12 is sent.
+ */
+export const VISUALIZER_MAX_PRODUCT_REFERENCES = 12;
 
 async function toReference(buffer: Buffer, role: AiReferenceRole, key: string): Promise<AiReferenceImage | null> {
   try {
@@ -60,7 +66,7 @@ export function productImageUrls(
   }
   const classified = classifyRowValues(row.originalData, settings.selectedColumns);
   for (const url of classified.imageUrls) push(url);
-  return urls.slice(0, MAX_PRODUCT_REFERENCES * 2);
+  return urls.slice(0, VISUALIZER_MAX_PRODUCT_REFERENCES * 2);
 }
 
 export interface VisualizerReferenceSet {
@@ -91,7 +97,7 @@ export async function loadVisualizerReferences(params: {
 
   const products: AiReferenceImage[] = [];
   for (const url of productImageUrls(row, settings)) {
-    if (products.length >= MAX_PRODUCT_REFERENCES) break;
+    if (products.length >= VISUALIZER_MAX_PRODUCT_REFERENCES) break;
     if (isStoredImageRef(url)) {
       const stored = await loadStoredReference(storedImagePath(url), "product");
       if (stored) products.push(stored);
@@ -112,7 +118,10 @@ export async function loadVisualizerReferences(params: {
       ? await loadStoredReference(images.brandGuidePath, "brandGuide")
       : null;
 
-  const ordered = orderReferences([...products, guide, logo].filter((value): value is AiReferenceImage => !!value));
+  const ordered = orderReferences(
+    [...products, guide, logo].filter((value): value is AiReferenceImage => !!value),
+    VISUALIZER_MAX_PRODUCT_REFERENCES
+  );
   const counts = ordered.reduce<Record<string, number>>((acc, reference) => {
     acc[reference.role] = (acc[reference.role] ?? 0) + 1;
     return acc;

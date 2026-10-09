@@ -7,7 +7,7 @@ import { generateNanoBananaImage } from "@/lib/ai-images/nano-banana";
 import { selectShotReferences } from "@/lib/ai-images/reference-set";
 import { extensionForMime } from "@/lib/gallery/agents/ai-shared";
 import { requireGeminiApiKey } from "@/lib/sync/agent/ai-utils";
-import { resolveSlotPrompt } from "@/lib/visualizer/agents/planner-plan";
+import { resolveSlotShot } from "@/lib/visualizer/agents/planner-plan";
 import { buildImagesCharge } from "@/lib/visualizer/billing";
 import { settleProviderUsage, type UsageSettlement } from "@/lib/jobs/credits";
 import { embedVisualizerPlaceholders } from "@/lib/visualizer/html-embed";
@@ -176,19 +176,25 @@ export async function processImagesRow(params: {
         return;
       }
       const placeholder = missing[slot];
-      const shot = { prompt: resolveSlotPrompt(placeholder), perspective: placeholder.perspective };
+      const slotShot = resolveSlotShot(placeholder, {
+        style: settings.images.style,
+        fallbackAspectRatio: settings.images.aspectRatio,
+      });
+      const shot = { prompt: slotShot.prompt, perspective: placeholder.perspective };
       const generated = await withAiSlot(() =>
         generateNanoBananaImage({
           ai,
           model: imageModel,
           settings: {
-            aspectRatio: settings.images.aspectRatio,
+            aspectRatio: slotShot.aspectRatio,
             resolution: settings.images.resolution,
             outputFormat: settings.images.outputFormat,
             groundWithSearch: settings.images.groundWithSearch,
           },
           shot,
-          references: selectShotReferences(references.ordered, { useLogo: placeholder.useLogo === true }),
+          references: slotShot.attachProduct
+            ? selectShotReferences(references.ordered, { useLogo: placeholder.useLogo === true })
+            : [],
           identityRules: skill.instructions,
           rowId: row.id,
           galleryIndex: placeholder.index,

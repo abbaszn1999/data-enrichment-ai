@@ -3336,8 +3336,9 @@ export default function ProductsVisualizerPage() {
               onOpenChange={setLayoutDialogOpen}
               layoutId={settings.description.layoutId}
               imageCount={settings.description.imageCount}
+              theme={settings.images.style}
               disabled={!canEdit}
-              onApply={({ layoutId, imageCount }) => {
+              onApply={({ layoutId, imageCount, theme }) => {
                 setSettings((current) => ({
                   ...current,
                   description: {
@@ -3346,6 +3347,7 @@ export default function ProductsVisualizerPage() {
                     imageCount,
                     maxPlaceholders: imageCount,
                   },
+                  images: { ...current.images, style: theme },
                 }));
               }}
             />

@@ -18,7 +18,9 @@ export function embedVisualizerPlaceholders(
   let html = descriptionHtml;
   for (const item of placeholders) {
     if (!item.storagePath) continue;
-    const figure = `<figure style="margin:0"><img src="${STORAGE_SRC_PREFIX}${item.storagePath}" alt="${escapeAttr(item.alt || `Product visual ${item.index}`)}" style="display:block;width:100%;height:auto;border-radius:8px;object-fit:cover" /></figure>`;
+    // The image fills its cell: a fixed-ratio box, or the whole banner behind the Showcase card.
+    const radius = item.role === "scene" ? "0" : "8px";
+    const figure = `<figure style="margin:0;height:100%"><img src="${STORAGE_SRC_PREFIX}${item.storagePath}" alt="${escapeAttr(item.alt || `Product visual ${item.index}`)}" style="display:block;width:100%;height:100%;border-radius:${radius};object-fit:cover" /></figure>`;
     html = html.split(`[imageplaceholder-${item.index}]`).join(figure);
   }
   return html;

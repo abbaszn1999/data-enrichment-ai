@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Check, Minus, Plus } from "lucide-react";
 import {
   Dialog,
@@ -15,8 +15,21 @@ import {
   getVisualizerLayout,
   VISUALIZER_LAYOUT_IDS,
   VISUALIZER_LAYOUTS,
+  VISUALIZER_MAX_IMAGES,
+  visualizerSlotRole,
   type VisualizerLayoutId,
 } from "@/lib/visualizer/layouts";
+import {
+  getVisualizerTheme,
+  VISUALIZER_THEME_IDS,
+  VISUALIZER_THEMES,
+  type VisualizerImageStyle,
+} from "@/lib/visualizer/themes";
+import {
+  isCompactSlot,
+  renderVisualizerPage,
+  type VisualizerPageCopy,
+} from "@/lib/visualizer/templates";
 
 type PreviewMode = "structure" | "filled";
 
@@ -29,48 +42,6 @@ const FILL_TONES = [
   "linear-gradient(140deg,#b5c9b8 0%,#6f8f74 50%,#3f5a44 100%)",
   "linear-gradient(155deg,#cfc6b8 0%,#9a8b72 48%,#5e5340 100%)",
 ];
-
-function SquareSlot({
-  index,
-  mode,
-  className = "",
-}: {
-  index: number;
-  mode: PreviewMode;
-  className?: string;
-}) {
-  if (mode === "filled") {
-    return (
-      <div
-        className={`relative aspect-square shrink-0 overflow-hidden rounded-md shadow-sm ring-1 ring-black/5 dark:ring-white/10 ${className}`}
-        style={{ background: FILL_TONES[index % FILL_TONES.length] }}
-      >
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_25%,rgba(255,255,255,0.35),transparent_55%)] dark:bg-[radial-gradient(circle_at_30%_25%,rgba(255,255,255,0.18),transparent_55%)]" />
-        <div className="absolute right-1.5 bottom-1.5 rounded bg-black/45 px-1.5 py-0.5 text-[9px] font-medium tracking-wide text-white/90 dark:bg-black/60">
-          1:1
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div
-      className={`aspect-square shrink-0 rounded-md border border-dashed border-foreground/20 bg-muted-foreground/[0.07] dark:border-foreground/25 dark:bg-muted-foreground/10 ${className}`}
-    />
-  );
-}
-
-function CopyBlock({ dense = false }: { dense?: boolean }) {
-  return (
-    <div className="flex min-w-0 flex-1 flex-col justify-center gap-2 py-1">
-      <div className="h-2.5 w-[42%] rounded-full bg-foreground/15 dark:bg-foreground/25" />
-      <div className="h-1.5 w-full rounded-full bg-foreground/[0.08] dark:bg-foreground/15" />
-      <div className="h-1.5 w-[92%] rounded-full bg-foreground/[0.08] dark:bg-foreground/15" />
-      {!dense ? (
-        <div className="h-1.5 w-[70%] rounded-full bg-foreground/[0.08] dark:bg-foreground/15" />
-      ) : null}
-    </div>
-  );
-}
 
 function PageChrome({ children }: { children: ReactNode }) {
   return (
@@ -88,174 +59,86 @@ function PageChrome({ children }: { children: ReactNode }) {
   );
 }
 
+function sampleCopy(layoutId: VisualizerLayoutId, n: number): VisualizerPageCopy {
+  const base = {
+    headline: "Your product headline",
+    intro:
+      "A short opening hook that names what the shopper wants and how this product delivers it.",
+    closing: "A closing line that reinforces the value.",
+  };
+  if (layoutId === "showcase") {
+    return {
+      ...base,
+      sections: [],
+      showcase: {
+        tagline: "Product name",
+        badge: "Top feature",
+        highlights: [
+          { value: "10 h", label: "Key spec" },
+          { value: "2", label: "Second fact" },
+          { value: "Best", label: "Strongest benefit" },
+        ],
+        promise: "One promise, such as the warranty",
+        galleryCount: n - 2,
+      },
+    };
+  }
+  return {
+    ...base,
+    sections: Array.from({ length: n }, (_, i) => {
+      const compact = isCompactSlot(layoutId, i + 1);
+      return {
+        heading: `Benefit ${i + 1}`,
+        body: compact
+          ? "One or two sentences about the benefit this image proves."
+          : "A paragraph about the benefit this image proves: the feature behind it and why it matters to the shopper.",
+        bullets: compact ? [] : ["A supporting fact", "Another detail"],
+      };
+    }),
+  };
+}
+
+/**
+ * The real page template with sample copy. Empty slots, or in "With images"
+ * mode the theme's sample photo (tinted stand-ins for Auto), show the images.
+ */
 function LiveLayoutPreview({
   layoutId,
   imageCount,
   mode,
+  theme,
 }: {
   layoutId: VisualizerLayoutId;
   imageCount: number;
   mode: PreviewMode;
+  theme: VisualizerImageStyle;
 }) {
-  const n = clampVisualizerImageCount(layoutId, imageCount);
+  const html = useMemo(() => {
+    const n = clampVisualizerImageCount(layoutId, imageCount);
+    const sample = getVisualizerTheme(theme).sample;
+    let page = renderVisualizerPage(layoutId, sampleCopy(layoutId, n), { direction: "ltr" });
+    for (let index = 1; index <= n; index += 1) {
+      const role = visualizerSlotRole(layoutId, n, index);
+      let fill: string;
+      if (mode !== "filled") {
+        fill =
+          "border:1px dashed rgba(127,127,127,0.45);background:rgba(127,127,127,0.08);border-radius:8px;box-sizing:border-box";
+      } else if (role === "packshot") {
+        fill = "background:#FFFFFF url(/visualizer/themes/studio.webp) center/cover";
+      } else if (sample) {
+        fill = `background:url(${sample}) center/cover`;
+      } else {
+        fill = `background:${FILL_TONES[(index - 1) % FILL_TONES.length]}`;
+      }
+      page = page.replace(`[imageplaceholder-${index}]`, `<div style="width:100%;height:100%;${fill}"></div>`);
+    }
+    return page;
+  }, [layoutId, imageCount, mode, theme]);
 
-  if (layoutId === "zigzag") {
-    return (
-      <PageChrome>
-        <div className="mb-5 h-3 w-1/3 rounded-full bg-foreground/20 dark:bg-foreground/30" />
-        <div className="mb-6 space-y-1.5">
-          <div className="h-1.5 w-full rounded-full bg-foreground/[0.07] dark:bg-foreground/15" />
-          <div className="h-1.5 w-4/5 rounded-full bg-foreground/[0.07] dark:bg-foreground/15" />
-        </div>
-        <div className="space-y-6">
-          {Array.from({ length: n }, (_, i) => (
-            <div key={i} className="flex items-center gap-5">
-              {i % 2 === 0 ? (
-                <>
-                  <SquareSlot index={i} mode={mode} className="w-[42%]" />
-                  <CopyBlock />
-                </>
-              ) : (
-                <>
-                  <CopyBlock />
-                  <SquareSlot index={i} mode={mode} className="w-[42%]" />
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      </PageChrome>
-    );
-  }
-
-  if (layoutId === "feature-grid") {
-    const cols = n <= 3 ? 3 : n <= 4 ? 2 : 3;
-    return (
-      <PageChrome>
-        <div className="mb-3 h-3 w-1/3 rounded-full bg-foreground/20" />
-        <div className="mb-5 h-1.5 w-full rounded-full bg-foreground/[0.07]" />
-        <div
-          className="grid gap-4"
-          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-        >
-          {Array.from({ length: n }, (_, i) => (
-            <div key={i} className="space-y-2">
-              <SquareSlot index={i} mode={mode} className="w-full" />
-              <div className="h-2 w-3/4 rounded-full bg-foreground/15" />
-              <div className="h-1.5 w-full rounded-full bg-foreground/[0.07]" />
-            </div>
-          ))}
-        </div>
-      </PageChrome>
-    );
-  }
-
-  if (layoutId === "carousel") {
-    return (
-      <PageChrome>
-        <div className="mb-3 h-3 w-2/5 rounded-full bg-foreground/20" />
-        <div className="mb-4 h-1.5 w-full rounded-full bg-foreground/[0.07]" />
-        <div className="flex gap-3 overflow-hidden pb-2">
-          {Array.from({ length: n }, (_, i) => (
-            <div
-              key={i}
-              className="w-[min(72%,260px)] shrink-0 space-y-2"
-              style={{ opacity: i === 0 ? 1 : 0.85 }}
-            >
-              <SquareSlot index={i} mode={mode} className="w-full" />
-              <div className="h-1.5 w-2/3 rounded-full bg-foreground/[0.08]" />
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 flex justify-center gap-1.5">
-          {Array.from({ length: n }, (_, i) => (
-            <span
-              key={i}
-              className={`h-1.5 rounded-full transition-all ${
-                i === 0
-                  ? "w-4 bg-foreground/50"
-                  : "w-1.5 bg-foreground/15"
-              }`}
-            />
-          ))}
-        </div>
-      </PageChrome>
-    );
-  }
-
-  if (layoutId === "stacked-squares") {
-    return (
-      <PageChrome>
-        <div className="mb-4 h-3 w-1/3 rounded-full bg-foreground/20" />
-        <div className="space-y-8">
-          {Array.from({ length: n }, (_, i) => (
-            <div key={i} className="space-y-3">
-              <div className="h-2.5 w-2/5 rounded-full bg-foreground/15" />
-              <div className="h-1.5 w-full rounded-full bg-foreground/[0.07]" />
-              <div className="mx-auto w-[58%] max-w-[280px]">
-                <SquareSlot index={i} mode={mode} className="w-full" />
-              </div>
-              <div className="h-1.5 w-[90%] rounded-full bg-foreground/[0.07]" />
-            </div>
-          ))}
-        </div>
-      </PageChrome>
-    );
-  }
-
-  if (layoutId === "spotlight") {
-    return (
-      <PageChrome>
-        <div className="mb-3 h-3 w-1/3 rounded-full bg-foreground/20" />
-        <div className="mb-4 space-y-1.5">
-          <div className="h-1.5 w-full rounded-full bg-foreground/[0.07]" />
-          <div className="h-1.5 w-4/5 rounded-full bg-foreground/[0.07]" />
-        </div>
-        <div className="mx-auto mb-6 w-[62%] max-w-[300px]">
-          <SquareSlot index={0} mode={mode} className="w-full" />
-        </div>
-        {n >= 2 ? (
-          <div className="mb-5 flex items-center gap-5">
-            <SquareSlot index={1} mode={mode} className="w-[36%]" />
-            <CopyBlock dense />
-          </div>
-        ) : null}
-        {n >= 3 ? (
-          <div className="flex items-center gap-5">
-            <CopyBlock dense />
-            <SquareSlot index={2} mode={mode} className="w-[36%]" />
-          </div>
-        ) : null}
-      </PageChrome>
-    );
-  }
-
-  // mosaic
-  const gridCount = Math.max(2, n - 2);
   return (
     <PageChrome>
-      <div className="mb-5 h-3 w-1/3 rounded-full bg-foreground/20" />
-      <div className="mb-5 flex items-center gap-5">
-        <SquareSlot index={0} mode={mode} className="w-[40%]" />
-        <CopyBlock dense />
-      </div>
-      <div className="mb-6 flex items-center gap-5">
-        <CopyBlock dense />
-        <SquareSlot index={1} mode={mode} className="w-[40%]" />
-      </div>
-      <div
-        className="grid gap-3"
-        style={{
-          gridTemplateColumns: `repeat(${Math.min(gridCount, 3)}, minmax(0, 1fr))`,
-        }}
-      >
-        {Array.from({ length: gridCount }, (_, i) => (
-          <div key={i} className="space-y-2">
-            <SquareSlot index={i + 2} mode={mode} className="w-full" />
-            <div className="h-1.5 w-2/3 rounded-full bg-foreground/[0.08]" />
-          </div>
-        ))}
-      </div>
+      {/* Only template output with constant sample text may be rendered here. */}
+      <div className="text-[12px] text-foreground" dangerouslySetInnerHTML={{ __html: html }} />
     </PageChrome>
   );
 }
@@ -311,6 +194,27 @@ function LayoutGlyph({ layoutId }: { layoutId: VisualizerLayoutId }) {
       </div>
     );
   }
+  if (layoutId === "showcase") {
+    return (
+      <div className="flex h-8 w-10 flex-col gap-0.5 p-0.5">
+        <div className="h-[3px] rounded-full bg-foreground/35" />
+        <div className="flex flex-1 items-center rounded-[2px] bg-foreground/15 p-0.5">
+          <div className="flex h-full w-full items-center gap-0.5 rounded-[2px] bg-background/90 p-0.5">
+            <div className={`aspect-square h-full ${cell}`} />
+            <div className="flex flex-1 flex-col gap-0.5">
+              <div className={line} />
+              <div className={`${line} w-2/3`} />
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-0.5">
+          <div className={`h-2 w-[30%] ${cell}`} />
+          <div className={`h-2 w-[30%] ${cell}`} />
+          <div className={`h-2 w-[30%] opacity-50 ${cell}`} />
+        </div>
+      </div>
+    );
+  }
   if (layoutId === "spotlight") {
     return (
       <div className="flex h-8 w-10 flex-col items-center justify-center gap-0.5 p-0.5">
@@ -346,6 +250,7 @@ export function DescriptionLayoutDialog({
   onOpenChange,
   layoutId,
   imageCount,
+  theme,
   disabled,
   onApply,
 }: {
@@ -353,24 +258,32 @@ export function DescriptionLayoutDialog({
   onOpenChange: (open: boolean) => void;
   layoutId: VisualizerLayoutId;
   imageCount: number;
+  theme: VisualizerImageStyle;
   disabled?: boolean;
   onApply: (next: {
     layoutId: VisualizerLayoutId;
     imageCount: number;
+    theme: VisualizerImageStyle;
   }) => void;
 }) {
   const [draftLayout, setDraftLayout] = useState(layoutId);
   const [draftCount, setDraftCount] = useState(
     clampVisualizerImageCount(layoutId, imageCount)
   );
+  const [draftTheme, setDraftTheme] = useState(theme);
+  const [themeOpen, setThemeOpen] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("structure");
 
   useEffect(() => {
     if (!open) return;
     setDraftLayout(layoutId);
     setDraftCount(clampVisualizerImageCount(layoutId, imageCount));
+    setDraftTheme(theme);
+    setThemeOpen(false);
     setPreviewMode("structure");
-  }, [open, layoutId, imageCount]);
+  }, [open, layoutId, imageCount, theme]);
+
+  const activeTheme = getVisualizerTheme(draftTheme);
 
   const layout = getVisualizerLayout(draftLayout);
   const clamped = clampVisualizerImageCount(draftLayout, draftCount);
@@ -391,7 +304,8 @@ export function DescriptionLayoutDialog({
                     {layout.name}
                   </DialogTitle>
                   <DialogDescription className="text-[11px] text-muted-foreground">
-                    {layout.shortDescription} · square 1:1 only
+                    {layout.shortDescription} ·{" "}
+                    {draftLayout === "showcase" ? "16:9 scene, 1:1 product, 4:5 gallery" : "square 1:1 only"}
                   </DialogDescription>
                 </DialogHeader>
               </div>
@@ -426,18 +340,85 @@ export function DescriptionLayoutDialog({
                 layoutId={draftLayout}
                 imageCount={clamped}
                 mode={previewMode}
+                theme={draftTheme}
               />
             </div>
+
+            {themeOpen ? (
+              <div className="absolute inset-x-4 bottom-16 z-20 rounded-xl border border-border bg-background p-3 shadow-xl animate-in fade-in-0 slide-in-from-bottom-2 duration-150">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                    Image theme
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Applies to every image of every product (the product shot on white stays white)
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  {VISUALIZER_THEME_IDS.map((id) => {
+                    const item = VISUALIZER_THEMES[id];
+                    const selected = draftTheme === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          setDraftTheme(id);
+                          setThemeOpen(false);
+                          setPreviewMode("filled");
+                        }}
+                        className={`overflow-hidden rounded-lg border text-left transition-colors disabled:opacity-60 ${
+                          selected ? "border-foreground ring-1 ring-foreground" : "border-border hover:border-foreground/40"
+                        }`}
+                      >
+                        {item.sample ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={item.sample} alt="" className="aspect-[4/3] w-full object-cover" />
+                        ) : (
+                          <div className="flex aspect-[4/3] w-full items-center justify-center bg-gradient-to-br from-muted to-muted/40 text-[10px] font-medium text-muted-foreground">
+                            Best per product
+                          </div>
+                        )}
+                        <div className="px-2 py-1.5">
+                          <div className="flex items-center gap-1 text-[11px] font-semibold">
+                            {item.name}
+                            {selected ? <Check className="h-3 w-3 text-muted-foreground" /> : null}
+                          </div>
+                          <div className="truncate text-[10px] text-muted-foreground">{item.description}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
 
             <div className="relative z-10 flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border bg-background/80 px-5 py-3 backdrop-blur">
               <p className="max-w-md text-[11px] leading-snug text-muted-foreground">
                 {previewMode === "structure"
-                  ? "Empty slots show where each square image will sit in the HTML."
-                  : "Filled slots preview how product squares land once images are generated."}
+                  ? "This is the exact page template. Empty slots show where each image will sit."
+                  : "Filled slots use the theme sample to preview how the images land."}
               </p>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setThemeOpen((value) => !value)}
+                  aria-expanded={themeOpen}
+                  className="mr-2 flex h-7 items-center gap-1.5 rounded-md border border-border bg-background pr-2.5 pl-1 text-[11px] font-medium disabled:opacity-40"
+                >
+                  {activeTheme.sample ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={activeTheme.sample} alt="" className="h-5 w-5 rounded object-cover" />
+                  ) : (
+                    <span className="h-5 w-5 rounded bg-gradient-to-br from-muted-foreground/30 to-muted-foreground/10" />
+                  )}
+                  <span className="text-muted-foreground">Theme</span>
+                  {activeTheme.name}
+                </button>
                 <span className="text-[11px] text-muted-foreground">
-                  Squares
+                  {draftLayout === "showcase" ? "Images" : "Squares"}
                 </span>
                 <button
                   type="button"
@@ -471,7 +452,7 @@ export function DescriptionLayoutDialog({
                 Layouts
               </div>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Pick a composition. Agent follows it exactly.
+                Pick a composition. Every product uses it exactly.
               </p>
             </div>
 
@@ -552,6 +533,7 @@ export function DescriptionLayoutDialog({
                         draftLayout,
                         draftCount
                       ),
+                      theme: draftTheme,
                     });
                     onOpenChange(false);
                   }}
@@ -587,7 +569,7 @@ export function LayoutSettingsButton({
           Layout
         </span>
         <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
-          {imageCount}× 1:1
+          {layoutId === "showcase" ? `${imageCount} images` : `${imageCount}× 1:1`}
         </span>
       </div>
       <button
@@ -601,7 +583,7 @@ export function LayoutSettingsButton({
             <LayoutGlyph layoutId={layoutId} />
           </div>
           <div className="pointer-events-none absolute inset-x-3 bottom-2 flex gap-1">
-            {Array.from({ length: Math.min(imageCount, 6) }, (_, i) => (
+            {Array.from({ length: Math.min(imageCount, VISUALIZER_MAX_IMAGES) }, (_, i) => (
               <span
                 key={i}
                 className="h-1 flex-1 rounded-full bg-foreground/15 dark:bg-foreground/25"

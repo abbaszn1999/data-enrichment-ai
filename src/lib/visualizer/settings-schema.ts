@@ -3,7 +3,9 @@ import {
   DEFAULT_VISUALIZER_LAYOUT_ID,
   resolveVisualizerLayoutSettings,
   VISUALIZER_LAYOUT_IDS,
+  VISUALIZER_MAX_IMAGES,
 } from "@/lib/visualizer/layouts";
+import { DEFAULT_VISUALIZER_THEME, VISUALIZER_STYLE_VALUES } from "@/lib/visualizer/themes";
 
 const HexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
@@ -13,9 +15,9 @@ export const VisualizerDescriptionSettingsSchema = z.object({
   thinkingLevel: z.enum(["low", "medium", "high"]).default("medium"),
   instructions: z.string().trim().max(8_000).default(""),
   layoutId: z.enum(VISUALIZER_LAYOUT_IDS).default(DEFAULT_VISUALIZER_LAYOUT_ID),
-  imageCount: z.coerce.number().int().min(1).max(6).default(4),
+  imageCount: z.coerce.number().int().min(1).max(VISUALIZER_MAX_IMAGES).default(4),
   /** @deprecated Synced from imageCount; kept so older sessions still parse. */
-  maxPlaceholders: z.coerce.number().int().min(1).max(6).default(4),
+  maxPlaceholders: z.coerce.number().int().min(1).max(VISUALIZER_MAX_IMAGES).default(4),
 });
 
 export const VisualizerImagesSettingsSchema = z.object({
@@ -37,9 +39,8 @@ export const VisualizerImagesSettingsSchema = z.object({
     .default("1:1"),
   resolution: z.enum(["0.5K", "1K", "2K", "4K"]).default("1K"),
   outputFormat: z.enum(["image/jpeg", "image/png"]).default("image/jpeg"),
-  style: z
-    .enum(["studio", "white", "lifestyle", "editorial", "custom"])
-    .default("lifestyle"),
+  /** Visual theme (themes.ts). */
+  style: z.enum(VISUALIZER_STYLE_VALUES).catch(DEFAULT_VISUALIZER_THEME).default(DEFAULT_VISUALIZER_THEME),
   /** Unused in UI — always cleared on parse. */
   instructions: z.string().trim().max(4_000).default(""),
   groundWithSearch: z.boolean().default(false),
@@ -97,7 +98,7 @@ export const VisualizerProjectSettingsSchema = z.object({
     aspectRatio: "1:1",
     resolution: "1K",
     outputFormat: "image/jpeg",
-    style: "lifestyle",
+    style: DEFAULT_VISUALIZER_THEME,
     instructions: "",
     groundWithSearch: false,
     brandingEnabled: false,

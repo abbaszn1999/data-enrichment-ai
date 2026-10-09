@@ -1,10 +1,16 @@
 import { referenceMapText } from "@/lib/ai-images/reference-set";
 import type { AiImageModel } from "@/lib/gallery/agents/ai-shared";
-import { styleInstruction } from "@/lib/gallery/agents/ai-shared";
 import type { ClassifiedRow } from "@/lib/gallery/agents/gallery-brief";
 import { formatRowFields } from "@/lib/gallery/agents/planner-brief";
-import { getVisualizerLayout, type VisualizerLayoutId } from "@/lib/visualizer/layouts";
-import { visualizerMarker } from "@/lib/visualizer/agents/planner-plan";
+import {
+  getVisualizerLayout,
+  VISUALIZER_SLOT_ASPECT_RATIOS,
+  visualizerSlotRole,
+  type VisualizerLayoutId,
+  type VisualizerSlotRole,
+} from "@/lib/visualizer/layouts";
+import { isCompactSlot, VISUALIZER_COPY_LIMITS } from "@/lib/visualizer/templates";
+import { getVisualizerTheme } from "@/lib/visualizer/themes";
 import type { VisualizerImagesSettings, VisualizerBrandSettings } from "@/lib/visualizer/types";
 
 const IMAGE_MODEL_LABELS: Record<AiImageModel, string> = {
@@ -12,13 +18,28 @@ const IMAGE_MODEL_LABELS: Record<AiImageModel, string> = {
   "gemini-3-pro-image": "Nano Banana Pro (studio-grade, strongest text and identity fidelity)",
 };
 
-const STYLE_LABELS: Record<string, string> = {
-  studio: "Studio: controlled softbox lighting, polished catalog finish",
-  white: "White background: seamless pure white, soft grounded shadow",
-  lifestyle: "Lifestyle: natural, commercially useful setting",
-  editorial: "Editorial: art-directed campaign look",
-  custom: "Custom: follow the store owner's instructions only",
+const ROLE_BRIEFS: Record<VisualizerSlotRole, string> = {
+  feature: "square proof shot of the product beside its copy",
+  scene:
+    "wide background scene inspired by the product and where it is used. The product must not appear and no image is attached to this slot, so never refer to image numbers in its prompt. No people in focus, no text. Keep the centre calm and low in detail: a white card covers it",
+  packshot:
+    "the exact product alone on a seamless pure white background, centred and filling about 75% of the frame, soft contact shadow, no props and no scene. The theme does not apply to this slot",
+  gallery: "portrait lifestyle photo of the product in use; each gallery slide shows a different scene and angle",
 };
+
+/** One line per slot (consecutive slots of the same role share a line). */
+function slotRoleLines(layoutId: VisualizerLayoutId, count: number): string[] {
+  const lines: string[] = [];
+  let start = 1;
+  for (let index = 1; index <= count; index += 1) {
+    const role = visualizerSlotRole(layoutId, count, index);
+    if (index < count && visualizerSlotRole(layoutId, count, index + 1) === role) continue;
+    const range = start === index ? `Slot ${index}` : `Slots ${start}–${index}`;
+    lines.push(`- ${range} (${role}, ${VISUALIZER_SLOT_ASPECT_RATIOS[role]}): ${ROLE_BRIEFS[role]}.`);
+    start = index + 1;
+  }
+  return lines;
+}
 
 export interface VisualizerPlannerBriefInput {
   classified: ClassifiedRow;
@@ -44,13 +65,19 @@ export function buildVisualizerPlannerBrief(input: VisualizerPlannerBriefInput):
   const { images, references } = input;
   const hasLogo = references.some((reference) => reference.role === "logo");
   const hasGuide = references.some((reference) => reference.role === "brandGuide");
-  const markers = Array.from({ length: count }, (_, index) => visualizerMarker(index + 1)).join(", ");
+  const limits = VISUALIZER_COPY_LIMITS;
+  const compactSlots = Array.from({ length: count }, (_, index) => index + 1).filter((index) =>
+    isCompactSlot(layout.id, index)
+  );
   const sections: string[] = [];
 
+  const showcase = layout.id === "showcase";
   sections.push(
     "## Image model that will render your prompts",
     IMAGE_MODEL_LABELS[input.imageModel],
-    `Output: aspect ratio ${images.aspectRatio}, ${images.resolution}. Every image on the page is a square, so write each prompt for a square frame.`
+    showcase
+      ? `Output: ${images.resolution}. Each slot has its own frame (see Image slots); write each prompt for that frame.`
+      : `Output: aspect ratio 1:1, ${images.resolution}. Every image on the page is a square, so write each prompt for a square frame.`
   );
 
   sections.push(
@@ -61,18 +88,37 @@ export function buildVisualizerPlannerBrief(input: VisualizerPlannerBriefInput):
 
   sections.push("", "## Product data", formatRowFields(input.classified));
 
+  const bodyLimits =
+    compactSlots.length === 0
+      ? `body up to ${limits.body} characters`
+      : compactSlots.length === count
+        ? `body up to ${limits.compactBody} characters`
+        : `body up to ${limits.body} characters, except slots ${compactSlots.join(", ")} (small cards): up to ${limits.compactBody} characters`;
   sections.push(
     "",
-    "## Page layout (mandatory)",
+    "## Page layout (fixed template)",
     `Layout: ${layout.name} (${layout.id}). Exactly ${count} image slot${count === 1 ? "" : "s"}.`,
-    `Markers to use verbatim, each exactly once: ${markers}`,
-    layout.agentRules(count)
+    "The system builds the page from a fixed template; you write the text only. Every field is plain text: no HTML, no markdown, no image markers.",
+    layout.copyGuide(count),
+    showcase
+      ? `Lengths: headline up to ${limits.headline} characters; intro up to ${limits.intro}; closing up to ${limits.closing} or empty; tagline up to ${limits.tagline}; badge up to ${limits.badge}; ${limits.highlightsMin} to ${limits.highlightsMax} highlights with a value up to ${limits.highlightValue} and a label up to ${limits.highlightLabel}; promise up to ${limits.promise}.`
+      : `Lengths: headline up to ${limits.headline} characters; intro up to ${limits.intro}; closing up to ${limits.closing} or empty; each slot heading up to ${limits.heading}; ${bodyLimits}; 0 to ${limits.bullets} bullets of up to ${limits.bullet} characters each.`
   );
+  if (showcase) {
+    sections.push(
+      "Highlights and the badge use only facts from the product data or photos. A number appears only when the data states it; otherwise use one strong word (Waterproof, Foldable). Never write a price, discount or stock claim."
+    );
+  }
 
   sections.push(
     "",
     "## Image slots",
-    `Plan exactly ${count} distinct image${count === 1 ? "" : "s"}, indexes 1 to ${count}. Slot N is rendered into [imageplaceholder-N]. The copy next to a marker must be about the same claim that slot's image proves, and each image must show something the others do not.`
+    showcase
+      ? `Plan exactly ${count} distinct images, indexes 1 to ${count}. No slot has copy beside it.`
+      : `Plan exactly ${count} distinct image${count === 1 ? "" : "s"}, indexes 1 to ${count}. Each slot's heading, body and bullets sit beside that slot's image, so they must be about the same claim the image proves, and each image must show something the others do not.`,
+    ...slotRoleLines(layout.id, count),
+    "Shot list: the product shots read as one story told from different moments, never the same set-up twice. Each product slot has its own `setting` (place, surface and backdrop colour), its own camera angle and height, and the set mixes camera distances (wide, medium, close, macro). Change the props, the backdrop colour and, where it fits, the time of day between slots; keep only the colour grade and the level of finish shared.",
+    "Identity: fill `identityLock` from the product photos and set each slot's `viewImage`. Choose camera angles the product photos actually show; the system sends `identityLock` first with every image of the product."
   );
 
   const custom = input.customInstructions.trim();
@@ -82,7 +128,16 @@ export function buildVisualizerPlannerBrief(input: VisualizerPlannerBriefInput):
     custom || "None. Choose the story and the shot list yourself from the product data and images."
   );
 
-  sections.push("", "## Look", STYLE_LABELS[images.style] ?? STYLE_LABELS.lifestyle, styleInstruction(images.style, false));
+  const theme = getVisualizerTheme(images.style);
+  sections.push(
+    "",
+    "## Look (theme)",
+    theme.recipe
+      ? `Theme - ${theme.recipe} The theme is the world of the shoot, not one location: keep its light quality, mood and colour grade in every slot, and give each slot a different place inside that world.`
+      : theme.id === "custom"
+        ? "Follow the custom instructions for the look; do not add an unrelated house style."
+        : "Auto: choose the one look that suits this product best (lifestyle, studio, outdoor, …). Keep its light quality, mood and colour grade in every slot, and give each slot a different place inside that look."
+  );
 
   const design: string[] = [];
   if (input.brand.styleNotes.trim()) design.push(`Style notes: ${input.brand.styleNotes.trim()}`);
@@ -95,7 +150,7 @@ export function buildVisualizerPlannerBrief(input: VisualizerPlannerBriefInput):
   } else {
     branding.push("Branding is on.");
     if (images.brandGuideMode === "colors" && images.brandColors.length > 0) {
-      branding.push(`Brand palette: ${images.brandColors.join(", ")}. Use it in accents, props and backdrops of the image prompts and as accent colours in the page HTML.`);
+      branding.push(`Brand palette: ${images.brandColors.join(", ")}. Use it as accents in props and styling details, and as the backdrop in at most one slot, so the set does not look like one set-up. The page applies the palette itself.`);
     }
     if (hasGuide) {
       branding.push("A brand guide image is attached: follow its mood, colour and photography style.");

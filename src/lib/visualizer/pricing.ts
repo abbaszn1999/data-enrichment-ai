@@ -1,4 +1,5 @@
 import { costToCredits, getImageOutputCost, getModelPricing } from "@/lib/ai-pricing";
+import { VISUALIZER_MAX_IMAGES } from "@/lib/visualizer/layouts";
 import {
   resolveVisualizerDescriptionModel,
   resolveVisualizerImageModel,
@@ -21,7 +22,7 @@ export function estimateDescriptionCredits(params: {
 }): { min: number; max: number } {
   const rowCount = Math.max(0, params.rowCount);
   if (rowCount === 0) return { min: 0, max: 0 };
-  const imageCount = Math.min(6, Math.max(1, Math.floor(params.imageCount ?? 4) || 4));
+  const imageCount = Math.min(VISUALIZER_MAX_IMAGES, Math.max(1, Math.floor(params.imageCount ?? 4) || 4));
   const pricing = getModelPricing(resolveVisualizerDescriptionModel(params.tier));
   const perRow =
     (PLANNER_ESTIMATE_INPUT_TOKENS / 1_000_000) * pricing.inputPerMillion +

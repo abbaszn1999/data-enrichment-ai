@@ -1,10 +1,10 @@
 /**
  * Products Visualizer planner. One GPT-6.1 Sol (medium) call per row sees every
  * reference image (product photos, brand guide, logo) plus the row data, the
- * selected layout and the custom instructions. It returns the layout-faithful
- * HTML description and a complete Nano Banana prompt for every image slot.
- * Code re-checks the answer (planner-plan.ts) and every billed round is
- * returned for billing.
+ * selected layout and the custom instructions. It returns plain page copy and a
+ * complete Nano Banana prompt for every image slot; code checks the answer and
+ * renders the page from the layout's fixed template (planner-plan.ts,
+ * templates.ts). Every billed round is returned for billing.
  */
 import type { AiCallCost } from "@/lib/ai-pricing";
 import { bufferToDataUrl } from "@/lib/ai-images/reference-image";
@@ -66,17 +66,23 @@ export interface PlanVisualizerParams {
 
 export async function planVisualizerContent(params: PlanVisualizerParams): Promise<VisualizerPlanResult> {
   const { settings } = params;
-  const imageCount = clampVisualizerImageCount(settings.description.layoutId, settings.description.imageCount);
+  const layoutId = settings.description.layoutId;
+  const imageCount = clampVisualizerImageCount(layoutId, settings.description.imageCount);
   const imageModel = resolveVisualizerImageModel(settings.images.tier);
   const classified = classifyRowValues(params.row.originalData, settings.selectedColumns, { fieldChars: 1_200 });
   const attached = params.references.filter((image) => image.buffer && image.buffer.length > 0);
   const hasLogo = attached.some((image) => image.role === "logo");
   const skill = await loadVisualizerSkill("description");
   const imageUrls = attached.map((image) => bufferToDataUrl(image.buffer as Buffer, image.contentType || "image/jpeg"));
+  const brandColors =
+    settings.images.brandingEnabled && settings.images.brandGuideMode === "colors"
+      ? settings.images.brandColors
+      : undefined;
 
   let guardedResult: GuardedVisualizerPlan | null = null;
+  let strictVariety = true;
   const parse: EnrichResponseParser = async ({ selection }) => {
-    guardedResult = guardVisualizerPlan(selection, imageCount, { hasLogo });
+    guardedResult = guardVisualizerPlan(selection, imageCount, { hasLogo, layoutId, brandColors, strictVariety });
     return { ok: true };
   };
 
@@ -124,7 +130,7 @@ export async function planVisualizerContent(params: PlanVisualizerParams): Promi
         imageUrls,
         policy,
         schemaName: "visualizer_plan",
-        schema: buildVisualizerPlannerSchema(imageCount),
+        schema: buildVisualizerPlannerSchema(layoutId, imageCount),
         enabledColumns: [],
         instructions: skill.instructions,
         parse,
@@ -150,6 +156,7 @@ export async function planVisualizerContent(params: PlanVisualizerParams): Promi
       });
       retryHint = message;
       guardedResult = null;
+      strictVariety = false;
     }
   }
   throw new VisualizerPlannerError("Planner failed", priorCosts);

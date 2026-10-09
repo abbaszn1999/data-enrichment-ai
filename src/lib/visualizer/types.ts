@@ -2,8 +2,11 @@ import { parseVisualizerProjectSettings } from "@/lib/visualizer/settings-schema
 import { VISUALIZER_PLANNER_OPENAI_MODEL, type EnrichOpenAiModelId } from "@/lib/enrich/models";
 import {
   DEFAULT_VISUALIZER_LAYOUT_ID,
+  isVisualizerSlotRole,
   type VisualizerLayoutId,
+  type VisualizerSlotRole,
 } from "@/lib/visualizer/layouts";
+import { DEFAULT_VISUALIZER_THEME, type VisualizerImageStyle } from "@/lib/visualizer/themes";
 import { EMPTY_COLUMN_LAYOUT, type ColumnLayout } from "@/lib/sheet/column-layout";
 
 export type { VisualizerLayoutId, ColumnLayout };
@@ -33,12 +36,7 @@ export type VisualizerGenerationStage =
 
 export type VisualizerTier = "standard" | "premium";
 export type VisualizerThinkingLevel = "low" | "medium" | "high";
-export type VisualizerImageStyle =
-  | "studio"
-  | "white"
-  | "lifestyle"
-  | "editorial"
-  | "custom";
+export type { VisualizerImageStyle };
 
 export type VisualizerBrandGuideMode = "image" | "colors";
 
@@ -101,6 +99,12 @@ export interface VisualizerImagePlaceholder {
   perspective?: string;
   /** True when the brand logo is sent with this slot's image request. */
   useLogo?: boolean;
+  /** What the slot shows; rows saved before roles existed are "feature". */
+  role?: VisualizerSlotRole;
+  /** Image ratio for this slot; rows saved before per-slot ratios use the settings ratio. */
+  aspectRatio?: string;
+  /** Exact product facts sent first with this slot's image request; absent on older rows. */
+  identityLock?: string;
   storagePath?: string | null;
 }
 
@@ -182,7 +186,7 @@ export const DEFAULT_VISUALIZER_IMAGES: VisualizerImagesSettings = {
   aspectRatio: "1:1",
   resolution: "1K",
   outputFormat: "image/jpeg",
-  style: "lifestyle",
+  style: DEFAULT_VISUALIZER_THEME,
   instructions: "",
   groundWithSearch: false,
   brandingEnabled: false,
@@ -298,6 +302,9 @@ export function normalizeVisualizerWorksheet(
             prompt: item.prompt ? String(item.prompt) : undefined,
             perspective: item.perspective ? String(item.perspective) : undefined,
             useLogo: item.useLogo === true ? true : undefined,
+            role: isVisualizerSlotRole(item.role) ? item.role : undefined,
+            aspectRatio: item.aspectRatio ? String(item.aspectRatio) : undefined,
+            identityLock: item.identityLock ? String(item.identityLock) : undefined,
             storagePath: item.storagePath ? String(item.storagePath) : null,
           }))
         : undefined,

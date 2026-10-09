@@ -25,11 +25,14 @@ export function describeReference(role: AiReferenceRole, indexInRole: number): s
 }
 
 /** Sort into the canonical order and cap products. Labels are rebuilt from roles. */
-export function orderReferences(references: AiReferenceImage[]): AiReferenceImage[] {
+export function orderReferences(
+  references: AiReferenceImage[],
+  maxProducts: number = MAX_PRODUCT_REFERENCES
+): AiReferenceImage[] {
   const out: AiReferenceImage[] = [];
   for (const role of ROLE_ORDER) {
     const group = references.filter((reference) => reference.role === role);
-    const limited = role === "product" ? group.slice(0, MAX_PRODUCT_REFERENCES) : group.slice(0, 1);
+    const limited = role === "product" ? group.slice(0, maxProducts) : group.slice(0, 1);
     limited.forEach((reference, index) => {
       out.push({ ...reference, label: describeReference(role, index) });
     });
