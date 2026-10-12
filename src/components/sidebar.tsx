@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { toast } from "sonner";
 import { billingBlockReason, showBillingBlockedToast } from "@/lib/billing/billing-toast";
 import {
@@ -14,6 +14,8 @@ import {
   Columns3,
   ChevronDown,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Settings2,
   Zap,
   PanelLeftClose,
@@ -27,6 +29,8 @@ import {
   FileEdit,
   FolderTree,
   Image as ImageIcon,
+  ScanSearch,
+  Wrench,
   GripVertical,
   type LucideIcon,
 } from "lucide-react";
@@ -113,13 +117,26 @@ import {
 /** Store-category count per workspace, remembered across sidebar mounts so the "Use my store categories" option shows instantly. */
 const storeCategoryCountCache = new Map<string, number>();
 
-const SIDEBAR_MODES: { id: CatalogSidebarMode; label: string; icon: LucideIcon }[] = [
-  { id: "enrich", label: "Enrichment", icon: Sparkles },
-  { id: "categories", label: "Categories", icon: FolderTree },
-  { id: "images", label: "Source & Image Finder", icon: ImageIcon },
+const PANEL_WIDTH_DEFAULT = 320;
+const PANEL_WIDTH_MIN = 280;
+const PANEL_WIDTH_MAX = 560;
+const PANEL_WIDTH_STORAGE_KEY = "catalog-sidebar-panel-width";
+const RAIL_COLLAPSED_STORAGE_KEY = "catalog-sidebar-rail-collapsed";
+
+function clampPanelWidth(width: number): number {
+  return Math.min(Math.max(Math.round(width), PANEL_WIDTH_MIN), PANEL_WIDTH_MAX);
+}
+
+/** The tools in the left rail: a name the user can read, plus one line on what it does. */
+const SIDEBAR_MODES: { id: CatalogSidebarMode; label: string; hint: string; icon: LucideIcon }[] = [
+  { id: "enrich", label: "Enrichment", hint: "Titles, descriptions, AI text", icon: Sparkles },
+  { id: "categories", label: "Categorize", hint: "Assign store categories", icon: FolderTree },
+  { id: "images", label: "Source / Image Finder", hint: "Product pages and images", icon: ImageIcon },
+  { id: "lens", label: "Lens Source Checker", hint: "Find pages from a picture", icon: ScanSearch },
+  { id: "functions", label: "Sheet Tools", hint: "Bulk edits, prices, cleanup", icon: Wrench },
 ];
 
-/** The progress line of a running Source & Image Finder run, from the columns it generates. */
+/** The progress line of a running Source / Image Finder or Lens run, from the columns it generates. */
 function finderRunningLabel(columnIds: string[]): string {
   if (columnIds.includes(LENS_FOUNDS_COLUMN_ID)) return "Finding Lens matches...";
   const sources = columnIds.includes(SOURCE_URLS_COLUMN_ID);
@@ -304,25 +321,80 @@ export function Sidebar() {
   }, []);
   const isPlp = sessionKind === "plp";
 
-  const [sidebarTab, setSidebarTab] = useState<"ai" | "functions">("ai");
   // Kept in the store (and saved with the sheet) so the sheet reopens on the tool it was left on.
   const sidebarMode = useSheetStore((s) => s.sidebarMode);
   const setSidebarMode = useSheetStore((s) => s.setSidebarMode);
 
-  // Functions (Math, Generate, Clean, Copy & Fill) act on matched product
-  // rows — PLP has none of that, so it only ever gets the AI tab.
-  useEffect(() => {
-    if (isPlp) setSidebarTab("ai");
-  }, [isPlp]);
-
-  // Categories and Image Finder are product-only; PLP and viewers keep the
-  // single-panel layout.
+  // Categories, the finders and Sheet Tools (Math, Generate, Clean, Copy & Fill
+  // act on matched product rows) are product-only; PLP and viewers keep the
+  // single-panel layout, which is always Enrichment.
   const hasModes = !isPlp && !isViewer;
   const mode: CatalogSidebarMode = hasModes ? sidebarMode : "enrich";
-  const showFunctions = mode === "enrich" && sidebarTab === "functions";
+  const showFunctions = mode === "functions";
   const runningMode = isEnriching
     ? catalogModeForRunColumns(enrichingTab, enrichingNewColumns)
     : null;
+  // Layout the user can change: the width of the settings panel (drag its right
+  // edge) and whether the tool rail shows names or only icons. Both are
+  // remembered in this browser; they are read after mount so the first render
+  // matches the server.
+  const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
+  const panelWidthRef = useRef(PANEL_WIDTH_DEFAULT);
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      const savedWidth = Number(window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY));
+      if (Number.isFinite(savedWidth) && savedWidth > 0) {
+        const width = clampPanelWidth(savedWidth);
+        panelWidthRef.current = width;
+        setPanelWidth(width);
+      }
+      setRailCollapsed(window.localStorage.getItem(RAIL_COLLAPSED_STORAGE_KEY) === "1");
+    } catch {
+      // Storage can be blocked; the defaults then stand.
+    }
+  }, []);
+  const applyPanelWidth = useCallback((width: number, save: boolean) => {
+    const next = clampPanelWidth(width);
+    panelWidthRef.current = next;
+    setPanelWidth(next);
+    if (save) {
+      try {
+        window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(next));
+      } catch {
+        // Not remembered; the width still applies for this visit.
+      }
+    }
+  }, []);
+  const startPanelResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = panelWidthRef.current;
+      const onMove = (move: PointerEvent) => applyPanelWidth(startWidth + move.clientX - startX, false);
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        applyPanelWidth(panelWidthRef.current, true);
+      };
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [applyPanelWidth]
+  );
+  const toggleRailCollapsed = () => {
+    const next = !railCollapsed;
+    setRailCollapsed(next);
+    try {
+      window.localStorage.setItem(RAIL_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+    } catch {
+      // Not remembered; the rail still changes for this visit.
+    }
+  };
   const [lastError, setLastError] = useState<string | null>(null);
   const [enrichSectionOpen, setEnrichSectionOpen] = useState(true);
   const [sourceSectionOpen, setSourceSectionOpen] = useState(true);
@@ -443,25 +515,41 @@ export function Sidebar() {
     .filter((col) => col.enabled)
     .map((col) => col.id);
   const modeColumn =
-    mode === "enrich"
+    mode === "enrich" || mode === "lens" || mode === "functions"
       ? null
       : enrichmentColumns.find((col) => col.id === PRODUCT_MODE_COLUMN_IDS[mode]) ?? null;
-  // Source & Image Finder tab: two outputs the user switches on or off, each with
+  // Source / Image Finder tool: two outputs the user switches on or off, each with
   // its own custom instruction. Source URLs (Google AI Mode) is the `sourceUrls`
   // column; Images (Image Finder) is `modeColumn`, the Image URLs column, which
   // also owns the website rules. Kept with the sheet in the settings.
   const sourceUrlsColumn =
     mode === "images" ? enrichmentColumns.find((col) => col.id === SOURCE_URLS_COLUMN_ID) ?? null : null;
-  const finderOutputs: FinderOutput[] = enrichmentSettings.finderOutputs ?? DEFAULT_FINDER_OUTPUTS;
+  // Lens is not a switch of this tool any more: it has its own tool, so a saved
+  // "lens" here is ignored by the Source / Image Finder.
+  const finderOutputs: FinderOutput[] = (enrichmentSettings.finderOutputs ?? DEFAULT_FINDER_OUTPUTS).filter(
+    (output) => output !== "lens"
+  );
   const runsSourceUrls = mode === "images" && !!sourceUrlsColumn && finderOutputs.includes("sourceUrls");
   const runsImages = mode === "images" && !!modeColumn && finderOutputs.includes("images");
+  // The Lens Source Checker always runs Lens: opening the tool is the choice.
   const lensColumn =
-    mode === "images" ? enrichmentColumns.find((col) => col.id === LENS_FOUNDS_COLUMN_ID) ?? null : null;
-  const runsLens = mode === "images" && !!lensColumn && finderOutputs.includes("lens");
-  // Images, Source URLs and Lens never run together: switching one on replaces
-  // the others, and switching the one that is on turns everything off.
+    mode === "lens" ? enrichmentColumns.find((col) => col.id === LENS_FOUNDS_COLUMN_ID) ?? null : null;
+  const runsLens = mode === "lens" && !!lensColumn;
+  // Images and Source URLs never run together: switching one on replaces the
+  // other, and switching the one that is on turns both off.
   const toggleFinderOutput = (output: FinderOutput) => {
     updateSettings({ finderOutputs: finderOutputs.includes(output) ? [] : [output] });
+  };
+  // Opens a tool from the rail. Each tool starts with its own finder output
+  // saved, so a sheet reopens on what it was left on.
+  const selectMode = (next: CatalogSidebarMode) => {
+    if (next === "lens") {
+      if (enrichmentSettings.finderOutputs?.[0] !== "lens") updateSettings({ finderOutputs: ["lens"] });
+    } else if (next === "images" && enrichmentSettings.finderOutputs?.includes("lens")) {
+      updateSettings({ finderOutputs: [...DEFAULT_FINDER_OUTPUTS] });
+    }
+    setSidebarMode(next);
+    setSidebarOpen(true);
   };
   const toggleColumnExpanded = (id: string) =>
     setExpandedColumns((prev) => {
@@ -841,9 +929,9 @@ export function Sidebar() {
     const runColumns =
       mode === "enrich"
         ? enrichListColumns.filter((c) => c.enabled)
-        : mode === "images"
+        : mode === "images" || mode === "lens"
           ? [
-              // Exactly one of Images (with its Image sources column), Source URLs or Lens founds, as switched on in the tab.
+              // Exactly one of Images (with its Image sources column), Source URLs or Lens founds, as switched on in the tool.
               ...(runsImages && modeColumn ? [{ ...modeColumn, enabled: true }] : []),
               ...(imageSourcesColumn ? [{ ...imageSourcesColumn, enabled: true }] : []),
               ...(runsSourceUrls && sourceUrlsColumn ? [{ ...sourceUrlsColumn, enabled: true }] : []),
@@ -868,7 +956,7 @@ export function Sidebar() {
     if (useSheetStore.getState().isStoppingEnrich) return;
     if ((isNewTab ? runColumnIds.length === 0 : existingColumnsToEnrich.length === 0) || enrichableRows.length === 0) return;
     // Mode columns start hidden in the grid; show them once they are generated.
-    if (mode === "images") {
+    if (mode === "images" || mode === "lens") {
       if (runsImages && modeColumn && !modeColumn.enabled) {
         updateEnrichmentColumnConfig(modeColumn.id, { enabled: true });
       }
@@ -1166,8 +1254,28 @@ export function Sidebar() {
   }
 
   const panel = (
-    <div className="w-[320px] border-r bg-card flex flex-col shrink-0 h-full min-h-0 overflow-hidden">
-      {/* Header with Tab Toggle */}
+    <div
+      style={{ width: panelWidth }}
+      className="relative border-r bg-card flex flex-col shrink-0 h-full min-h-0 overflow-hidden"
+    >
+      {/* Drag the right edge to widen or narrow the panel; double-click resets it. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize settings panel"
+        aria-valuemin={PANEL_WIDTH_MIN}
+        aria-valuemax={PANEL_WIDTH_MAX}
+        aria-valuenow={panelWidth}
+        tabIndex={0}
+        onPointerDown={startPanelResize}
+        onDoubleClick={() => applyPanelWidth(PANEL_WIDTH_DEFAULT, true)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") applyPanelWidth(panelWidthRef.current - 16, true);
+          else if (event.key === "ArrowRight") applyPanelWidth(panelWidthRef.current + 16, true);
+        }}
+        className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none active:bg-primary/40"
+      />
+      {/* Header: the name of the tool that is open */}
       <div className="border-b bg-muted/30 shrink-0">
         <div className="p-3 flex items-center justify-between">
           {isViewer ? (
@@ -1175,59 +1283,37 @@ export function Sidebar() {
               <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <span className="text-[11px] font-semibold text-muted-foreground">View Only</span>
             </div>
-          ) : isPlp ? (
-            // PLP has nothing for Functions to act on, so there's no tab to switch.
+          ) : isPlp || mode === "enrich" ? (
             <div className="flex flex-1 items-center gap-1.5 px-2 py-1.5">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
               <span className="text-[11px] font-semibold">AI Enrichment</span>
             </div>
-          ) : mode !== "enrich" ? (
+          ) : (
             <div className="flex flex-1 items-center gap-1.5 px-2 py-1.5">
               {mode === "categories" ? (
                 <FolderTree className="h-3.5 w-3.5 text-primary" />
+              ) : mode === "lens" ? (
+                <ScanSearch className="h-3.5 w-3.5 text-primary" />
+              ) : mode === "functions" ? (
+                <Wrench className="h-3.5 w-3.5 text-primary" />
               ) : (
                 <ImageIcon className="h-3.5 w-3.5 text-primary" />
               )}
               <span className="text-[11px] font-semibold">
-                {mode === "categories" ? "Categories" : "Source & Image Finder"}
+                {SIDEBAR_MODES.find((entry) => entry.id === mode)?.label ?? "Source / Image Finder"}
               </span>
             </div>
-          ) : (
-          <div className="flex items-center bg-muted rounded-lg p-0.5 flex-1 mr-2">
-            <button
-              onClick={() => setSidebarTab("ai")}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-semibold transition-all ${
-                sidebarTab === "ai"
-                  ? "bg-background shadow-sm text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              AI
-            </button>
-            <button
-              onClick={() => setSidebarTab("functions")}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-semibold transition-all ${
-                sidebarTab === "functions"
-                  ? "bg-background shadow-sm text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Zap className="h-3.5 w-3.5" />
-              Functions
-            </button>
-          </div>
           )}
-          {!hasModes && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0"
-              onClick={() => setSidebarOpen(false)}
-            >
-              <PanelLeftClose className="h-4 w-4" />
-            </Button>
-          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Hide settings panel"
+            title="Hide settings panel"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
@@ -1246,10 +1332,10 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* Functions Tab */}
+      {/* Sheet Tools */}
       {!isViewer && showFunctions && <FunctionsPanel />}
 
-      {/* AI Tab */}
+      {/* Enrichment, Categorize, Source / Image Finder and Lens Source Checker */}
       {!isViewer && !showFunctions && (
       <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar min-h-0">
         <div className="p-4 space-y-5">
@@ -1267,7 +1353,7 @@ export function Sidebar() {
               className="text-[10px] font-mono px-1.5 py-0"
             >
               {enrichableRows.length} to{" "}
-              {mode === "categories" ? "categorize" : mode === "images" ? "search" : "enrich"}
+              {mode === "categories" ? "categorize" : mode === "images" || mode === "lens" ? "search" : "enrich"}
             </Badge>
           </div>
 
@@ -1739,15 +1825,23 @@ export function Sidebar() {
           </div>
           )}
 
-          {/* Source & Image Finder — switch on what to find; each output has its own instruction */}
-          {mode === "images" && (
+          {/* Source / Image Finder and Lens Source Checker — each output has its own instruction */}
+          {(mode === "images" || mode === "lens") && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <ImageIcon className="h-4 w-4 text-primary" />
-                <span className="text-xs font-semibold">Find on the web</span>
+                {mode === "lens" ? (
+                  <ScanSearch className="h-4 w-4 text-primary" />
+                ) : (
+                  <ImageIcon className="h-4 w-4 text-primary" />
+                )}
+                <span className="text-xs font-semibold">
+                  {mode === "lens" ? "Find pages from a picture" : "Find on the web"}
+                </span>
               </div>
               <p className="text-[10px] leading-relaxed text-muted-foreground">
-                Switch on what to find for each selected product. Each one has its own instructions.
+                {mode === "lens"
+                  ? "Sends one picture per row to Google Lens and writes the pages that show the same item to the Lens founds column. It runs on its own and does not use AI."
+                  : "Switch on what to find for each selected product. Each one has its own instructions."}
               </p>
               <div className="space-y-0.5">
                 {sourceUrlsColumn && (
@@ -1775,15 +1869,11 @@ export function Sidebar() {
                   </FinderOutputCard>
                 )}
                 {lensColumn && (
-                  <FinderOutputCard
-                    label="Lens"
-                    description="Sends one picture per row to Google Lens and writes the pages that show the same item to the Lens founds column. Pick the picture column under Source Columns. Lens founds can then be a source for Images, Enrichment and Categories."
-                    enabled={runsLens}
-                    expanded={expandedColumns.has(lensColumn.id)}
-                    disabled={isEnriching}
-                    onToggle={() => toggleFinderOutput("lens")}
-                    onExpand={() => toggleColumnExpanded(lensColumn.id)}
-                  >
+                  <div className="space-y-2.5 rounded-md border border-primary/15 bg-primary/[0.04] p-2.5">
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      Pick the picture column under Source Columns. Lens founds can then be a source for the
+                      Source / Image Finder, Enrichment and Categorize.
+                    </p>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-medium text-muted-foreground">Matches</label>
                       <select
@@ -1845,12 +1935,12 @@ export function Sidebar() {
                         disabled={isEnriching}
                       />
                     </div>
-                  </FinderOutputCard>
+                  </div>
                 )}
                 {modeColumn && (
                   <FinderOutputCard
                     label="Images"
-                    description={`Finds the exact product on the web, starting from your Source URLs or Lens founds column when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
+                    description={`Finds the exact product on the web, starting from your Source URLs or Lens founds column (from the Lens Source Checker) when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
                     enabled={runsImages}
                     expanded={expandedColumns.has(modeColumn.id)}
                     disabled={isEnriching}
@@ -1858,8 +1948,8 @@ export function Sidebar() {
                     onExpand={() => toggleColumnExpanded(modeColumn.id)}
                   >
                     <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      For the best results, run Source URLs or Lens first, then tick that column as a source
-                      column. The agent opens those pages first and searches further only if none shows the item.
+                      For the best results, run Source URLs or the Lens Source Checker first, then tick that column
+                      as a source column. The agent opens those pages first and searches further only if none shows the item.
                     </p>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
@@ -1883,7 +1973,7 @@ export function Sidebar() {
                   </FinderOutputCard>
                 )}
               </div>
-              {!runsSourceUrls && !runsImages && !runsLens && (
+              {mode === "images" && !runsSourceUrls && !runsImages && (
                 <p className="text-[10px] text-amber-600">Switch on one to run.</p>
               )}
               {runsLens && !lensImageColumn && (
@@ -2249,7 +2339,7 @@ export function Sidebar() {
                       ? "Stopping..."
                       : runningMode === "categories"
                         ? "Categorizing..."
-                        : runningMode === "images"
+                        : runningMode === "images" || runningMode === "lens"
                           ? finderRunningLabel(enrichingNewColumns)
                           : "Enriching..."}
                   </span>
@@ -2327,7 +2417,7 @@ export function Sidebar() {
           <Button
             onClick={handleEnrich}
             disabled={
-              (mode === "images"
+              (mode === "images" || mode === "lens"
                 ? !runsImages && !runsSourceUrls && !runsLens
                 : mode !== "enrich"
                 ? !modeColumn
@@ -2342,6 +2432,8 @@ export function Sidebar() {
           >
             {mode === "categories" ? (
               <FolderTree className="h-4 w-4" />
+            ) : mode === "lens" ? (
+              <ScanSearch className="h-4 w-4" />
             ) : mode === "images" ? (
               <ImageIcon className="h-4 w-4" />
             ) : (
@@ -2349,7 +2441,7 @@ export function Sidebar() {
             )}
             {mode === "categories"
               ? "Categorize"
-              : mode === "images"
+              : mode === "images" || mode === "lens"
                 ? runsLens
                   ? "Find Lens Matches for"
                   : runsSourceUrls
@@ -2536,46 +2628,67 @@ export function Sidebar() {
 
   return (
     <div className="flex h-full min-h-0 shrink-0">
-      <div className="w-12 border-r bg-muted/30 flex flex-col items-center py-3 gap-3 shrink-0">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          aria-label={sidebarOpen ? "Collapse panel" : "Expand panel"}
-        >
-          {sidebarOpen ? (
-            <PanelLeftClose className="h-4 w-4" />
-          ) : (
-            <PanelLeft className="h-4 w-4" />
+      <div
+        className={`border-r bg-muted/30 flex flex-col py-3 gap-2 shrink-0 ${
+          railCollapsed ? "w-12 items-center" : "w-44"
+        }`}
+      >
+        <div className={railCollapsed ? "flex justify-center" : "flex items-center justify-between pl-3 pr-2"}>
+          {!railCollapsed && (
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Tools</span>
           )}
-        </Button>
-        <Separator className="w-6" />
-        <div className="flex flex-col items-center gap-1.5">
-          {SIDEBAR_MODES.map(({ id, label, icon: Icon }) => {
+          <Button
+            variant="ghost"
+            size="icon"
+            className={railCollapsed ? "h-8 w-8" : "h-7 w-7"}
+            onClick={toggleRailCollapsed}
+            aria-label={railCollapsed ? "Show tool names" : "Hide tool names"}
+            title={railCollapsed ? "Show tool names" : "Hide tool names"}
+          >
+            {railCollapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+          </Button>
+        </div>
+        <Separator className={railCollapsed ? "w-6" : undefined} />
+        <div className={`flex flex-col gap-1 ${railCollapsed ? "items-center" : "px-2"}`}>
+          {SIDEBAR_MODES.map(({ id, label, hint, icon: Icon }) => {
             const isActive = sidebarOpen && mode === id;
             return (
+              <Fragment key={id}>
+                {/* Sheet Tools edits the sheet itself, so it sits apart from the tools that run searches and AI. */}
+                {id === "functions" && <Separator className={`my-1 ${railCollapsed ? "w-6" : ""}`} />}
               <button
-                key={id}
                 type="button"
-                title={label}
+                title={`${label}: ${hint}`}
                 aria-label={label}
                 aria-pressed={isActive}
-                onClick={() => {
-                  setSidebarMode(id);
-                  setSidebarOpen(true);
-                }}
-                className={`relative flex h-8 w-8 items-center justify-center rounded-md transition-colors ${
+                // Opening a tool shows its panel; clicking the open one hides the panel to give the sheet room.
+                onClick={() => (isActive ? setSidebarOpen(false) : selectMode(id))}
+                className={`relative flex rounded-md transition-colors ${
+                  railCollapsed
+                    ? "h-8 w-8 items-center justify-center"
+                    : "w-full items-start gap-2 px-2 py-1.5 text-left"
+                } ${
                   isActive
                     ? "bg-primary/10 text-primary"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
               >
-                <Icon className="h-4 w-4" />
+                <Icon className={`h-4 w-4 shrink-0 ${railCollapsed ? "" : "mt-0.5"}`} />
+                {!railCollapsed && (
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[11px] font-semibold leading-tight">{label}</span>
+                    <span className="mt-0.5 block text-[9px] leading-tight text-muted-foreground/80">{hint}</span>
+                  </span>
+                )}
                 {runningMode === id && (
-                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                  <span
+                    className={`absolute h-1.5 w-1.5 rounded-full bg-primary animate-pulse ${
+                      railCollapsed ? "right-1 top-1" : "right-1.5 top-1.5"
+                    }`}
+                  />
                 )}
               </button>
+              </Fragment>
             );
           })}
         </div>
