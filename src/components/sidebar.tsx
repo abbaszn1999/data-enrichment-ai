@@ -121,10 +121,31 @@ const PANEL_WIDTH_DEFAULT = 320;
 const PANEL_WIDTH_MIN = 280;
 const PANEL_WIDTH_MAX = 560;
 const PANEL_WIDTH_STORAGE_KEY = "catalog-sidebar-panel-width";
+const RAIL_WIDTH_STORAGE_KEY = "catalog-sidebar-rail-width";
+/** Saved by the earlier on/off toggle; still read so a collapsed rail stays collapsed. */
 const RAIL_COLLAPSED_STORAGE_KEY = "catalog-sidebar-rail-collapsed";
+/** Icons only. */
+const RAIL_WIDTH_ICONS = 48;
+const RAIL_WIDTH_DEFAULT = 176;
+const RAIL_WIDTH_MAX = 288;
+/** Below this the rail has no room for names and shows icons only. */
+const RAIL_NAMES_MIN_WIDTH = 120;
+/** The narrowest rail that still shows names; a drag that ends between icons and this snaps to one or the other. */
+const RAIL_NAMES_SNAP_WIDTH = 150;
 
 function clampPanelWidth(width: number): number {
   return Math.min(Math.max(Math.round(width), PANEL_WIDTH_MIN), PANEL_WIDTH_MAX);
+}
+
+function clampRailWidth(width: number): number {
+  return Math.min(Math.max(Math.round(width), RAIL_WIDTH_ICONS), RAIL_WIDTH_MAX);
+}
+
+/** Where a released drag settles: icons only, or names at a readable width (never half-way). */
+function snapRailWidth(width: number): number {
+  const clamped = clampRailWidth(width);
+  if (clamped < RAIL_NAMES_MIN_WIDTH) return RAIL_WIDTH_ICONS;
+  return Math.max(clamped, RAIL_NAMES_SNAP_WIDTH);
 }
 
 /** The tools in the left rail: a name the user can read, plus one line on what it does. */
@@ -334,13 +355,15 @@ export function Sidebar() {
   const runningMode = isEnriching
     ? catalogModeForRunColumns(enrichingTab, enrichingNewColumns)
     : null;
-  // Layout the user can change: the width of the settings panel (drag its right
-  // edge) and whether the tool rail shows names or only icons. Both are
-  // remembered in this browser; they are read after mount so the first render
-  // matches the server.
+  // Layout the user can change: the width of the settings panel and of the tool
+  // rail (drag the right edge of either; the rail shows icons only when it is
+  // narrow). Both are remembered in this browser; they are read after mount so
+  // the first render matches the server.
   const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
   const panelWidthRef = useRef(PANEL_WIDTH_DEFAULT);
-  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [railWidth, setRailWidth] = useState(RAIL_WIDTH_DEFAULT);
+  const railWidthRef = useRef(RAIL_WIDTH_DEFAULT);
+  const railCollapsed = railWidth < RAIL_NAMES_MIN_WIDTH;
   useEffect(() => {
     try {
       const savedWidth = Number(window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY));
@@ -349,7 +372,17 @@ export function Sidebar() {
         panelWidthRef.current = width;
         setPanelWidth(width);
       }
-      setRailCollapsed(window.localStorage.getItem(RAIL_COLLAPSED_STORAGE_KEY) === "1");
+      const savedRail = Number(window.localStorage.getItem(RAIL_WIDTH_STORAGE_KEY));
+      const rail =
+        Number.isFinite(savedRail) && savedRail > 0
+          ? snapRailWidth(savedRail)
+          : window.localStorage.getItem(RAIL_COLLAPSED_STORAGE_KEY) === "1"
+            ? RAIL_WIDTH_ICONS
+            : null;
+      if (rail !== null) {
+        railWidthRef.current = rail;
+        setRailWidth(rail);
+      }
     } catch {
       // Storage can be blocked; the defaults then stand.
     }
@@ -386,15 +419,41 @@ export function Sidebar() {
     },
     [applyPanelWidth]
   );
-  const toggleRailCollapsed = () => {
-    const next = !railCollapsed;
-    setRailCollapsed(next);
-    try {
-      window.localStorage.setItem(RAIL_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
-    } catch {
-      // Not remembered; the rail still changes for this visit.
+  const applyRailWidth = useCallback((width: number, save: boolean) => {
+    // While dragging the rail follows the pointer; on release it settles on icons or names.
+    const next = save ? snapRailWidth(width) : clampRailWidth(width);
+    railWidthRef.current = next;
+    setRailWidth(next);
+    if (save) {
+      try {
+        window.localStorage.setItem(RAIL_WIDTH_STORAGE_KEY, String(next));
+      } catch {
+        // Not remembered; the width still applies for this visit.
+      }
     }
-  };
+  }, []);
+  const startRailResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = railWidthRef.current;
+      const onMove = (move: PointerEvent) => applyRailWidth(startWidth + move.clientX - startX, false);
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        applyRailWidth(railWidthRef.current, true);
+      };
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [applyRailWidth]
+  );
+  // The « button: icons only, or back to the default width with names.
+  const toggleRailCollapsed = () => applyRailWidth(railCollapsed ? RAIL_WIDTH_DEFAULT : RAIL_WIDTH_ICONS, true);
   const [lastError, setLastError] = useState<string | null>(null);
   const [enrichSectionOpen, setEnrichSectionOpen] = useState(true);
   const [sourceSectionOpen, setSourceSectionOpen] = useState(true);
@@ -2629,10 +2688,28 @@ export function Sidebar() {
   return (
     <div className="flex h-full min-h-0 shrink-0">
       <div
-        className={`border-r bg-muted/30 flex flex-col py-3 gap-2 shrink-0 ${
-          railCollapsed ? "w-12 items-center" : "w-44"
+        style={{ width: railWidth }}
+        className={`relative border-r bg-muted/30 flex flex-col py-3 gap-2 shrink-0 ${
+          railCollapsed ? "items-center" : ""
         }`}
       >
+        {/* Drag the right edge to widen or narrow the tools; narrow shows icons only. Double-click toggles. */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize tools"
+          aria-valuemin={RAIL_WIDTH_ICONS}
+          aria-valuemax={RAIL_WIDTH_MAX}
+          aria-valuenow={railWidth}
+          tabIndex={0}
+          onPointerDown={startRailResize}
+          onDoubleClick={toggleRailCollapsed}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") applyRailWidth(railWidthRef.current - 24, true);
+            else if (event.key === "ArrowRight") applyRailWidth(railWidthRef.current + 24, true);
+          }}
+          className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none active:bg-primary/40"
+        />
         <div className={railCollapsed ? "flex justify-center" : "flex items-center justify-between pl-3 pr-2"}>
           {!railCollapsed && (
             <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Tools</span>
