@@ -1669,6 +1669,15 @@ function EditableEnrichedCell({
 }
 
 // --- Row Preview Panel ---
+/** Text for a preview value of any shape; React cannot render a plain object as a child. */
+function previewText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value);
+  const record = value as Record<string, unknown>;
+  const label = record.title ?? record.label ?? record.name ?? record.uri ?? record.url;
+  return typeof label === "string" && label ? label : JSON.stringify(value);
+}
+
 function RowPreviewPanel({
   row,
   originalColumns,
@@ -1698,7 +1707,8 @@ function RowPreviewPanel({
           <h3 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Original Data</h3>
           <div className="space-y-2">
             {originalColumns.map((col) => {
-              const val = row.originalData[col] || "";
+              const raw = row.originalData[col];
+              const val = raw === null || raw === undefined ? "" : String(raw);
               const isImage = val.startsWith("data:image/");
               return (
                 <div key={col} className="border rounded-lg p-2.5 bg-muted/20">
@@ -1727,13 +1737,23 @@ function RowPreviewPanel({
                 if (val === undefined || val === null) return null;
                 let display: React.ReactNode;
                 if (Array.isArray(val)) {
-                  if (val.length > 0 && typeof val[0] === "object" && "uri" in val[0]) {
+                  if (val.length > 0 && val[0] && typeof val[0] === "object" && "imageUrl" in val[0]) {
+                    display = (
+                      <div className="flex flex-wrap gap-1.5">
+                        {(val as EnrichImageItem[])
+                          .filter((image) => typeof image?.imageUrl === "string" && image.imageUrl)
+                          .map((image, i) => (
+                            <SmartImageThumb key={`${image.imageUrl}-${i}`} url={image.imageUrl} alt={image.title || col.label} />
+                          ))}
+                      </div>
+                    );
+                  } else if (val.length > 0 && val[0] && typeof val[0] === "object" && "uri" in val[0]) {
                     display = (val as { title: string; uri: string }[]).map((s, i) => (
                       <a key={i} href={s.uri} target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-500 hover:underline flex items-center gap-1">
                         <ExternalLink className="h-2.5 w-2.5 shrink-0" />{s.title}
                       </a>
                     ));
-                  } else if (val.length > 0 && typeof val[0] === "object" && "question" in val[0]) {
+                  } else if (val.length > 0 && val[0] && typeof val[0] === "object" && "question" in val[0]) {
                     display = (val as { question: string; answer: string }[]).map((item, i) => (
                       <div key={i} className="mb-1.5 last:mb-0">
                         <div className="text-[11px] font-semibold">{item.question}</div>
@@ -1741,12 +1761,12 @@ function RowPreviewPanel({
                       </div>
                     ));
                   } else {
-                    display = (val as string[]).map((item, i) => (
-                      <div key={i} className="text-xs">• {item}</div>
+                    display = val.map((item, i) => (
+                      <div key={i} className="text-xs break-words">• {previewText(item)}</div>
                     ));
                   }
                 } else {
-                  display = <div className="text-xs leading-relaxed break-words">{String(val)}</div>;
+                  display = <div className="text-xs leading-relaxed break-words">{previewText(val)}</div>;
                 }
                 return (
                   <div key={col.id} className="border rounded-lg p-2.5 bg-primary/5 border-primary/20">
