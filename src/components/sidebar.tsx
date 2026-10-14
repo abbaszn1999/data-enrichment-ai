@@ -1579,6 +1579,7 @@ export function Sidebar() {
                         </button>
                         <button
                           type="button"
+                          data-agent-id={`ci.col.${col.id}`}
                           className="min-w-0 flex-1 truncate text-left text-[11px] font-medium leading-none"
                           onClick={() => toggleEnrichmentColumn(col.id)}
                         >
@@ -2262,6 +2263,7 @@ export function Sidebar() {
                     variant="ghost"
                     size="sm"
                     className="h-6 px-2 text-[10px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    data-agent-id="ci.stop"
                     onClick={handleStopEnrich}
                     disabled={isStoppingEnrich}
                   >
@@ -2325,6 +2327,8 @@ export function Sidebar() {
       <div className="p-4 border-t bg-muted/20 space-y-2 shrink-0">
         {!isEnriching && (
           <Button
+            data-agent-id="ci.run"
+            data-agent-spend="enrich"
             onClick={handleEnrich}
             disabled={
               (mode === "images"
@@ -2558,6 +2562,7 @@ export function Sidebar() {
               <button
                 key={id}
                 type="button"
+                data-agent-id={`ci.mode.${id}`}
                 title={label}
                 aria-label={label}
                 aria-pressed={isActive}

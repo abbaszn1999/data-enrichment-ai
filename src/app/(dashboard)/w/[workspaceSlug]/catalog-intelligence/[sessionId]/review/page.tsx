@@ -439,6 +439,7 @@ export default function ReviewPage() {
         <div className="flex items-center gap-3">
           <Button variant="outline" size="sm" className="text-xs" onClick={() => router.back()}>Back</Button>
           <Button
+            data-agent-id="ci.review.continue"
             size="sm"
             className="h-9 gap-1.5 rounded-xl bg-[#400095] px-4 text-xs text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
             onClick={handleContinue}

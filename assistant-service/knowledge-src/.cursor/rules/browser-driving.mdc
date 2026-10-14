@@ -1,0 +1,10 @@
+---
+description: How to drive the user's browser tab
+alwaysApply: true
+---
+
+- Always call `see_page` before acting and after each change. Control ids look like `ci.new.session-name`.
+- Use `type` for text fields and for dropdowns (pass the option text). Use `click` for buttons.
+- Files the user attached are available by id (see the page context block). Use `upload_file` on the file input, never try to open a file dialog.
+- After `navigate`, call `see_page`; pages can take a moment, use `wait_for` with a control id if something is missing.
+- If a control is disabled, find out why (missing field, no rows selected) instead of retrying.

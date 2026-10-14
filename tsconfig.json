@@ -41,6 +41,7 @@
     "supabase/functions",
     ".next",
     "newxx",
-    "low-hanging-fruits"
+    "low-hanging-fruits",
+    "assistant-service"
   ]
 }

@@ -105,6 +105,8 @@ export default function NewImportPage() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [suppliersLoaded, setSuppliersLoaded] = useState(false);
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const isPlp = kind === "plp";
 
   // Load suppliers from Storage
@@ -353,6 +355,7 @@ export default function NewImportPage() {
                       <button
                         key={option.value}
                         type="button"
+                        data-agent-id={`ci.new.kind.${option.value}`}
                         onClick={() => setKind(option.value)}
                         className={`flex flex-col gap-1.5 rounded-xl border p-3 text-left transition-colors ${
                           active
@@ -383,6 +386,7 @@ export default function NewImportPage() {
               <div className="space-y-2">
                 <Label className="text-xs font-medium">Session Name</Label>
                 <Input
+                  data-agent-id="ci.new.session-name"
                   placeholder="e.g. Samsung Q3 Shipment"
                   value={sessionName}
                   onChange={(e) => setSessionName(e.target.value)}
@@ -395,6 +399,7 @@ export default function NewImportPage() {
               <div className="space-y-2">
                 <Label className="text-xs font-medium">Supplier</Label>
                 <select
+                  data-agent-id="ci.new.supplier"
                   value={supplier}
                   onChange={(e) => setSupplier(e.target.value)}
                   className="h-10 w-full rounded-xl border border-border/60 bg-muted/35 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#6B358D]/25"
@@ -409,6 +414,7 @@ export default function NewImportPage() {
                 </select>
                 {supplier === "__new__" && (
                   <Input
+                    data-agent-id="ci.new.supplier-name"
                     placeholder="Enter new supplier name"
                     value={newSupplierName}
                     onChange={(e) => setNewSupplierName(e.target.value)}
@@ -445,16 +451,8 @@ export default function NewImportPage() {
                   }}
                   onDragLeave={() => setIsDragging(false)}
                   onDrop={handleDrop}
-                  onClick={() => {
-                    const input = document.createElement("input");
-                    input.type = "file";
-                    input.accept = ".xlsx,.xls,.csv";
-                    input.onchange = (e) => {
-                      const f = (e.target as HTMLInputElement).files?.[0];
-                      if (f) handleFileSelect(f);
-                    };
-                    input.click();
-                  }}
+                  data-agent-id="ci.new.dropzone"
+                  onClick={() => fileInputRef.current?.click()}
                   className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-10 transition-all ${
                     isDragging
                       ? "border-[#400095] bg-[#400095]/5 dark:border-[#F76D01] dark:bg-[#F76D01]/5"
@@ -486,6 +484,19 @@ export default function NewImportPage() {
                   )}
                 </div>
               </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                data-agent-id="ci.new.file"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (f) handleFileSelect(f);
+                }}
+              />
 
               {/* File Quality + Stats */}
               {fileData && (
@@ -610,6 +621,7 @@ export default function NewImportPage() {
               )}
 
               <Button
+                data-agent-id="ci.new.submit"
                 onClick={handleSubmit}
                 disabled={!sessionName || !file || !fileData || loading}
                 className="h-11 w-full gap-2 rounded-xl bg-[#400095] text-white shadow-[0_10px_26px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"

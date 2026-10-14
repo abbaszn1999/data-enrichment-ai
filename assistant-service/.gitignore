@@ -1,0 +1,5 @@
+node_modules
+knowledge
+.store
+.env
+.env.local

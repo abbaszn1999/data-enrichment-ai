@@ -60,6 +60,7 @@ import { AutommerceLogo } from "@/components/brand/autommerce-logo";
 import { PageLoader } from "@/components/brand/page-loader";
 import { WorkspaceContext } from "./workspace-context";
 import { JobInbox } from "@/components/job-inbox";
+import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { WelcomeGiftTicker } from "@/components/billing/welcome-gift-ticker";
 
 export default function WorkspaceLayout({
@@ -824,6 +825,9 @@ export default function WorkspaceLayout({
             )}
           </main>
         </div>
+        {process.env.NEXT_PUBLIC_ASSISTANT_ENABLED === "true" && workspace?.id && (
+          <AssistantWidget workspaceId={workspace.id} workspaceSlug={slug} />
+        )}
       </div>
     </WorkspaceContext.Provider>
   );
