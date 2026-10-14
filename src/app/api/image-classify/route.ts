@@ -129,7 +129,7 @@ function buildUserPrompt(
     lines.push(`- ${img.id} → ${img.filename}`);
   }
   lines.push(
-    "Each image is provided in order below this prompt as inlineData parts."
+    'Each image follows below this prompt, right after its own text label "Image <id> (<filename>)". Assign each image by that label, never by its position.'
   );
   lines.push(
     "Output JSON with: groups[{id,label,description,imageIds[]}] and items[{id,groupId,sku,confidence,notes}]."
@@ -299,19 +299,24 @@ async function runClassificationJob(params: {
     const downloads = await mapLimit(images, 6, (img) =>
       downloadImage(admin, img.storagePath)
     );
-    const inlineParts: Array<{
-      inlineData: { mimeType: string; data: string };
-    }> = [];
+    // Across dozens of images the model loses count of positions, so every
+    // image carries its id in a text part right before it.
+    const inlineParts: Array<
+      { text: string } | { inlineData: { mimeType: string; data: string } }
+    > = [];
     const validImages: RequestImage[] = [];
     downloads.forEach((d, i) => {
       if (d) {
         validImages.push(images[i]);
-        inlineParts.push({
-          inlineData: {
-            mimeType: images[i].mimeType || d.mimeType || "image/jpeg",
-            data: d.data,
-          },
-        });
+        inlineParts.push(
+          { text: `Image ${images[i].id} (${images[i].filename}):` },
+          {
+            inlineData: {
+              mimeType: images[i].mimeType || d.mimeType || "image/jpeg",
+              data: d.data,
+            },
+          }
+        );
       }
     });
     if (validImages.length === 0) {
