@@ -26,6 +26,15 @@ function publicEvent(event: AssistantEvent): AssistantEvent {
       return { ...event, text: hideProviderNames(event.text) };
     case "step":
       return { ...event, label: hideProviderNames(event.label) };
+    case "thinking":
+      return { ...event, text: hideProviderNames(event.text) };
+    case "tool":
+      return {
+        ...event,
+        title: hideProviderNames(event.title),
+        ...(event.detail ? { detail: hideProviderNames(event.detail) } : {}),
+        ...(event.summary ? { summary: hideProviderNames(event.summary) } : {}),
+      };
     case "error":
       return { ...event, message: hideProviderNames(event.message) };
     case "confirmation":

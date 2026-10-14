@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ASSISTANT_LIMITS, isAllowedNavigation, isBlockedNavigation } from "../../src/lib/assistant/protocol";
 import { RunLimitError, RunRegistry } from "../src/agent/bridge";
 import { listDir, readFile, resolveInside, searchCode } from "../src/agent/tools/code-tools";
-import { mapSdkMessage, stepLabel } from "../src/agent/events";
+import { mapSdkMessage } from "../src/agent/events";
 import { signRequest, verifyRequest } from "../src/auth";
 import { costToCredits, usageToCredits } from "../src/usage";
 
@@ -62,16 +62,50 @@ describe("request signing", () => {
 });
 
 describe("event mapping", () => {
-  it("passes assistant text and friendly steps only", () => {
+  const call = (status: string, toolName: string, args: Record<string, unknown>, result?: unknown) => ({
+    type: "tool_call",
+    call_id: "c1",
+    name: "mcp",
+    status,
+    args: { providerIdentifier: "custom-user-tools", toolName, args },
+    result,
+  });
+
+  it("passes assistant text", () => {
     expect(mapSdkMessage({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })).toEqual([
       { type: "text", text: "hi" },
     ]);
-    const steps = mapSdkMessage({ type: "tool_call", name: "custom-user-tools__click", status: "running" });
-    expect(steps).toEqual([{ type: "step", label: "Clicking" }]);
-    expect(JSON.stringify(steps)).not.toContain("custom-user-tools");
-    expect(mapSdkMessage({ type: "thinking", text: "secret reasoning" })).toEqual([]);
-    expect(mapSdkMessage({ type: "tool_call", name: "x", status: "completed" })).toEqual([]);
-    expect(stepLabel("unknown_tool")).toBe("Working");
+  });
+
+  it("streams thinking without internal names", () => {
+    const [event] = mapSdkMessage({ type: "thinking", text: "I will use CallDynamicTool via mcp" });
+    expect(event).toEqual({ type: "thinking", text: "I will use tool via tool" });
+    expect(mapSdkMessage({ type: "thinking", text: "", thinking_duration_ms: 380 })).toEqual([
+      { type: "thinking_end", durationMs: 380 },
+    ]);
+  });
+
+  it("describes tool steps from their arguments and results", () => {
+    expect(mapSdkMessage(call("running", "click", { target: "ci.new.session-name" }))).toEqual([
+      { type: "tool", id: "c1", status: "running", kind: "action", title: "Clicking", detail: "session name" },
+    ]);
+    const done = mapSdkMessage(
+      call("completed", "search_code", { pattern: "gallery" }, {
+        status: "success",
+        value: { content: [{ text: { text: "src/a.ts:3: x\nsrc/b.ts:9: y" } }], isError: false },
+      })
+    );
+    expect(done[0]).toMatchObject({ status: "completed", title: "Searching the platform", detail: '"gallery"', summary: "2 matches" });
+    const failed = mapSdkMessage(
+      call("completed", "click", { target: "ci.run" }, { status: "success", value: { content: [{ text: { text: "disabled" } }], isError: true } })
+    );
+    expect(failed[0]).toMatchObject({ status: "error", summary: "disabled" });
+    expect(JSON.stringify([done, failed])).not.toMatch(/custom-user-tools|mcp/);
+  });
+
+  it("drops unknown messages", () => {
+    expect(mapSdkMessage({ type: "usage", usage: {} })).toEqual([]);
+    expect(mapSdkMessage({ type: "tool_call", call_id: "c", name: "x", status: "running" })).toEqual([]);
   });
 });
 

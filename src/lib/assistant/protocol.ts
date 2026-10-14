@@ -61,6 +61,20 @@ export const assistantEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run"), runId: z.string(), conversationId: z.string().optional() }),
   z.object({ type: z.literal("text"), text: z.string() }),
   z.object({ type: z.literal("step"), label: z.string().max(200) }),
+  /** Live reasoning, streamed in small pieces. */
+  z.object({ type: z.literal("thinking"), text: z.string().max(4000) }),
+  /** The current reasoning block ended. */
+  z.object({ type: z.literal("thinking_end"), durationMs: z.number().min(0).optional() }),
+  /** One tool step, sent when it starts and again when it ends (same id). */
+  z.object({
+    type: z.literal("tool"),
+    id: z.string().max(120),
+    status: z.enum(["running", "completed", "error"]),
+    kind: z.enum(["code", "page", "action", "sheet", "approval"]),
+    title: z.string().max(120),
+    detail: z.string().max(300).optional(),
+    summary: z.string().max(300).optional(),
+  }),
   z.object({ type: z.literal("browser_action"), callId: z.string(), action: browserActionSchema }),
   z.object({
     type: z.literal("confirmation"),

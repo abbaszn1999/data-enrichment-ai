@@ -6,13 +6,35 @@ import { executeBrowserAction } from "@/lib/assistant/driver/actions";
 import { forgetFile, getAttachedFile, rememberFile } from "@/lib/assistant/driver/attachments";
 import { clearApprovals, issueApproval } from "@/lib/assistant/driver/spend-guard";
 import { hideCursor } from "@/lib/assistant/driver/cursor-controller";
-import { assistantEventSchema, type AttachedFile } from "@/lib/assistant/protocol";
+import { assistantEventSchema, type AssistantEvent, type AttachedFile } from "@/lib/assistant/protocol";
 
 export type ChatMessage =
   | { id: string; role: "user"; text: string; files?: string[] }
   | { id: string; role: "assistant"; text: string }
-  | { id: string; role: "step"; text: string }
+  | { id: string; role: "thinking"; text: string; startedAt: number; endedAt?: number }
+  | {
+      id: string;
+      role: "tool";
+      status: "running" | "completed" | "error";
+      kind: "code" | "page" | "action" | "sheet" | "approval";
+      title: string;
+      detail?: string;
+      summary?: string;
+      startedAt: number;
+      endedAt?: number;
+    }
   | { id: string; role: "error"; text: string };
+
+type ToolEvent = Extract<AssistantEvent, { type: "tool" }>;
+
+/** Close the open reasoning block, if the last item is one. */
+function closeThinking(current: ChatMessage[]): ChatMessage[] {
+  const last = current[current.length - 1];
+  if (last?.role === "thinking" && !last.endedAt) {
+    return [...current.slice(0, -1), { ...last, endedAt: Date.now() }];
+  }
+  return current;
+}
 
 export type PendingConfirmation = {
   callId: string;
@@ -56,10 +78,55 @@ export function useAssistantStream(params: { workspaceId: string; workspaceSlug:
   const push = useCallback((message: ChatMessage) => setMessages((current) => [...current, message]), []);
 
   const appendAssistantText = useCallback((text: string) => {
-    setMessages((current) => {
+    setMessages((before) => {
+      const current = closeThinking(before);
       const last = current[current.length - 1];
       if (last && last.role === "assistant") return [...current.slice(0, -1), { ...last, text: `${last.text}${text}` }];
       return [...current, { id: nextId(), role: "assistant", text }];
+    });
+  }, []);
+
+  const appendThinking = useCallback((text: string) => {
+    setMessages((current) => {
+      const last = current[current.length - 1];
+      if (last?.role === "thinking" && !last.endedAt) {
+        return [...current.slice(0, -1), { ...last, text: `${last.text}${text}` }];
+      }
+      return [...current, { id: nextId(), role: "thinking", text: text.replace(/^\s+/, ""), startedAt: Date.now() }];
+    });
+  }, []);
+
+  const endThinking = useCallback(() => setMessages((current) => closeThinking(current)), []);
+
+  const upsertTool = useCallback((event: ToolEvent) => {
+    setMessages((before) => {
+      const current = closeThinking(before);
+      const index = current.findIndex((m) => m.role === "tool" && m.id === event.id);
+      if (index >= 0) {
+        const existing = current[index] as Extract<ChatMessage, { role: "tool" }>;
+        const updated: ChatMessage = {
+          ...existing,
+          status: event.status,
+          summary: event.summary ?? existing.summary,
+          detail: event.detail ?? existing.detail,
+          endedAt: event.status === "running" ? undefined : Date.now(),
+        };
+        return [...current.slice(0, index), updated, ...current.slice(index + 1)];
+      }
+      return [
+        ...current,
+        {
+          id: event.id,
+          role: "tool",
+          status: event.status,
+          kind: event.kind,
+          title: event.title,
+          detail: event.detail,
+          summary: event.summary,
+          startedAt: Date.now(),
+          ...(event.status === "running" ? {} : { endedAt: Date.now() }),
+        },
+      ];
     });
   }, []);
 
@@ -148,7 +215,6 @@ export function useAssistantStream(params: { workspaceId: string; workspaceSlug:
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let lastStep = "";
       try {
         for (;;) {
           const { value, done } = await reader.read();
@@ -173,14 +239,16 @@ export function useAssistantStream(params: { workspaceId: string; workspaceSlug:
                 if (event.conversationId) conversationRef.current = event.conversationId;
                 break;
               case "text":
-                lastStep = "";
                 appendAssistantText(event.text);
                 break;
-              case "step":
-                if (event.label !== lastStep) {
-                  lastStep = event.label;
-                  push({ id: nextId(), role: "step", text: event.label });
-                }
+              case "thinking":
+                appendThinking(event.text);
+                break;
+              case "thinking_end":
+                endThinking();
+                break;
+              case "tool":
+                upsertTool(event);
                 break;
               case "browser_action":
                 if (runIdRef.current) void handleBrowserAction(runIdRef.current, event.callId, event.action);
@@ -204,6 +272,11 @@ export function useAssistantStream(params: { workspaceId: string; workspaceSlug:
       } catch {
         push({ id: nextId(), role: "error", text: "The assistant connection was interrupted." });
       } finally {
+        setMessages((current) =>
+          closeThinking(current).map((m) =>
+            m.role === "tool" && m.status === "running" ? { ...m, status: "error", endedAt: Date.now() } : m
+          )
+        );
         hideCursor();
         clearApprovals();
         setConfirmation(null);
@@ -211,7 +284,7 @@ export function useAssistantStream(params: { workspaceId: string; workspaceSlug:
         setStatus("idle");
       }
     },
-    [appendAssistantText, attached, handleBrowserAction, push, status]
+    [appendAssistantText, appendThinking, attached, endThinking, handleBrowserAction, push, status, upsertTool]
   );
 
   const stop = useCallback(async () => {

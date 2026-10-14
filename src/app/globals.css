@@ -206,6 +206,21 @@
 
 /* ═══ Dashboard Animations ═══ */
 
+/* In-app assistant: moving highlight on live status text. */
+@keyframes assistant-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+.assistant-shimmer {
+  background: linear-gradient(90deg, var(--muted-foreground) 35%, #c8a8d2 50%, var(--muted-foreground) 65%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: assistant-shimmer 1.6s linear infinite;
+}
+
 @keyframes dash-float {
   0%, 100% { transform: translateY(0px) scale(1); opacity: 0.6; }
   50% { transform: translateY(-20px) scale(1.1); opacity: 1; }
