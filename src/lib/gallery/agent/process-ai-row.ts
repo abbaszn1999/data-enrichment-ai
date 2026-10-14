@@ -29,6 +29,7 @@ import { buildAiRowCharge } from "@/lib/gallery/agent/ai-row-billing";
 import { shouldChargeGalleryCredits } from "@/lib/gallery/pricing";
 import {
   extensionForMime,
+  toStorableImage,
   type AiImageModel,
   type AiReferenceImage,
   type AiReferenceRole,
@@ -259,12 +260,13 @@ export async function processAiRow(params: {
       }
       for (const originalUrl of originalUrls) {
         if (!/^https?:\/\//i.test(originalUrl)) continue;
-        const { image: original, failure } = await downloadImageBytesDetailed(originalUrl);
-        if (!original) {
+        const { image: downloaded, failure } = await downloadImageBytesDetailed(originalUrl);
+        if (!downloaded) {
           galleryWarn("ai-image:row", "Skipping undownloadable original image", { rowId: row.id, originalUrl, failure });
           downloadFailure ??= { url: originalUrl, failure };
           continue;
         }
+        const original = await toStorableImage(downloaded);
         const path = getGalleryRowImagePath(workspaceId, sessionId, row.id, "main", original.ext);
         await uploadGalleryBytesAdmin(path, original.buffer, original.contentType);
         newlyStoredPaths.push(path);
