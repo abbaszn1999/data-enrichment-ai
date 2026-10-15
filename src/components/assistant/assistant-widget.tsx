@@ -23,7 +23,7 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
       {open ? (
         <div
           data-assistant-widget
-          className="fixed bottom-4 right-4 z-[60] flex h-[min(560px,calc(100vh-6rem))] w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl"
+          className="pointer-events-auto fixed bottom-4 right-4 z-[60] flex h-[min(560px,calc(100vh-6rem))] w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl"
         >
           <div className="flex items-center gap-2 border-b border-border/60 bg-gradient-to-r from-[#400095] to-[#6B358D] px-3 py-2.5 text-white">
             <Bot className="h-4 w-4" />
@@ -66,7 +66,7 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
           data-assistant-widget
           aria-label="Open assistant"
           onClick={() => setOpen(true)}
-          className="fixed bottom-4 right-4 z-[60] flex h-12 items-center gap-2 rounded-full bg-[#400095] px-4 text-xs font-bold text-white shadow-xl transition-transform hover:scale-105 dark:bg-[#F76D01]"
+          className="pointer-events-auto fixed bottom-4 right-4 z-[60] flex h-12 items-center gap-2 rounded-full bg-[#400095] px-4 text-xs font-bold text-white shadow-xl transition-transform hover:scale-105 dark:bg-[#F76D01]"
         >
           <Bot className="h-4 w-4" />
           {running ? "Working…" : "Assistant"}

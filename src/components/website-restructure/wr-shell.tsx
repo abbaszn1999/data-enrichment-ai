@@ -585,7 +585,7 @@ export function WebsiteRestructureShell() {
       projectLimit,
       projectsCreated: projectsCreatedTotal,
       projectsLeft,
-      createDialogOpen: createOpen,
+      createDialog: createOpen ? { name: createName } : null,
       railOpen,
       railFilter: filter,
       projects: projects.slice(0, 30).map((p) => ({ id: p.id, name: p.name, status: p.status, stage: p.phase })),
