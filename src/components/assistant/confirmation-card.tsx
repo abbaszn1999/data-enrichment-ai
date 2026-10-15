@@ -26,7 +26,12 @@ export function ConfirmationCard({
 
   useEffect(() => {
     let alive = true;
-    const pageEstimate = confirmation.actionTarget.startsWith("gallery.") ? getPageHandlers("gallery")?.estimate?.() : null;
+    const scope = confirmation.actionTarget.startsWith("gallery.")
+      ? "gallery"
+      : confirmation.actionTarget.startsWith("visualizer.")
+        ? "visualizer"
+        : null;
+    const pageEstimate = scope ? getPageHandlers(scope)?.estimate?.() : null;
     const feature = pageEstimate?.feature ?? "catalog";
     const rows = Math.max(1, pageEstimate ? pageEstimate.rows : useSheetStore.getState().selectedRowIds.size || 1);
     fetch(`/api/assistant/estimate?workspaceId=${encodeURIComponent(workspaceId)}&rows=${rows}&feature=${feature}`)

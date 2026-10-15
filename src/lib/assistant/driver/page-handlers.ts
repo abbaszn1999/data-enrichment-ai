@@ -8,7 +8,7 @@ import { useEffect, useRef } from "react";
  * the page that is currently mounted is registered.
  */
 
-export type PageScope = "gallery";
+export type PageScope = "gallery" | "visualizer";
 
 export type PageSelectRows = {
   mode: "all" | "none" | "indexes" | "status";
@@ -16,11 +16,15 @@ export type PageSelectRows = {
   statuses?: string[];
 };
 
-export type PageEstimate = { feature: "catalog" | "gallery_ai" | "gallery_google"; rows: number };
+export type EstimateFeature = "catalog" | "gallery_ai" | "gallery_google" | "visualizer";
+
+export type PageEstimate = { feature: EstimateFeature; rows: number };
 
 export interface PageHandlers {
   getState: () => unknown;
   selectRows: (args: PageSelectRows) => unknown;
+  /** Replace the page's chosen input columns (by header name). */
+  setColumns?: (columns: string[]) => unknown;
   /** What the credit-spending control would run, for the confirmation card's estimate. */
   estimate?: () => PageEstimate | null;
 }
@@ -39,6 +43,10 @@ export function usePageAgentHandlers(scope: PageScope, handlers: PageHandlers) {
     const stable: PageHandlers = {
       getState: () => ref.current.getState(),
       selectRows: (args) => ref.current.selectRows(args),
+      setColumns: (columns) => {
+        if (!ref.current.setColumns) throw new Error("This page has no column choice.");
+        return ref.current.setColumns(columns);
+      },
       estimate: () => ref.current.estimate?.() ?? null,
     };
     registry.set(scope, stable);

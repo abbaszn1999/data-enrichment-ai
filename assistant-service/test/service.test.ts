@@ -109,6 +109,12 @@ describe("event mapping", () => {
       title: "Selecting products",
       detail: "failed, not_started",
     });
+    expect(mapSdkMessage(call("running", "visualizer_get_state", {}))[0]).toMatchObject({ title: "Reading the visualizer" });
+    expect(mapSdkMessage(call("running", "visualizer_select_rows", { mode: "all" }))[0]).toMatchObject({ title: "Selecting products", detail: "all" });
+    expect(mapSdkMessage(call("running", "visualizer_set_columns", { columns: ["Title", "Brand"] }))[0]).toMatchObject({
+      title: "Choosing columns",
+      detail: "Title, Brand",
+    });
   });
 
   it("drops unknown messages", () => {

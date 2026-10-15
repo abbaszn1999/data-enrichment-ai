@@ -76,7 +76,16 @@ function describe(toolName: string, args: Args): Pick<ToolEvent, "kind" | "title
     }
     case "gallery_get_state":
       return { kind: "sheet", title: "Reading the gallery" };
-    case "gallery_select_rows": {
+    case "visualizer_get_state":
+      return { kind: "sheet", title: "Reading the visualizer" };
+    case "visualizer_set_columns":
+      return {
+        kind: "sheet",
+        title: "Choosing columns",
+        detail: Array.isArray(args.columns) ? clip(args.columns.join(", "), 80) : undefined,
+      };
+    case "gallery_select_rows":
+    case "visualizer_select_rows": {
       const mode = str(args.mode);
       const detail =
         mode === "indexes" && Array.isArray(args.indexes)

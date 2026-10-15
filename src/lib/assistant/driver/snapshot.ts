@@ -58,8 +58,8 @@ export function describeControl(element: HTMLElement): SnapshotControl | null {
     control.value = element.value.slice(0, 200);
   }
   const disabled = (element as HTMLButtonElement).disabled === true || element.getAttribute("aria-disabled") === "true";
-  const pressed = element.getAttribute("aria-pressed");
-  const states = [disabled ? "disabled" : "", pressed === "true" ? "active" : ""].filter(Boolean);
+  const active = element.getAttribute("aria-pressed") === "true" || element.getAttribute("aria-checked") === "true";
+  const states = [disabled ? "disabled" : "", active ? "active" : ""].filter(Boolean);
   if (states.length) control.state = states.join(",");
   if (element.hasAttribute("data-agent-spend")) control.spends_credits = true;
   return control;

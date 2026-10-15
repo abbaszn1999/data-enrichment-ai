@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { usePageAgentHandlers } from "@/lib/assistant/driver/page-handlers";
 import { withDisplayError } from "@/lib/provider-names";
 import { showBillingBlockedToast, toastIfBillingBlocked } from "@/lib/billing/billing-toast";
 import { PageLoader } from "@/components/brand/page-loader";
@@ -253,6 +254,8 @@ function ConfigSelect({
     <label className="block space-y-1.5">
       <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
       <select
+        data-agent-id={`visualizer.setting.${label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+        aria-label={label.replace(/\s*\*$/, "")}
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1657,6 +1660,96 @@ export default function ProductsVisualizerPage() {
     Number(settings.description.imageCount) || 4
   );
 
+  usePageAgentHandlers("visualizer", {
+    getState: () => {
+      if (!projectId) {
+        return {
+          view: "projects",
+          canEdit,
+          projects: sessions.slice(0, 30).map((item) => ({
+            id: item.id,
+            name: item.name,
+            status: item.status,
+            rows: item.total_rows,
+            ready: item.ready_rows,
+            failed: item.failed_rows,
+          })),
+        };
+      }
+      const statusCounts: Record<string, number> = {};
+      for (const row of rows) statusCounts[row.status] = (statusCounts[row.status] ?? 0) + 1;
+      return {
+        view: "project",
+        canEdit,
+        name: session?.name ?? null,
+        totalRows: rows.length,
+        visibleRows: visibleRows.length,
+        filtered: hasActiveFilters(columnFilters),
+        selectedRows: selectedRowIds.size,
+        selectedThatWillRun: selectedGenerateTargets.length,
+        statusCounts,
+        running: showGenerationBanner,
+        progress: showGenerationBanner ? { completed: bannerCompleted, total: bannerTotal } : null,
+        readyToGenerate: settingsReady,
+        productImageColumn: settings.productImageColumn,
+        productImageColumnValid: imageColumnIsValid,
+        imageColumnCandidates,
+        availableColumns: productColumns.slice(0, 60),
+        selectedColumns: settings.selectedColumns,
+        settings: {
+          quality: settings.images.tier,
+          layout: settings.description.layoutId,
+          imagesPerProduct: settings.description.imageCount,
+          instructions: settings.description.instructions.slice(0, 200),
+          branding: settings.images.brandingEnabled,
+        },
+        firstRows: visibleRows.slice(0, 3).map((row, index) => ({
+          row: index + 1,
+          status: row.status,
+          values: Object.fromEntries(
+            Object.entries(row.originalData ?? {})
+              .slice(0, 5)
+              .map(([key, value]) => [key, String(value ?? "").slice(0, 60)])
+          ),
+        })),
+      };
+    },
+    selectRows: ({ mode, indexes, statuses }) => {
+      if (!projectId || !worksheet) throw new Error("Open a visualizer project first.");
+      if (!canEdit) throw new Error("You do not have permission to edit this project.");
+      let chosen: string[] = [];
+      if (mode === "all") chosen = visibleRows.map((row) => row.id);
+      else if (mode === "indexes") {
+        const wanted = new Set(indexes ?? []);
+        chosen = visibleRows.filter((_, index) => wanted.has(index + 1)).map((row) => row.id);
+      } else if (mode === "status") {
+        const wanted = new Set((statuses ?? []).map((status) => status.trim().toLowerCase()));
+        chosen = visibleRows.filter((row) => wanted.has(row.status)).map((row) => row.id);
+      }
+      setSelectedRowIds(new Set(chosen));
+      return { selected: chosen.length, of: visibleRows.length };
+    },
+    setColumns: (columns) => {
+      if (!projectId || !worksheet) throw new Error("Open a visualizer project first.");
+      if (!canEdit) throw new Error("You do not have permission to edit this project.");
+      const byName = new Map(productColumns.map((column) => [column.trim().toLowerCase(), column]));
+      const chosen = new Set<string>();
+      const unknown: string[] = [];
+      for (const name of columns) {
+        const match = byName.get(name.trim().toLowerCase());
+        if (match) chosen.add(match);
+        else unknown.push(name);
+      }
+      setSettings((current) => ({
+        ...current,
+        columnsSelectionExplicit: true,
+        selectedColumns: productColumns.filter((column) => chosen.has(column)),
+      }));
+      return { selected: chosen.size, ...(unknown.length ? { unknown } : {}) };
+    },
+    estimate: () => (projectId ? { feature: "visualizer", rows: selectedGenerateTargets.length } : null),
+  });
+
   const prepareRunSession = async () => {
     if (!workspace || !session || !worksheet) return null;
     // Always store the settings the run starts with (a no-op when already saved).
@@ -1930,6 +2023,8 @@ export default function ProductsVisualizerPage() {
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0"
+              data-agent-id="visualizer.back"
+              aria-label="Back to projects"
               onClick={() => void leaveProject()}
             >
               <ArrowLeft className="h-4 w-4" />
@@ -1952,6 +2047,7 @@ export default function ProductsVisualizerPage() {
                 saveStatus === "saving" ||
                 saveStatus === "saved"
               }
+              data-agent-id="visualizer.save"
               onClick={() => void persistSettings()}
               className={`h-8 gap-1.5 rounded-lg text-[10px] ${saveStatus === "dirty" ? "bg-[#400095] text-white dark:bg-[#F76D01]" : ""}`}
             >
@@ -2097,6 +2193,8 @@ export default function ProductsVisualizerPage() {
                     key={tier}
                     type="button"
                     disabled={!canEdit}
+                    data-agent-id={`visualizer.quality.${tier}`}
+                    aria-pressed={settings.images.tier === tier}
                     onClick={() => updateImageQuality(tier)}
                     className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
                       settings.images.tier === tier
@@ -2119,6 +2217,8 @@ export default function ProductsVisualizerPage() {
                   Custom instructions
                 </span>
                 <textarea
+                  data-agent-id="visualizer.instructions"
+                  aria-label="Custom instructions"
                   value={settings.description.instructions}
                   disabled={!canEdit}
                   onChange={(event) =>
@@ -2148,6 +2248,7 @@ export default function ProductsVisualizerPage() {
                   role="switch"
                   aria-checked={settings.images.brandingEnabled}
                   aria-label="Toggle branding"
+                  data-agent-id="visualizer.branding"
                   disabled={!canEdit}
                   onClick={() =>
                     updateImagesField(
@@ -2357,6 +2458,7 @@ export default function ProductsVisualizerPage() {
                     variant="destructive"
                     size="sm"
                     className="h-10 w-full gap-2 font-medium shadow-sm"
+                    data-agent-id="visualizer.stop"
                     disabled={stopping}
                     onClick={() => void stopGeneration()}
                   >
@@ -2378,6 +2480,8 @@ export default function ProductsVisualizerPage() {
                       selectedGenerateTargets.length === 0 ||
                       session.status === "processing"
                     }
+                    data-agent-id="visualizer.run"
+                    data-agent-spend="visualizer"
                     onClick={() => void runGenerate(false)}
                   >
                     <Sparkles className="h-4 w-4" />
@@ -2390,6 +2494,7 @@ export default function ProductsVisualizerPage() {
                 variant="outline"
                 size="sm"
                 className="h-9 w-full gap-2 font-medium"
+                data-agent-id="visualizer.export"
                 disabled={rows.length === 0 || generating || stopping || !!generationRun}
                 onClick={() => setExportOpen(true)}
               >
@@ -3419,6 +3524,7 @@ export default function ProductsVisualizerPage() {
           <Button
             size="sm"
             className="h-9 gap-2 self-start rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] sm:self-auto"
+            data-agent-id="visualizer.new-project"
             disabled={!canEdit}
             onClick={() => setShowCreate(true)}
           >
@@ -3550,6 +3656,8 @@ export default function ProductsVisualizerPage() {
                     transition={{ delay: Math.min(index * .04, .2) }}
                     role="button"
                     tabIndex={0}
+                    data-agent-id={`visualizer.project.${item.id}`}
+                    aria-label={`Open project ${item.name}`}
                     onClick={() => openProject(item.id)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
@@ -3679,6 +3787,7 @@ export default function ProductsVisualizerPage() {
               <Label htmlFor="visualizer-project-name">Project name</Label>
               <Input
                 id="visualizer-project-name"
+                data-agent-id="visualizer.create.name"
                 autoFocus
                 value={projectName}
                 onChange={(event) => setProjectName(event.target.value)}
@@ -3690,6 +3799,7 @@ export default function ProductsVisualizerPage() {
               <Label>Product worksheet</Label>
               <button
                 type="button"
+                data-agent-id="visualizer.create.dropzone"
                 onClick={() => createFileInputRef.current?.click()}
                 className={`flex min-h-32 w-full flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-4 text-center transition-colors ${
                   uploadFile
@@ -3718,6 +3828,7 @@ export default function ProductsVisualizerPage() {
                 type="file"
                 accept=".csv,.xlsx,.xls"
                 className="hidden"
+                data-agent-id="visualizer.create.file"
                 onChange={(event) =>
                   setUploadFile(event.target.files?.[0] || null)
                 }
@@ -3734,6 +3845,7 @@ export default function ProductsVisualizerPage() {
             </Button>
             <Button
               className="gap-1.5 rounded-xl bg-[#400095] px-5 text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
+              data-agent-id="visualizer.create.submit"
               disabled={!projectName.trim() || !uploadFile || creating || !canEdit}
               onClick={() => void createProject()}
             >

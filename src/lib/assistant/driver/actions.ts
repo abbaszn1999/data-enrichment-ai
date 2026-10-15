@@ -121,7 +121,7 @@ async function upload(action: Extract<BrowserAction, { kind: "upload_file" }>, c
   }
   const file = ctx.getFile(action.fileId);
   if (!file) throw new ActionError("That file is no longer attached. Ask the user to attach it again.");
-  const zone = findAgentElement("ci.new.dropzone") ?? element.parentElement;
+  const zone = findAgentElement(action.target.replace(/\.file$/, ".dropzone")) ?? element.parentElement;
   if (zone) {
     reveal(zone as HTMLElement);
     await sleep(250);
@@ -179,6 +179,8 @@ export async function executeBrowserAction(action: BrowserAction, ctx: DriverCon
             statuses: action.statuses,
           }),
         };
+      case "page_set_columns":
+        return { ok: true, result: requirePage(action.scope).setColumns?.(action.columns) };
     }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "The action failed" };

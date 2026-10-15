@@ -26,6 +26,9 @@ export const agentTargetSchema = z
   .max(120)
   .regex(/^[a-z0-9][a-z0-9._:-]*$/i, "Invalid target id");
 
+/** Pages that register state handlers with the driver (see driver/page-handlers). */
+export const pageScopeSchema = z.enum(["gallery", "visualizer"]);
+
 export const browserActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("see_page") }),
   z.object({
@@ -54,13 +57,18 @@ export const browserActionSchema = z.discriminatedUnion("kind", [
     enable: z.array(z.string().max(120)).max(40).optional(),
     disable: z.array(z.string().max(120)).max(40).optional(),
   }),
-  z.object({ kind: z.literal("page_get_state"), scope: z.enum(["gallery"]) }),
+  z.object({ kind: z.literal("page_get_state"), scope: pageScopeSchema }),
   z.object({
     kind: z.literal("page_select_rows"),
-    scope: z.enum(["gallery"]),
+    scope: pageScopeSchema,
     mode: z.enum(["all", "none", "indexes", "status"]),
     indexes: z.array(z.number().int().min(1)).max(500).optional(),
     statuses: z.array(z.string().max(40)).max(10).optional(),
+  }),
+  z.object({
+    kind: z.literal("page_set_columns"),
+    scope: z.enum(["visualizer"]),
+    columns: z.array(z.string().max(200)).max(200),
   }),
 ]);
 export type BrowserAction = z.infer<typeof browserActionSchema>;

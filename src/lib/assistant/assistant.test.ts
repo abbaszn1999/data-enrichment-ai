@@ -26,6 +26,9 @@ describe("assistant protocol", () => {
     expect(browserActionSchema.safeParse({ kind: "page_get_state", scope: "gallery" }).success).toBe(true);
     expect(browserActionSchema.safeParse({ kind: "page_select_rows", scope: "gallery", mode: "status", statuses: ["failed"] }).success).toBe(true);
     expect(browserActionSchema.safeParse({ kind: "page_get_state", scope: "billing" }).success).toBe(false);
+    expect(browserActionSchema.safeParse({ kind: "page_get_state", scope: "visualizer" }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "page_set_columns", scope: "visualizer", columns: ["Title", "Brand"] }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "page_set_columns", scope: "gallery", columns: ["Title"] }).success).toBe(false);
     expect(browserActionSchema.safeParse({ kind: "page_select_rows", scope: "gallery", mode: "indexes", indexes: [0] }).success).toBe(false);
   });
 

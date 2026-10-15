@@ -9,22 +9,24 @@ export const dynamic = "force-dynamic";
 const querySchema = z.object({
   workspaceId: z.string().max(80),
   rows: z.coerce.number().int().min(1).max(100_000),
-  feature: z.enum(["catalog", "gallery_ai", "gallery_google"]).default("catalog"),
+  feature: z.enum(["catalog", "gallery_ai", "gallery_google", "visualizer"]).default("catalog"),
 });
 
 const FEATURE_SOURCE = {
-  catalog: { operation: "catalog_intelligence", entityType: "catalog_row" },
-  gallery_ai: { operation: "gallery_ai", entityType: "gallery_session" },
-  gallery_google: { operation: "gallery_google", entityType: "gallery_session" },
+  catalog: { operations: ["catalog_intelligence"], entityType: "catalog_row" },
+  gallery_ai: { operations: ["gallery_ai"], entityType: "gallery_session" },
+  gallery_google: { operations: ["gallery_google"], entityType: "gallery_session" },
+  visualizer: { operations: ["visualizer_description", "visualizer_images"], entityType: "visualizer_session" },
 } as const;
 
-/** Gallery charges once per row phase, so phases are summed back into one cost per product. */
+/** Gallery and Visualizer charge once per row phase, so phases are summed back into one cost per product and run. */
 function costsPerRow(rows: { credits_used: unknown; details: unknown }[], groupByRow: boolean): number[] {
   if (!groupByRow) return rows.map((row) => Number(row.credits_used));
   const totals = new Map<string, number>();
   rows.forEach((row, index) => {
-    const details = row.details as { rowId?: unknown } | null;
-    const key = typeof details?.rowId === "string" ? details.rowId : `#${index}`;
+    const details = row.details as { rowId?: unknown; runId?: unknown } | null;
+    const runId = typeof details?.runId === "string" ? details.runId : "";
+    const key = typeof details?.rowId === "string" ? `${runId}:${details.rowId}` : `#${index}`;
     totals.set(key, (totals.get(key) ?? 0) + Number(row.credits_used));
   });
   return [...totals.values()];
@@ -50,7 +52,7 @@ export async function GET(request: NextRequest) {
     .from("credit_transactions")
     .select("credits_used, details")
     .eq("workspace_id", parsed.data.workspaceId)
-    .eq("operation", source.operation)
+    .in("operation", [...source.operations])
     .eq("entity_type", source.entityType)
     .order("created_at", { ascending: false })
     .limit(400);

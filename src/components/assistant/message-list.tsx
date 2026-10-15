@@ -41,6 +41,7 @@ const ICONS: Record<string, ComponentType<{ className?: string }>> = {
   "Selecting rows": Table2,
   "Choosing columns": Table2,
   "Reading the gallery": Table2,
+  "Reading the visualizer": Table2,
   "Selecting products": Table2,
   "Asking for your approval": ShieldCheck,
 };
