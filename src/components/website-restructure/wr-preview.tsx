@@ -127,6 +127,8 @@ export function WrPreview({
               <button
                 key={key}
                 type="button"
+                data-agent-id={`website.preview.${key}`}
+                aria-pressed={size === key}
                 onClick={() => setSize(key)}
                 title={label}
                 aria-label={label}
@@ -167,6 +169,7 @@ export function WrPreview({
           <>
             <button
               type="button"
+              data-agent-id="website.preview.open-menu"
               onClick={openMenu}
               disabled={!result}
               className="inline-flex items-center gap-1.5 rounded-full border border-border/70 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-40"
@@ -252,6 +255,7 @@ export function WrPreview({
           </button>
 
           <a
+            data-agent-id="website.download"
             href={result ? downloadUrl : undefined}
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-opacity ${
               result ? "bg-[#400095] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90" : "pointer-events-none bg-[#400095]/40 dark:bg-[#F76D01]/40"

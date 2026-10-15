@@ -29,7 +29,7 @@ export const agentTargetSchema = z
   .regex(/^[a-z0-9][a-z0-9._:-]*$/i, "Invalid target id");
 
 /** Pages that register state handlers with the driver (see driver/page-handlers). */
-export const pageScopeSchema = z.enum(["gallery", "visualizer", "classify"]);
+export const pageScopeSchema = z.enum(["gallery", "visualizer", "classify", "website"]);
 
 export const browserActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("see_page") }),

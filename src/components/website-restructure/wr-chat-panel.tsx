@@ -327,6 +327,8 @@ export function WrChatPanel({
               {state.images.length < WR_MAX_IMAGES ? (
                 <button
                   type="button"
+                  data-agent-id="website.images.dropzone"
+                  aria-label="Add header screenshots"
                   onClick={() => imageInputRef.current?.click()}
                   className="flex aspect-square flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border/70 text-muted-foreground hover:text-foreground hover:border-foreground/40"
                 >
@@ -340,6 +342,7 @@ export function WrChatPanel({
               type="file"
               accept="image/*"
               multiple
+              data-agent-id="website.images.file"
               className="hidden"
               onChange={(e) => {
                 const files = Array.from(e.target.files ?? []);
@@ -353,6 +356,7 @@ export function WrChatPanel({
             </p>
             <button
               type="button"
+              data-agent-id="website.images.done"
               onClick={onDoneWithImages}
               disabled={state.images.length === 0 || busy}
               className="w-full rounded-full bg-[#400095] px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-[#6B358D] disabled:opacity-40 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
@@ -389,6 +393,7 @@ export function WrChatPanel({
                 </div>
                 <button
                   type="button"
+                  data-agent-id="website.logo.remove"
                   onClick={onDeleteLogo}
                   className="inline-flex items-center gap-1 rounded-full border border-border/70 px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground"
                 >
@@ -399,6 +404,7 @@ export function WrChatPanel({
             ) : (
               <button
                 type="button"
+                data-agent-id="website.logo.dropzone"
                 onClick={() => logoInputRef.current?.click()}
                 className="flex w-full flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border/70 py-6 text-muted-foreground hover:text-foreground hover:border-foreground/40"
               >
@@ -410,6 +416,7 @@ export function WrChatPanel({
               ref={logoInputRef}
               type="file"
               accept="image/*"
+              data-agent-id="website.logo.file"
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
@@ -419,6 +426,7 @@ export function WrChatPanel({
             />
             <button
               type="button"
+              data-agent-id="website.logo.continue"
               onClick={onDoneWithLogo}
               disabled={busy}
               className="w-full rounded-full bg-[#400095] px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-[#6B358D] disabled:opacity-40 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
@@ -436,9 +444,10 @@ export function WrChatPanel({
                   <span className="min-w-0 truncate">{c.raw}</span>
                   <button
                     type="button"
+                    data-agent-id={`website.competitor.remove.${i}`}
                     onClick={() => onRemoveCompetitor(i)}
                     className="shrink-0 text-muted-foreground hover:text-foreground"
-                    aria-label="Remove competitor"
+                    aria-label={`Remove competitor ${c.raw}`}
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -448,6 +457,8 @@ export function WrChatPanel({
             {state.competitors.length < WR_MAX_COMPETITORS ? (
               <form onSubmit={submitCompetitor} className="flex items-center gap-1.5">
                 <input
+                  data-agent-id="website.competitor.input"
+                  aria-label="Competitor brand name or URL"
                   value={competitorDraft}
                   onChange={(e) => setCompetitorDraft(e.target.value)}
                   placeholder="Brand name or URL"
@@ -455,6 +466,7 @@ export function WrChatPanel({
                 />
                 <button
                   type="submit"
+                  data-agent-id="website.competitor.add"
                   disabled={!competitorDraft.trim()}
                   className="rounded-full border border-border/70 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-40"
                 >
@@ -464,6 +476,8 @@ export function WrChatPanel({
             ) : null}
             <button
               type="button"
+              data-agent-id="website.build"
+              data-agent-spend="website"
               onClick={() => onStartBuild(state.competitors.length === 0)}
               disabled={busy}
               className="flex w-full items-center justify-center gap-2 rounded-full bg-[#400095] px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-[#6B358D] disabled:opacity-40 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
@@ -477,6 +491,8 @@ export function WrChatPanel({
         {phase === "failed" && !readOnly ? (
           <button
             type="button"
+            data-agent-id="website.build.retry"
+            data-agent-spend="website"
             onClick={() => onStartBuild(state.competitors.length === 0)}
             disabled={busy}
             className="flex w-full items-center justify-center gap-2 rounded-full bg-[#400095] px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-[#6B358D] disabled:opacity-40 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
@@ -527,6 +543,7 @@ export function WrChatPanel({
               <button
                 type="button"
                 disabled={composerLocked || pending.length >= WR_MAX_CHAT_ATTACHMENTS}
+                data-agent-id="website.edit.dropzone"
                 onClick={() => chatFileInputRef.current?.click()}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
                 aria-label="Attach image"
@@ -539,6 +556,7 @@ export function WrChatPanel({
                 type="file"
                 accept={WR_CHAT_IMAGE_ACCEPT}
                 multiple
+                data-agent-id="website.edit.file"
                 className="hidden"
                 onChange={(e) => {
                   const files = Array.from(e.target.files ?? []);
@@ -548,6 +566,8 @@ export function WrChatPanel({
               />
               <textarea
                 ref={textareaRef}
+                data-agent-id="website.edit.message"
+                aria-label="Describe a change to the header"
                 value={editDraft}
                 onChange={handleTextareaChange}
                 onPaste={handleComposerPaste}
@@ -568,6 +588,8 @@ export function WrChatPanel({
               />
               <button
                 type="submit"
+                data-agent-id="website.edit.send"
+                data-agent-spend="website"
                 disabled={!canSend}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#400095] text-white shadow-sm transition-opacity hover:bg-[#6B358D] disabled:opacity-30 dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
                 aria-label="Send"

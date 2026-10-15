@@ -157,6 +157,7 @@ export function WrProjectsRail({
           <button
             type="button"
             onClick={() => onOpenChange(true)}
+            data-agent-id={open ? undefined : "website.rail.open"}
             className="flex h-9 w-9 items-center justify-center rounded-lg text-foreground/90 hover:bg-muted transition-colors"
             title="Open projects"
             aria-label="Open projects sidebar"
@@ -218,6 +219,8 @@ export function WrProjectsRail({
                 <button
                   key={tab}
                   type="button"
+                  data-agent-id={open ? `website.filter.${tab}` : undefined}
+                  aria-pressed={selected}
                   onClick={() => onFilterChange(tab)}
                   className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors ${
                     selected
@@ -234,6 +237,7 @@ export function WrProjectsRail({
           {canEdit ? (
             <button
               type="button"
+              data-agent-id={open ? "website.new-project" : undefined}
               onClick={onNewProject}
               disabled={atProjectCap}
               className="mx-3.5 mb-2 flex items-center gap-2 rounded-lg px-1.5 py-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors shrink-0"
@@ -307,6 +311,9 @@ export function WrProjectsRail({
                   >
                     <button
                       type="button"
+                      data-agent-id={open ? `website.project.${project.id}` : undefined}
+                      aria-label={`Open project ${project.name}`}
+                      aria-pressed={active}
                       onClick={() => onSelectProject(project.id)}
                       className="flex min-w-0 flex-1 items-center gap-2.5 py-1 text-left"
                     >

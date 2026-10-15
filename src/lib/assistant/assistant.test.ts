@@ -34,6 +34,9 @@ describe("assistant protocol", () => {
 
   it("accepts the classification scope and multi-file uploads", () => {
     expect(browserActionSchema.safeParse({ kind: "page_get_state", scope: "classify" }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "page_get_state", scope: "website" }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "page_set_columns", scope: "website", columns: ["x"] }).success).toBe(false);
+    expect(browserActionSchema.safeParse({ kind: "click", target: "website.competitor.remove.0" }).success).toBe(true);
     expect(browserActionSchema.safeParse({ kind: "page_select_rows", scope: "classify", mode: "all" }).success).toBe(false);
     expect(browserActionSchema.safeParse({ kind: "upload_file", target: "classify.new.file", fileIds: ["a", "b"] }).success).toBe(true);
     expect(browserActionSchema.safeParse({ kind: "upload_file", target: "visualizer.create.file", fileId: "a" }).success).toBe(true);

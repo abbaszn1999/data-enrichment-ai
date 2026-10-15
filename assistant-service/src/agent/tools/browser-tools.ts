@@ -222,6 +222,13 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
       annotations: { readOnlyHint: true },
       execute: () => perform(run, { kind: "page_get_state", scope: "classify" }),
     },
+    website_get_state: {
+      description:
+        "Website Restructure only: read the header builder. Returns the projects and the plan's project allowance, and for the open project its stage, screenshots, logo, competitors, edits left, versions, the latest builder messages and whether it is busy.",
+      inputSchema: noArgs,
+      annotations: { readOnlyHint: true },
+      execute: () => perform(run, { kind: "page_get_state", scope: "website" }),
+    },
     visualizer_set_columns: {
       description:
         "Products Visualizer only: choose exactly which worksheet columns describe each product (by header name, as listed in visualizer_get_state). The product image column is set separately with its dropdown.",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 /**
  * Pages whose state lives in local React state (not a shared store) register
@@ -8,7 +8,7 @@ import { useEffect, useRef } from "react";
  * the page that is currently mounted is registered.
  */
 
-export type PageScope = "gallery" | "visualizer" | "classify";
+export type PageScope = "gallery" | "visualizer" | "classify" | "website";
 
 export type PageSelectRows = {
   mode: "all" | "none" | "indexes" | "status";
@@ -27,6 +27,8 @@ export interface PageHandlers {
   setColumns?: (columns: string[]) => unknown;
   /** What the credit-spending control would run, for the confirmation card's estimate. */
   estimate?: () => PageEstimate | null;
+  /** For guarded controls that use a plan allowance instead of credits: what approving uses up. */
+  allowanceNote?: (target: string) => string | null;
 }
 
 const registry = new Map<PageScope, PageHandlers>();
@@ -38,7 +40,9 @@ export function getPageHandlers(scope: PageScope): PageHandlers | undefined {
 /** Register handlers for the lifetime of the calling component. The latest closures are always used. */
 export function usePageAgentHandlers(scope: PageScope, handlers: PageHandlers) {
   const ref = useRef(handlers);
-  ref.current = handlers;
+  useLayoutEffect(() => {
+    ref.current = handlers;
+  });
   useEffect(() => {
     const stable: PageHandlers = {
       getState: () => ref.current.getState(),
@@ -51,6 +55,7 @@ export function usePageAgentHandlers(scope: PageScope, handlers: PageHandlers) {
         return ref.current.setColumns(columns);
       },
       estimate: () => ref.current.estimate?.() ?? null,
+      allowanceNote: (target) => ref.current.allowanceNote?.(target) ?? null,
     };
     registry.set(scope, stable);
     return () => {

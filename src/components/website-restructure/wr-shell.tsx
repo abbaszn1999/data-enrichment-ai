@@ -45,9 +45,12 @@ import {
   type WrProjectRowWithUrls,
 } from "@/lib/website-restructure/client-api";
 import { resolveWrEditInstruction, wrChatImageFilename } from "@/lib/website-restructure/wr-chat-images";
+import { usePageAgentHandlers } from "@/lib/assistant/driver/page-handlers";
 import {
   WR_DEFAULT_PROJECT_LIMIT,
+  WR_MAX_COMPETITORS,
   WR_MAX_EDIT_MESSAGES,
+  WR_MAX_IMAGES,
   type WrBuildResult,
   type WrChatAttachment,
   type WrChatMessage,
@@ -573,6 +576,62 @@ export function WebsiteRestructureShell() {
     });
   };
 
+  const projectsLeft = projectLimit == null ? null : Math.max(0, projectLimit - projectsCreatedTotal);
+  usePageAgentHandlers("website", {
+    getState: () => ({
+      hasIntegration,
+      canEdit,
+      loading: wsLoading || loading,
+      projectLimit,
+      projectsCreated: projectsCreatedTotal,
+      projectsLeft,
+      createDialogOpen: createOpen,
+      railOpen,
+      railFilter: filter,
+      projects: projects.slice(0, 30).map((p) => ({ id: p.id, name: p.name, status: p.status, stage: p.phase })),
+      open: activeProject
+        ? {
+            id: activeProject.id,
+            name: activeProject.name,
+            stage: activeProject.phase,
+            busy,
+            progress: progressSteps.slice(-3),
+            screenshots: activeProject.state.images.length,
+            maxScreenshots: WR_MAX_IMAGES,
+            logo: !!activeProject.state.logo,
+            competitors: activeProject.state.competitors.map((c) => c.raw),
+            maxCompetitors: WR_MAX_COMPETITORS,
+            editsLeft: Math.max(0, WR_MAX_EDIT_MESSAGES - activeProject.editMessagesUsed),
+            activeVersion: activeProject.activeVersion,
+            versions: (versionsByProject[activeProject.id] ?? []).map((v) => ({ version: v.version, notes: v.notes })),
+            hasResult: !!resultByProject[activeProject.id],
+            lastError: activeProject.lastError,
+            recentMessages: activeProject.state.chat.slice(-6).map((m) => ({
+              from: m.role === "user" ? "user" : "builder",
+              text: m.text.slice(0, 400),
+              images: m.attachments?.length ?? 0,
+              ...(m.isError ? { error: true } : {}),
+            })),
+          }
+        : null,
+    }),
+    allowanceNote: (target) => {
+      if (target === "website.create.submit") {
+        return projectsLeft == null
+          ? "Free · creates a header project"
+          : `Free · uses 1 of your ${projectsLeft} remaining header projects (deleting one does not give it back)`;
+      }
+      if (target === "website.edit.send" && activeProject) {
+        const left = Math.max(0, WR_MAX_EDIT_MESSAGES - activeProject.editMessagesUsed);
+        return `Free · uses 1 of the ${left} edits left on this project`;
+      }
+      if (target === "website.build" || target === "website.build.retry") {
+        return "Free · builds the header from the screenshots, logo and competitors; they cannot be changed afterwards";
+      }
+      return null;
+    },
+  });
+
   if (wsLoading || loading) {
     return <PageLoader />;
   }
@@ -663,6 +722,7 @@ export function WebsiteRestructureShell() {
             </p>
             {canEdit ? (
               <Button
+                data-agent-id="website.new-project-main"
                 onClick={handleNewProject}
                 disabled={atProjectCap}
                 className="rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
@@ -700,6 +760,8 @@ export function WebsiteRestructureShell() {
             <DialogDescription>You can rename it later from the projects list.</DialogDescription>
           </DialogHeader>
           <Input
+            data-agent-id="website.create.name"
+            aria-label="Header project name"
             value={createName}
             onChange={(e) => setCreateName(e.target.value)}
             placeholder="e.g. New homepage header"
@@ -715,10 +777,17 @@ export function WebsiteRestructureShell() {
             className="rounded-xl"
           />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={creatingProject}>
+            <Button
+              variant="outline"
+              data-agent-id="website.create.cancel"
+              onClick={() => setCreateOpen(false)}
+              disabled={creatingProject}
+            >
               Cancel
             </Button>
             <Button
+              data-agent-id="website.create.submit"
+              data-agent-spend="website"
               onClick={() => void handleCreateProject()}
               disabled={creatingProject}
               className="rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
