@@ -28,39 +28,53 @@ function loadSdk() {
   document.head.appendChild(script);
 }
 
+async function fetchIdentityToken(): Promise<string | null> {
+  try {
+    const res = await fetch("/api/featurebase/token", { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { token?: string | null };
+    return data.token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Featurebase messenger (the Fibi AI agent + help center search).
  *
  * Renders nothing and loads no third-party script unless
  * NEXT_PUBLIC_FEATUREBASE_APP_ID (the Featurebase organization id) is set, so
- * it is safe to ship before the agent is switched on in the Featurebase
- * dashboard.
+ * it is safe to ship before the agent is switched on.
+ *
+ * Featurebase has identity verification enabled, so users are identified with
+ * a server-signed token from /api/featurebase/token. If no token is available
+ * (secret not configured yet) the messenger still opens, anonymously.
  */
-export function FeaturebaseMessenger({
-  email,
-  name,
-  userId,
-}: {
-  email?: string | null;
-  name?: string | null;
-  userId?: string | null;
-}) {
+export function FeaturebaseMessenger({ userId }: { userId?: string | null }) {
   const appId = process.env.NEXT_PUBLIC_FEATUREBASE_APP_ID;
 
   useEffect(() => {
     if (!appId || !userId) return;
-    loadSdk();
-    window.Featurebase?.("boot", {
-      appId,
-      userId,
-      ...(email ? { email } : {}),
-      ...(name ? { name } : {}),
-      language: "en",
-    });
+    let cancelled = false;
+    let booted = false;
+
+    (async () => {
+      const token = await fetchIdentityToken();
+      if (cancelled) return;
+      loadSdk();
+      window.Featurebase?.("boot", {
+        appId,
+        language: "en",
+        ...(token ? { featurebaseJwt: token } : {}),
+      });
+      booted = true;
+    })();
+
     return () => {
-      window.Featurebase?.("shutdown");
+      cancelled = true;
+      if (booted) window.Featurebase?.("shutdown");
     };
-  }, [appId, userId, email, name]);
+  }, [appId, userId]);
 
   return null;
 }

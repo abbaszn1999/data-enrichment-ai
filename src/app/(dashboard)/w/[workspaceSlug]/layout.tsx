@@ -508,11 +508,7 @@ export default function WorkspaceLayout({
 
   return (
     <WorkspaceContext.Provider value={{ workspace, role, wsLoading, hasIntegration: !!hasIntegration }}>
-      <FeaturebaseMessenger
-        userId={user?.id}
-        email={user?.email}
-        name={profile?.full_name}
-      />
+      <FeaturebaseMessenger userId={user?.id} />
       <div className="h-screen flex flex-col bg-background overflow-hidden">
         {/* Top Header — hidden in immersive mode */}
         <header className={`border-b bg-background/95 backdrop-blur-sm sticky top-0 z-50 shrink-0 transition-all duration-300 ${
