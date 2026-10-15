@@ -32,9 +32,9 @@ function loadSdk() {
  * Featurebase messenger (the Fibi AI agent + help center search).
  *
  * Renders nothing and loads no third-party script unless
- * NEXT_PUBLIC_FEATUREBASE_ORG (the Featurebase workspace slug, e.g.
- * "autommerce") is set, so it is safe to ship before the agent is switched on
- * in the Featurebase dashboard.
+ * NEXT_PUBLIC_FEATUREBASE_APP_ID (the Featurebase organization id) is set, so
+ * it is safe to ship before the agent is switched on in the Featurebase
+ * dashboard.
  */
 export function FeaturebaseMessenger({
   email,
@@ -45,13 +45,13 @@ export function FeaturebaseMessenger({
   name?: string | null;
   userId?: string | null;
 }) {
-  const organization = process.env.NEXT_PUBLIC_FEATUREBASE_ORG;
+  const appId = process.env.NEXT_PUBLIC_FEATUREBASE_APP_ID;
 
   useEffect(() => {
-    if (!organization || !userId) return;
+    if (!appId || !userId) return;
     loadSdk();
     window.Featurebase?.("boot", {
-      organization,
+      appId,
       userId,
       ...(email ? { email } : {}),
       ...(name ? { name } : {}),
@@ -60,7 +60,7 @@ export function FeaturebaseMessenger({
     return () => {
       window.Featurebase?.("shutdown");
     };
-  }, [organization, userId, email, name]);
+  }, [appId, userId, email, name]);
 
   return null;
 }
