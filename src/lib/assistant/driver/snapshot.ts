@@ -27,6 +27,11 @@ function isVisible(element: HTMLElement): boolean {
 function labelOf(element: HTMLElement): string {
   const aria = element.getAttribute("aria-label");
   if (aria) return aria.trim().slice(0, 120);
+  if (element.id && (element instanceof HTMLSelectElement || element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+    const text = document.querySelector(`label[for="${CSS.escape(element.id)}"]`)?.textContent?.replace(/\s+/g, " ").trim();
+    if (text) return text.slice(0, 120);
+  }
+  if (element instanceof HTMLSelectElement) return "dropdown";
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
     return (element.placeholder || element.name || element.type || "").slice(0, 120);
   }

@@ -103,6 +103,14 @@ describe("event mapping", () => {
     expect(JSON.stringify([done, failed])).not.toMatch(/custom-user-tools|mcp/);
   });
 
+  it("describes gallery steps", () => {
+    expect(mapSdkMessage(call("running", "gallery_get_state", {}))[0]).toMatchObject({ title: "Reading the gallery" });
+    expect(mapSdkMessage(call("running", "gallery_select_rows", { mode: "status", statuses: ["failed", "not_started"] }))[0]).toMatchObject({
+      title: "Selecting products",
+      detail: "failed, not_started",
+    });
+  });
+
   it("drops unknown messages", () => {
     expect(mapSdkMessage({ type: "usage", usage: {} })).toEqual([]);
     expect(mapSdkMessage({ type: "tool_call", call_id: "c", name: "x", status: "running" })).toEqual([]);

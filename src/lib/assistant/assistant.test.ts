@@ -21,6 +21,14 @@ describe("assistant protocol", () => {
     expect(browserActionSchema.safeParse({ kind: "shell", cmd: "ls" }).success).toBe(false);
   });
 
+  it("accepts gallery page actions only for known scopes", () => {
+    expect(browserActionSchema.safeParse({ kind: "click", target: "gallery.project.3f2a9c1e-0b4d-4c55-9a1e-2b7f0c8d9e10" }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "page_get_state", scope: "gallery" }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "page_select_rows", scope: "gallery", mode: "status", statuses: ["failed"] }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "page_get_state", scope: "billing" }).success).toBe(false);
+    expect(browserActionSchema.safeParse({ kind: "page_select_rows", scope: "gallery", mode: "indexes", indexes: [0] }).success).toBe(false);
+  });
+
   it("limits message size", () => {
     const context = { workspaceSlug: "a", workspaceId: "w", path: "/w/a" };
     expect(chatRequestSchema.safeParse({ message: "x".repeat(4001), context }).success).toBe(false);

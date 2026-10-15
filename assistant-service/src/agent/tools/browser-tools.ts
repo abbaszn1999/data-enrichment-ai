@@ -161,6 +161,33 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
         return perform(run, { kind: "ci_set_columns", enable: strings(args.enable), disable: strings(args.disable) });
       },
     },
+    gallery_get_state: {
+      description:
+        "Products Gallery only: read the page. Without an open project it lists the projects; with one open it returns the mode (scraping or ai), the settings, row counts by status, selected rows, whether a run is active and its progress.",
+      inputSchema: noArgs,
+      annotations: { readOnlyHint: true },
+      execute: () => perform(run, { kind: "page_get_state", scope: "gallery" }),
+    },
+    gallery_select_rows: {
+      description:
+        "Products Gallery only: choose which products are selected for the next run. mode: all (every row matching the current filter), none, indexes (1-based row numbers), or status (rows whose status is in statuses, for example not_started, failed, ready).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { type: "string", enum: ["all", "none", "indexes", "status"] },
+          indexes: { type: "array", items: { type: "number" } },
+          statuses: { type: "array", items: { type: "string" } },
+        },
+        required: ["mode"],
+      },
+      execute: async (args: Args) => {
+        const mode = args.mode;
+        if (mode !== "all" && mode !== "none" && mode !== "indexes" && mode !== "status") return failure("Invalid mode");
+        const indexes = Array.isArray(args.indexes) ? args.indexes.filter((n): n is number => Number.isInteger(n) && n >= 1).slice(0, 500) : undefined;
+        const statuses = Array.isArray(args.statuses) ? args.statuses.filter((s): s is string => typeof s === "string").slice(0, 10) : undefined;
+        return perform(run, { kind: "page_select_rows", scope: "gallery", mode, indexes, statuses });
+      },
+    },
     ask_confirmation: {
       description:
         "Ask the user to approve an action that spends credits BEFORE doing it. Give a short title and 1 to 5 detail lines (what will run, on how many rows, which columns). The page adds the estimated cost and the balance. Returns approved true with an approvalToken to pass to click, or approved false.",

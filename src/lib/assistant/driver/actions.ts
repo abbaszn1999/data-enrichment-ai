@@ -1,6 +1,7 @@
 import { isAllowedNavigation, isBlockedNavigation, type BrowserAction } from "../protocol";
 import { ciGetState, ciSelectRows, ciSetColumns } from "./ci-handlers";
 import { moveCursorTo, pressCursor } from "./cursor-controller";
+import { getPageHandlers, type PageScope } from "./page-handlers";
 import { consumeApproval, isSpendControl } from "./spend-guard";
 import { findAgentElement, takeSnapshot } from "./snapshot";
 
@@ -20,6 +21,12 @@ function requireElement(id: string): HTMLElement {
   const element = findAgentElement(id);
   if (!element) throw new ActionError(`Control "${id}" is not on the page. Call see_page for the current controls.`);
   return element;
+}
+
+function requirePage(scope: PageScope) {
+  const handlers = getPageHandlers(scope);
+  if (!handlers) throw new ActionError(`That page is not open. Navigate to it first.`);
+  return handlers;
 }
 
 function isDisabled(element: HTMLElement): boolean {
@@ -161,6 +168,17 @@ export async function executeBrowserAction(action: BrowserAction, ctx: DriverCon
         return { ok: true, result: ciSelectRows(action) };
       case "ci_set_columns":
         return { ok: true, result: ciSetColumns(action) };
+      case "page_get_state":
+        return { ok: true, result: requirePage(action.scope).getState() };
+      case "page_select_rows":
+        return {
+          ok: true,
+          result: requirePage(action.scope).selectRows({
+            mode: action.mode,
+            indexes: action.indexes,
+            statuses: action.statuses,
+          }),
+        };
     }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "The action failed" };

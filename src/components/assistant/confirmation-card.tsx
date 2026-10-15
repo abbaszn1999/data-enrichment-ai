@@ -5,6 +5,7 @@ import { Coins, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatCredits } from "@/lib/format-credits";
 import { useSheetStore } from "@/store/sheet-store";
+import { getPageHandlers } from "@/lib/assistant/driver/page-handlers";
 import type { PendingConfirmation } from "@/hooks/use-assistant-stream";
 
 type Estimate = { min: number; max: number } | null;
@@ -25,9 +26,10 @@ export function ConfirmationCard({
 
   useEffect(() => {
     let alive = true;
-    const state = useSheetStore.getState();
-    const rows = Math.max(1, state.selectedRowIds.size || 1);
-    fetch(`/api/assistant/estimate?workspaceId=${encodeURIComponent(workspaceId)}&rows=${rows}`)
+    const pageEstimate = confirmation.actionTarget.startsWith("gallery.") ? getPageHandlers("gallery")?.estimate?.() : null;
+    const feature = pageEstimate?.feature ?? "catalog";
+    const rows = Math.max(1, pageEstimate ? pageEstimate.rows : useSheetStore.getState().selectedRowIds.size || 1);
+    fetch(`/api/assistant/estimate?workspaceId=${encodeURIComponent(workspaceId)}&rows=${rows}&feature=${feature}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!alive || !data) return;

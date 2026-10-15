@@ -45,6 +45,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { usePageAgentHandlers } from "@/lib/assistant/driver/page-handlers";
 import { withDisplayError } from "@/lib/provider-names";
 import { showBillingBlockedToast, toastIfBillingBlocked } from "@/lib/billing/billing-toast";
 import { PageLoader } from "@/components/brand/page-loader";
@@ -255,6 +256,8 @@ function ConfigSelect({
     <label className="block space-y-1.5">
       <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
       <select
+        data-agent-id={`gallery.setting.${label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+        aria-label={label}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="h-8 w-full rounded-md border bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-ring"
@@ -2943,6 +2946,91 @@ export default function ProductsGalleryPage() {
     Number(activeTab === "scraping" ? scrapingImages : aiImages) || 4
   );
 
+  usePageAgentHandlers("gallery", {
+    getState: () => {
+      if (!projectId) {
+        return {
+          view: "projects",
+          canEdit,
+          projects: sessions.slice(0, 30).map((session) => ({
+            id: session.id,
+            name: session.name,
+            status: session.status,
+            rows: session.total_rows,
+            ready: session.ready_rows,
+            failed: session.failed_rows,
+          })),
+        };
+      }
+      const statusCounts: Record<string, number> = {};
+      for (const row of rows) statusCounts[row.status] = (statusCounts[row.status] ?? 0) + 1;
+      return {
+        view: "project",
+        canEdit,
+        name: activeSession?.name ?? null,
+        mode: activeTab,
+        totalRows: rows.length,
+        visibleRows: visibleRows.length,
+        filter: worksheetFilter,
+        selectedRows: selectedRowIds.size,
+        statusCounts,
+        running: showGenerationBanner,
+        progress: showGenerationBanner ? { completed: bannerCompleted, total: bannerTotal } : null,
+        originalImageColumn: hasOriginalImageColumn ? originalImageColumn : null,
+        imageColumnCandidates: originalImageCandidateColumns.slice(0, 20),
+        settings:
+          activeTab === "scraping"
+            ? {
+                galleryImagesPerProduct: scrapingImages,
+                researchDepth: scrapingSearchDepth,
+                sourcePreference: scrapingSourcePolicy,
+                resolution: scrapingResolution,
+                aspectRatio: scrapingAspectRatio,
+                instructions: scrapingInstructions.slice(0, 200),
+              }
+            : {
+                quality: aiModel === "pro" ? "premium" : "standard",
+                galleryImages: aiImages,
+                aspectRatio: aiAspectRatio,
+                resolution: aiResolution,
+                style: aiStyle,
+                outputFormat: aiOutputFormat,
+                instructions: aiInstructions.slice(0, 200),
+                branding: brandingEnabled,
+              },
+        columns: worksheetColumns.slice(0, 40),
+        firstRows: visibleRows.slice(0, 3).map((row, index) => ({
+          row: index + 1,
+          status: row.status,
+          values: Object.fromEntries(
+            Object.entries(row.originalData ?? {})
+              .slice(0, 5)
+              .map(([key, value]) => [key, String(value ?? "").slice(0, 60)])
+          ),
+        })),
+      };
+    },
+    selectRows: ({ mode, indexes, statuses }) => {
+      if (!projectId || !worksheet) throw new Error("Open a gallery project first.");
+      if (!canEdit) throw new Error("You do not have permission to edit this project.");
+      let chosen: string[] = [];
+      if (mode === "all") chosen = visibleRows.map((row) => row.id);
+      else if (mode === "indexes") {
+        const wanted = new Set(indexes ?? []);
+        chosen = visibleRows.filter((_, index) => wanted.has(index + 1)).map((row) => row.id);
+      } else if (mode === "status") {
+        const wanted = new Set((statuses ?? []).map((status) => status.trim().toLowerCase()));
+        chosen = visibleRows.filter((row) => wanted.has(row.status)).map((row) => row.id);
+      }
+      setSelectedRowIds(new Set(chosen));
+      return { selected: chosen.length, of: visibleRows.length };
+    },
+    estimate: () =>
+      projectId
+        ? { feature: activeTab === "ai" ? "gallery_ai" : "gallery_google", rows: selectedRowIds.size }
+        : null,
+  });
+
   // ── Project detail view ──────────────────────────────────────────────
   if (projectId) {
     if (sessionLoading && !worksheet) {
@@ -3063,6 +3151,8 @@ export default function ProductsGalleryPage() {
               <div className="grid grid-cols-2 rounded-xl bg-muted/60 p-1">
                 <button
                   type="button"
+                  data-agent-id="gallery.mode.scraping"
+                  aria-pressed={activeTab === "scraping"}
                   onClick={() => setActiveTab("scraping")}
                   disabled={!canEdit || !!generationRun || isGenerating}
                   className={`flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
@@ -3073,6 +3163,8 @@ export default function ProductsGalleryPage() {
                 </button>
                 <button
                   type="button"
+                  data-agent-id="gallery.mode.ai"
+                  aria-pressed={activeTab === "ai"}
                   onClick={() => setActiveTab("ai")}
                   disabled={!canEdit || !!generationRun || isGenerating}
                   title="Create product images with AI"
@@ -3101,6 +3193,8 @@ export default function ProductsGalleryPage() {
                   </InfoTip>
                 </div>
                 <select
+                  data-agent-id="gallery.image-column"
+                  aria-label="Original product image column"
                   value={originalImageColumn}
                   onChange={(event) => {
                     const next = event.target.value;
@@ -3258,6 +3352,8 @@ export default function ProductsGalleryPage() {
                         Gallery · Custom instructions
                       </span>
                       <textarea
+                        data-agent-id="gallery.scraping.instructions"
+                        aria-label="Scraping instructions"
                         value={scrapingInstructions}
                         onChange={(event) => setScrapingInstructions(event.target.value)}
                         className="min-h-28 w-full resize-none rounded-md border bg-background p-3 text-xs leading-relaxed outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
@@ -3282,6 +3378,8 @@ export default function ProductsGalleryPage() {
                     <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
                       <button
                         type="button"
+                        data-agent-id="gallery.ai.quality.standard"
+                        aria-pressed={aiModel === "standard"}
                         onClick={() => setAiModel("standard")}
                         className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
                           aiModel === "standard"
@@ -3293,6 +3391,8 @@ export default function ProductsGalleryPage() {
                       </button>
                       <button
                         type="button"
+                        data-agent-id="gallery.ai.quality.premium"
+                        aria-pressed={aiModel === "pro"}
                         onClick={() => {
                           setAiModel("pro");
                           setAiResolution((current) => (current === "0.5K" ? "1K" : current));
@@ -3373,6 +3473,8 @@ export default function ProductsGalleryPage() {
                         Gallery · Custom instructions
                       </span>
                       <textarea
+                        data-agent-id="gallery.ai.instructions"
+                        aria-label="Generation instructions"
                         value={aiInstructions}
                         onChange={(event) => setAiInstructions(event.target.value)}
                         className="min-h-28 w-full resize-none rounded-md border bg-background p-3 text-xs leading-relaxed outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
@@ -3794,6 +3896,7 @@ export default function ProductsGalleryPage() {
                     variant="destructive"
                     className="h-10 w-full gap-2 font-medium shadow-sm"
                     size="sm"
+                    data-agent-id="gallery.stop"
                     disabled={isStoppingGeneration}
                     onClick={() => void stopGeneration()}
                   >
@@ -3808,6 +3911,8 @@ export default function ProductsGalleryPage() {
                   <Button
                     className="h-10 w-full gap-2 font-medium shadow-sm"
                     size="sm"
+                    data-agent-id="gallery.run"
+                    data-agent-spend="gallery"
                     disabled={generateDisabled}
                     onClick={() => runGeneration(Array.from(selectedRowIds))}
                   >
@@ -3819,6 +3924,7 @@ export default function ProductsGalleryPage() {
                 variant="outline"
                 className="h-9 w-full gap-2 font-medium"
                 size="sm"
+                data-agent-id="gallery.export"
                 disabled={!worksheet || rows.length === 0 || generationIsActive || isGenerating}
                 onClick={() => setExportOpen(true)}
               >
@@ -3835,6 +3941,7 @@ export default function ProductsGalleryPage() {
                   <div className="relative w-52">
                     <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                     <Input
+                      data-agent-id="gallery.search"
                       value={worksheetSearch}
                       onChange={(event) => setWorksheetSearch(event.target.value)}
                       placeholder="Search products or SKU..."
@@ -3842,6 +3949,8 @@ export default function ProductsGalleryPage() {
                     />
                   </div>
                   <select
+                    data-agent-id="gallery.filter"
+                    aria-label="Show products"
                     value={worksheetFilter}
                     onChange={(event) =>
                       setWorksheetFilter(event.target.value as typeof worksheetFilter)
@@ -4839,6 +4948,7 @@ export default function ProductsGalleryPage() {
           <Button
             size="sm"
             className="h-9 gap-2 self-start rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] sm:self-auto"
+            data-agent-id="gallery.new-project"
             disabled={!canEdit}
             onClick={() => setShowCreate(true)}
           >
@@ -4973,6 +5083,8 @@ export default function ProductsGalleryPage() {
                     transition={{ delay: Math.min(index * .04, .2) }}
                     role="button"
                     tabIndex={0}
+                    data-agent-id={`gallery.project.${session.id}`}
+                    aria-label={`Open project ${session.name}`}
                     onClick={() => openProject(session.id)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
@@ -5102,6 +5214,7 @@ export default function ProductsGalleryPage() {
               <Label htmlFor="project-name">Project name</Label>
               <Input
                 id="project-name"
+                data-agent-id="gallery.create.name"
                 autoFocus
                 value={projectName}
                 onChange={(event) => setProjectName(event.target.value)}
@@ -5113,6 +5226,7 @@ export default function ProductsGalleryPage() {
               <Label>Product worksheet</Label>
               <button
                 type="button"
+                data-agent-id="gallery.create.dropzone"
                 onClick={() => inputRef.current?.click()}
                 className={`flex min-h-32 w-full flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-4 text-center transition-colors ${
                   uploadFile
@@ -5141,6 +5255,7 @@ export default function ProductsGalleryPage() {
                 type="file"
                 accept=".csv,.xlsx,.xls"
                 className="hidden"
+                data-agent-id="gallery.create.file"
                 onChange={(event) => setUploadFile(event.target.files?.[0] || null)}
               />
             </div>
@@ -5155,6 +5270,7 @@ export default function ProductsGalleryPage() {
             </Button>
             <Button
               className="gap-1.5 rounded-xl bg-[#400095] px-5 text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
+              data-agent-id="gallery.create.submit"
               disabled={!projectName.trim() || !uploadFile || creating || !canEdit}
               onClick={createProject}
             >

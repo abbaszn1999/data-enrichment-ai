@@ -74,6 +74,18 @@ function describe(toolName: string, args: Args): Pick<ToolEvent, "kind" | "title
       const detail = [on.length ? `on: ${on.join(", ")}` : "", off.length ? `off: ${off.join(", ")}` : ""].filter(Boolean).join(" · ");
       return { kind: "sheet", title: "Choosing columns", detail: clip(detail, 120) || undefined };
     }
+    case "gallery_get_state":
+      return { kind: "sheet", title: "Reading the gallery" };
+    case "gallery_select_rows": {
+      const mode = str(args.mode);
+      const detail =
+        mode === "indexes" && Array.isArray(args.indexes)
+          ? `rows ${clip(args.indexes.join(", "), 60)}`
+          : mode === "status" && Array.isArray(args.statuses)
+            ? clip(args.statuses.join(", "), 60)
+            : mode;
+      return { kind: "sheet", title: "Selecting products", detail };
+    }
     case "ask_confirmation":
       return { kind: "approval", title: "Asking for your approval", detail: clip(str(args.title), 100) };
     default:
