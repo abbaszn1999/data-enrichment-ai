@@ -14,13 +14,19 @@ export function costToCredits(usd: number): number {
   return Math.ceil(milli) / 1000;
 }
 
-/** Cost from token counts and configured rates (an estimate; billed cost wins when known). */
+/**
+ * Cost from token counts and configured rates (billed cost wins when known).
+ * `inputTokens` already contains the cache reads and writes, as Cursor's usage export shows.
+ */
 export function estimateUsd(usage: RunTokenUsage, rates: ServiceConfig["rates"]): number {
+  const cacheRead = Math.min(Math.max(0, usage.cacheReadTokens), Math.max(0, usage.inputTokens));
+  const cacheWrite = Math.min(Math.max(0, usage.cacheWriteTokens), Math.max(0, usage.inputTokens - cacheRead));
+  const freshInput = Math.max(0, usage.inputTokens - cacheRead - cacheWrite);
   return (
-    (usage.inputTokens * rates.input +
+    (freshInput * rates.input +
       usage.outputTokens * rates.output +
-      usage.cacheReadTokens * rates.cacheRead +
-      usage.cacheWriteTokens * rates.cacheWrite) /
+      cacheRead * rates.cacheRead +
+      cacheWrite * rates.cacheWrite) /
     1_000_000
   );
 }

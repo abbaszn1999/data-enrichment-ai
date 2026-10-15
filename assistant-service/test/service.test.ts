@@ -7,7 +7,7 @@ import { RunLimitError, RunRegistry } from "../src/agent/bridge";
 import { listDir, readFile, resolveInside, searchCode } from "../src/agent/tools/code-tools";
 import { mapSdkMessage } from "../src/agent/events";
 import { signRequest, verifyRequest } from "../src/auth";
-import { billedCents, costToCredits, usageToCredits } from "../src/usage";
+import { billedCents, costToCredits, estimateUsd, usageToCredits } from "../src/usage";
 
 const ctx = { workspaceSlug: "acme", workspaceId: "w1", path: "/w/acme" };
 
@@ -177,5 +177,13 @@ describe("cost", () => {
     expect(billedCents({ chargedCents: 9, rawCostCents: 12 })).toBe(9);
     expect(usageToCredits({ usage, rates })).toMatchObject({ source: "estimated", credits: 20 });
     expect(usageToCredits({ rates }).source).toBe("none");
+  });
+
+  it("matches Cursor's usage export for a Composer 2.5 run", () => {
+    const rates = { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0.5 };
+    // Export row: input w/o cache write 7,718, cache read 39,129, output 796; the SDK reports input 46,847.
+    const usage = { inputTokens: 46_847, outputTokens: 796, cacheReadTokens: 39_129, cacheWriteTokens: 0 };
+    expect(estimateUsd(usage, rates)).toBeCloseTo(0.0136748, 7);
+    expect(usageToCredits({ usage, rates }).credits).toBe(0.137);
   });
 });
