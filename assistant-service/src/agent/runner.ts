@@ -3,7 +3,7 @@ import path from "node:path";
 import { Agent, JsonlLocalAgentStore, type AgentOptions, type SDKAgent, type ToolName } from "@cursor/sdk";
 import type { ServiceRunRequest } from "../../../src/lib/assistant/protocol";
 import type { ServiceConfig } from "../config";
-import { usageToCredits, type RunTokenUsage } from "../usage";
+import { billedCents, usageToCredits, type RunTokenUsage } from "../usage";
 import type { AssistantRun } from "./bridge";
 import { mapSdkMessage, type SdkStreamMessage } from "./events";
 import { createAllTools } from "./tools";
@@ -55,7 +55,7 @@ export function buildPrompt(request: ServiceRunRequest): string {
 function baseOptions(config: ServiceConfig, store: JsonlLocalAgentStore): AgentOptions {
   return {
     apiKey: config.cursorApiKey,
-    model: { id: config.model },
+    model: { id: config.model, params: [{ id: "fast", value: String(config.modelFast) }] },
     tools: ["mcp"],
     disallowedTools: DENIED_TOOLS,
     local: {
@@ -64,6 +64,41 @@ function baseOptions(config: ServiceConfig, store: JsonlLocalAgentStore): AgentO
       store,
     },
   };
+}
+
+/** Billed usage for local agents is enabled per account; while Cursor says it is unavailable, stop asking for an hour. */
+let billedUsageUnavailableUntil = 0;
+
+/** The agent's total billed cents so far, or undefined when Cursor does not report billed usage. */
+async function readBilledCents(agent: SDKAgent): Promise<number | undefined> {
+  if (Date.now() < billedUsageUnavailableUntil) return undefined;
+  try {
+    const usage = await agent.getUsage();
+    return usage.cost ? (billedCents(usage.cost) ?? 0) : 0;
+  } catch (error) {
+    if ((error as { code?: string }).code === "feature_unavailable") billedUsageUnavailableUntil = Date.now() + 60 * 60 * 1000;
+    return undefined;
+  }
+}
+
+/** Billed cost settles shortly after a run ends, so poll briefly until the total moves. */
+async function waitForBilledCents(agent: SDKAgent, before: number): Promise<number | undefined> {
+  let latest: number | undefined;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    latest = await readBilledCents(agent);
+    if (latest === undefined || latest > before) return latest;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  return latest;
+}
+
+async function appendUsageLog(storeDir: string, entry: Record<string, unknown>): Promise<void> {
+  try {
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.appendFile(path.join(storeDir, "usage.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
+  } catch {
+    // the usage log is for reconciliation only
+  }
 }
 
 export interface RunnerDeps {
@@ -98,6 +133,7 @@ export async function executeRun(deps: RunnerDeps, run: AssistantRun, request: S
     }
     run.emit({ type: "run", runId: run.id, conversationId: agent.agentId });
 
+    const billedBefore = request.conversationId ? await readBilledCents(agent) : 0;
     const sdkRun = await agent.send(buildPrompt(request), {
       local: { customTools: createAllTools(config.knowledgeRoot, run) },
     });
@@ -111,13 +147,8 @@ export async function executeRun(deps: RunnerDeps, run: AssistantRun, request: S
     }
     const result = await sdkRun.wait();
 
-    let chargedCents: number | undefined;
-    try {
-      const billed = await agent.getUsage({ runId: sdkRun.id });
-      chargedCents = billed.cost?.chargedCents;
-    } catch {
-      // Billed usage is not enabled for this account; tokens are used instead.
-    }
+    const billedAfter = billedBefore === undefined ? undefined : await waitForBilledCents(agent, billedBefore);
+    const runBilledCents = billedAfter === undefined || billedBefore === undefined ? undefined : billedAfter - billedBefore;
     const tokens = result.usage
       ? ({
           inputTokens: result.usage.inputTokens,
@@ -126,8 +157,26 @@ export async function executeRun(deps: RunnerDeps, run: AssistantRun, request: S
           cacheWriteTokens: result.usage.cacheWriteTokens,
         } satisfies RunTokenUsage)
       : undefined;
-    const cost = usageToCredits({ chargedCents, usage: tokens, rates: config.rates });
-    log(`run ${run.id} ${result.status} credits=${cost.credits} source=${cost.source}`);
+    const cost = usageToCredits({ billedCents: runBilledCents, usage: tokens, rates: config.rates });
+    log(
+      `run ${run.id} ${result.status} model=${config.model}${config.modelFast ? " fast" : ""} ` +
+        `tokens in=${tokens?.inputTokens ?? 0} out=${tokens?.outputTokens ?? 0} cacheRead=${tokens?.cacheReadTokens ?? 0} ` +
+        `usd=${cost.usd.toFixed(5)} credits=${cost.credits} source=${cost.source}`
+    );
+    await appendUsageLog(config.storeDir, {
+      at: new Date().toISOString(),
+      runId: run.id,
+      conversationId: agent.agentId,
+      userId: request.userId,
+      workspaceId: request.workspaceId,
+      status: result.status,
+      model: config.model,
+      fast: config.modelFast,
+      tokens,
+      usd: cost.usd,
+      credits: cost.credits,
+      source: cost.source,
+    });
 
     const status = run.cancelled ? "cancelled" : result.status === "finished" ? "finished" : result.status === "cancelled" ? "cancelled" : "error";
     if (status === "error") run.emit({ type: "error", message: "The assistant ran into a problem. Please try again." });

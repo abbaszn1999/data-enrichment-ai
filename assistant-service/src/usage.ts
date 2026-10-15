@@ -31,13 +31,19 @@ export interface UsageResult {
   source: "billed" | "estimated" | "none";
 }
 
+/** Cents Cursor reported for a run: what it charged, or the raw model cost when the plan covered it (charged is 0 then). */
+export function billedCents(cost: { chargedCents: number; rawCostCents: number } | undefined): number | undefined {
+  if (!cost) return undefined;
+  return cost.chargedCents > 0 ? cost.chargedCents : cost.rawCostCents;
+}
+
 export function usageToCredits(params: {
-  chargedCents?: number;
+  billedCents?: number;
   usage?: RunTokenUsage;
   rates: ServiceConfig["rates"];
 }): UsageResult {
-  if (typeof params.chargedCents === "number" && params.chargedCents > 0) {
-    const usd = params.chargedCents / 100;
+  if (typeof params.billedCents === "number" && params.billedCents > 0) {
+    const usd = params.billedCents / 100;
     return { credits: costToCredits(usd), usd, source: "billed" };
   }
   if (params.usage) {

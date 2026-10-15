@@ -7,7 +7,7 @@ import { RunLimitError, RunRegistry } from "../src/agent/bridge";
 import { listDir, readFile, resolveInside, searchCode } from "../src/agent/tools/code-tools";
 import { mapSdkMessage } from "../src/agent/events";
 import { signRequest, verifyRequest } from "../src/auth";
-import { costToCredits, usageToCredits } from "../src/usage";
+import { billedCents, costToCredits, usageToCredits } from "../src/usage";
 
 const ctx = { workspaceSlug: "acme", workspaceId: "w1", path: "/w/acme" };
 
@@ -172,7 +172,9 @@ describe("cost", () => {
   it("prefers billed cents over token estimates", () => {
     const rates = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
     const usage = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-    expect(usageToCredits({ chargedCents: 50, usage, rates }).source).toBe("billed");
+    expect(usageToCredits({ billedCents: 50, usage, rates }).source).toBe("billed");
+    expect(billedCents({ chargedCents: 0, rawCostCents: 12 })).toBe(12);
+    expect(billedCents({ chargedCents: 9, rawCostCents: 12 })).toBe(9);
     expect(usageToCredits({ usage, rates })).toMatchObject({ source: "estimated", credits: 20 });
     expect(usageToCredits({ rates }).source).toBe("none");
   });
