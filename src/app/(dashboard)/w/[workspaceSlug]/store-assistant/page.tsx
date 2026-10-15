@@ -76,6 +76,7 @@ import { getWorkspaceIntegration, type WorkspaceIntegration } from "@/lib/supaba
 import { getClientProviderSchema } from "@/lib/sync/client-schema";
 import { parseGalleryImages } from "@/lib/sync/core/gallery-images";
 import { SyncExportButton } from "@/components/sync/sync-export-button";
+import { usePageAgentHandlers } from "@/lib/assistant/driver/page-handlers";
 import type { ColumnProfileKey } from "@/lib/sync/core/types";
 
 type SyncSheetRow = Record<string, any>;
@@ -1682,6 +1683,62 @@ export default function SyncPage() {
     router.push(basePath);
   }, [resetChat, router, basePath]);
 
+  usePageAgentHandlers("store", {
+    getState: () => ({
+      loading,
+      connected: integration ? { store: integration.integration_name, platform: integration.provider } : null,
+      canEdit,
+      blocked: chatBlockedReason,
+      mode,
+      thinkingLevel,
+      webResearch: webEnabled,
+      working: isStreaming && !pendingPlan,
+      progress: liveProgress
+        ? { task: liveProgress.column ? `Writing ${liveProgress.column}` : liveProgress.tool === "sync_images_search" ? "Finding images" : "Working", done: liveProgress.processed, total: liveProgress.total, failed: liveProgress.failedCount ?? 0 }
+        : null,
+      unfinishedBatch: checkpoint && !isStreaming ? { done: checkpoint.processed, total: checkpoint.total, column: checkpoint.column ?? null } : null,
+      draft: input.slice(0, 300),
+      attachedToMessage: pendingAttachments.map((file) => file.name),
+      recentMessages: messages.slice(-6).map((message) => ({
+        from: message.role === "user" ? "user" : "store_assistant",
+        text: message.content.slice(0, 600),
+      })),
+      planAwaitingApproval: pendingPlan
+        ? {
+            summary: (pendingPlan.plan.assistantMessage ?? "").slice(0, 600),
+            steps: pendingPlan.plan.steps.map((step) => TOOL_LABELS[step.tool] || step.tool),
+          }
+        : null,
+      sheet: currentSheet
+        ? {
+            title: resultsTitle,
+            entity: currentEntity,
+            view: sheetView,
+            views: sheetViews.map((view) => view.key),
+            rows: resultRows.length,
+            shownRows: displayRows.length,
+            filter: filterDescription,
+            columns: resultColumns.slice(0, 40),
+            page: safeCurrentPage,
+            pages: totalPages,
+            moreInStore: remainingCount ?? 0,
+            canUndo: sheetHistory.length > 0,
+            canRedo: redoHistory.length > 0,
+          }
+        : null,
+      pendingChanges: {
+        total: pendingChangeCount,
+        newRows: changeSummary.creates.length,
+        updatedRows: changeSummary.updates.length,
+        sample: changeSummary.updates.slice(0, 5).map((item) => ({
+          row: item.label,
+          columns: item.changes.map((change) => change.column),
+        })),
+      },
+    }),
+    estimate: () => ({ feature: "store", rows: 1 }),
+  });
+
   // ─── Render States ─────────────────────────────────
 
   if (loading) {
@@ -1729,6 +1786,8 @@ export default function SyncPage() {
           <Button
             size="sm"
             className="h-7 rounded-lg text-[11px]"
+            data-agent-id="store.checkpoint.resume"
+            data-agent-spend="store"
             onClick={() =>
               runAgent("Resume from the last checkpoint and continue the unfinished batch.", [], {
                 resumeCheckpoint: true,
@@ -1770,6 +1829,7 @@ export default function SyncPage() {
         </div>
         <button
           type="button"
+          data-agent-id="store.progress.stop"
           onClick={handleStopStreaming}
           className="text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-muted"
         >
@@ -1852,6 +1912,8 @@ export default function SyncPage() {
               )}
               <span className="max-w-[120px] truncate">{file.name}</span>
               <button
+                data-agent-id={`store.attachment.remove.${i}`}
+                aria-label={`Remove ${file.name}`}
                 onClick={() => removePendingAttachment(i)}
                 className="ml-0.5 hover:text-destructive transition-colors"
               >
@@ -1867,6 +1929,8 @@ export default function SyncPage() {
         <div className="flex-1 relative">
           <textarea
             ref={textareaRef}
+            data-agent-id="store.message"
+            aria-label="Message to the Store Assistant"
             value={input}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
@@ -1880,6 +1944,9 @@ export default function SyncPage() {
 
         <Button
           size="icon"
+          data-agent-id={isStreaming ? "store.stop" : "store.send"}
+          data-agent-spend={isStreaming ? undefined : "store"}
+          aria-label={isStreaming ? "Stop" : "Send"}
           onClick={isStreaming ? handleStopStreaming : handleSend}
           disabled={!canEdit || !!chatBlockedReason || (!isStreaming && !input.trim() && pendingAttachments.length === 0)}
           className="h-10 w-10 rounded-xl shrink-0 bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
@@ -1899,12 +1966,14 @@ export default function SyncPage() {
           type="file"
           className="hidden"
           multiple
+          data-agent-id="store.attach.file"
           accept="image/jpeg,image/png,image/webp,image/bmp,.pdf"
           onChange={handleFileSelect}
         />
         <Tooltip>
           <TooltipTrigger asChild>
             <button
+              data-agent-id="store.attach.dropzone"
               onClick={() => fileInputRef.current?.click()}
               disabled={!canEdit}
               className="flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-40"
@@ -1917,6 +1986,8 @@ export default function SyncPage() {
         </Tooltip>
 
         <button
+          data-agent-id="store.web"
+          aria-pressed={webEnabled}
           onClick={toggleWebEnabled}
           className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
             webEnabled
@@ -1935,6 +2006,8 @@ export default function SyncPage() {
 
         <div className="flex items-center bg-muted rounded-lg p-0.5">
           <button
+            data-agent-id="store.mode.fast"
+            aria-pressed={mode === "fast"}
             onClick={() => setMode("fast")}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
               mode === "fast"
@@ -1946,6 +2019,8 @@ export default function SyncPage() {
             Fast
           </button>
           <button
+            data-agent-id="store.mode.pro"
+            aria-pressed={mode === "pro"}
             onClick={() => setMode("pro")}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
               mode === "pro"
@@ -2211,6 +2286,8 @@ export default function SyncPage() {
                         <Button
                           size="sm"
                           className="h-7 px-3 text-xs gap-1.5 rounded-lg bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                          data-agent-id="store.plan.execute"
+                          data-agent-spend="store"
                           onClick={handleConfirmPlan}
                         >
                           <ChevronRight className="h-3.5 w-3.5" />
@@ -2220,6 +2297,7 @@ export default function SyncPage() {
                           size="sm"
                           variant="ghost"
                           className="h-7 px-3 text-xs"
+                          data-agent-id="store.plan.cancel"
                           onClick={handleDismissPlan}
                         >
                           Cancel
@@ -2248,6 +2326,8 @@ export default function SyncPage() {
                       type="button"
                       size="sm"
                       variant={sheetView === view.key ? "secondary" : "ghost"}
+                      data-agent-id={`store.view.${view.key}`}
+                      aria-pressed={sheetView === view.key}
                       className={`h-7 px-2.5 text-[11px] ${
                         sheetView === view.key
                           ? "bg-[#400095]/10 text-[#400095] dark:bg-[#F76D01]/10 dark:text-[#F76D01]"
@@ -2272,6 +2352,8 @@ export default function SyncPage() {
                       variant="ghost"
                       className="h-7 px-2.5 text-[11px] opacity-70 hover:opacity-100"
                       disabled={isStreaming || !canEdit}
+                      data-agent-id="store.switch.collections"
+                      data-agent-spend="store"
                       onClick={() =>
                         void runAgent(taxonomyPrompt(integration?.provider), [])
                       }
@@ -2287,6 +2369,8 @@ export default function SyncPage() {
                       variant="ghost"
                       className="h-7 px-2.5 text-[11px] opacity-70 hover:opacity-100"
                       disabled={isStreaming || !canEdit}
+                      data-agent-id="store.switch.products"
+                      data-agent-spend="store"
                       onClick={() =>
                         void runAgent("اعرض كل المنتجات", [])
                       }
@@ -2303,6 +2387,8 @@ export default function SyncPage() {
                     size="sm"
                     variant="outline"
                     className="h-7 px-2.5 text-[11px] gap-1"
+                    data-agent-id="store.load-more"
+                    data-agent-spend="store"
                     onClick={handleContinueLoad}
                     disabled={isStreaming || !canEdit}
                     title="Load the next page of products from the connected store"
@@ -2315,6 +2401,7 @@ export default function SyncPage() {
                     size="sm"
                     variant="outline"
                     className="h-7 px-2.5 text-[11px] gap-1"
+                    data-agent-id="store.show-all"
                     onClick={() => setSheet({ title: originalSheet.title, columns: originalSheet.columns, rows: originalSheet.rows })}
                     disabled={isStreaming}
                   >
@@ -2326,6 +2413,7 @@ export default function SyncPage() {
                     size="sm"
                     variant="ghost"
                     className="h-7 px-2.5 text-[11px] gap-1"
+                    data-agent-id="store.undo"
                     onClick={handleUndo}
                     disabled={isStreaming || !canEdit}
                   >
@@ -2338,6 +2426,7 @@ export default function SyncPage() {
                     size="sm"
                     variant="ghost"
                     className="h-7 px-2.5 text-[11px] gap-1"
+                    data-agent-id="store.redo"
                     onClick={handleRedo}
                     disabled={isStreaming || !canEdit}
                   >
@@ -2445,6 +2534,8 @@ export default function SyncPage() {
                 <Button
                   size="sm"
                   className="h-7 px-3 text-[11px] rounded-lg bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+                  data-agent-id="store.sync"
+                  data-agent-spend="store"
                   disabled={pendingChangeCount === 0 || isApplying || !canEdit}
                   onClick={handleApplySync}
                 >
@@ -2465,6 +2556,7 @@ export default function SyncPage() {
                       size="sm"
                       variant="ghost"
                       className="h-6 px-2 text-[11px] text-[#6B358D] hover:text-[#6B358D]/80 dark:text-[#F76D01] dark:hover:text-[#F76D01]/80"
+                      data-agent-id="store.filter.clear"
                       onClick={() => {
                         setFilteredRowIndexes(null);
                         setFilterDescription(null);
@@ -2511,6 +2603,7 @@ export default function SyncPage() {
                         variant="outline"
                         className="h-7 px-2 text-[11px]"
                         disabled={safeCurrentPage <= 1}
+                        data-agent-id="store.page.prev"
                         onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
                       >
                         Previous
@@ -2524,6 +2617,7 @@ export default function SyncPage() {
                         variant="outline"
                         className="h-7 px-2 text-[11px]"
                         disabled={safeCurrentPage >= totalPages}
+                        data-agent-id="store.page.next"
                         onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
                       >
                         Next
@@ -2602,6 +2696,7 @@ export default function SyncPage() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.35, delay: i * 0.03 }}
+                  data-agent-id={`store.quick.${i}`}
                   onClick={() => handleQuickPrompt(qp.prompt)}
                   disabled={!canEdit}
                   className="group flex items-start gap-3 p-3.5 rounded-xl border border-border/60 hover:border-[#6B358D]/40 hover:bg-[#400095]/5 dark:hover:border-[#F76D01]/40 dark:hover:bg-[#F76D01]/5 text-left transition-all disabled:pointer-events-none disabled:opacity-50"

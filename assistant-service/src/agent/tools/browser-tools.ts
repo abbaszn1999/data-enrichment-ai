@@ -229,6 +229,13 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
       annotations: { readOnlyHint: true },
       execute: () => perform(run, { kind: "page_get_state", scope: "website" }),
     },
+    store_get_state: {
+      description:
+        "Store Assistant only: read the page. Returns the connected store, mode, web research, the latest Store Assistant messages, a plan waiting for approval, whether it is working (with progress), the sheet on the right (entity, view, rows, columns, filter, page) and the pending changes not yet synced to the store.",
+      inputSchema: noArgs,
+      annotations: { readOnlyHint: true },
+      execute: () => perform(run, { kind: "page_get_state", scope: "store" }),
+    },
     visualizer_set_columns: {
       description:
         "Products Visualizer only: choose exactly which worksheet columns describe each product (by header name, as listed in visualizer_get_state). The product image column is set separately with its dropdown.",

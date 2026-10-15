@@ -84,6 +84,8 @@ function describe(toolName: string, args: Args): Pick<ToolEvent, "kind" | "title
       return { kind: "sheet", title: "Reading the classification" };
     case "website_get_state":
       return { kind: "sheet", title: "Reading the header project" };
+    case "store_get_state":
+      return { kind: "sheet", title: "Reading the Store Assistant" };
     case "visualizer_set_columns":
       return {
         kind: "sheet",

@@ -8,7 +8,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
  * the page that is currently mounted is registered.
  */
 
-export type PageScope = "gallery" | "visualizer" | "classify" | "website";
+export type PageScope = "gallery" | "visualizer" | "classify" | "website" | "store";
 
 export type PageSelectRows = {
   mode: "all" | "none" | "indexes" | "status";
@@ -16,7 +16,7 @@ export type PageSelectRows = {
   statuses?: string[];
 };
 
-export type EstimateFeature = "catalog" | "gallery_ai" | "gallery_google" | "visualizer" | "classify";
+export type EstimateFeature = "catalog" | "gallery_ai" | "gallery_google" | "visualizer" | "classify" | "store";
 
 export type PageEstimate = { feature: EstimateFeature; rows: number };
 

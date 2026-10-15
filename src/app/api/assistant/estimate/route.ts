@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 const querySchema = z.object({
   workspaceId: z.string().max(80),
   rows: z.coerce.number().int().min(1).max(100_000),
-  feature: z.enum(["catalog", "gallery_ai", "gallery_google", "visualizer", "classify"]).default("catalog"),
+  feature: z.enum(["catalog", "gallery_ai", "gallery_google", "visualizer", "classify", "store"]).default("catalog"),
 });
 
 const FEATURE_SOURCE = {
@@ -18,6 +18,7 @@ const FEATURE_SOURCE = {
   gallery_google: { operations: ["gallery_google"], entityType: "gallery_session", unit: "phase" },
   visualizer: { operations: ["visualizer_description", "visualizer_images"], entityType: "visualizer_session", unit: "phase" },
   classify: { operations: ["image_classification"], entityType: "image_classification_session", unit: "batch" },
+  store: { operations: ["store_assistant"], entityType: "store_assistant", unit: "row" },
 } as const;
 
 type CostUnit = (typeof FEATURE_SOURCE)[keyof typeof FEATURE_SOURCE]["unit"];
