@@ -37,6 +37,7 @@ import {
   getImageSignedUrl,
   type ImageClassificationJson,
 } from "@/lib/storage-helpers";
+import { usePageAgentHandlers } from "@/lib/assistant/driver/page-handlers";
 
 type ExportFormat = "json" | "csv";
 
@@ -201,6 +202,24 @@ export default function ImageClassifyDetailPage() {
     }
   };
 
+  usePageAgentHandlers("classify", {
+    getState: () => ({
+      view: "result",
+      found: !!session,
+      name: session?.name ?? null,
+      status: session?.status ?? (loading ? "loading" : null),
+      error: session?.error_message || error,
+      totalImages: result?.totalImages ?? session?.total_images ?? 0,
+      credits: result ? Number(result.usage.totalCredits.toFixed(3)) : null,
+      groups: groupedItems.slice(0, 60).map(({ group, items }) => ({
+        label: group.label,
+        images: items.length,
+        skus: Array.from(new Set(items.map((it) => sanitizeSku(it.sku, it.filename)).filter(Boolean))).slice(0, 5),
+      })),
+      canExport: !!result,
+    }),
+  });
+
   if (loading) {
     return <PageLoader />;
   }
@@ -247,7 +266,7 @@ export default function ImageClassifyDetailPage() {
               className="h-9 w-9 shrink-0 rounded-xl border border-border/60 bg-background/70"
               asChild
             >
-              <Link href={`/w/${slug}/image-classify`} aria-label="Back">
+              <Link href={`/w/${slug}/image-classify`} aria-label="Back" data-agent-id="classify.back">
                 <ArrowLeft className="h-4 w-4" />
               </Link>
             </Button>
@@ -286,6 +305,7 @@ export default function ImageClassifyDetailPage() {
               <Button
                 size="sm"
                 variant="outline"
+                data-agent-id="classify.export.csv"
                 onClick={() => handleExport("csv")}
                 className="h-9 gap-1.5 rounded-xl border-border/60 bg-background/70 text-xs"
               >
@@ -293,6 +313,7 @@ export default function ImageClassifyDetailPage() {
               </Button>
               <Button
                 size="sm"
+                data-agent-id="classify.export.json"
                 onClick={() => handleExport("json")}
                 className="h-9 gap-1.5 rounded-xl bg-[#400095] px-4 text-xs text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
               >

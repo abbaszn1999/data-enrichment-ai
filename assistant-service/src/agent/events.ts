@@ -55,7 +55,9 @@ function describe(toolName: string, args: Args): Pick<ToolEvent, "kind" | "title
     case "type":
       return { kind: "action", title: "Typing", detail: `${clip(`"${str(args.text)}"`, 50)} → ${controlName(args.target)}` };
     case "upload_file":
-      return { kind: "action", title: "Uploading the file" };
+      return Array.isArray(args.fileIds) && args.fileIds.length > 1
+        ? { kind: "action", title: "Uploading the files", detail: `${args.fileIds.length} files` }
+        : { kind: "action", title: "Uploading the file" };
     case "ci_get_state":
       return { kind: "sheet", title: "Reading the sheet" };
     case "ci_select_rows": {
@@ -78,6 +80,8 @@ function describe(toolName: string, args: Args): Pick<ToolEvent, "kind" | "title
       return { kind: "sheet", title: "Reading the gallery" };
     case "visualizer_get_state":
       return { kind: "sheet", title: "Reading the visualizer" };
+    case "classify_get_state":
+      return { kind: "sheet", title: "Reading the classification" };
     case "visualizer_set_columns":
       return {
         kind: "sheet",

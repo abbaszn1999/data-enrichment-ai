@@ -8,7 +8,7 @@ import { useEffect, useRef } from "react";
  * the page that is currently mounted is registered.
  */
 
-export type PageScope = "gallery" | "visualizer";
+export type PageScope = "gallery" | "visualizer" | "classify";
 
 export type PageSelectRows = {
   mode: "all" | "none" | "indexes" | "status";
@@ -16,13 +16,13 @@ export type PageSelectRows = {
   statuses?: string[];
 };
 
-export type EstimateFeature = "catalog" | "gallery_ai" | "gallery_google" | "visualizer";
+export type EstimateFeature = "catalog" | "gallery_ai" | "gallery_google" | "visualizer" | "classify";
 
 export type PageEstimate = { feature: EstimateFeature; rows: number };
 
 export interface PageHandlers {
   getState: () => unknown;
-  selectRows: (args: PageSelectRows) => unknown;
+  selectRows?: (args: PageSelectRows) => unknown;
   /** Replace the page's chosen input columns (by header name). */
   setColumns?: (columns: string[]) => unknown;
   /** What the credit-spending control would run, for the confirmation card's estimate. */
@@ -42,7 +42,10 @@ export function usePageAgentHandlers(scope: PageScope, handlers: PageHandlers) {
   useEffect(() => {
     const stable: PageHandlers = {
       getState: () => ref.current.getState(),
-      selectRows: (args) => ref.current.selectRows(args),
+      selectRows: (args) => {
+        if (!ref.current.selectRows) throw new Error("This page has no row selection.");
+        return ref.current.selectRows(args);
+      },
       setColumns: (columns) => {
         if (!ref.current.setColumns) throw new Error("This page has no column choice.");
         return ref.current.setColumns(columns);

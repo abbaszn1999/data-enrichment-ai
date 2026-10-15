@@ -9,19 +9,31 @@ export const dynamic = "force-dynamic";
 const querySchema = z.object({
   workspaceId: z.string().max(80),
   rows: z.coerce.number().int().min(1).max(100_000),
-  feature: z.enum(["catalog", "gallery_ai", "gallery_google", "visualizer"]).default("catalog"),
+  feature: z.enum(["catalog", "gallery_ai", "gallery_google", "visualizer", "classify"]).default("catalog"),
 });
 
 const FEATURE_SOURCE = {
-  catalog: { operations: ["catalog_intelligence"], entityType: "catalog_row" },
-  gallery_ai: { operations: ["gallery_ai"], entityType: "gallery_session" },
-  gallery_google: { operations: ["gallery_google"], entityType: "gallery_session" },
-  visualizer: { operations: ["visualizer_description", "visualizer_images"], entityType: "visualizer_session" },
+  catalog: { operations: ["catalog_intelligence"], entityType: "catalog_row", unit: "row" },
+  gallery_ai: { operations: ["gallery_ai"], entityType: "gallery_session", unit: "phase" },
+  gallery_google: { operations: ["gallery_google"], entityType: "gallery_session", unit: "phase" },
+  visualizer: { operations: ["visualizer_description", "visualizer_images"], entityType: "visualizer_session", unit: "phase" },
+  classify: { operations: ["image_classification"], entityType: "image_classification_session", unit: "batch" },
 } as const;
 
-/** Gallery and Visualizer charge once per row phase, so phases are summed back into one cost per product and run. */
-function costsPerRow(rows: { credits_used: unknown; details: unknown }[], groupByRow: boolean): number[] {
-  if (!groupByRow) return rows.map((row) => Number(row.credits_used));
+type CostUnit = (typeof FEATURE_SOURCE)[keyof typeof FEATURE_SOURCE]["unit"];
+
+/**
+ * One cost per processed item. Gallery and Visualizer charge once per row phase, so phases are summed
+ * back per product and run; Image Classification charges once per batch, so it is divided per image.
+ */
+function costsPerRow(rows: { credits_used: unknown; details: unknown }[], unit: CostUnit): number[] {
+  if (unit === "row") return rows.map((row) => Number(row.credits_used));
+  if (unit === "batch") {
+    return rows.map((row) => {
+      const count = Number((row.details as { imageCount?: unknown } | null)?.imageCount);
+      return count > 0 ? Number(row.credits_used) / count : Number.NaN;
+    });
+  }
   const totals = new Map<string, number>();
   rows.forEach((row, index) => {
     const details = row.details as { rowId?: unknown; runId?: unknown } | null;
@@ -57,10 +69,10 @@ export async function GET(request: NextRequest) {
     .order("created_at", { ascending: false })
     .limit(400);
 
-  const costs = costsPerRow(data ?? [], parsed.data.feature !== "catalog")
+  const costs = costsPerRow(data ?? [], source.unit)
     .filter((value) => Number.isFinite(value) && value > 0)
     .sort((a, b) => a - b);
-  if (costs.length < 5) return NextResponse.json({ estimate: null, balance: access.ctx.credits?.total ?? null });
+  if (costs.length < (source.unit === "batch" ? 2 : 5)) return NextResponse.json({ estimate: null, balance: access.ctx.credits?.total ?? null });
 
   const round = (value: number) => Math.round(value * 100) / 100;
   return NextResponse.json({

@@ -119,8 +119,15 @@ async function upload(action: Extract<BrowserAction, { kind: "upload_file" }>, c
   if (!(element instanceof HTMLInputElement) || element.type !== "file") {
     throw new ActionError("That control is not a file input.");
   }
-  const file = ctx.getFile(action.fileId);
-  if (!file) throw new ActionError("That file is no longer attached. Ask the user to attach it again.");
+  const ids = action.fileIds?.length ? action.fileIds : action.fileId ? [action.fileId] : [];
+  if (ids.length === 0) throw new ActionError("Pass fileId or fileIds.");
+  if (ids.length > 1 && !element.multiple) throw new ActionError("This input takes one file at a time.");
+  const chosen: File[] = [];
+  for (const id of ids) {
+    const file = ctx.getFile(id);
+    if (!file) throw new ActionError(`File ${id} is no longer attached. Ask the user to attach it again.`);
+    chosen.push(file);
+  }
   const zone = findAgentElement(action.target.replace(/\.file$/, ".dropzone")) ?? element.parentElement;
   if (zone) {
     reveal(zone as HTMLElement);
@@ -129,11 +136,11 @@ async function upload(action: Extract<BrowserAction, { kind: "upload_file" }>, c
     await pressCursor();
   }
   const transfer = new DataTransfer();
-  transfer.items.add(file);
+  for (const file of chosen) transfer.items.add(file);
   element.files = transfer.files;
   element.dispatchEvent(new Event("change", { bubbles: true }));
   await sleep(1500);
-  return `uploaded ${file.name}`;
+  return chosen.length === 1 ? `uploaded ${chosen[0].name}` : `uploaded ${chosen.length} files`;
 }
 
 async function waitFor(action: Extract<BrowserAction, { kind: "wait_for" }>) {
@@ -173,7 +180,7 @@ export async function executeBrowserAction(action: BrowserAction, ctx: DriverCon
       case "page_select_rows":
         return {
           ok: true,
-          result: requirePage(action.scope).selectRows({
+          result: requirePage(action.scope).selectRows?.({
             mode: action.mode,
             indexes: action.indexes,
             statuses: action.statuses,

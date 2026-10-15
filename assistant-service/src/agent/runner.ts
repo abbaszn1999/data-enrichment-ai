@@ -45,7 +45,7 @@ export function buildPrompt(request: ServiceRunRequest): string {
     `current page: ${request.context.path}`,
     request.context.sessionId ? `open sheet session: ${request.context.sessionId}` : "",
     request.files?.length
-      ? `files attached by the user (use the id with upload_file): ${request.files.map((f) => `${f.id} = "${f.name}"`).join("; ")}`
+      ? `${request.files.length} file(s) attached by the user (use the ids with upload_file): ${request.files.map((f) => `${f.id} = "${f.name}"`).join("; ")}`
       : "",
     "[/page context]",
   ].filter(Boolean);

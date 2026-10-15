@@ -32,6 +32,16 @@ describe("assistant protocol", () => {
     expect(browserActionSchema.safeParse({ kind: "page_select_rows", scope: "gallery", mode: "indexes", indexes: [0] }).success).toBe(false);
   });
 
+  it("accepts the classification scope and multi-file uploads", () => {
+    expect(browserActionSchema.safeParse({ kind: "page_get_state", scope: "classify" }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "page_select_rows", scope: "classify", mode: "all" }).success).toBe(false);
+    expect(browserActionSchema.safeParse({ kind: "upload_file", target: "classify.new.file", fileIds: ["a", "b"] }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "upload_file", target: "visualizer.create.file", fileId: "a" }).success).toBe(true);
+    expect(
+      browserActionSchema.safeParse({ kind: "upload_file", target: "classify.new.file", fileIds: Array.from({ length: 201 }, (_, i) => `f${i}`) }).success,
+    ).toBe(false);
+  });
+
   it("limits message size", () => {
     const context = { workspaceSlug: "a", workspaceId: "w", path: "/w/a" };
     expect(chatRequestSchema.safeParse({ message: "x".repeat(4001), context }).success).toBe(false);

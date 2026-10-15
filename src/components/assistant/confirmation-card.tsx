@@ -30,7 +30,9 @@ export function ConfirmationCard({
       ? "gallery"
       : confirmation.actionTarget.startsWith("visualizer.")
         ? "visualizer"
-        : null;
+        : confirmation.actionTarget.startsWith("classify.")
+          ? "classify"
+          : null;
     const pageEstimate = scope ? getPageHandlers(scope)?.estimate?.() : null;
     const feature = pageEstimate?.feature ?? "catalog";
     const rows = Math.max(1, pageEstimate ? pageEstimate.rows : useSheetStore.getState().selectedRowIds.size || 1);

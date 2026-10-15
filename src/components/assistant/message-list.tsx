@@ -37,11 +37,13 @@ const ICONS: Record<string, ComponentType<{ className?: string }>> = {
   Clicking: MousePointerClick,
   Typing: Keyboard,
   "Uploading the file": Upload,
+  "Uploading the files": Upload,
   "Reading the sheet": Table2,
   "Selecting rows": Table2,
   "Choosing columns": Table2,
   "Reading the gallery": Table2,
   "Reading the visualizer": Table2,
+  "Reading the classification": Table2,
   "Selecting products": Table2,
   "Asking for your approval": ShieldCheck,
 };
@@ -193,7 +195,11 @@ export function MessageList({ messages, running }: { messages: ChatMessage[]; ru
                 <div dir="auto" className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-[#400095] px-3 py-2 text-xs text-white">
                   {message.text}
                 </div>
-                {message.files?.map((name) => (
+                {message.files && message.files.length > 3 ? (
+                  <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                    <Paperclip className="h-3 w-3" /> {message.files.length} files
+                  </span>
+                ) : message.files?.map((name) => (
                   <span key={name} className="flex items-center gap-1 text-[10px] text-muted-foreground">
                     <Paperclip className="h-3 w-3" /> {name}
                   </span>

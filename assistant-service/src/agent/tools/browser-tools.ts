@@ -124,16 +124,25 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
       },
     },
     upload_file: {
-      description: "Put a file the user attached in the chat into a file input by its id. Use the file id listed in the request context.",
+      description:
+        "Put files the user attached in the chat into a file input by its id. Use the file ids listed in the request context: fileId for one file, or fileIds to add several at once (inputs that accept many, such as image uploads).",
       inputSchema: {
         type: "object",
-        properties: { target: { type: "string" }, fileId: { type: "string" } },
-        required: ["target", "fileId"],
+        properties: {
+          target: { type: "string" },
+          fileId: { type: "string" },
+          fileIds: { type: "array", items: { type: "string" } },
+        },
+        required: ["target"],
       },
       execute: async (args: Args) => {
         const id = target(args.target);
-        if (!id || typeof args.fileId !== "string") return failure("Invalid arguments");
-        return perform(run, { kind: "upload_file", target: id, fileId: args.fileId });
+        const fileIds = Array.isArray(args.fileIds)
+          ? args.fileIds.filter((f): f is string => typeof f === "string").slice(0, 200)
+          : undefined;
+        const fileId = typeof args.fileId === "string" ? args.fileId : undefined;
+        if (!id || (!fileId && !fileIds?.length)) return failure("Invalid arguments");
+        return perform(run, { kind: "upload_file", target: id, fileId, fileIds });
       },
     },
     wait_for: {
@@ -206,6 +215,13 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
       state: "the product image column, the chosen input columns, quality, instructions and branding",
       statuses: "not_started, failed, description_ready, images_ready",
     }),
+    classify_get_state: {
+      description:
+        "Image Classification only: read the page. On the project list it lists the projects; on the new-project page it returns the name, instruction, thinking level, how many images are added and whether it can be submitted; on a result page it returns the status and the groups (label, image count, SKUs).",
+      inputSchema: noArgs,
+      annotations: { readOnlyHint: true },
+      execute: () => perform(run, { kind: "page_get_state", scope: "classify" }),
+    },
     visualizer_set_columns: {
       description:
         "Products Visualizer only: choose exactly which worksheet columns describe each product (by header name, as listed in visualizer_get_state). The product image column is set separately with its dropdown.",

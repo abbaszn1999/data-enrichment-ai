@@ -7,6 +7,8 @@ import { z } from "zod";
  */
 
 export const ASSISTANT_LIMITS = {
+  /** Files one message may carry (Image Classification takes up to 200 images). */
+  maxAttachments: 200,
   /** Browser actions one run may perform. */
   maxActionsPerRun: 40,
   /** Wall-clock time of one run. */
@@ -27,7 +29,7 @@ export const agentTargetSchema = z
   .regex(/^[a-z0-9][a-z0-9._:-]*$/i, "Invalid target id");
 
 /** Pages that register state handlers with the driver (see driver/page-handlers). */
-export const pageScopeSchema = z.enum(["gallery", "visualizer"]);
+export const pageScopeSchema = z.enum(["gallery", "visualizer", "classify"]);
 
 export const browserActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("see_page") }),
@@ -39,7 +41,13 @@ export const browserActionSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("type"), target: agentTargetSchema, text: z.string().max(2000) }),
   z.object({ kind: z.literal("navigate"), path: z.string().max(300) }),
-  z.object({ kind: z.literal("upload_file"), target: agentTargetSchema, fileId: z.string().max(120) }),
+  z.object({
+    kind: z.literal("upload_file"),
+    target: agentTargetSchema,
+    /** One file, or several at once for inputs that take many. */
+    fileId: z.string().max(120).optional(),
+    fileIds: z.array(z.string().max(120)).max(200).optional(),
+  }),
   z.object({
     kind: z.literal("wait_for"),
     target: agentTargetSchema.optional(),
@@ -60,7 +68,7 @@ export const browserActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("page_get_state"), scope: pageScopeSchema }),
   z.object({
     kind: z.literal("page_select_rows"),
-    scope: pageScopeSchema,
+    scope: z.enum(["gallery", "visualizer"]),
     mode: z.enum(["all", "none", "indexes", "status"]),
     indexes: z.array(z.number().int().min(1)).max(500).optional(),
     statuses: z.array(z.string().max(40)).max(10).optional(),
@@ -132,7 +140,7 @@ export const chatRequestSchema = z.object({
   context: pageContextSchema,
   /** Conversation to continue; omitted for a new one. */
   conversationId: z.string().max(80).optional(),
-  files: z.array(attachedFileSchema).max(5).optional(),
+  files: z.array(attachedFileSchema).max(ASSISTANT_LIMITS.maxAttachments).optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
@@ -154,7 +162,7 @@ export const serviceRunRequestSchema = z.object({
   message: z.string().min(1).max(ASSISTANT_LIMITS.maxMessageChars),
   context: pageContextSchema,
   conversationId: z.string().max(80).optional(),
-  files: z.array(attachedFileSchema).max(5).optional(),
+  files: z.array(attachedFileSchema).max(ASSISTANT_LIMITS.maxAttachments).optional(),
 });
 export type ServiceRunRequest = z.infer<typeof serviceRunRequestSchema>;
 

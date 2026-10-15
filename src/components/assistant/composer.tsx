@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { Paperclip, Send, Square, X } from "lucide-react";
 import type { AttachedFile } from "@/lib/assistant/protocol";
 
+const VISIBLE_CHIPS = 6;
+
 export function Composer({
   running,
   attached,
@@ -32,7 +34,7 @@ export function Composer({
     <div className="border-t border-border/60 p-2">
       {attached.length > 0 && (
         <div className="mb-1.5 flex flex-wrap gap-1">
-          {attached.map((file) => (
+          {attached.slice(0, VISIBLE_CHIPS).map((file) => (
             <span key={file.id} className="flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px]">
               <Paperclip className="h-3 w-3" /> {file.name}
               <button type="button" aria-label="Remove file" onClick={() => onDetach(file.id)}>
@@ -40,13 +42,26 @@ export function Composer({
               </button>
             </span>
           ))}
+          {attached.length > VISIBLE_CHIPS && (
+            <span className="flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px]">
+              +{attached.length - VISIBLE_CHIPS} more
+              <button
+                type="button"
+                aria-label="Remove the other files"
+                onClick={() => attached.slice(VISIBLE_CHIPS).forEach((file) => onDetach(file.id))}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
         </div>
       )}
       <div className="flex items-end gap-1.5">
         <input
           ref={fileRef}
           type="file"
-          accept=".xlsx,.xls,.csv"
+          accept=".xlsx,.xls,.csv,image/jpeg,image/png,image/webp,image/gif"
+          multiple
           className="hidden"
           onChange={(e) => {
             if (e.target.files?.length) onAttach(e.target.files);
@@ -55,7 +70,7 @@ export function Composer({
         />
         <button
           type="button"
-          aria-label="Attach a spreadsheet"
+          aria-label="Attach a spreadsheet or images"
           disabled={running}
           onClick={() => fileRef.current?.click()}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-40"

@@ -6,7 +6,7 @@ import { executeBrowserAction } from "@/lib/assistant/driver/actions";
 import { forgetFile, getAttachedFile, rememberFile } from "@/lib/assistant/driver/attachments";
 import { clearApprovals, issueApproval } from "@/lib/assistant/driver/spend-guard";
 import { hideCursor } from "@/lib/assistant/driver/cursor-controller";
-import { assistantEventSchema, type AssistantEvent, type AttachedFile } from "@/lib/assistant/protocol";
+import { ASSISTANT_LIMITS, assistantEventSchema, type AssistantEvent, type AttachedFile } from "@/lib/assistant/protocol";
 
 export type ChatMessage =
   | { id: string; role: "user"; text: string; files?: string[] }
@@ -130,10 +130,14 @@ export function useAssistantStream(params: { workspaceId: string; workspaceSlug:
     });
   }, []);
 
-  const attach = useCallback((files: FileList | File[]) => {
-    const list = Array.from(files).slice(0, 5);
-    setAttached((current) => [...current, ...list.map((file) => rememberFile(file))].slice(0, 5));
-  }, []);
+  const attach = useCallback(
+    (files: FileList | File[]) => {
+      const room = Math.max(0, ASSISTANT_LIMITS.maxAttachments - attached.length);
+      const added = Array.from(files).slice(0, room).map((file) => rememberFile(file));
+      if (added.length) setAttached((current) => [...current, ...added]);
+    },
+    [attached.length]
+  );
 
   const detach = useCallback((id: string) => {
     forgetFile(id);
