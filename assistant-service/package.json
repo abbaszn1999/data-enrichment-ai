@@ -12,6 +12,7 @@
     "start": "tsx --env-file=.env.local src/main.ts",
     "start:prod": "tsx src/main.ts",
     "knowledge": "node scripts/build-knowledge.mjs",
+    "postinstall": "node scripts/link-shared-deps.mjs",
     "spike": "tsx --env-file=.env.local spike/spike.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
