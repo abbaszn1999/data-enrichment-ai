@@ -24,6 +24,20 @@ import { saveSession, loadSession, clearSession, type PersistedSession } from "@
 import { expandToGroupMemberIds, visibleCatalogRows } from "@/lib/catalog/product-groups";
 import { moveColumn, reorderKeysInPlace, toggleColumnHidden } from "@/lib/sheet/column-layout";
 
+/**
+ * The tool a sheet reopens on. Lens used to be a switch inside the Source /
+ * Image Finder tool; a sheet saved there with Lens on now opens the Lens tool.
+ */
+function reopenSidebarMode(
+  mode: CatalogSidebarMode | undefined,
+  settings: EnrichmentSettings
+): CatalogSidebarMode {
+  if (mode === "images" && settings.finderOutputs?.length === 1 && settings.finderOutputs[0] === "lens") {
+    return "lens";
+  }
+  return mode ?? "enrich";
+}
+
 function normalizeEnrichmentSettings(
   settings: EnrichmentSettings | Partial<EnrichmentSettings> | null | undefined
 ): EnrichmentSettings {
@@ -794,7 +808,10 @@ export const useSheetStore = create<SheetStore>((set, get) => ({
         columnVisibility,
         columnLayout: columnLayout ?? { order: [], hidden: [] },
         // Reopen on the tool and sheet tab the user left (product sheets only have the modes).
-        sidebarMode: (sessionKind ?? "product") === "plp" ? "enrich" : (view?.sidebarMode ?? "enrich"),
+        sidebarMode:
+          (sessionKind ?? "product") === "plp"
+            ? "enrich"
+            : reopenSidebarMode(view?.sidebarMode, normalizeEnrichmentSettings(enrichmentSettings)),
         activeSheet: view?.activeSheet === "existing" ? "existing" : "new",
         selectedRowIds: new Set<string>(),
         isEnriching: false,

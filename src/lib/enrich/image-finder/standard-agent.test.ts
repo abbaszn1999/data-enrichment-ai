@@ -1,5 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The image load check refuses hosts that are private or do not resolve, which
+// needs a real DNS lookup. These tests use made-up shop hosts, so keep the real
+// rules for host names and addresses but skip the lookup.
+vi.mock("@/lib/net/public-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/net/public-host")>();
+  return {
+    ...actual,
+    isPublicHttpUrl: async (url: URL) =>
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password &&
+      !actual.isBlockedHostname(url.hostname),
+  };
+});
+
 // The single agent call on its own; the wrapper around it is covered by agent.test.ts.
 const { findProductImagesStandard: enrichRow } = await import("./standard-agent");
 const { OPENAI_RESPONSES_URL } = await import("../openai");

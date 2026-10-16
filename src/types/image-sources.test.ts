@@ -47,7 +47,13 @@ describe("Image sources column", () => {
     expect(catalogModeForRunColumns("existing", ["imageUrls"])).toBe("enrich");
   });
 
-  it("puts Source URLs, alone or with Images, in the Source & Image Finder tab", () => {
+  it("puts a Lens-only run in the Lens Source Checker, not the Source / Image Finder", () => {
+    expect(catalogModeForRunColumns("new", ["lensFounds"])).toBe("lens");
+    expect(catalogModeForRunColumns("existing", ["lensFounds"])).toBe("enrich");
+    expect(catalogModeForRunColumns("new", ["lensFounds", "enhancedTitle"])).toBe("enrich");
+  });
+
+  it("puts Source URLs, alone or with Images, in the Source / Image Finder tool", () => {
     expect(catalogModeForRunColumns("new", ["sourceUrls"])).toBe("images");
     expect(catalogModeForRunColumns("new", ["imageUrls", IMAGE_SOURCES_COLUMN_ID, "sourceUrls"])).toBe("images");
     // Next to Enrichment columns it is still an Enrichment-shaped run.

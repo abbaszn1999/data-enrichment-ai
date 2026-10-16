@@ -1,10 +1,33 @@
 import { describe, expect, it } from "vitest";
+import sharp from "sharp";
 import {
   buildAiImageResponseFormat,
   geminiImageSize,
   referenceFlags,
+  toStorableImage,
   type AiReferenceImage,
 } from "./ai-shared";
+
+describe("toStorableImage", () => {
+  const solid = (channels: 3 | 4) =>
+    sharp({ create: { width: 8, height: 8, channels, background: { r: 200, g: 30, b: 30, alpha: channels === 4 ? 0.5 : 1 } } });
+
+  it("keeps JPEG, PNG and WebP as they are", async () => {
+    const buffer = await solid(3).jpeg().toBuffer();
+    const image = { buffer, contentType: "image/jpeg", ext: "jpg" };
+    expect(await toStorableImage(image)).toBe(image);
+  });
+
+  it("converts AVIF to JPEG, and AVIF with transparency to PNG", async () => {
+    const opaque = await toStorableImage({ buffer: await solid(3).avif().toBuffer(), contentType: "image/avif", ext: "avif" });
+    expect(opaque).toMatchObject({ contentType: "image/jpeg", ext: "jpg" });
+    expect((await sharp(opaque.buffer).metadata()).format).toBe("jpeg");
+
+    const clear = await toStorableImage({ buffer: await solid(4).avif().toBuffer(), contentType: "image/avif", ext: "avif" });
+    expect(clear).toMatchObject({ contentType: "image/png", ext: "png" });
+    expect((await sharp(clear.buffer).metadata()).format).toBe("png");
+  });
+});
 import { orderReferences, selectShotReferences } from "@/lib/ai-images/reference-set";
 
 const ref = (role: AiReferenceImage["role"], key: string): AiReferenceImage => ({

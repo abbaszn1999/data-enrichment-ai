@@ -346,7 +346,14 @@ export const PRODUCT_MODE_COLUMN_IDS = {
  */
 export const IMAGE_SOURCES_COLUMN_ID = "imageSourceUrls";
 
-export type CatalogSidebarMode = "enrich" | keyof typeof PRODUCT_MODE_COLUMN_IDS;
+/**
+ * The tools in the left rail. "images" is the Source / Image Finder (Source URLs
+ * or Images); "lens" is the Lens Source Checker, which has its own tool because
+ * it starts from a picture and never runs next to the others; "functions" is
+ * Sheet Tools (bulk Math, Text, Generate, Clean, Copy & Fill), which edits the
+ * sheet without any AI run.
+ */
+export type CatalogSidebarMode = "enrich" | keyof typeof PRODUCT_MODE_COLUMN_IDS | "lens" | "functions";
 
 export function isProductModeColumn(
   id: string,
@@ -440,21 +447,19 @@ export function catalogModeForRunColumns(
   if (tab === "new" && columnIds.length === 1 && columnIds[0] === PRODUCT_MODE_COLUMN_IDS.categories) {
     return "categories";
   }
-  // The "Source & Image Finder" tab: Images (with its Image sources column),
-  // Source URLs, or Lens founds. Runs made before the three became exclusive
-  // may hold Images and Source URLs together; they still belong to this tab.
+  // The Lens Source Checker: Lens founds is the only column it writes.
+  if (tab === "new" && columnIds.length === 1 && columnIds[0] === LENS_FOUNDS_COLUMN_ID) {
+    return "lens";
+  }
+  // The "Source / Image Finder" tool: Images (with its Image sources column) or
+  // Source URLs. Runs made before they became exclusive may hold both together;
+  // they still belong to this tool.
   if (
     tab === "new" &&
-    columnIds.some(
-      (id) =>
-        id === PRODUCT_MODE_COLUMN_IDS.images || id === SOURCE_URLS_COLUMN_ID || id === LENS_FOUNDS_COLUMN_ID
-    ) &&
+    columnIds.some((id) => id === PRODUCT_MODE_COLUMN_IDS.images || id === SOURCE_URLS_COLUMN_ID) &&
     columnIds.every(
       (id) =>
-        id === PRODUCT_MODE_COLUMN_IDS.images ||
-        id === IMAGE_SOURCES_COLUMN_ID ||
-        id === SOURCE_URLS_COLUMN_ID ||
-        id === LENS_FOUNDS_COLUMN_ID
+        id === PRODUCT_MODE_COLUMN_IDS.images || id === IMAGE_SOURCES_COLUMN_ID || id === SOURCE_URLS_COLUMN_ID
     )
   ) {
     return "images";

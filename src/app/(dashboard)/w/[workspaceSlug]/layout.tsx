@@ -62,6 +62,7 @@ import { WorkspaceContext } from "./workspace-context";
 import { JobInbox } from "@/components/job-inbox";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { WelcomeGiftTicker } from "@/components/billing/welcome-gift-ticker";
+import { FeaturebaseMessenger } from "@/components/featurebase-messenger";
 
 export default function WorkspaceLayout({
   children,
@@ -508,6 +509,7 @@ export default function WorkspaceLayout({
 
   return (
     <WorkspaceContext.Provider value={{ workspace, role, wsLoading, hasIntegration: !!hasIntegration }}>
+      <FeaturebaseMessenger userId={user?.id} />
       <div className="h-screen flex flex-col bg-background overflow-hidden">
         {/* Top Header — hidden in immersive mode */}
         <header className={`border-b bg-background/95 backdrop-blur-sm sticky top-0 z-50 shrink-0 transition-all duration-300 ${

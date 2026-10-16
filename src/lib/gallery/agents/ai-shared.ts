@@ -204,6 +204,28 @@ export function buildAiImageResponseFormat(
   };
 }
 
+const STORABLE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/**
+ * Workspace storage only accepts JPEG, PNG and WebP. Downloaded originals in any
+ * other format (AVIF, GIF, HEIC…) are converted before upload: PNG when they have
+ * transparency, JPEG otherwise.
+ */
+export async function toStorableImage(image: {
+  buffer: Buffer;
+  contentType: string;
+  ext: string;
+}): Promise<{ buffer: Buffer; contentType: string; ext: string }> {
+  if (STORABLE_IMAGE_TYPES.has(image.contentType)) return image;
+  const { default: sharp } = await import("sharp");
+  const source = sharp(image.buffer, { animated: false });
+  const { hasAlpha } = await source.metadata();
+  const pipeline = source.rotate();
+  return hasAlpha
+    ? { buffer: await pipeline.png().toBuffer(), contentType: "image/png", ext: "png" }
+    : { buffer: await pipeline.jpeg({ quality: 92, mozjpeg: true }).toBuffer(), contentType: "image/jpeg", ext: "jpg" };
+}
+
 /** Convert returned image bytes to the format chosen in settings so stored files always match. */
 export async function convertImageFormat(
   buffer: Buffer,

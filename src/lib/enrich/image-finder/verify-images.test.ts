@@ -9,6 +9,39 @@ import {
   verifyImageUrls,
 } from "./verify-images";
 
+// The load check refuses hosts that are private or do not resolve, which needs
+// a real DNS lookup. These tests use made-up hosts (cdn.example.com, cdn.test),
+// so keep the real rules for host names and addresses but skip the lookup.
+vi.mock("@/lib/net/public-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/net/public-host")>();
+  return {
+    ...actual,
+    isPublicHttpUrl: async (url: URL) =>
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password &&
+      !actual.isBlockedHostname(url.hostname),
+  };
+});
+
+describe("private addresses are never fetched", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    "http://localhost/a.png",
+    "http://127.0.0.1/a.png",
+    "http://169.254.169.254/latest/meta-data",
+    "http://10.0.0.5/a.png",
+    "http://printer.local/a.png",
+    "file:///etc/passwd",
+  ])("does not open %s, and reports it as not verified", async (url) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200, headers: { "content-type": "image/png" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await checkImageUrl(url, { retryDelayMs: 0 })).toBe("unverified");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("verifyImageUrl", () => {
   afterEach(() => vi.unstubAllGlobals());
 
