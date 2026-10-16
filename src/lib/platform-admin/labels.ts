@@ -18,6 +18,7 @@ export const CREDIT_OPERATION_LABELS: Record<AdminCreditOperation, string> = {
   ai_category_suggest: "Category Suggest",
   ai_function: "AI Function",
   store_assistant: STORE_ASSISTANT.label,
+  assistant: "Agent",
   image_classification: "Image Classification",
   gallery_google: "Products Gallery",
   gallery_ai: "Products Gallery",
@@ -95,6 +96,7 @@ export const RANGE_LABELS = {
 export const ACTIVITY_ENTITY_LABELS: Record<string, string> = {
   catalog_intelligence: CATALOG_INTELLIGENCE.label,
   store_assistant: STORE_ASSISTANT.label,
+  assistant: "Agent",
   gallery_session: "Products Gallery",
   visualizer_session: "Products Visualizer",
   image_classification_session: "Image Classification",

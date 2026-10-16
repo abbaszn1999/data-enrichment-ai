@@ -21,6 +21,7 @@ export type AdminCreditOperation =
   | "ai_category_suggest"
   | "ai_function"
   | "store_assistant"
+  | "assistant"
   | "image_classification"
   | "gallery_google"
   | "gallery_ai"
