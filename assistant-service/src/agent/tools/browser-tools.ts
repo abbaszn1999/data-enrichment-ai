@@ -162,7 +162,7 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
     },
     ci_get_state: {
       description:
-        "Catalog Intelligence only: read the open sheet (row count, selected rows, enabled output columns, source columns, whether an enrichment is running, per-row status counts).",
+        "Catalog Intelligence only: read the open sheet (the open tool and what Run will run with it, row count, selected rows, output columns, source columns, whether a run is in progress, per-row status counts).",
       inputSchema: noArgs,
       annotations: { readOnlyHint: true },
       execute: () => perform(run, { kind: "ci_get_state" }),

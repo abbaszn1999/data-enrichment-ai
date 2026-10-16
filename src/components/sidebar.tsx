@@ -208,7 +208,9 @@ function FinderOutputCard({
   onToggle,
   onExpand,
   children,
+  agentId,
 }: {
+  agentId?: string;
   label: string;
   badge?: string;
   description: string;
@@ -231,6 +233,8 @@ function FinderOutputCard({
           className="shrink-0"
           onClick={onToggle}
           disabled={disabled}
+          data-agent-id={agentId}
+          aria-pressed={enabled}
           aria-label={enabled ? `Switch off ${label}` : `Switch on ${label}`}
         >
           {enabled ? (
@@ -1906,6 +1910,7 @@ export function Sidebar() {
               <div className="space-y-0.5">
                 {sourceUrlsColumn && (
                   <FinderOutputCard
+                    agentId="ci.finder.source-urls"
                     label="Source URLs"
                     description="The web pages that sell this exact product: the brand's own site, factories and suppliers, wholesalers and retailers. Written to the Source URLs column."
                     enabled={runsSourceUrls}
@@ -1999,6 +2004,7 @@ export function Sidebar() {
                 )}
                 {modeColumn && (
                   <FinderOutputCard
+                    agentId="ci.finder.images"
                     label="Images"
                     description={`Finds the exact product on the web, starting from your Source URLs or Lens founds column (from the Lens Source Checker) when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
                     enabled={runsImages}

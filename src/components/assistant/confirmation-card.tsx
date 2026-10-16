@@ -5,10 +5,18 @@ import { Coins, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatCredits } from "@/lib/format-credits";
 import { useSheetStore } from "@/store/sheet-store";
-import { getPageHandlers } from "@/lib/assistant/driver/page-handlers";
+import { getPageHandlers, type EstimateFeature } from "@/lib/assistant/driver/page-handlers";
 import type { PendingConfirmation } from "@/hooks/use-assistant-stream";
 
 type Estimate = { min: number; max: number } | null;
+
+/** Lens and Source URLs runs cost differently from enrichment, so they have their own history. */
+function catalogEstimateFeature(): EstimateFeature {
+  const { sidebarMode, enrichmentSettings } = useSheetStore.getState();
+  if (sidebarMode === "lens") return "catalog_lens";
+  if (sidebarMode === "images" && enrichmentSettings.finderOutputs?.[0] === "sourceUrls") return "catalog_source_urls";
+  return "catalog";
+}
 
 /** Shown before the assistant spends credits. Approving unlocks exactly one click on exactly one control. */
 export function ConfirmationCard({
@@ -42,7 +50,7 @@ export function ConfirmationCard({
             ? "store"
             : null;
     const pageEstimate = scope ? getPageHandlers(scope)?.estimate?.() : null;
-    const feature = pageEstimate?.feature ?? "catalog";
+    const feature = pageEstimate?.feature ?? catalogEstimateFeature();
     const rows = Math.max(1, pageEstimate ? pageEstimate.rows : useSheetStore.getState().selectedRowIds.size || 1);
     fetch(`/api/assistant/estimate?workspaceId=${encodeURIComponent(workspaceId)}&rows=${rows}&feature=${feature}`)
       .then((res) => (res.ok ? res.json() : null))

@@ -16,7 +16,7 @@ export type PageSelectRows = {
   statuses?: string[];
 };
 
-export type EstimateFeature = "catalog" | "gallery_ai" | "gallery_google" | "visualizer" | "classify" | "store";
+export type EstimateFeature = "catalog" | "catalog_lens" | "catalog_source_urls" | "gallery_ai" | "gallery_google" | "visualizer" | "classify" | "store";
 
 export type PageEstimate = { feature: EstimateFeature; rows: number };
 
