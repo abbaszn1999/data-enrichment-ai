@@ -103,7 +103,7 @@ async function type(action: Extract<BrowserAction, { kind: "type" }>) {
 
 async function navigate(action: Extract<BrowserAction, { kind: "navigate" }>, ctx: DriverContext) {
   if (!isAllowedNavigation(action.path, ctx.workspaceSlug) || isBlockedNavigation(action.path)) {
-    throw new ActionError("The assistant cannot open that page.");
+    throw new ActionError("The agent cannot open that page.");
   }
   ctx.navigate(action.path);
   const target = action.path.split("?")[0];

@@ -60,7 +60,13 @@ async function post(path: string, body: unknown): Promise<void> {
   }
 }
 
-export function useAssistantStream(params: { workspaceId: string; workspaceSlug: string; sessionId?: string }) {
+export function useAssistantStream(params: {
+  workspaceId: string;
+  workspaceSlug: string;
+  sessionId?: string;
+  /** The server no longer accepts this browser (code changed or cookie gone). */
+  onLocked?: () => void;
+}) {
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -201,17 +207,22 @@ export function useAssistantStream(params: { workspaceId: string; workspaceSlug:
           }),
         });
       } catch {
-        push({ id: nextId(), role: "error", text: "Could not reach the assistant. Check your connection." });
+        push({ id: nextId(), role: "error", text: "Could not reach the agent. Check your connection." });
         setStatus("idle");
         return;
       }
 
+      if (response.status === 403 && (await response.clone().json().catch(() => null))?.error === "LOCKED") {
+        paramsRef.current.onLocked?.();
+        setStatus("idle");
+        return;
+      }
       if (!response.ok || !response.body) {
         const known: Record<number, string> = {
-          402: "Your plan has no credits left for the assistant.",
-          429: "The assistant is busy. Try again in a moment.",
+          402: "Your plan has no credits left for the agent.",
+          429: "The agent is busy. Try again in a moment.",
         };
-        push({ id: nextId(), role: "error", text: known[response.status] ?? "The assistant is not available right now." });
+        push({ id: nextId(), role: "error", text: known[response.status] ?? "The agent is not available right now." });
         setStatus("idle");
         return;
       }
@@ -274,7 +285,7 @@ export function useAssistantStream(params: { workspaceId: string; workspaceSlug:
           }
         }
       } catch {
-        push({ id: nextId(), role: "error", text: "The assistant connection was interrupted." });
+        push({ id: nextId(), role: "error", text: "The agent connection was interrupted." });
       } finally {
         setMessages((current) =>
           closeThinking(current).map((m) =>

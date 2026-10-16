@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { getWorkspaceContext, isContextSubscriptionActive, type WorkspaceContext } from "@/lib/workspace-context";
 import { isAssistantEnabled } from "./service-client";
+import { hasAgentAccess } from "./access-gate";
 
 export type AssistantAccess = {
   userId: string;
@@ -22,6 +23,7 @@ export async function authorizeAssistant(params: {
     error,
   } = await supabase.auth.getUser();
   if (error || !user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  if (!(await hasAgentAccess(user.id))) return NextResponse.json({ error: "LOCKED" }, { status: 403 });
 
   const ctx = await getWorkspaceContext({ workspaceId: params.workspaceId, userId: user.id });
   if (!ctx.membershipRole || ctx.membershipRole === "viewer") {

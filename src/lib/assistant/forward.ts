@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { ZodType } from "zod";
 import { createClient } from "@/lib/supabase-server";
 import { callAssistantService, isAssistantEnabled } from "./service-client";
+import { hasAgentAccess } from "./access-gate";
 
 /**
  * Forward a browser call about a live run (tool result, cancel, steer) to the
@@ -16,6 +17,7 @@ export async function forwardRunCall<T>(request: Request, servicePath: string, s
     error,
   } = await supabase.auth.getUser();
   if (error || !user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  if (!(await hasAgentAccess(user.id))) return NextResponse.json({ error: "LOCKED" }, { status: 403 });
 
   let json: unknown;
   try {
@@ -31,6 +33,6 @@ export async function forwardRunCall<T>(request: Request, servicePath: string, s
     const data = await response.json().catch(() => ({}));
     return NextResponse.json(data, { status: response.ok ? 200 : response.status === 404 ? 404 : 502 });
   } catch {
-    return NextResponse.json({ error: "The assistant is not available right now." }, { status: 503 });
+    return NextResponse.json({ error: "The agent is not available right now." }, { status: 503 });
   }
 }

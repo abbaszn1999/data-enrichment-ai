@@ -82,7 +82,7 @@ export function Composer({
           rows={1}
           maxLength={4000}
           disabled={running}
-          placeholder={running ? "Working…" : "Ask the assistant…"}
+          placeholder={running ? "Working…" : "Ask the agent…"}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {

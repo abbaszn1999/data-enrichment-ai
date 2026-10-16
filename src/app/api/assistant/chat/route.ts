@@ -89,13 +89,13 @@ export async function POST(request: NextRequest) {
   try {
     upstream = await callAssistantService({ path: "/runs", userId: access.userId, body: payload });
   } catch {
-    return NextResponse.json({ error: "The assistant is not available right now." }, { status: 503 });
+    return NextResponse.json({ error: "The agent is not available right now." }, { status: 503 });
   }
   if (upstream.status === 429) {
-    return NextResponse.json({ error: "The assistant is already working on a request." }, { status: 429 });
+    return NextResponse.json({ error: "The agent is already working on a request." }, { status: 429 });
   }
   if (!upstream.ok || !upstream.body) {
-    return NextResponse.json({ error: "The assistant is not available right now." }, { status: 503 });
+    return NextResponse.json({ error: "The agent is not available right now." }, { status: 503 });
   }
 
   const reader = upstream.body.getReader();
@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
           }
         }
       } catch {
-        send({ type: "error", message: "The assistant connection was interrupted." });
+        send({ type: "error", message: "The agent connection was interrupted." });
       } finally {
         await settleAssistantRun({
           runId,
