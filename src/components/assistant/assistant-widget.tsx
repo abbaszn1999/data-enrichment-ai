@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useState, useSyncExternalStore, type FormEvent } from "react";
 import { usePathname } from "next/navigation";
 import { Bot, KeyRound, Loader2, Lock, RotateCcw, X } from "lucide-react";
 import { useAssistantStream } from "@/hooks/use-assistant-stream";
@@ -11,6 +11,21 @@ import { MessageList } from "./message-list";
 
 type Access = "unknown" | "checking" | "locked" | "unlocked";
 
+/** The button stays hidden until this browser opens a page with `?agent`; locking hides it again. */
+const REVEAL_KEY = "agent-revealed";
+
+function subscribeReveal(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+}
+
+function readReveal(): boolean {
+  if (new URLSearchParams(window.location.search).has("agent")) {
+    window.localStorage.setItem(REVEAL_KEY, "1");
+  }
+  return window.localStorage.getItem(REVEAL_KEY) === "1";
+}
+
 const UNLOCK_ERRORS: Record<number, string> = {
   403: "Wrong code.",
   429: "Too many attempts. Try again in 15 minutes.",
@@ -19,6 +34,8 @@ const UNLOCK_ERRORS: Record<number, string> = {
 
 /** Floating agent. Lives in the workspace layout, so a run continues while it navigates. */
 export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: string; workspaceSlug: string }) {
+  const revealed = useSyncExternalStore(subscribeReveal, readReveal, () => false);
+  const [hidden, setHidden] = useState(false);
   const [open, setOpen] = useState(false);
   const [access, setAccess] = useState<Access>("unknown");
   const pathname = usePathname();
@@ -42,8 +59,13 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
   const lock = useCallback(async () => {
     chat.reset();
     setAccess("locked");
+    setOpen(false);
+    window.localStorage.removeItem(REVEAL_KEY);
+    setHidden(true);
     await fetch("/api/assistant/access", { method: "DELETE" }).catch(() => {});
   }, [chat]);
+
+  if (!revealed || hidden) return null;
 
   return (
     <>

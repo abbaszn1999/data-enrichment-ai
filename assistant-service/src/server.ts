@@ -187,7 +187,7 @@ export function startServer(config: ServiceConfig = loadConfig()) {
     registry,
     runner: { config, owners, store, log: (message, extra) => console.log(`[assistant] ${message}`, extra ?? "") },
   });
-  const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" });
-  console.log(`[assistant] listening on 127.0.0.1:${config.port} (billing: ${config.billingMode})`);
+  const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host });
+  console.log(`[assistant] listening on ${config.host}:${config.port} (billing: ${config.billingMode})`);
   return server;
 }

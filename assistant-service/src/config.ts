@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 export type BillingMode = "log" | "charge";
 
 export interface ServiceConfig {
+  /** 127.0.0.1 locally; 0.0.0.0 on a host that routes traffic in, such as Render. */
+  host: string;
   port: number;
   /** Shared secret that signs every request from the gateway. */
   secret: string;
@@ -41,7 +43,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
   const modelFast = env.ASSISTANT_MODEL_FAST === "true";
   const base = COMPOSER_RATES[modelFast ? "fast" : "standard"];
   return {
-    port: num(env.ASSISTANT_SERVICE_PORT, 4100),
+    host: env.ASSISTANT_SERVICE_HOST || "127.0.0.1",
+    port: num(env.ASSISTANT_SERVICE_PORT ?? env.PORT, 4100),
     secret,
     cursorApiKey,
     model: env.ASSISTANT_MODEL || "composer-2.5",
