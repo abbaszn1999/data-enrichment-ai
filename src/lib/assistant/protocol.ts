@@ -124,6 +124,8 @@ export const assistantEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("summary"), status: z.enum(["started", "completed"]) }),
   /** Estimated context fill after a reply; the SDK reports usage per reply, not per model call. */
   z.object({ type: z.literal("context"), usedTokens: z.number().min(0), windowTokens: z.number().positive() }),
+  /** The workspace has no active plan, or its credit balance is spent. */
+  z.object({ type: z.literal("billing_blocked"), reason: z.enum(["no_credits", "no_subscription"]) }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type AssistantEvent = z.infer<typeof assistantEventSchema>;

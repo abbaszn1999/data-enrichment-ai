@@ -10,6 +10,7 @@ const VISIBLE_CHIPS = 6;
 
 export function Composer({
   running,
+  locked,
   attached,
   context,
   onSend,
@@ -18,6 +19,8 @@ export function Composer({
   onDetach,
 }: {
   running: boolean;
+  /** Credits or the subscription block the next message. */
+  locked: boolean;
   attached: AttachedFile[];
   context: ContextUsage | null;
   onSend: (text: string) => void;
@@ -29,7 +32,7 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement>(null);
 
   const submit = () => {
-    if (!text.trim() || running) return;
+    if (!text.trim() || running || locked) return;
     onSend(text);
     setText("");
   };
@@ -75,7 +78,7 @@ export function Composer({
         <button
           type="button"
           aria-label="Attach a spreadsheet or images"
-          disabled={running}
+          disabled={running || locked}
           onClick={() => fileRef.current?.click()}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-40"
         >
@@ -85,8 +88,8 @@ export function Composer({
           value={text}
           rows={1}
           maxLength={4000}
-          disabled={running}
-          placeholder={running ? "Working…" : "Ask the agent…"}
+          disabled={running || locked}
+          placeholder={locked ? "Agent paused" : running ? "Working…" : "Ask the agent…"}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -110,7 +113,7 @@ export function Composer({
           <button
             type="button"
             aria-label="Send"
-            disabled={!text.trim()}
+            disabled={!text.trim() || locked}
             onClick={submit}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#400095] text-white disabled:opacity-40"
           >

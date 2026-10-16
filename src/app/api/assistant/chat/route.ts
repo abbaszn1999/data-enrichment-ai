@@ -145,13 +145,14 @@ export async function POST(request: NextRequest) {
       } catch {
         send({ type: "error", message: "The agent connection was interrupted." });
       } finally {
-        await settleAssistantRun({
+        const settlement = await settleAssistantRun({
           runId,
           workspaceId: body.context.workspaceId,
           ownerUserId: access.ctx.subscription?.user_id ?? access.userId,
           actorUserId: access.userId,
           credits,
         });
+        if (settlement.balanceExhausted) send({ type: "billing_blocked", reason: "no_credits" });
         try {
           controller.close();
         } catch {

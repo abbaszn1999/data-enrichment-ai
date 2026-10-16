@@ -16,6 +16,8 @@ describe("assistant protocol", () => {
     expect(assistantEventSchema.safeParse({ type: "summary", status: "completed" }).success).toBe(true);
     expect(assistantEventSchema.safeParse({ type: "context", usedTokens: 10, windowTokens: 200 }).success).toBe(true);
     expect(assistantEventSchema.safeParse({ type: "context", usedTokens: 10, windowTokens: 0 }).success).toBe(false);
+    expect(assistantEventSchema.safeParse({ type: "billing_blocked", reason: "no_credits" }).success).toBe(true);
+    expect(assistantEventSchema.safeParse({ type: "billing_blocked", reason: "other" }).success).toBe(false);
   });
 
   it("rejects malformed control ids", () => {

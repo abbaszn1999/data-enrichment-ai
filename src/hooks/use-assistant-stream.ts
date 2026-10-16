@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { getBalance } from "@/lib/credits";
 import { executeBrowserAction } from "@/lib/assistant/driver/actions";
 import { forgetFile, getAttachedFile, rememberFile } from "@/lib/assistant/driver/attachments";
 import { clearApprovals, issueApproval } from "@/lib/assistant/driver/spend-guard";
 import { hideCursor } from "@/lib/assistant/driver/cursor-controller";
 import { ASSISTANT_LIMITS, assistantEventSchema, type AssistantEvent, type AttachedFile } from "@/lib/assistant/protocol";
+import { useWorkspaceStore } from "@/store/workspace-store";
 
 export type ChatMessage =
   | { id: string; role: "user"; text: string; files?: string[] }
@@ -48,6 +50,9 @@ export type PendingConfirmation = {
 
 type Status = "idle" | "running";
 
+/** Why the agent refuses the next message. Same reasons the other tools use. */
+export type BillingBlock = "no_credits" | "no_subscription";
+
 let counter = 0;
 const nextId = () => `m${Date.now().toString(36)}${(counter += 1)}`;
 
@@ -76,6 +81,7 @@ export function useAssistantStream(params: {
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [attached, setAttached] = useState<AttachedFile[]>([]);
   const [context, setContext] = useState<ContextUsage | null>(null);
+  const [billingBlock, setBillingBlock] = useState<BillingBlock | null>(null);
   const runIdRef = useRef<string | null>(null);
   const conversationRef = useRef<string | undefined>(undefined);
   const routerRef = useRef(router);
@@ -196,7 +202,12 @@ export function useAssistantStream(params: {
   const send = useCallback(
     async (text: string) => {
       const message = text.trim();
-      if (!message || status === "running") return;
+      if (!message || status === "running" || billingBlock) return;
+      const balance = await getBalance(paramsRef.current.workspaceId).catch(() => null);
+      if (balance && balance.remaining <= 0) {
+        setBillingBlock("no_credits");
+        return;
+      }
       const files = attached;
       push({ id: nextId(), role: "user", text: message, files: files.map((f) => f.name) });
       setStatus("running");
@@ -232,8 +243,13 @@ export function useAssistantStream(params: {
         return;
       }
       if (!response.ok || !response.body) {
+        if (response.status === 402) {
+          const data = await response.json().catch(() => null);
+          setBillingBlock(data?.error === "NO_SUBSCRIPTION" ? "no_subscription" : "no_credits");
+          setStatus("idle");
+          return;
+        }
         const known: Record<number, string> = {
-          402: "Your plan has no credits left for the agent.",
           429: "The agent is busy. Try again in a moment.",
         };
         push({ id: nextId(), role: "error", text: known[response.status] ?? "The agent is not available right now." });
@@ -299,6 +315,13 @@ export function useAssistantStream(params: {
               case "context":
                 setContext({ usedTokens: event.usedTokens, windowTokens: event.windowTokens });
                 break;
+              case "done":
+                if (event.credits && event.credits > 0) useWorkspaceStore.getState().invalidateCredits();
+                break;
+              case "billing_blocked":
+                setBillingBlock(event.reason);
+                useWorkspaceStore.getState().invalidateCredits();
+                break;
               default:
                 break;
             }
@@ -319,7 +342,7 @@ export function useAssistantStream(params: {
         setStatus("idle");
       }
     },
-    [appendAssistantText, appendThinking, attached, endThinking, handleBrowserAction, markSummary, push, status, upsertTool]
+    [appendAssistantText, appendThinking, attached, billingBlock, endThinking, handleBrowserAction, markSummary, push, status, upsertTool]
   );
 
   const stop = useCallback(async () => {
@@ -344,5 +367,19 @@ export function useAssistantStream(params: {
     return () => window.removeEventListener("pagehide", onHide);
   }, []);
 
-  return { messages, status, confirmation, attached, context, attach, detach, send, stop, reset, resolveConfirmation };
+  return {
+    messages,
+    status,
+    confirmation,
+    attached,
+    context,
+    billingBlock,
+    clearBillingBlock: () => setBillingBlock(null),
+    attach,
+    detach,
+    send,
+    stop,
+    reset,
+    resolveConfirmation,
+  };
 }

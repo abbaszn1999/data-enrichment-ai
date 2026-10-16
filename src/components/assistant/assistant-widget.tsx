@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useState, type FormEvent } from "react";
-import { usePathname } from "next/navigation";
-import { Bot, KeyRound, Loader2, Lock, RotateCcw, X } from "lucide-react";
-import { useAssistantStream } from "@/hooks/use-assistant-stream";
+import { usePathname, useRouter } from "next/navigation";
+import { AlertTriangle, Bot, Crown, KeyRound, Loader2, Lock, RotateCcw, X } from "lucide-react";
+import { useAssistantStream, type BillingBlock } from "@/hooks/use-assistant-stream";
 import { Composer } from "./composer";
 import { ConfirmationCard } from "./confirmation-card";
 import { CursorOverlay } from "./cursor-overlay";
@@ -21,6 +21,7 @@ const UNLOCK_ERRORS: Record<number, string> = {
 export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: string; workspaceSlug: string }) {
   const [open, setOpen] = useState(false);
   const [access, setAccess] = useState<Access>("unknown");
+  const router = useRouter();
   const pathname = usePathname();
   const sessionId = /\/catalog-intelligence\/([0-9a-f-]{36})/i.exec(pathname)?.[1];
   const chat = useAssistantStream({ workspaceId, workspaceSlug, sessionId, onLocked: () => setAccess("locked") });
@@ -95,8 +96,16 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
                   onDecide={(approved) => void chat.resolveConfirmation(approved)}
                 />
               )}
+              {chat.billingBlock && (
+                <BillingLock
+                  reason={chat.billingBlock}
+                  onPlans={() => router.push(`/w/${workspaceSlug}/subscription`)}
+                  onClose={chat.clearBillingBlock}
+                />
+              )}
               <Composer
                 running={running}
+                locked={!!chat.billingBlock}
                 attached={chat.attached}
                 context={chat.context}
                 onSend={(text) => void chat.send(text)}
@@ -126,6 +135,47 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
         </button>
       )}
     </>
+  );
+}
+
+function BillingLock({
+  reason,
+  onPlans,
+  onClose,
+}: {
+  reason: BillingBlock;
+  onPlans: () => void;
+  onClose: () => void;
+}) {
+  const subscription = reason === "no_subscription";
+  return (
+    <div className="border-t border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        {subscription ? (
+          <Crown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#6B358D] dark:text-[#F76D01]" />
+        ) : (
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+        )}
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-xs font-bold">{subscription ? "Subscription required" : "No AI credits remaining"}</p>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {subscription
+              ? "The agent is locked until this workspace has an active subscription. Renew or subscribe to continue."
+              : "The agent is locked because this workspace has no remaining AI credits. Buy credits or upgrade your plan to continue."}
+          </p>
+          <button
+            type="button"
+            onClick={onPlans}
+            className="mt-1 rounded-lg bg-[#400095] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#6B358D] dark:bg-[#F76D01]"
+          >
+            {subscription ? "View plans" : "Buy credits"}
+          </button>
+        </div>
+        <button type="button" aria-label="Dismiss" onClick={onClose} className="rounded-md p-0.5 text-muted-foreground hover:bg-muted">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
   );
 }
 
