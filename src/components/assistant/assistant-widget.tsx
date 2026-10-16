@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useCallback, useState, type FormEvent } from "react";
 import { usePathname } from "next/navigation";
 import { Bot, KeyRound, Loader2, Lock, RotateCcw, X } from "lucide-react";
 import { useAssistantStream } from "@/hooks/use-assistant-stream";
@@ -11,21 +11,6 @@ import { MessageList } from "./message-list";
 
 type Access = "unknown" | "checking" | "locked" | "unlocked";
 
-/** The button stays hidden until this browser opens a page with `?agent`; locking hides it again. */
-const REVEAL_KEY = "agent-revealed";
-
-function subscribeReveal(onChange: () => void) {
-  window.addEventListener("storage", onChange);
-  return () => window.removeEventListener("storage", onChange);
-}
-
-function readReveal(): boolean {
-  if (new URLSearchParams(window.location.search).has("agent")) {
-    window.localStorage.setItem(REVEAL_KEY, "1");
-  }
-  return window.localStorage.getItem(REVEAL_KEY) === "1";
-}
-
 const UNLOCK_ERRORS: Record<number, string> = {
   403: "Wrong code.",
   429: "Too many attempts. Try again in 15 minutes.",
@@ -34,8 +19,6 @@ const UNLOCK_ERRORS: Record<number, string> = {
 
 /** Floating agent. Lives in the workspace layout, so a run continues while it navigates. */
 export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: string; workspaceSlug: string }) {
-  const revealed = useSyncExternalStore(subscribeReveal, readReveal, () => false);
-  const [hidden, setHidden] = useState(false);
   const [open, setOpen] = useState(false);
   const [access, setAccess] = useState<Access>("unknown");
   const pathname = usePathname();
@@ -59,13 +42,8 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
   const lock = useCallback(async () => {
     chat.reset();
     setAccess("locked");
-    setOpen(false);
-    window.localStorage.removeItem(REVEAL_KEY);
-    setHidden(true);
     await fetch("/api/assistant/access", { method: "DELETE" }).catch(() => {});
   }, [chat]);
-
-  if (!revealed || hidden) return null;
 
   return (
     <>
@@ -73,7 +51,7 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
       {open ? (
         <div
           data-assistant-widget
-          className="pointer-events-auto fixed bottom-4 right-4 z-[60] flex h-[min(560px,calc(100vh-6rem))] w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl"
+          className="pointer-events-auto fixed bottom-[92px] right-5 z-[60] flex h-[min(560px,calc(100vh-8.5rem))] w-[min(380px,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl"
         >
           <div className="flex items-center gap-2 border-b border-border/60 bg-gradient-to-r from-[#400095] to-[#6B358D] px-3 py-2.5 text-white">
             <Bot className="h-4 w-4" />
@@ -138,12 +116,12 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
         <button
           type="button"
           data-assistant-widget
-          aria-label="Open agent"
+          aria-label={running ? "Agent is working" : "Open agent"}
+          title={running ? "Agent is working…" : "Agent"}
           onClick={() => void openWidget()}
-          className="pointer-events-auto fixed bottom-4 right-4 z-[60] flex h-12 items-center gap-2 rounded-full bg-[#400095] px-4 text-xs font-bold text-white shadow-xl transition-transform hover:scale-105 dark:bg-[#F76D01]"
+          className="pointer-events-auto fixed bottom-[92px] right-5 z-[60] flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-[#400095] to-[#6B358D] text-white shadow-lg transition-transform hover:scale-105 dark:from-[#F76D01] dark:to-[#c55500]"
         >
-          <Bot className="h-4 w-4" />
-          {running ? "Working…" : "Agent"}
+          {running ? <Loader2 className="h-6 w-6 animate-spin" /> : <Bot className="h-6 w-6" />}
         </button>
       )}
     </>
