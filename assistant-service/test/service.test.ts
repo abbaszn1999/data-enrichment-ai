@@ -6,6 +6,7 @@ import { ASSISTANT_LIMITS, isAllowedNavigation, isBlockedNavigation } from "../.
 import { RunLimitError, RunRegistry } from "../src/agent/bridge";
 import { listDir, readFile, resolveInside, searchCode } from "../src/agent/tools/code-tools";
 import { mapSdkMessage } from "../src/agent/events";
+import { createCodeTools, searchPattern } from "../src/agent/tools";
 import { signRequest, verifyRequest } from "../src/auth";
 import { billedCents, costToCredits, estimateUsd, usageToCredits } from "../src/usage";
 
@@ -42,6 +43,17 @@ describe("code tools confinement", () => {
     const listing = await listDir(root, "");
     expect(listing).not.toContain(".env");
     expect(await searchCode(root, "SECRET")).not.toContain(".env");
+  });
+
+  it("takes the search text as pattern or query", async () => {
+    expect(searchPattern({ pattern: "needle" })).toBe("needle");
+    expect(searchPattern({ query: "needle" })).toBe("needle");
+    expect(searchPattern({ pattern: "", query: "needle" })).toBe("needle");
+    expect(searchPattern({})).toBeNull();
+    const root = await makeRoot();
+    const tool = createCodeTools(root).search_code!;
+    const result = await tool.execute({ query: "needle" }, {} as Parameters<typeof tool.execute>[1]);
+    expect(JSON.stringify(result)).toContain("a.ts");
   });
 });
 

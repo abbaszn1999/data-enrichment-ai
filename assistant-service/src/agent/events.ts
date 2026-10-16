@@ -39,7 +39,7 @@ function pagePath(path: unknown): string {
 function describe(toolName: string, args: Args): Pick<ToolEvent, "kind" | "title" | "detail"> {
   switch (toolName) {
     case "search_code":
-      return { kind: "code", title: "Searching the platform", detail: clip(`"${str(args.pattern)}"`, 80) };
+      return { kind: "code", title: "Searching the platform", detail: clip(`"${str(args.pattern ?? args.query)}"`, 80) };
     case "read_file":
       return { kind: "code", title: "Reading", detail: shortPath(args.path) };
     case "list_dir":

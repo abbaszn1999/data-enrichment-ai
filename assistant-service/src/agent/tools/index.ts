@@ -9,6 +9,12 @@ const fail = (error: unknown) => ({
   isError: true as const,
 });
 
+/** The model often names the search text `query` on its first call; both mean the same. */
+export function searchPattern(args: Record<string, unknown>): string | null {
+  const value = [args.pattern, args.query].find((v): v is string => typeof v === "string" && v.trim().length > 0);
+  return value ?? null;
+}
+
 /** Read-only tools over the knowledge folder (a copy of the platform source). */
 export function createCodeTools(root: string): Record<string, SDKCustomTool> {
   return {
@@ -53,8 +59,9 @@ export function createCodeTools(root: string): Record<string, SDKCustomTool> {
       annotations: { readOnlyHint: true },
       execute: async (args) => {
         try {
-          if (typeof args.pattern !== "string") return fail(new Error("pattern is required"));
-          return ok(await searchCode(root, args.pattern, typeof args.path === "string" ? args.path : "."));
+          const pattern = searchPattern(args);
+          if (!pattern) return fail(new Error("pattern is required: the text or regular expression to search for"));
+          return ok(await searchCode(root, pattern, typeof args.path === "string" ? args.path : "."));
         } catch (error) {
           return fail(error);
         }
