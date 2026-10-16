@@ -5,6 +5,7 @@ import type { ServiceRunRequest } from "../../../src/lib/assistant/protocol";
 import type { ServiceConfig } from "../config";
 import { billedCents, usageToCredits, type RunTokenUsage } from "../usage";
 import type { AssistantRun } from "./bridge";
+import { ContextMeter, type SdkDeltaUpdate } from "./context-meter";
 import { mapSdkMessage, type SdkStreamMessage } from "./events";
 import { createAllTools } from "./tools";
 
@@ -134,8 +135,12 @@ export async function executeRun(deps: RunnerDeps, run: AssistantRun, request: S
     run.emit({ type: "run", runId: run.id, conversationId: agent.agentId });
 
     const billedBefore = request.conversationId ? await readBilledCents(agent) : 0;
+    const meter = new ContextMeter(config.contextWindow);
     const sdkRun = await agent.send(buildPrompt(request), {
       local: { customTools: createAllTools(config.knowledgeRoot, run) },
+      onDelta: ({ update }) => {
+        for (const event of meter.onUpdate(update as SdkDeltaUpdate)) run.emit(event);
+      },
     });
     run.steer = async (text: string) => sdkRun.steer?.(text);
     run.onAbort(() => {

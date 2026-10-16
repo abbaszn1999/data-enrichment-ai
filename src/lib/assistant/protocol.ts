@@ -120,6 +120,10 @@ export const assistantEventSchema = z.discriminatedUnion("type", [
     credits: z.number().min(0).optional(),
   }),
   z.object({ type: z.literal("error"), message: z.string() }),
+  /** The conversation got long and the agent is condensing what came before. */
+  z.object({ type: z.literal("summary"), status: z.enum(["started", "completed"]) }),
+  /** Estimated context fill after a reply; the SDK reports usage per reply, not per model call. */
+  z.object({ type: z.literal("context"), usedTokens: z.number().min(0), windowTokens: z.number().positive() }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type AssistantEvent = z.infer<typeof assistantEventSchema>;

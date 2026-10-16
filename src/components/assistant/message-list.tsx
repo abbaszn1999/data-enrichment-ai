@@ -146,6 +146,23 @@ function ToolRow({ message }: { message: ToolMessage }) {
   );
 }
 
+function SummaryDivider({ done }: { done: boolean }) {
+  return (
+    <div className="flex items-center gap-2 py-1 text-[10px] text-muted-foreground">
+      <span className="h-px flex-1 bg-border/70" />
+      {done ? (
+        <span>Chat context summarized</span>
+      ) : (
+        <span className="flex items-center gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          <span className="assistant-shimmer">Summarizing chat context…</span>
+        </span>
+      )}
+      <span className="h-px flex-1 bg-border/70" />
+    </div>
+  );
+}
+
 function AssistantText({ text }: { text: string }) {
   return (
     <div dir="auto" className="max-w-[95%] rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-xs leading-relaxed">
@@ -185,7 +202,10 @@ export function MessageList({ messages, running }: { messages: ChatMessage[]; ru
   }
 
   const last = messages[messages.length - 1];
-  const liveElsewhere = (last?.role === "thinking" && !last.endedAt) || (last?.role === "tool" && last.status === "running");
+  const liveElsewhere =
+    (last?.role === "thinking" && !last.endedAt) ||
+    (last?.role === "tool" && last.status === "running") ||
+    (last?.role === "summary" && !last.done);
 
   return (
     <div className="space-y-1.5 px-3 py-3">
@@ -214,6 +234,8 @@ export function MessageList({ messages, running }: { messages: ChatMessage[]; ru
             return <ThinkingBlock key={message.id} message={message} />;
           case "tool":
             return <ToolRow key={message.id} message={message} />;
+          case "summary":
+            return <SummaryDivider key={message.id} done={message.done} />;
           default:
             return (
               <div

@@ -23,7 +23,10 @@ export type ChatMessage =
       startedAt: number;
       endedAt?: number;
     }
+  | { id: string; role: "summary"; done: boolean }
   | { id: string; role: "error"; text: string };
+
+export type ContextUsage = { usedTokens: number; windowTokens: number };
 
 type ToolEvent = Extract<AssistantEvent, { type: "tool" }>;
 
@@ -72,6 +75,7 @@ export function useAssistantStream(params: {
   const [status, setStatus] = useState<Status>("idle");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [attached, setAttached] = useState<AttachedFile[]>([]);
+  const [context, setContext] = useState<ContextUsage | null>(null);
   const runIdRef = useRef<string | null>(null);
   const conversationRef = useRef<string | undefined>(undefined);
   const routerRef = useRef(router);
@@ -103,6 +107,15 @@ export function useAssistantStream(params: {
   }, []);
 
   const endThinking = useCallback(() => setMessages((current) => closeThinking(current)), []);
+
+  const markSummary = useCallback((done: boolean) => {
+    setMessages((before) => {
+      const current = closeThinking(before);
+      const index = current.findLastIndex((m) => m.role === "summary" && !m.done);
+      if (index >= 0) return current.map((m, i) => (i === index ? { ...m, done } : m));
+      return [...current, { id: nextId(), role: "summary", done }];
+    });
+  }, []);
 
   const upsertTool = useCallback((event: ToolEvent) => {
     setMessages((before) => {
@@ -280,6 +293,12 @@ export function useAssistantStream(params: {
               case "error":
                 push({ id: nextId(), role: "error", text: event.message });
                 break;
+              case "summary":
+                markSummary(event.status === "completed");
+                break;
+              case "context":
+                setContext({ usedTokens: event.usedTokens, windowTokens: event.windowTokens });
+                break;
               default:
                 break;
             }
@@ -300,7 +319,7 @@ export function useAssistantStream(params: {
         setStatus("idle");
       }
     },
-    [appendAssistantText, appendThinking, attached, endThinking, handleBrowserAction, push, status, upsertTool]
+    [appendAssistantText, appendThinking, attached, endThinking, handleBrowserAction, markSummary, push, status, upsertTool]
   );
 
   const stop = useCallback(async () => {
@@ -312,6 +331,7 @@ export function useAssistantStream(params: {
     conversationRef.current = undefined;
     setMessages([]);
     setAttached([]);
+    setContext(null);
   }, []);
 
   // Leaving the app (closing the tab) cancels a live run.
@@ -324,5 +344,5 @@ export function useAssistantStream(params: {
     return () => window.removeEventListener("pagehide", onHide);
   }, []);
 
-  return { messages, status, confirmation, attached, attach, detach, send, stop, reset, resolveConfirmation };
+  return { messages, status, confirmation, attached, context, attach, detach, send, stop, reset, resolveConfirmation };
 }

@@ -6,6 +6,7 @@ import { ASSISTANT_LIMITS, isAllowedNavigation, isBlockedNavigation } from "../.
 import { RunLimitError, RunRegistry } from "../src/agent/bridge";
 import { listDir, readFile, resolveInside, searchCode } from "../src/agent/tools/code-tools";
 import { mapSdkMessage } from "../src/agent/events";
+import { ContextMeter } from "../src/agent/context-meter";
 import { createCodeTools, searchPattern } from "../src/agent/tools";
 import { signRequest, verifyRequest } from "../src/auth";
 import { billedCents, costToCredits, estimateUsd, usageToCredits } from "../src/usage";
@@ -54,6 +55,26 @@ describe("code tools confinement", () => {
     const tool = createCodeTools(root).search_code!;
     const result = await tool.execute({ query: "needle" }, {} as Parameters<typeof tool.execute>[1]);
     expect(JSON.stringify(result)).toContain("a.ts");
+  });
+});
+
+describe("context meter", () => {
+  it("estimates one model call's prompt from a reply's summed usage", () => {
+    const meter = new ContextMeter(200_000);
+    expect(meter.onUpdate({ type: "tool-requests-listed" })).toEqual([]);
+    meter.onUpdate({ type: "tool-requests-listed" });
+    const usage = { inputTokens: 24_000, outputTokens: 300, cacheReadTokens: 9_000, cacheWriteTokens: 0 };
+    expect(meter.onUpdate({ type: "turn-ended", usage })).toEqual([{ type: "context", usedTokens: 11_300, windowTokens: 200_000 }]);
+    expect(meter.onUpdate({ type: "turn-ended", usage })).toEqual([{ type: "context", usedTokens: 33_300, windowTokens: 200_000 }]);
+  });
+
+  it("reports summarization and caps at the window", () => {
+    const meter = new ContextMeter(1_000);
+    expect(meter.onUpdate({ type: "summary-started" })).toEqual([{ type: "summary", status: "started" }]);
+    expect(meter.onUpdate({ type: "summary-completed" })).toEqual([{ type: "summary", status: "completed" }]);
+    const usage = { inputTokens: 5_000, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    expect(meter.onUpdate({ type: "turn-ended", usage })).toEqual([{ type: "context", usedTokens: 1_000, windowTokens: 1_000 }]);
+    expect(meter.onUpdate({ type: "turn-ended" })).toEqual([]);
   });
 });
 

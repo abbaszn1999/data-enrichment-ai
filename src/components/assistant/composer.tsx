@@ -2,13 +2,16 @@
 
 import { useRef, useState } from "react";
 import { Paperclip, Send, Square, X } from "lucide-react";
+import type { ContextUsage } from "@/hooks/use-assistant-stream";
 import type { AttachedFile } from "@/lib/assistant/protocol";
+import { ContextRing } from "./context-ring";
 
 const VISIBLE_CHIPS = 6;
 
 export function Composer({
   running,
   attached,
+  context,
   onSend,
   onStop,
   onAttach,
@@ -16,6 +19,7 @@ export function Composer({
 }: {
   running: boolean;
   attached: AttachedFile[];
+  context: ContextUsage | null;
   onSend: (text: string) => void;
   onStop: () => void;
   onAttach: (files: FileList) => void;
@@ -92,6 +96,7 @@ export function Composer({
           }}
           className="max-h-28 min-h-9 flex-1 resize-none rounded-lg border border-border/60 bg-muted/35 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#6B358D]/25 disabled:opacity-60"
         />
+        {context && <ContextRing usage={context} />}
         {running ? (
           <button
             type="button"

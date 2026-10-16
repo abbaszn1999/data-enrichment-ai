@@ -13,6 +13,9 @@ describe("assistant protocol", () => {
   it("accepts known events and rejects unknown ones", () => {
     expect(assistantEventSchema.safeParse({ type: "text", text: "hi" }).success).toBe(true);
     expect(assistantEventSchema.safeParse({ type: "usage", tokens: 5 }).success).toBe(false);
+    expect(assistantEventSchema.safeParse({ type: "summary", status: "completed" }).success).toBe(true);
+    expect(assistantEventSchema.safeParse({ type: "context", usedTokens: 10, windowTokens: 200 }).success).toBe(true);
+    expect(assistantEventSchema.safeParse({ type: "context", usedTokens: 10, windowTokens: 0 }).success).toBe(false);
   });
 
   it("rejects malformed control ids", () => {

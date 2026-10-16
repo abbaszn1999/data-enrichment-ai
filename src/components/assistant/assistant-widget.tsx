@@ -98,6 +98,7 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
               <Composer
                 running={running}
                 attached={chat.attached}
+                context={chat.context}
                 onSend={(text) => void chat.send(text)}
                 onStop={() => void chat.stop()}
                 onAttach={chat.attach}

@@ -12,6 +12,8 @@ export interface ServiceConfig {
   model: string;
   /** Composer defaults to its Fast variant, billed about 6x the standard one. */
   modelFast: boolean;
+  /** The model's context window in tokens, for the context meter only; the SDK does not report it. */
+  contextWindow: number;
   knowledgeRoot: string;
   storeDir: string;
   billingMode: BillingMode;
@@ -49,6 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
     cursorApiKey,
     model: env.ASSISTANT_MODEL || "composer-2.5",
     modelFast,
+    contextWindow: num(env.ASSISTANT_CONTEXT_WINDOW, 0) || 200_000,
     knowledgeRoot: resolve(env.ASSISTANT_KNOWLEDGE_DIR || "knowledge"),
     storeDir: resolve(env.ASSISTANT_STORE_DIR || ".store"),
     billingMode,
