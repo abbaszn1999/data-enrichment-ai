@@ -7,6 +7,7 @@ description: Create and run Catalog Intelligence projects (upload a supplier she
 
 Flow, with the control ids from `see_page`:
 
+0. **Project list** — `/w/{slug}/catalog-intelligence`. Each project is `ci.project.{id}` (label: name · status); clicking it opens the project on its current step. `ci.new-project` starts a new one. Only one page of projects is on screen: to find a project by name, use `list_projects` with tool `catalog` and navigate to its `open` path.
 1. **New project** — `/w/{slug}/catalog-intelligence/new`
    - Kind: `ci.new.kind.product` (product enrichment) or `ci.new.kind.plp` (category pages).
    - `ci.new.session-name` (text), `ci.new.supplier` (dropdown, product only), `ci.new.supplier-name` (when "+ New Supplier").

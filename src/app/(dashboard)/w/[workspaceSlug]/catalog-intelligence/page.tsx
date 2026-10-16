@@ -285,7 +285,7 @@ export default function ImportPage() {
                 className="h-9 gap-2 self-start rounded-xl bg-[#400095] px-4 text-[10px] text-white shadow-[0_8px_24px_rgba(64,0,149,.2)] hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90 lg:self-auto"
                 asChild
               >
-                <Link href={`/w/${slug}/catalog-intelligence/new`}>
+                <Link href={`/w/${slug}/catalog-intelligence/new`} data-agent-id="ci.new-project">
                   <Plus className="h-3.5 w-3.5" /> New project
                   <ArrowRight className="h-3 w-3" />
                 </Link>
@@ -387,7 +387,7 @@ export default function ImportPage() {
               </p>
               {canEdit && (
                 <Button size="sm" className="mt-5 gap-1.5 rounded-xl bg-[#400095] text-white dark:bg-[#F76D01]" asChild>
-                  <Link href={`/w/${slug}/catalog-intelligence/new`}>
+                  <Link href={`/w/${slug}/catalog-intelligence/new`} data-agent-id="ci.new-project">
                     <Plus className="h-3.5 w-3.5" /> New project
                   </Link>
                 </Button>
@@ -416,6 +416,8 @@ export default function ImportPage() {
                       transition={{ delay: Math.min(index * 0.04, 0.2) }}
                       role="button"
                       tabIndex={0}
+                      data-agent-id={`ci.project.${session.id}`}
+                      data-agent-label={`${session.name} · ${statusLabel}`}
                       onClick={() => openProject(session)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {

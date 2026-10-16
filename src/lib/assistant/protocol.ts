@@ -31,6 +31,10 @@ export const agentTargetSchema = z
 /** Pages that register state handlers with the driver (see driver/page-handlers). */
 export const pageScopeSchema = z.enum(["gallery", "visualizer", "classify", "website", "store"]);
 
+/** Tools whose projects `list_projects` can read. */
+export const projectToolSchema = z.enum(["catalog", "gallery", "visualizer", "classify", "website", "store"]);
+export type ProjectTool = z.infer<typeof projectToolSchema>;
+
 export const browserActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("see_page") }),
   z.object({
@@ -53,6 +57,7 @@ export const browserActionSchema = z.discriminatedUnion("kind", [
     target: agentTargetSchema.optional(),
     ms: z.number().int().min(100).max(15000).optional(),
   }),
+  z.object({ kind: z.literal("list_projects"), tool: projectToolSchema.optional() }),
   z.object({ kind: z.literal("ci_get_state") }),
   z.object({
     kind: z.literal("ci_select_rows"),

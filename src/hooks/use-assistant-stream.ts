@@ -153,6 +153,7 @@ export function useAssistantStream(params: {
   const handleBrowserAction = useCallback(async (runId: string, callId: string, action: Parameters<typeof executeBrowserAction>[0]) => {
     const outcome = await executeBrowserAction(action, {
       workspaceSlug: paramsRef.current.workspaceSlug,
+      workspaceId: paramsRef.current.workspaceId,
       navigate: (path) => routerRef.current.push(path),
       getFile: getAttachedFile,
     });

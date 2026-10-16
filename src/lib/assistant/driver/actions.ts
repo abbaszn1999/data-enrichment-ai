@@ -9,6 +9,7 @@ export type ActionOutcome = { ok: true; result?: unknown } | { ok: false; error:
 
 export interface DriverContext {
   workspaceSlug: string;
+  workspaceId: string;
   navigate: (path: string) => void;
   getFile: (fileId: string) => File | undefined;
 }
@@ -153,6 +154,15 @@ async function waitFor(action: Extract<BrowserAction, { kind: "wait_for" }>) {
   return "waited";
 }
 
+async function listProjects(action: Extract<BrowserAction, { kind: "list_projects" }>, ctx: DriverContext) {
+  const query = new URLSearchParams({ workspaceId: ctx.workspaceId, workspaceSlug: ctx.workspaceSlug });
+  if (action.tool) query.set("tool", action.tool);
+  const res = await fetch(`/api/assistant/projects?${query}`, { cache: "no-store" });
+  if (!res.ok) throw new ActionError("Could not read the projects right now.");
+  const data = (await res.json()) as { projects?: unknown };
+  return data.projects ?? {};
+}
+
 /** Run one action requested by the agent on this tab. Never throws. */
 export async function executeBrowserAction(action: BrowserAction, ctx: DriverContext): Promise<ActionOutcome> {
   try {
@@ -169,6 +179,8 @@ export async function executeBrowserAction(action: BrowserAction, ctx: DriverCon
         return { ok: true, result: await upload(action, ctx) };
       case "wait_for":
         return { ok: true, result: await waitFor(action) };
+      case "list_projects":
+        return { ok: true, result: await listProjects(action, ctx) };
       case "ci_get_state":
         return { ok: true, result: ciGetState() };
       case "ci_select_rows":

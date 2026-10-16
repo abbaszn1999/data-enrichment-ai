@@ -58,6 +58,8 @@ function describe(toolName: string, args: Args): Pick<ToolEvent, "kind" | "title
       return Array.isArray(args.fileIds) && args.fileIds.length > 1
         ? { kind: "action", title: "Uploading the files", detail: `${args.fileIds.length} files` }
         : { kind: "action", title: "Uploading the file" };
+    case "list_projects":
+      return { kind: "page", title: "Finding your projects", detail: args.tool ? str(args.tool) : undefined };
     case "ci_get_state":
       return { kind: "sheet", title: "Reading the sheet" };
     case "ci_select_rows": {
@@ -135,6 +137,15 @@ function summarize(toolName: string, text: string): string | undefined {
         const page = JSON.parse(text) as { controls?: unknown[]; heading?: string };
         const parts = [page.heading ? clip(page.heading, 60) : "", Array.isArray(page.controls) ? `${page.controls.length} controls` : ""];
         return parts.filter(Boolean).join(" · ") || undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    case "list_projects": {
+      try {
+        const lists = Object.values(JSON.parse(text) as Record<string, { projects?: unknown[] }>);
+        const count = lists.reduce((total, list) => total + (Array.isArray(list?.projects) ? list.projects.length : 0), 0);
+        return `${count} project${count === 1 ? "" : "s"}`;
       } catch {
         return undefined;
       }

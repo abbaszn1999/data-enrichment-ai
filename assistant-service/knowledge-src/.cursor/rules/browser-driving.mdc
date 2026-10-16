@@ -8,3 +8,5 @@ alwaysApply: true
 - Files the user attached are available by id (see the page context block). Use `upload_file` on the file input, never try to open a file dialog.
 - After `navigate`, call `see_page`; pages can take a moment, use `wait_for` with a control id if something is missing.
 - If a control is disabled, find out why (missing field, no rows selected) instead of retrying.
+- To find or open a project in any tool, call `list_projects` (pass `tool` when you know it) and `navigate` to its `open` path; when it has `select`, click that control after the page opens. Do not search the code to find projects.
+- Project lists also show each project as a control (`ci.project.{id}`, `gallery.project.{id}`, `visualizer.project.{id}`, `classify.project.{id}`, `website.project.{id}`) labeled with its name, so you can click it on screen.

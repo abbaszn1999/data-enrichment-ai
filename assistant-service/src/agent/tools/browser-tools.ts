@@ -4,6 +4,7 @@ import {
   agentTargetSchema,
   isAllowedNavigation,
   isBlockedNavigation,
+  projectToolSchema,
   type BrowserAction,
 } from "../../../../src/lib/assistant/protocol";
 import type { AssistantRun } from "../bridge";
@@ -158,6 +159,23 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
         if (args.target !== undefined && !id) return failure("Invalid control id");
         const ms = typeof args.ms === "number" ? Math.min(15000, Math.max(100, Math.round(args.ms))) : undefined;
         return perform(run, { kind: "wait_for", target: id ?? undefined, ms });
+      },
+    },
+    list_projects: {
+      description:
+        "List the workspace's projects (read-only), newest first: the 8 newest per tool, or up to 40 when you pass tool (`more: true` means there are older ones). Tools: Catalog Intelligence (catalog), Products Gallery (gallery), Products Visualizer (visualizer), Image Classification (classify), Website Restructure (website), and the connected store for Store Assistant (store). Each project has id, name, status, updatedAt, item count, and `open`: the path to pass to navigate. When a project has `select`, open the page first, then click that control. Works from any page; pass tool to read one tool only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          tool: { type: "string", enum: ["catalog", "gallery", "visualizer", "classify", "website", "store"] },
+        },
+        required: [],
+      },
+      annotations: { readOnlyHint: true },
+      execute: async (args: Args) => {
+        const parsed = projectToolSchema.optional().safeParse(args.tool);
+        if (!parsed.success) return failure("Invalid tool");
+        return perform(run, { kind: "list_projects", tool: parsed.data });
       },
     },
     ci_get_state: {

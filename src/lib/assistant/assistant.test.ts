@@ -47,6 +47,12 @@ describe("assistant protocol", () => {
     ).toBe(false);
   });
 
+  it("accepts list_projects for known tools only", () => {
+    expect(browserActionSchema.safeParse({ kind: "list_projects" }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "list_projects", tool: "catalog" }).success).toBe(true);
+    expect(browserActionSchema.safeParse({ kind: "list_projects", tool: "billing" }).success).toBe(false);
+  });
+
   it("limits message size", () => {
     const context = { workspaceSlug: "a", workspaceId: "w", path: "/w/a" };
     expect(chatRequestSchema.safeParse({ message: "x".repeat(4001), context }).success).toBe(false);

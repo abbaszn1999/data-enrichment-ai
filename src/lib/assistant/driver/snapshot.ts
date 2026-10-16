@@ -25,6 +25,8 @@ function isVisible(element: HTMLElement): boolean {
 }
 
 function labelOf(element: HTMLElement): string {
+  const own = element.getAttribute("data-agent-label");
+  if (own) return own.trim().slice(0, 120);
   const aria = element.getAttribute("aria-label");
   if (aria) return aria.trim().slice(0, 120);
   if (element.id && (element instanceof HTMLSelectElement || element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
