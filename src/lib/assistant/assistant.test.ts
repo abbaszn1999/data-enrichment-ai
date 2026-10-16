@@ -6,7 +6,7 @@ import {
   isBlockedNavigation,
   chatRequestSchema,
 } from "./protocol";
-import { consumeApproval, issueApproval } from "./driver/spend-guard";
+import { consumeApproval, issueApproval, setAutoApprove } from "./driver/spend-guard";
 import { signServiceRequest } from "./service-client";
 
 describe("assistant protocol", () => {
@@ -88,6 +88,13 @@ describe("spend guard", () => {
   it("rejects missing and invented tokens", () => {
     expect(consumeApproval("ci.run", undefined)).toBe(false);
     expect(consumeApproval("ci.run", "deadbeef")).toBe(false);
+  });
+
+  it("allows spend clicks without a token when run-without-approval is on", () => {
+    setAutoApprove(true);
+    expect(consumeApproval("ci.run", undefined)).toBe(true);
+    setAutoApprove(false);
+    expect(consumeApproval("ci.run", undefined)).toBe(false);
   });
 });
 

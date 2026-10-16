@@ -136,6 +136,8 @@ export const pageContextSchema = z.object({
   workspaceId: z.string().max(80),
   path: z.string().max(300),
   sessionId: z.string().max(80).optional(),
+  /** The user allowed generate actions to run without an approval card. */
+  autoApprove: z.boolean().optional(),
 });
 export type PageContext = z.infer<typeof pageContextSchema>;
 

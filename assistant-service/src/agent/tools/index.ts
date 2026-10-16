@@ -70,6 +70,6 @@ export function createCodeTools(root: string): Record<string, SDKCustomTool> {
   };
 }
 
-export function createAllTools(root: string, run: AssistantRun): Record<string, SDKCustomTool> {
-  return { ...createCodeTools(root), ...createBrowserTools(run) };
+export function createAllTools(root: string, run: AssistantRun, options?: { autoApprove?: boolean }): Record<string, SDKCustomTool> {
+  return { ...createCodeTools(root), ...createBrowserTools(run, options) };
 }

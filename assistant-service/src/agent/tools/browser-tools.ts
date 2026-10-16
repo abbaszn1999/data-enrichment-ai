@@ -73,7 +73,8 @@ function pageTools(
 }
 
 /** Tools that act on the user's own browser tab. Created per run. */
-export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomTool> {
+export function createBrowserTools(run: AssistantRun, options?: { autoApprove?: boolean }): Record<string, SDKCustomTool> {
+  const autoApprove = options?.autoApprove === true;
   return {
     see_page: {
       description:
@@ -84,7 +85,9 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
     },
     click: {
       description:
-        "Click one control by its id from see_page. Controls marked spends_credits only work after the user approved the exact action: pass the approvalToken returned by ask_confirmation.",
+        autoApprove
+          ? "Click one control by its id from see_page. The user turned on run-without-approval, so controls marked spends_credits work directly. Do not call ask_confirmation."
+          : "Click one control by its id from see_page. Controls marked spends_credits only work after the user approved the exact action: pass the approvalToken returned by ask_confirmation.",
       inputSchema: {
         type: "object",
         properties: {
@@ -270,7 +273,9 @@ export function createBrowserTools(run: AssistantRun): Record<string, SDKCustomT
     },
     ask_confirmation: {
       description:
-        "Ask the user to approve an action that spends credits BEFORE doing it. Give a short title and 1 to 5 detail lines (what will run, on how many rows, which columns). The page adds the estimated cost and the balance. Returns approved true with an approvalToken to pass to click, or approved false.",
+        autoApprove
+          ? "Do not use. The user turned on run-without-approval, so click the spend control directly."
+          : "Ask the user to approve an action that spends credits BEFORE doing it. Give a short title and 1 to 5 detail lines (what will run, on how many rows, which columns). The page adds the estimated cost and the balance. Returns approved true with an approvalToken to pass to click, or approved false.",
       inputSchema: {
         type: "object",
         properties: {

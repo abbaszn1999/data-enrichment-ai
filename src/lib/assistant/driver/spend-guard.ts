@@ -10,6 +10,17 @@ const TOKEN_TTL_MS = 5 * 60 * 1000;
 type Approval = { target: string; expiresAt: number };
 const approvals = new Map<string, Approval>();
 
+/** The user turned on "run without approval" in the agent settings. */
+let autoApprove = false;
+
+export function setAutoApprove(on: boolean): void {
+  autoApprove = on;
+}
+
+export function isAutoApprove(): boolean {
+  return autoApprove;
+}
+
 function randomToken(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -24,6 +35,7 @@ export function issueApproval(target: string): string {
 
 /** Returns true once for a valid token bound to this target. */
 export function consumeApproval(target: string, token: string | undefined): boolean {
+  if (autoApprove) return true;
   if (!token) return false;
   const approval = approvals.get(token);
   if (!approval) return false;

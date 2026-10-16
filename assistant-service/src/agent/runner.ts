@@ -45,6 +45,9 @@ export function buildPrompt(request: ServiceRunRequest): string {
     `workspace slug: ${request.context.workspaceSlug}`,
     `current page: ${request.context.path}`,
     request.context.sessionId ? `open sheet session: ${request.context.sessionId}` : "",
+    request.context.autoApprove
+      ? "run without approval: ON. Do not call ask_confirmation. Click controls that spend credits directly; this page allows it."
+      : "",
     request.files?.length
       ? `${request.files.length} file(s) attached by the user (use the ids with upload_file): ${request.files.map((f) => `${f.id} = "${f.name}"`).join("; ")}`
       : "",
@@ -137,7 +140,7 @@ export async function executeRun(deps: RunnerDeps, run: AssistantRun, request: S
     const billedBefore = request.conversationId ? await readBilledCents(agent) : 0;
     const meter = new ContextMeter(config.contextWindow);
     const sdkRun = await agent.send(buildPrompt(request), {
-      local: { customTools: createAllTools(config.knowledgeRoot, run) },
+      local: { customTools: createAllTools(config.knowledgeRoot, run, { autoApprove: request.context.autoApprove }) },
       onDelta: ({ update }) => {
         for (const event of meter.onUpdate(update as SdkDeltaUpdate)) run.emit(event);
       },

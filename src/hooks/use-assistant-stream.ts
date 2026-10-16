@@ -6,6 +6,7 @@ import { getBalance } from "@/lib/credits";
 import { executeBrowserAction } from "@/lib/assistant/driver/actions";
 import { forgetFile, getAttachedFile, rememberFile } from "@/lib/assistant/driver/attachments";
 import { clearApprovals, issueApproval } from "@/lib/assistant/driver/spend-guard";
+import { readAutoApprove } from "@/lib/assistant/settings";
 import { hideCursor } from "@/lib/assistant/driver/cursor-controller";
 import { ASSISTANT_LIMITS, assistantEventSchema, type AssistantEvent, type AttachedFile } from "@/lib/assistant/protocol";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -228,6 +229,7 @@ export function useAssistantStream(params: {
               workspaceId: current.workspaceId,
               path: window.location.pathname,
               sessionId: current.sessionId,
+              autoApprove: readAutoApprove(),
             },
           }),
         });
@@ -299,6 +301,15 @@ export function useAssistantStream(params: {
                 if (runIdRef.current) void handleBrowserAction(runIdRef.current, event.callId, event.action);
                 break;
               case "confirmation":
+                if (readAutoApprove() && runIdRef.current) {
+                  void post("/api/assistant/tool-result", {
+                    runId: runIdRef.current,
+                    callId: event.callId,
+                    ok: true,
+                    result: { approved: true, approvalToken: issueApproval(event.actionTarget) },
+                  });
+                  break;
+                }
                 setConfirmation({
                   callId: event.callId,
                   title: event.title,

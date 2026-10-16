@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useState, useSyncExternalStore, type FormEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { AlertTriangle, Bot, Crown, KeyRound, Loader2, Lock, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, Bot, Crown, KeyRound, Loader2, Lock, RotateCcw, Settings, X } from "lucide-react";
 import { useAssistantStream, type BillingBlock } from "@/hooks/use-assistant-stream";
+import { readAutoApprove, subscribeAutoApprove, writeAutoApprove } from "@/lib/assistant/settings";
 import { Composer } from "./composer";
 import { ConfirmationCard } from "./confirmation-card";
 import { CursorOverlay } from "./cursor-overlay";
@@ -21,6 +22,8 @@ const UNLOCK_ERRORS: Record<number, string> = {
 export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: string; workspaceSlug: string }) {
   const [open, setOpen] = useState(false);
   const [access, setAccess] = useState<Access>("unknown");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const autoApprove = useSyncExternalStore(subscribeAutoApprove, readAutoApprove, () => false);
   const router = useRouter();
   const pathname = usePathname();
   const sessionId = /\/catalog-intelligence\/([0-9a-f-]{36})/i.exec(pathname)?.[1];
@@ -61,6 +64,15 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
               <>
                 <button
                   type="button"
+                  aria-label="Agent settings"
+                  aria-expanded={settingsOpen}
+                  onClick={() => setSettingsOpen((value) => !value)}
+                  className={`rounded-md p-1 hover:bg-white/15 ${settingsOpen ? "bg-white/15" : ""}`}
+                >
+                  <Settings className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
                   aria-label="New conversation"
                   disabled={running}
                   onClick={chat.reset}
@@ -86,6 +98,34 @@ export function AssistantWidget({ workspaceId, workspaceSlug }: { workspaceId: s
           </div>
           {access === "unlocked" ? (
             <>
+              {settingsOpen && (
+                <div className="border-b border-border/60 bg-background px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold">Run without approval</p>
+                      <p className="text-[10px] leading-relaxed text-muted-foreground">
+                        When on, generate starts immediately. When off, the agent asks before every generate.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={autoApprove}
+                      aria-label="Run without approval"
+                      onClick={() => {
+                        const next = !autoApprove;
+                        writeAutoApprove(next);
+                        if (next && chat.confirmation) void chat.resolveConfirmation(true);
+                      }}
+                      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${autoApprove ? "bg-[#400095] dark:bg-[#F76D01]" : "bg-muted-foreground/30"}`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-[left] ${autoApprove ? "left-[18px]" : "left-0.5"}`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <MessageList messages={chat.messages} running={running} />
               </div>
