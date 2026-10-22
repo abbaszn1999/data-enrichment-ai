@@ -9,10 +9,12 @@ import {
   FileJson,
   FileSpreadsheet,
   FileText,
+  ImagePlus,
   Layers,
   ListChecks,
   Loader2,
   MousePointerClick,
+  PackagePlus,
   Search,
   Sheet,
   Sparkles,
@@ -30,7 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import type { ExportPlatformOption, PlatformMapping } from "@/lib/catalog/platforms/types";
+import type { ExportMode, ExportPlatformOption, PlatformMapping } from "@/lib/catalog/platforms/types";
 
 export type ExportScope = "selected" | "sheet" | "all";
 export type ExportFormat = "xlsx" | "csv" | "json";
@@ -65,6 +67,8 @@ export type ExportRequest = {
   platform: string;
   /** Field id → column key, for a store platform. */
   mapping: PlatformMapping;
+  /** What a store file does; always "products" for "As is". */
+  mode: ExportMode;
   /** Keys of the chosen columns, in sheet order. */
   columnKeys: string[];
   onProgress: (update: ExportProgressUpdate) => void;
@@ -215,6 +219,7 @@ export function ExportWizard({
   const [step, setStep] = useState<Step>("rows");
   const [platform, setPlatform] = useState(GENERIC_PLATFORM);
   const [mapping, setMapping] = useState<PlatformMapping>({});
+  const [mode, setMode] = useState<ExportMode>("products");
   const [scope, setScope] = useState<ExportScope>(defaultScope);
   const [format, setFormat] = useState<ExportFormat>("xlsx");
   const [columnMode, setColumnMode] = useState<"all" | "custom">("all");
@@ -233,6 +238,7 @@ export function ExportWizard({
       setScope(defaultScope);
       setPlatform(GENERIC_PLATFORM);
       setMapping({});
+      setMode("products");
       setColumnMode("all");
       setColumnSearch("");
       setResult(null);
@@ -251,6 +257,8 @@ export function ExportWizard({
   );
 
   const platformOption = platforms?.find((p) => p.id === platform) ?? null;
+  // A platform with modes takes its fields from the chosen mode.
+  const fieldSet = platformOption?.modes?.find((m) => m.id === mode) ?? platformOption;
   const wizardSteps: { id: WizardStep; label: string }[] = [
     { id: "rows", label: "Rows" },
     ...(platforms?.length ? [{ id: "platform" as const, label: "Platform" }] : []),
@@ -259,15 +267,15 @@ export function ExportWizard({
   ];
   const stepAfter = (from: WizardStep, offset: number) =>
     wizardSteps[wizardSteps.findIndex((s) => s.id === from) + offset]?.id;
-  const mappedCount = platformOption ? platformOption.fields.filter((f) => mapping[f.id]).length : 0;
-  const missingRequired = platformOption?.fields.some((f) => f.required && !mapping[f.id]) ?? false;
+  const mappedCount = fieldSet ? fieldSet.fields.filter((f) => mapping[f.id]).length : 0;
+  const missingRequired = fieldSet?.fields.some((f) => f.required && !mapping[f.id]) ?? false;
   const targetLabel = platformOption ? platformOption.title : formatLabel(format);
 
   const goNext = (from: WizardStep) => {
     const next = stepAfter(from, 1);
     if (!next) return;
     // Columns differ per row scope, so the guess is redone each time.
-    if (next === "columns" && platformOption) setMapping(platformOption.guessMapping(availableColumns));
+    if (next === "columns" && fieldSet) setMapping(fieldSet.guessMapping(availableColumns));
     setStep(next);
   };
 
@@ -285,6 +293,7 @@ export function ExportWizard({
         format: platformOption ? "csv" : format,
         platform,
         mapping: platformOption ? mapping : {},
+        mode: platformOption ? mode : "products",
         columnKeys: exportColumns.map((c) => c.key),
         onProgress: setProgress,
         signal: controller.signal,
@@ -377,7 +386,10 @@ export function ExportWizard({
           <div className="space-y-2">
             <ChoiceCard
               selected={platform === GENERIC_PLATFORM}
-              onClick={() => setPlatform(GENERIC_PLATFORM)}
+              onClick={() => {
+                setPlatform(GENERIC_PLATFORM);
+                setMode("products");
+              }}
               icon={Table2}
               iconTone="bg-muted text-foreground"
               title="As is"
@@ -387,7 +399,10 @@ export function ExportWizard({
               <ChoiceCard
                 key={option.id}
                 selected={platform === option.id}
-                onClick={() => setPlatform(option.id)}
+                onClick={() => {
+                  setPlatform(option.id);
+                  setMode(option.modes?.[0]?.id ?? "products");
+                }}
                 icon={Store}
                 iconTone="bg-emerald-100 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400"
                 title={option.title}
@@ -397,10 +412,28 @@ export function ExportWizard({
           </div>
         )}
 
-        {step === "columns" && platformOption && (
+        {step === "columns" && platformOption && fieldSet && (
           <div className="space-y-3">
+            {platformOption.modes && platformOption.modes.length > 1 && (
+              <div className="grid grid-cols-2 gap-2">
+                {platformOption.modes.map((option) => (
+                  <ChoiceCard
+                    key={option.id}
+                    selected={mode === option.id}
+                    onClick={() => {
+                      setMode(option.id);
+                      setMapping(option.guessMapping(availableColumns));
+                    }}
+                    icon={option.id === "images" ? ImagePlus : PackagePlus}
+                    iconTone="bg-muted text-foreground"
+                    title={option.title}
+                    description={option.description}
+                  />
+                ))}
+              </div>
+            )}
             <div className="max-h-80 divide-y overflow-y-auto rounded-lg border">
-              {platformOption.fields.map((field) => (
+              {fieldSet.fields.map((field) => (
                 <div key={field.id} className="flex items-center gap-3 px-3 py-2">
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-semibold">
@@ -428,9 +461,9 @@ export function ExportWizard({
                 </div>
               ))}
             </div>
-            {platformOption.note && (
+            {fieldSet.note && (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                {platformOption.note}
+                {fieldSet.note}
               </p>
             )}
             <div className="rounded-lg bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">

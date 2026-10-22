@@ -156,6 +156,7 @@ import {
   type ExportRequest,
   type ExportScope,
 } from "@/components/sheet/export-wizard";
+import { IMAGE_EXPORT_PLATFORMS, isPlatformId } from "@/lib/catalog/platforms";
 import { CellText, CellTextDialog } from "@/components/sheet/cell-text-dialog";
 import { ColumnResizeHandle, RowResizeHandle } from "@/components/sheet/resize-handles";
 import {
@@ -2493,9 +2494,19 @@ export default function ProductsGalleryPage() {
     }));
   };
 
-  const handleExport = async ({ scope, format, columnKeys, onProgress, signal }: ExportRequest) => {
+  const handleExport = async ({
+    scope,
+    format,
+    platform,
+    mode,
+    mapping,
+    columnKeys,
+    onProgress,
+    signal,
+  }: ExportRequest) => {
     if (!workspace || !projectId) throw new Error("Project is not loaded");
     const exportRows = exportRowsFor(scope);
+    const forStore = isPlatformId(platform);
     const blob = await fetchExportFile(
       "/api/gallery/export",
       {
@@ -2506,6 +2517,7 @@ export default function ProductsGalleryPage() {
           sessionId: projectId,
           format,
           columns: columnKeys,
+          ...(forStore ? { platform, mode, mapping } : {}),
           ...(scope === "all" ? {} : { rowIds: exportRows.map((row) => row.id) }),
         }),
         signal,
@@ -2516,9 +2528,9 @@ export default function ProductsGalleryPage() {
     const suffix = scope === "selected" ? "selected" : scope === "sheet" ? "filtered" : "export";
     return {
       blob,
-      filename: `${baseName}_${suffix}.${format}`,
+      filename: forStore ? `${baseName}_${suffix}_${platform}_${mode}.csv` : `${baseName}_${suffix}.${format}`,
       rows: exportRows.length,
-      columns: columnKeys.length,
+      columns: forStore ? Object.values(mapping).filter(Boolean).length : columnKeys.length,
     };
   };
 
@@ -4678,6 +4690,7 @@ export default function ProductsGalleryPage() {
           ]}
           getColumns={exportColumnsFor}
           onExport={handleExport}
+          platforms={IMAGE_EXPORT_PLATFORMS}
         />
         <Dialog
           open={showDeleteRows && canEdit}

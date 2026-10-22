@@ -16,12 +16,21 @@ import {
   serializeTableExport,
 } from "@/lib/export/table-file";
 import { deliverExportFile } from "@/lib/export/deliver";
+import {
+  PLATFORM_IMAGE_LINK_TTL_SEC,
+  parseTablePlatformOptions,
+  serializeTablePlatformExport,
+} from "@/lib/export/table-platform";
+import { collectGalleryImagePaths } from "@/lib/gallery/signed-urls";
+import { createSignedUrlsAdmin } from "@/lib/gallery/storage-admin";
 
 export const maxDuration = 120;
 
 /**
  * POST /api/gallery/export
  * { workspaceId, sessionId, format?: "xlsx" | "csv" | "json", rowIds?: string[], columns?: string[] }
+ * With { platform: "shopify" | "woocommerce" | "magento", mode?, mapping } it
+ * returns that store's import CSV instead, with directly downloadable image links.
  */
 export async function POST(request: NextRequest) {
   let body: {
@@ -30,6 +39,9 @@ export async function POST(request: NextRequest) {
     format?: unknown;
     rowIds?: unknown;
     columns?: unknown;
+    platform?: unknown;
+    mode?: unknown;
+    mapping?: unknown;
   };
   try {
     body = await request.json();
@@ -45,6 +57,7 @@ export async function POST(request: NextRequest) {
     );
   }
   const options = parseTableExportOptions(body);
+  const platformOptions = parseTablePlatformOptions(body);
 
   const auth = await requireGalleryAuth({
     workspaceId,
@@ -90,9 +103,20 @@ export async function POST(request: NextRequest) {
   }
   worksheet = applyGalleryProjectSettings(worksheet, settings);
 
+  // A store downloads each picture on import, so it needs plain signed links
+  // instead of the app's own image route, which asks for a login.
+  const storeLinks = platformOptions
+    ? await createSignedUrlsAdmin(
+        collectGalleryImagePaths(worksheet, options.rowIds ? [...options.rowIds] : undefined),
+        PLATFORM_IMAGE_LINK_TTL_SEC
+      )
+    : null;
   const table = await buildGalleryExportTable(
     worksheet,
     async (path) => {
+      if (storeLinks) {
+        return storeLinks[path] ?? (await createSignedUrlsAdmin([path], PLATFORM_IMAGE_LINK_TTL_SEC))[path] ?? null;
+      }
       const url = new URL("/api/gallery/images", request.nextUrl.origin);
       url.searchParams.set("workspaceId", workspaceId);
       url.searchParams.set("sessionId", sessionId);
@@ -101,17 +125,17 @@ export async function POST(request: NextRequest) {
     },
     options.rowIds
   );
-  const { buffer, contentType, extension } = await serializeTableExport(
-    selectTableColumns(table, options.columns),
-    options.format
-  );
+  const { buffer, contentType, extension } = platformOptions
+    ? await serializeTablePlatformExport(table, platformOptions)
+    : await serializeTableExport(selectTableColumns(table, options.columns), options.format);
+  const fileSuffix = platformOptions ? `${platformOptions.platform}_${platformOptions.mode}` : "export";
 
   return deliverExportFile({
     admin: auth.admin,
     path: getGalleryExportPath(workspaceId, sessionId, extension),
     buffer,
     contentType,
-    fileName: `${(session.name || "gallery").replace(/[^\w.-]+/g, "_")}_export.${extension}`,
+    fileName: `${(session.name || "gallery").replace(/[^\w.-]+/g, "_")}_${fileSuffix}.${extension}`,
     headers: auth.headers,
     onStorageError: (error) =>
       galleryWarn("export", "Export storage failed; sending file inline", { error }),
