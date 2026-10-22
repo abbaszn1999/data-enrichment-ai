@@ -35,18 +35,39 @@ describe("image modes", () => {
     ).toEqual({ "URL handle": "Handle", Title: "Title", main_image: "Product Image URL", new_images: "Gallery Images" });
   });
 
-  it("Shopify writes only title, handle and pictures, main picture first", async () => {
+  it("Shopify writes title, handle, Default Title option and pictures, main picture first", async () => {
     const csv = await buildPlatformCsv(
       "shopify",
       input(rows, { "URL handle": "Handle", Title: "Name", main_image: "Main", new_images: "Gallery" }),
       "images"
     );
-    expect(csv.split("\n")[0]).toBe("Title,URL handle,Product image URL,Image position,Image alt text");
-    expect(parseCsv(csv).map((r) => [r.Title, r["URL handle"], r["Product image URL"], r["Image position"]])).toEqual([
-      ["Bag", "bag", "https://s/main.jpg", "1"],
-      ["", "bag", "https://s/g1.jpg", "2"],
-      ["", "bag", "https://s/g2.jpg", "3"],
+    expect(csv.split("\n")[0]).toBe(
+      "Title,URL handle,Option1 name,Option1 value,Product image URL,Image position,Image alt text"
+    );
+    expect(
+      parseCsv(csv).map((r) => [r.Title, r["URL handle"], r["Option1 name"], r["Option1 value"], r["Product image URL"], r["Image position"]])
+    ).toEqual([
+      ["Bag", "bag", "Title", "Default Title", "https://s/main.jpg", "1"],
+      ["", "bag", "", "", "https://s/g1.jpg", "2"],
+      ["", "bag", "", "", "https://s/g2.jpg", "3"],
     ]);
+  });
+
+  it("Shopify turns a title in the handle column into a handle and keeps a mapped option", async () => {
+    const csv = await buildPlatformCsv(
+      "shopify",
+      {
+        ...input([{ H: "Men's L-Spin Evo - 49SMA", T: "Shoe", Size: "40", G: "https://s/a.jpg" }], {
+          "URL handle": "H",
+          Title: "T",
+          new_images: "G",
+          "Option1 value": "Size",
+        }),
+        optionName: "Size",
+      },
+      "images"
+    );
+    expect(parseCsv(csv)[0]).toMatchObject({ "URL handle": "men-s-l-spin-evo-49sma", "Option1 name": "Size", "Option1 value": "40" });
   });
 
   it("WooCommerce lists every picture in one cell, main first", async () => {

@@ -1,4 +1,4 @@
-import { buildPlatformCsv, isPlatformId, type PlatformId } from "@/lib/catalog/platforms";
+import { OPTION_FIELD, buildPlatformCsv, isPlatformId, type PlatformId } from "@/lib/catalog/platforms";
 import type { ExportMode, PlatformMapping } from "@/lib/catalog/platforms/types";
 import { splitUrlList } from "@/lib/jobs/row-sources";
 import type { TableExport } from "@/lib/export/table-file";
@@ -39,7 +39,8 @@ export async function serializeTablePlatformExport(
     {
       products: table.rows.map((row) => [row]),
       mapping: options.mapping,
-      optionName: undefined,
+      // Table headers are the column names, so the mapped header names the option.
+      optionName: options.mapping[OPTION_FIELD[options.platform]],
       text: cell,
       images: (row, key) => splitUrlList(cell(row, key)),
     },

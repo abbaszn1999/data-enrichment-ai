@@ -3,6 +3,7 @@ import {
   fitLength,
   guessMapping,
   isImportableImage,
+  slugify,
   withoutAliases,
   type AliasedField,
   type PlatformCsvInput,
@@ -14,8 +15,11 @@ import type { ExportPlatformMode } from "@/lib/catalog/platforms/types";
  * pictures, and leaves every other field in the store alone. Each platform
  * treats pictures on an existing product differently (researched against the
  * official docs and importer behaviour):
- * - Shopify: only the included columns are touched, so no Option columns —
- *   they would reset the product's variants. Title + URL handle are required.
+ * - Shopify: only the included columns are touched. Title + URL handle are
+ *   required, and so are the option columns: without them the import stops
+ *   with "Product options input is required when updating variants". The
+ *   first line carries the product's option (Default Title for a product
+ *   without variants, as in Shopify's own exports); picture lines leave it blank.
  * - WooCommerce: Images replaces the featured image and gallery, so the main
  *   picture goes first to stay featured.
  * - Magento: additional_images is added to what is there; base_image is left
@@ -49,6 +53,12 @@ const SHOPIFY_FIELDS: AliasedField[] = [
   MAIN_IMAGE,
   NEW_IMAGES,
   { id: "Image alt text", label: "Image alt text", aliases: ["image alt text", "alt text", "alt"] },
+  {
+    id: "Option1 value",
+    label: "Variant option",
+    hint: "Only for products with variants: the first variant's value (e.g. Small). The column name becomes the option name.",
+    aliases: ["option1 value", "size", "color", "colour", "المقاس", "اللون"],
+  },
 ];
 
 const WOOCOMMERCE_FIELDS: AliasedField[] = [
@@ -78,7 +88,7 @@ const LINK_NOTE = "Image links stay valid for 7 days: import before then, withou
 
 export const SHOPIFY_IMAGES_MODE = imagesMode(
   SHOPIFY_FIELDS,
-  `${LINK_NOTE} In Shopify, tick "Overwrite products with matching handles". Only the title and pictures are written; prices, descriptions and variants stay as they are. Try one product first: Shopify may keep the pictures it already has next to the new ones.`
+  `${LINK_NOTE} In Shopify, tick "Overwrite products with matching handles". Only the title, option and pictures are written; prices and descriptions stay as they are. Safe for products without variants. For a product with variants Shopify needs every variant's options, so leave those products out or check one first.`
 );
 export const WOOCOMMERCE_IMAGES_MODE = imagesMode(
   WOOCOMMERCE_FIELDS,
@@ -104,10 +114,22 @@ function cell<Row>(input: PlatformCsvInput<Row>, row: Row, field: string): strin
 
 /** Rows without an identity or a picture are left out: they could only create a stray product. */
 export async function buildShopifyImagesCsv<Row>(input: PlatformCsvInput<Row>): Promise<string> {
-  const csv = csvWriter(["Title", "URL handle", "Product image URL", "Image position", "Image alt text"]);
+  const csv = csvWriter([
+    "Title",
+    "URL handle",
+    "Option1 name",
+    "Option1 value",
+    "Product image URL",
+    "Image position",
+    "Image alt text",
+  ]);
+  const optionValueKey = input.mapping["Option1 value"];
   for (const members of input.products) {
     for (const row of members) {
-      const handle = cell(input, row, "URL handle");
+      // Shopify handles are lowercase words joined by dashes; a title typed
+      // into the handle column becomes the handle Shopify made from it.
+      const handle = slugify(cell(input, row, "URL handle"));
+      const option = optionValueKey ? cell(input, row, "Option1 value") : "";
       const title = cell(input, row, "Title");
       const pictures = picturesFor(input, row).slice(0, 250);
       if (!handle || pictures.length === 0) continue;
@@ -116,6 +138,8 @@ export async function buildShopifyImagesCsv<Row>(input: PlatformCsvInput<Row>): 
         csv.push({
           Title: index === 0 ? title : "",
           "URL handle": handle,
+          "Option1 name": index === 0 ? (option ? input.optionName || "Option" : "Title") : "",
+          "Option1 value": index === 0 ? option || "Default Title" : "",
           "Product image URL": url,
           "Image position": String(index + 1),
           "Image alt text": alt,
