@@ -20,6 +20,8 @@ import type { ExportPlatformMode, ExportPlatformOption, ExportPlatformSetting } 
  * keeps that file name on its CDN, under a prefix that is fixed per store. The
  * description can therefore point at the CDN link before the import runs:
  *   https://cdn.shopify.com/s/files/1/0832/7305/6474/files/<unique name>
+ * The "files" variant leaves product images alone: the pictures come in a ZIP
+ * that the user uploads to Content → Files, which keeps file names the same way.
  */
 
 export const SHOPIFY_FILES_SETTING = "shopifyFilesUrl";
@@ -86,12 +88,29 @@ const NOTE =
 
 const DESCRIPTION_MODE: ExportPlatformMode = {
   id: "description",
-  title: "Update description",
-  description: "Of products already in your store",
+  title: "Update description + images",
+  description: "Pictures are also added to the product's images",
   fields: withoutAliases(FIELDS),
   settings: [FILES_SETTING],
   guessMapping: (columns) => guessMapping(FIELDS, columns),
   note: NOTE,
+};
+
+const FILES_NOTE =
+  'You get a ZIP: first upload everything in its images folder to Shopify → Content → Files, then import the CSV with "Overwrite products with matching handles" ticked. Only the title and description are written; product images stay as they are. Keep the file names unchanged. Safe for products without variants.';
+
+const DESCRIPTION_FILES_MODE: ExportPlatformMode = {
+  id: "description_files",
+  title: "Update description",
+  description: "Pictures go to Shopify Files (ZIP); product images stay as they are",
+  fields: withoutAliases(FIELDS.filter((field) => field.id !== "main_image")),
+  settings: [FILES_SETTING],
+  guessMapping: (columns) => {
+    const mapping = guessMapping(FIELDS, columns);
+    delete mapping.main_image;
+    return mapping;
+  },
+  note: FILES_NOTE,
 };
 
 /** The generated description is the product description in a new-product file too. */
@@ -114,11 +133,23 @@ const PRODUCTS_MODE: ExportPlatformMode = {
 export const SHOPIFY_DESCRIPTION_PLATFORM: ExportPlatformOption = {
   ...SHOPIFY_PLATFORM,
   description: "Product CSV for Shopify admin → Products → Import",
-  modes: [DESCRIPTION_MODE, PRODUCTS_MODE],
+  modes: [DESCRIPTION_FILES_MODE, DESCRIPTION_MODE, PRODUCTS_MODE],
 };
 
 /** Title, handle, description and pictures; options as Shopify needs them on an update. */
-export async function buildShopifyDescriptionCsv<Row>(input: PlatformCsvInput<Row>): Promise<string> {
+export function buildShopifyDescriptionCsv<Row>(input: PlatformCsvInput<Row>): Promise<string> {
+  return buildDescriptionCsv(input, true);
+}
+
+/**
+ * Title, handle and description only. No image columns at all: an included but
+ * empty image column would clear the product's pictures on overwrite.
+ */
+export function buildShopifyDescriptionOnlyCsv<Row>(input: PlatformCsvInput<Row>): Promise<string> {
+  return buildDescriptionCsv(input, false);
+}
+
+async function buildDescriptionCsv<Row>(input: PlatformCsvInput<Row>, withPictures: boolean): Promise<string> {
   const { mapping, text, images } = input;
   const csv = csvWriter([
     "Title",
@@ -126,9 +157,7 @@ export async function buildShopifyDescriptionCsv<Row>(input: PlatformCsvInput<Ro
     "Description",
     "Option1 name",
     "Option1 value",
-    "Product image URL",
-    "Image position",
-    "Image alt text",
+    ...(withPictures ? ["Product image URL", "Image position", "Image alt text"] : []),
   ]);
   const cell = (row: Row, field: string) => {
     const key = mapping[field];
@@ -142,8 +171,9 @@ export async function buildShopifyDescriptionCsv<Row>(input: PlatformCsvInput<Ro
       const descriptionKey = mapping.Description;
       const description = descriptionKey ? toHtml(text(row, descriptionKey)) : "";
       const option = mapping["Option1 value"] ? cell(row, "Option1 value") : "";
-      const main = mapping.main_image ? images(row, mapping.main_image).slice(0, 1) : [];
-      const added = mapping[DESCRIPTION_IMAGES_FIELD] ? images(row, mapping[DESCRIPTION_IMAGES_FIELD]) : [];
+      const main = withPictures && mapping.main_image ? images(row, mapping.main_image).slice(0, 1) : [];
+      const added =
+        withPictures && mapping[DESCRIPTION_IMAGES_FIELD] ? images(row, mapping[DESCRIPTION_IMAGES_FIELD]) : [];
       const pictures = [...new Set([...main, ...added])].filter(isImportableImage).slice(0, 250);
       const alt = fitLength(title, 512);
       const lines = Math.max(1, pictures.length);

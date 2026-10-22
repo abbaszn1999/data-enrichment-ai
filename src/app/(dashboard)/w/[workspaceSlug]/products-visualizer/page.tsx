@@ -2016,7 +2016,10 @@ export default function ProductsVisualizerPage() {
     const suffix = scope === "selected" ? "selected" : "export";
     return {
       blob,
-      filename: forStore ? `${baseName}_${suffix}_${platform}_${mode}.csv` : `${baseName}_${suffix}.${format}`,
+      // The Shopify Files route ships the CSV and its pictures together.
+      filename: forStore
+        ? `${baseName}_${suffix}_${platform}_${mode}.${mode === "description_files" ? "zip" : "csv"}`
+        : `${baseName}_${suffix}.${format}`,
       rows: exportRows.length,
       columns: forStore ? Object.values(mapping).filter(Boolean).length : columnKeys.length,
     };

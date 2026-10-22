@@ -12,6 +12,7 @@ import { SHOPIFY_PLATFORM, buildShopifyCsv } from "@/lib/catalog/platforms/shopi
 import {
   SHOPIFY_DESCRIPTION_PLATFORM,
   buildShopifyDescriptionCsv,
+  buildShopifyDescriptionOnlyCsv,
 } from "@/lib/catalog/platforms/shopify-description";
 import type { ExportMode, ExportPlatformMode, ExportPlatformOption } from "@/lib/catalog/platforms/types";
 import { WOOCOMMERCE_PLATFORM, buildWooCommerceCsv } from "@/lib/catalog/platforms/woocommerce";
@@ -25,7 +26,12 @@ type Builder = <Row>(input: PlatformCsvInput<Row>) => Promise<string>;
 
 /** Not every platform has every mode: descriptions with pictures need Shopify's CDN naming. */
 const BUILDERS: Record<PlatformId, Partial<Record<ExportMode, Builder>>> = {
-  shopify: { products: buildShopifyCsv, images: buildShopifyImagesCsv, description: buildShopifyDescriptionCsv },
+  shopify: {
+    products: buildShopifyCsv,
+    images: buildShopifyImagesCsv,
+    description: buildShopifyDescriptionCsv,
+    description_files: buildShopifyDescriptionOnlyCsv,
+  },
   woocommerce: { products: buildWooCommerceCsv, images: buildWooCommerceImagesCsv },
   magento: { products: buildMagentoCsv, images: buildMagentoImagesCsv },
 };

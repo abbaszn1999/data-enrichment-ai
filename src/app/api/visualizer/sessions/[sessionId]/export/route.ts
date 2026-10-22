@@ -31,7 +31,9 @@ import {
 } from "@/lib/catalog/platforms/shopify-description";
 import {
   DESCRIPTION_IMAGES_HEADER,
+  buildShopifyFilesZip,
   prepareShopifyDescriptionImages,
+  shopifyFilesLinks,
   withDescriptionImagesColumn,
 } from "@/lib/visualizer/shopify-export";
 import { getVisualizerPrefix } from "@/lib/visualizer/storage-paths";
@@ -105,13 +107,18 @@ async function exportVisualizerWorkbook(
     : hydrated.rows;
 
   if (platformOptions && filesPrefix) {
-    const { cdnByPath, signedByPath } = await prepareShopifyDescriptionImages({
-      admin: auth.admin,
-      workspaceId,
-      sessionId,
-      rows: exportRows,
-      filesPrefix,
-    });
+    // "description_files": pictures travel in a ZIP for Shopify Files, so no
+    // copies or signed links; otherwise Shopify downloads them as product images.
+    const toFiles = platformOptions.mode === "description_files";
+    const { cdnByPath, signedByPath } = toFiles
+      ? { cdnByPath: shopifyFilesLinks(exportRows, filesPrefix), signedByPath: {} as Record<string, string> }
+      : await prepareShopifyDescriptionImages({
+          admin: auth.admin,
+          workspaceId,
+          sessionId,
+          rows: exportRows,
+          filesPrefix,
+        });
     const described = {
       ...hydrated,
       rows: hydrated.rows.map((row) =>
@@ -133,10 +140,17 @@ async function exportVisualizerWorkbook(
     // The description's pictures are what Shopify must download and keep.
     const imageField = platformOptions.mode === "description" ? DESCRIPTION_IMAGES_FIELD : "Product image URL";
     const mapping = { ...platformOptions.mapping, [imageField]: DESCRIPTION_IMAGES_HEADER };
-    const { buffer, contentType, extension } = await serializeTablePlatformExport(table, {
+    const exported = await serializeTablePlatformExport(table, {
       ...platformOptions,
-      mapping,
+      mapping: toFiles ? platformOptions.mapping : mapping,
     });
+    const { buffer, contentType, extension } = toFiles
+      ? {
+          buffer: await buildShopifyFilesZip({ admin: auth.admin, rows: exportRows, csv: exported.buffer.toString("utf8") }),
+          contentType: "application/zip",
+          extension: "zip",
+        }
+      : exported;
     const shopName = String(session.name || "visualizer").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
     return deliverExportFile({
       admin: auth.admin,
