@@ -37,6 +37,8 @@ import {
   Bot,
   Apple,
   BarChart3,
+  Library,
+  Megaphone,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useTheme } from "next-themes";
@@ -63,6 +65,12 @@ import { JobInbox } from "@/components/job-inbox";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { WelcomeGiftTicker } from "@/components/billing/welcome-gift-ticker";
 import { FeaturebaseMessenger } from "@/components/featurebase-messenger";
+
+/**
+ * The floating agent is hidden for now, whatever NEXT_PUBLIC_ASSISTANT_ENABLED
+ * says. Set back to true to show it again.
+ */
+const SHOW_ASSISTANT_WIDGET = false;
 
 export default function WorkspaceLayout({
   children,
@@ -250,7 +258,7 @@ export default function WorkspaceLayout({
     { href: `${basePath}/catalog-intelligence`, label: "Catalog Intelligence", icon: Upload },
   ];
 
-  const toolsLinksAfterGrowthEngine = [
+  const agentLinks = [
     {
       href: hasIntegration ? `${basePath}/website-restructure` : "",
       label: "Website restructure",
@@ -263,7 +271,9 @@ export default function WorkspaceLayout({
       icon: Bot,
       disabled: !hasIntegration,
     },
-    { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
+    // Not built yet: visible on the roadmap, unclickable until it ships.
+    { href: "", label: "Google Ads", icon: Megaphone, disabled: true, badge: "Soon" },
+    { href: `${basePath}/library`, label: "Library", icon: Library },
   ];
 
   const accountLinks = [
@@ -273,6 +283,7 @@ export default function WorkspaceLayout({
     ...(permissions.canAdmin
       ? [{ href: `${basePath}/settings`, label: "Settings", icon: Settings }]
       : []),
+    { href: `${basePath}/usage`, label: "Usage", icon: CreditCard },
     ...(permissions.isOwner
       ? [{ href: `${basePath}/subscription`, label: "Subscription", icon: Crown }]
       : []),
@@ -754,8 +765,8 @@ export default function WorkspaceLayout({
                 </>
               ) : null}
 
-              <SectionLabel>Tools</SectionLabel>
-              {toolsLinksAfterGrowthEngine.map((link) => renderNavLink(link))}
+              <SectionLabel>Agents</SectionLabel>
+              {agentLinks.map((link) => renderNavLink(link))}
 
               {accountLinks.length > 0 && (
                 <>
@@ -827,7 +838,7 @@ export default function WorkspaceLayout({
             )}
           </main>
         </div>
-        {process.env.NEXT_PUBLIC_ASSISTANT_ENABLED === "true" && workspace?.id && (
+        {SHOW_ASSISTANT_WIDGET && process.env.NEXT_PUBLIC_ASSISTANT_ENABLED === "true" && workspace?.id && (
           <AssistantWidget workspaceId={workspace.id} workspaceSlug={slug} />
         )}
       </div>
