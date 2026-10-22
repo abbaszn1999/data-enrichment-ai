@@ -1,12 +1,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { Agent, JsonlLocalAgentStore, type AgentOptions, type SDKAgent, type ToolName } from "@cursor/sdk";
+import { Agent, type AgentOptions, type SDKAgent, type ToolName } from "@cursor/sdk";
+import type { SqliteLocalAgentStore } from "@cursor/sdk/sqlite";
 import type { ServiceRunRequest } from "../../../src/lib/assistant/protocol";
 import type { ServiceConfig } from "../config";
 import { billedCents, usageToCredits, type RunTokenUsage } from "../usage";
 import type { AssistantRun } from "./bridge";
 import { ContextMeter, type SdkDeltaUpdate } from "./context-meter";
-import { mapSdkMessage, type SdkStreamMessage } from "./events";
+import { mapSdkMessage, mapTextDelta, type SdkStreamMessage } from "./events";
 import { createAllTools } from "./tools";
 
 /** Built-in tools that must never be offered, on top of the `tools` allowlist. */
@@ -56,7 +57,7 @@ export function buildPrompt(request: ServiceRunRequest): string {
   return `${context.join("\n")}\n\n${request.message}`;
 }
 
-function baseOptions(config: ServiceConfig, store: JsonlLocalAgentStore): AgentOptions {
+function baseOptions(config: ServiceConfig, store: SqliteLocalAgentStore): AgentOptions {
   return {
     apiKey: config.cursorApiKey,
     model: { id: config.model, params: [{ id: "fast", value: String(config.modelFast) }] },
@@ -108,13 +109,18 @@ async function appendUsageLog(storeDir: string, entry: Record<string, unknown>):
 export interface RunnerDeps {
   config: ServiceConfig;
   owners: ConversationOwners;
-  store: JsonlLocalAgentStore;
+  store: SqliteLocalAgentStore;
   log?: (message: string, extra?: unknown) => void;
 }
 
 export interface RunOutcome {
   status: "finished" | "cancelled" | "error";
   credits: number;
+}
+
+/** The previous on-disk log does not contain this agent, so the conversation has to start over. */
+export function isMissingAgent(error: unknown): boolean {
+  return error instanceof Error && /not found/i.test(error.message);
 }
 
 /** Execute one run: stream public events, then report the outcome. Never throws. */
@@ -130,8 +136,14 @@ export async function executeRun(deps: RunnerDeps, run: AssistantRun, request: S
         run.emit({ type: "error", message: "This conversation is not available." });
         return { status: "error", credits: 0 };
       }
-      agent = await Agent.resume(request.conversationId, options);
-    } else {
+      try {
+        agent = await Agent.resume(request.conversationId, options);
+      } catch (error) {
+        if (!isMissingAgent(error)) throw error;
+        agent = null;
+      }
+    }
+    if (!agent) {
       agent = await Agent.create(options);
       await owners.set(agent.agentId, request.userId);
     }
@@ -142,7 +154,10 @@ export async function executeRun(deps: RunnerDeps, run: AssistantRun, request: S
     const sdkRun = await agent.send(buildPrompt(request), {
       local: { customTools: createAllTools(config.knowledgeRoot, run, { autoApprove: request.context.autoApprove }) },
       onDelta: ({ update }) => {
-        for (const event of meter.onUpdate(update as SdkDeltaUpdate)) run.emit(event);
+        const delta = update as SdkDeltaUpdate & { text?: unknown };
+        const text = mapTextDelta(delta);
+        if (text) run.emit(text);
+        for (const event of meter.onUpdate(delta)) run.emit(event);
       },
     });
     run.steer = async (text: string) => sdkRun.steer?.(text);
@@ -151,7 +166,7 @@ export async function executeRun(deps: RunnerDeps, run: AssistantRun, request: S
     });
 
     for await (const message of sdkRun.stream()) {
-      for (const event of mapSdkMessage(message as SdkStreamMessage)) run.emit(event);
+      for (const event of mapSdkMessage(message as SdkStreamMessage, { assistantText: false })) run.emit(event);
     }
     const result = await sdkRun.wait();
 

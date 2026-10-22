@@ -5,11 +5,13 @@ import { describe, expect, it } from "vitest";
 import { ASSISTANT_LIMITS, isAllowedNavigation, isBlockedNavigation } from "../../src/lib/assistant/protocol";
 import { RunLimitError, RunRegistry } from "../src/agent/bridge";
 import { listDir, readFile, resolveInside, searchCode } from "../src/agent/tools/code-tools";
-import { mapSdkMessage } from "../src/agent/events";
+import { mapSdkMessage, mapTextDelta } from "../src/agent/events";
 import { ContextMeter } from "../src/agent/context-meter";
 import { createCodeTools, searchPattern } from "../src/agent/tools";
 import { signRequest, verifyRequest } from "../src/auth";
 import { billedCents, costToCredits, estimateUsd, usageToCredits } from "../src/usage";
+import { defaultStoreDir } from "../src/config";
+import { isMissingAgent } from "../src/agent/runner";
 
 const ctx = { workspaceSlug: "acme", workspaceId: "w1", path: "/w/acme" };
 
@@ -108,6 +110,13 @@ describe("event mapping", () => {
     expect(mapSdkMessage({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })).toEqual([
       { type: "text", text: "hi" },
     ]);
+  });
+
+  it("streams text from token deltas and can hide the repeated assistant message", () => {
+    expect(mapTextDelta({ type: "text-delta", text: "Hel" })).toEqual({ type: "text", text: "Hel" });
+    expect(mapTextDelta({ type: "text-delta", text: "" })).toBeNull();
+    expect(mapTextDelta({ type: "thinking-delta", text: "secret" })).toBeNull();
+    expect(mapSdkMessage({ type: "assistant", message: { content: [{ type: "text", text: "Hel" }] } }, { assistantText: false })).toEqual([]);
   });
 
   it("streams thinking without internal names", () => {
@@ -234,5 +243,27 @@ describe("cost", () => {
     const usage = { inputTokens: 46_847, outputTokens: 796, cacheReadTokens: 39_129, cacheWriteTokens: 0 };
     expect(estimateUsd(usage, rates)).toBeCloseTo(0.0136748, 7);
     expect(usageToCredits({ usage, rates }).credits).toBe(0.137);
+  });
+});
+
+describe("store location", () => {
+  const env = { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" };
+
+  it("moves the store off OneDrive onto the local disk", () => {
+    expect(defaultStoreDir(env, "C:\\Users\\me\\OneDrive\\Desktop\\app", "win32")).toBe(
+      path.join(env.LOCALAPPDATA, "autommerce-agent", "store")
+    );
+  });
+
+  it("treats a missing saved agent as a conversation to start over", () => {
+    expect(isMissingAgent(new Error("Agent abc not found"))).toBe(true);
+    expect(isMissingAgent(new Error("network down"))).toBe(false);
+    expect(isMissingAgent("not found")).toBe(false);
+  });
+
+  it("keeps an explicit directory and a normal project folder", () => {
+    expect(defaultStoreDir({ ...env, ASSISTANT_STORE_DIR: "D:\\agent" }, "C:\\Users\\me\\OneDrive\\app", "win32")).toBe("D:\\agent");
+    expect(defaultStoreDir(env, "C:\\dev\\app", "win32")).toBe(".store");
+    expect(defaultStoreDir(env, "/home/me/OneDrive/app", "linux")).toBe(".store");
   });
 });

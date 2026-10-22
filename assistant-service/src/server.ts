@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { JsonlLocalAgentStore } from "@cursor/sdk";
+import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite";
 import { z } from "zod";
 import { serviceRunRequestSchema, toolResultSchema } from "../../src/lib/assistant/protocol";
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, USER_HEADER, verifyRequest } from "./auth";
@@ -177,9 +177,14 @@ function safeJson(body: string): unknown {
   }
 }
 
-export function startServer(config: ServiceConfig = loadConfig()) {
+export async function startServer(config: ServiceConfig = loadConfig()) {
   mkdirSync(config.storeDir, { recursive: true });
-  const store = new JsonlLocalAgentStore(path.join(config.storeDir, "agents"));
+  // SQLite appends one row per token. The JSONL store rewrites the whole log
+  // on every token, which makes the reply type about ten times slower.
+  const store = await SqliteLocalAgentStore.open({
+    workspaceRef: config.knowledgeRoot,
+    stateRoot: config.storeDir,
+  });
   const owners = new ConversationOwners(path.join(config.storeDir, "owners.json"));
   const registry = new RunRegistry();
   const app = createApp({
@@ -188,6 +193,6 @@ export function startServer(config: ServiceConfig = loadConfig()) {
     runner: { config, owners, store, log: (message, extra) => console.log(`[assistant] ${message}`, extra ?? "") },
   });
   const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host });
-  console.log(`[assistant] listening on ${config.host}:${config.port} (billing: ${config.billingMode})`);
+  console.log(`[assistant] listening on ${config.host}:${config.port} (billing: ${config.billingMode}, store: ${config.storeDir})`);
   return server;
 }

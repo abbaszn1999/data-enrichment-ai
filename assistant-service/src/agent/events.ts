@@ -163,8 +163,18 @@ function summarize(toolName: string, text: string): string | undefined {
  * Convert one SDK message into zero or more public events. Model names, raw
  * tool plumbing and full tool results never leave this function.
  */
-export function mapSdkMessage(message: SdkStreamMessage): AssistantEvent[] {
+/**
+ * One token of assistant text. The SDK then repeats the same chunk as an
+ * `assistant` stream message, so callers that use this must not also emit that message.
+ */
+export function mapTextDelta(update: { type: string; text?: unknown }): AssistantEvent | null {
+  if (update.type !== "text-delta" || typeof update.text !== "string" || update.text.length === 0) return null;
+  return { type: "text", text: scrubInternal(update.text) };
+}
+
+export function mapSdkMessage(message: SdkStreamMessage, options?: { assistantText?: boolean }): AssistantEvent[] {
   if (message.type === "assistant") {
+    if (options?.assistantText === false) return [];
     const content = (message as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content ?? [];
     return content
       .filter((block) => block.type === "text" && block.text)

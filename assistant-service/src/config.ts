@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 export type BillingMode = "log" | "charge";
 
@@ -34,6 +34,20 @@ const num = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
+/**
+ * Each token is saved before the next one is delivered. OneDrive makes that
+ * save take about 100ms, so the reply types at a crawl. Keep the store on a
+ * normal local disk when the project itself lives in OneDrive.
+ */
+export function defaultStoreDir(env: NodeJS.ProcessEnv, cwd: string, platform = process.platform): string {
+  if (env.ASSISTANT_STORE_DIR) return env.ASSISTANT_STORE_DIR;
+  const localAppData = env.LOCALAPPDATA;
+  if (platform === "win32" && localAppData && /[\\/]OneDrive([\\/]|$)/i.test(cwd)) {
+    return join(localAppData, "autommerce-agent", "store");
+  }
+  return ".store";
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig {
   const secret = env.ASSISTANT_SERVICE_SECRET ?? "";
   if (secret.length < 32) {
@@ -53,7 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
     modelFast,
     contextWindow: num(env.ASSISTANT_CONTEXT_WINDOW, 0) || 200_000,
     knowledgeRoot: resolve(env.ASSISTANT_KNOWLEDGE_DIR || "knowledge"),
-    storeDir: resolve(env.ASSISTANT_STORE_DIR || ".store"),
+    storeDir: resolve(defaultStoreDir(env, process.cwd())),
     billingMode,
     rates: {
       input: num(env.ASSISTANT_RATE_INPUT, base.input),

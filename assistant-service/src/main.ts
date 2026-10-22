@@ -16,4 +16,7 @@ process.on("exit", (code) => {
   console.error(`[assistant] process exit code=${code}`);
 });
 
-startServer();
+startServer().catch((error) => {
+  console.error("[assistant] failed to start:", error);
+  process.exit(1);
+});
