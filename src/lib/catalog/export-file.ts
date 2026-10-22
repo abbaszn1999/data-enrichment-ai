@@ -1,6 +1,6 @@
 import { enrichedValueToJson, enrichedValueToText } from "@/lib/export-values";
 import { imageUrlsFromEnriched, splitUrlList } from "@/lib/jobs/row-sources";
-import { buildShopifyCsv } from "@/lib/catalog/platforms/shopify";
+import { OPTION_FIELD, buildPlatformCsv, type PlatformId } from "@/lib/catalog/platforms";
 import type { PlatformMapping } from "@/lib/catalog/platforms/types";
 import { hasStoredImageRef, splitStoredImageRefs, storedImagePath } from "@/lib/stored-image-ref";
 import type { ProductRow } from "@/types";
@@ -275,11 +275,11 @@ function imageLinks(row: ProductRow, column: ExportColumn, pictures: StoredPictu
 }
 
 /**
- * Builds a store import file (only Shopify for now). `products` holds each
+ * Builds a store import file (Shopify, WooCommerce, Magento). `products` holds each
  * product's rows, primary first, so variants stay together under one handle.
  */
 export async function buildPlatformExport(params: {
-  platform: "shopify";
+  platform: PlatformId;
   products: ProductRow[][];
   columns: ExportColumn[];
   mapping: PlatformMapping;
@@ -295,14 +295,14 @@ export async function buildPlatformExport(params: {
   let done = 0;
 
   onProgress?.({ done: 0, total, phase: "rows" });
-  // csv format = signed links (7 days), which Shopify downloads on import.
+  // csv format = signed links (7 days), which the store downloads on import.
   const pictures = await resolveStoredPictures("csv", [{ name: "all", rows: products.flat() }], mappedColumns);
   if (isCancelled?.()) throw new ExportCancelledError();
 
-  const csv = await buildShopifyCsv({
+  const csv = await buildPlatformCsv(params.platform, {
     products,
     mapping,
-    optionName: byKey.get(mapping["Option1 Value"] ?? "")?.label,
+    optionName: byKey.get(mapping[OPTION_FIELD[params.platform]] ?? "")?.label,
     text: (row, key) => {
       const column = byKey.get(key);
       return column ? textValue(row, column, pictures) : "";
@@ -321,6 +321,6 @@ export async function buildPlatformExport(params: {
     },
   });
   onProgress?.({ done: total, total, phase: "packaging" });
-  // No BOM: Shopify may read it as part of the first header.
+  // Each builder decides on a BOM (WooCommerce adds one; Shopify and Magento must not).
   return new Blob([csv], { type: MIME.csv });
 }

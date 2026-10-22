@@ -28,7 +28,7 @@ import {
   exportColumnKey,
   type ExportColumn,
 } from "@/lib/catalog/export-file";
-import { SHOPIFY_PLATFORM } from "@/lib/catalog/platforms/shopify";
+import { EXPORT_PLATFORMS, isPlatformId } from "@/lib/catalog/platforms";
 import {
   ExportWizard,
   type ExportColumnOption,
@@ -182,10 +182,10 @@ export function ExportDialog() {
             }
       );
 
-    if (platform === SHOPIFY_PLATFORM.id) {
+    if (isPlatformId(platform)) {
       onProgress({ label: "Preparing image links…", percent: null });
       const blob = await buildPlatformExport({
-        platform: "shopify",
+        platform,
         products: groupProducts(exportRows, productGroupColumn),
         columns: columnsFor(scope),
         mapping,
@@ -194,7 +194,7 @@ export function ExportDialog() {
       });
       return {
         blob,
-        filename: `${baseName}_${suffix}_shopify.csv`,
+        filename: `${baseName}_${suffix}_${platform}.csv`,
         rows: exportRows.length,
         columns: Object.values(mapping).filter(Boolean).length,
       };
@@ -290,7 +290,7 @@ export function ExportDialog() {
         defaultScope={selectedRows.length > 0 ? "selected" : "all"}
         getColumns={getColumns}
         onExport={handleExport}
-        platforms={isPlp ? undefined : [SHOPIFY_PLATFORM]}
+        platforms={isPlp ? undefined : EXPORT_PLATFORMS}
         formatExtras={
           isPlp ? (
             <div className="space-y-2 border-t pt-3">
