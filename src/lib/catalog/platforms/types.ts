@@ -15,16 +15,31 @@ export type MappableColumn = { key: string; label: string };
 /** Field id → chosen column key ("" or missing = not included). */
 export type PlatformMapping = Record<string, string>;
 
+/** A value typed once in the wizard (not a column), e.g. a link from the store. */
+export type ExportPlatformSetting = {
+  id: string;
+  label: string;
+  placeholder?: string;
+  hint?: string;
+  /** Returns an error message, or null when the value can be used. */
+  validate?: (value: string) => string | null;
+};
+
 /** What a file does in the store: its fields, mapping guess and caveats. */
 export type ExportPlatformFieldSet = {
   fields: ExportPlatformField[];
+  /** Typed values the export needs besides the column mapping. */
+  settings?: ExportPlatformSetting[];
   guessMapping: (columns: MappableColumn[]) => PlatformMapping;
   /** Shown under the mapping, e.g. how long image links stay valid. */
   note?: string;
 };
 
-/** "products" creates or updates whole products; "images" only adds pictures. */
-export type ExportMode = "products" | "images";
+/**
+ * "products" creates or updates whole products; "images" only adds pictures;
+ * "description" writes a generated description and the pictures it shows.
+ */
+export type ExportMode = "products" | "images" | "description";
 
 export type ExportPlatformMode = ExportPlatformFieldSet & {
   id: ExportMode;

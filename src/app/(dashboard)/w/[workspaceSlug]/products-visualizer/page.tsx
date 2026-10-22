@@ -128,6 +128,7 @@ import {
   type ExportRequest,
   type ExportScope,
 } from "@/components/sheet/export-wizard";
+import { DESCRIPTION_EXPORT_PLATFORMS, isPlatformId } from "@/lib/catalog/platforms";
 import {
   CellText,
   CellTextDialog,
@@ -1981,9 +1982,20 @@ export default function ProductsVisualizerPage() {
     }));
   };
 
-  const handleExport = async ({ scope, format, columnKeys, onProgress, signal }: ExportRequest) => {
+  const handleExport = async ({
+    scope,
+    format,
+    platform,
+    mode,
+    mapping,
+    settings,
+    columnKeys,
+    onProgress,
+    signal,
+  }: ExportRequest) => {
     if (!workspace || !session) throw new Error("Project is not loaded");
     const exportRows = exportRowsFor(scope);
+    const forStore = isPlatformId(platform);
     const blob = await fetchExportFile(
       `/api/visualizer/sessions/${session.id}/export`,
       {
@@ -1993,6 +2005,7 @@ export default function ProductsVisualizerPage() {
           workspaceId: workspace.id,
           format,
           columns: columnKeys,
+          ...(forStore ? { platform, mode, mapping, settings } : {}),
           ...(scope === "all" ? {} : { rowIds: exportRows.map((row) => row.id) }),
         }),
         signal,
@@ -2000,11 +2013,12 @@ export default function ProductsVisualizerPage() {
       onProgress
     );
     const baseName = String(session.name || "visualizer").replace(/[^\w.-]+/g, "_");
+    const suffix = scope === "selected" ? "selected" : "export";
     return {
       blob,
-      filename: `${baseName}_${scope === "selected" ? "selected" : "export"}.${format}`,
+      filename: forStore ? `${baseName}_${suffix}_${platform}_${mode}.csv` : `${baseName}_${suffix}.${format}`,
       rows: exportRows.length,
-      columns: columnKeys.length,
+      columns: forStore ? Object.values(mapping).filter(Boolean).length : columnKeys.length,
     };
   };
 
@@ -3496,6 +3510,7 @@ export default function ProductsVisualizerPage() {
               ]}
               getColumns={exportColumnsFor}
               onExport={handleExport}
+              platforms={DESCRIPTION_EXPORT_PLATFORMS}
             />
           </main>
         </div>

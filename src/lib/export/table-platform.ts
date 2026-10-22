@@ -6,22 +6,36 @@ import type { TableExport } from "@/lib/export/table-file";
 /** How long image links in a store import file stay valid (the store downloads them on import). */
 export const PLATFORM_IMAGE_LINK_TTL_SEC = 7 * 24 * 60 * 60;
 
-export type TablePlatformOptions = { platform: PlatformId; mode: ExportMode; mapping: PlatformMapping };
+export type TablePlatformOptions = {
+  platform: PlatformId;
+  mode: ExportMode;
+  mapping: PlatformMapping;
+  /** Typed wizard values, e.g. a store picture link (setting id → value). */
+  settings: Record<string, string>;
+};
 
-/** Reads `platform`, `mode` and `mapping` from an export request; null = a plain table export. */
+const MODES: ExportMode[] = ["products", "images", "description"];
+
+function stringRecord(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof item === "string" && item) out[key] = item;
+    }
+  }
+  return out;
+}
+
+/** Reads `platform`, `mode`, `mapping` and `settings` from an export request; null = a plain table export. */
 export function parseTablePlatformOptions(body: {
   platform?: unknown;
   mode?: unknown;
   mapping?: unknown;
+  settings?: unknown;
 }): TablePlatformOptions | null {
   if (typeof body.platform !== "string" || !isPlatformId(body.platform)) return null;
-  const mapping: PlatformMapping = {};
-  if (body.mapping && typeof body.mapping === "object") {
-    for (const [field, column] of Object.entries(body.mapping as Record<string, unknown>)) {
-      if (typeof column === "string" && column) mapping[field] = column;
-    }
-  }
-  return { platform: body.platform, mode: body.mode === "images" ? "images" : "products", mapping };
+  const mode = MODES.find((item) => item === body.mode) ?? "products";
+  return { platform: body.platform, mode, mapping: stringRecord(body.mapping), settings: stringRecord(body.settings) };
 }
 
 /**

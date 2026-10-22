@@ -69,6 +69,8 @@ export type ExportRequest = {
   mapping: PlatformMapping;
   /** What a store file does; always "products" for "As is". */
   mode: ExportMode;
+  /** Typed values the platform asked for (setting id → value). */
+  settings: Record<string, string>;
   /** Keys of the chosen columns, in sheet order. */
   columnKeys: string[];
   onProgress: (update: ExportProgressUpdate) => void;
@@ -109,6 +111,25 @@ const FORMATS: {
     tone: "bg-amber-100 text-amber-600 dark:bg-amber-950/30 dark:text-amber-400",
   },
 ];
+
+const SETTING_STORAGE_PREFIX = "export-setting:";
+
+/** Typed settings (e.g. a store link) are remembered per browser; storage may be unavailable. */
+function loadSetting(id: string): string {
+  try {
+    return window.localStorage.getItem(SETTING_STORAGE_PREFIX + id) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveSetting(id: string, value: string) {
+  try {
+    window.localStorage.setItem(SETTING_STORAGE_PREFIX + id, value);
+  } catch {
+    // Not remembered; the export still uses the typed value.
+  }
+}
 
 const SCOPE_ICONS: Record<ExportScope, { icon: typeof Sheet; tone: string }> = {
   selected: { icon: MousePointerClick, tone: "bg-primary/10 text-primary" },
@@ -220,6 +241,7 @@ export function ExportWizard({
   const [platform, setPlatform] = useState(GENERIC_PLATFORM);
   const [mapping, setMapping] = useState<PlatformMapping>({});
   const [mode, setMode] = useState<ExportMode>("products");
+  const [settings, setSettings] = useState<Record<string, string>>({});
   const [scope, setScope] = useState<ExportScope>(defaultScope);
   const [format, setFormat] = useState<ExportFormat>("xlsx");
   const [columnMode, setColumnMode] = useState<"all" | "custom">("all");
@@ -268,14 +290,25 @@ export function ExportWizard({
   const stepAfter = (from: WizardStep, offset: number) =>
     wizardSteps[wizardSteps.findIndex((s) => s.id === from) + offset]?.id;
   const mappedCount = fieldSet ? fieldSet.fields.filter((f) => mapping[f.id]).length : 0;
-  const missingRequired = fieldSet?.fields.some((f) => f.required && !mapping[f.id]) ?? false;
+  const settingErrors = Object.fromEntries(
+    (fieldSet?.settings ?? []).map((setting) => {
+      const value = (settings[setting.id] ?? "").trim();
+      return [setting.id, value ? (setting.validate?.(value) ?? null) : "Required"];
+    })
+  );
+  const missingRequired =
+    (fieldSet?.fields.some((f) => f.required && !mapping[f.id]) ?? false) ||
+    Object.values(settingErrors).some(Boolean);
   const targetLabel = platformOption ? platformOption.title : formatLabel(format);
 
   const goNext = (from: WizardStep) => {
     const next = stepAfter(from, 1);
     if (!next) return;
     // Columns differ per row scope, so the guess is redone each time.
-    if (next === "columns" && fieldSet) setMapping(fieldSet.guessMapping(availableColumns));
+    if (next === "columns" && fieldSet) {
+      setMapping(fieldSet.guessMapping(availableColumns));
+      setSettings(Object.fromEntries((fieldSet.settings ?? []).map((setting) => [setting.id, loadSetting(setting.id)])));
+    }
     setStep(next);
   };
 
@@ -294,6 +327,7 @@ export function ExportWizard({
         platform,
         mapping: platformOption ? mapping : {},
         mode: platformOption ? mode : "products",
+        settings: platformOption ? settings : {},
         columnKeys: exportColumns.map((c) => c.key),
         onProgress: setProgress,
         signal: controller.signal,
@@ -423,8 +457,11 @@ export function ExportWizard({
                     onClick={() => {
                       setMode(option.id);
                       setMapping(option.guessMapping(availableColumns));
+                      setSettings(
+                        Object.fromEntries((option.settings ?? []).map((setting) => [setting.id, loadSetting(setting.id)]))
+                      );
                     }}
-                    icon={option.id === "images" ? ImagePlus : PackagePlus}
+                    icon={option.id === "images" ? ImagePlus : option.id === "description" ? FileText : PackagePlus}
                     iconTone="bg-muted text-foreground"
                     title={option.title}
                     description={option.description}
@@ -432,6 +469,29 @@ export function ExportWizard({
                 ))}
               </div>
             )}
+            {fieldSet.settings?.map((setting) => (
+              <label key={setting.id} className="block space-y-1">
+                <span className="text-xs font-semibold">
+                  {setting.label}
+                  <span className="ml-0.5 text-destructive">*</span>
+                </span>
+                <input
+                  value={settings[setting.id] ?? ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setSettings((current) => ({ ...current, [setting.id]: value }));
+                    if (!setting.validate?.(value.trim())) saveSetting(setting.id, value.trim());
+                  }}
+                  placeholder={setting.placeholder}
+                  className="h-8 w-full rounded-md border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary/50"
+                />
+                {settings[setting.id]?.trim() && settingErrors[setting.id] ? (
+                  <span className="block text-[10px] text-destructive">{settingErrors[setting.id]}</span>
+                ) : (
+                  setting.hint && <span className="block text-[10px] text-muted-foreground">{setting.hint}</span>
+                )}
+              </label>
+            ))}
             <div className="max-h-80 divide-y overflow-y-auto rounded-lg border">
               {fieldSet.fields.map((field) => (
                 <div key={field.id} className="flex items-center gap-3 px-3 py-2">
