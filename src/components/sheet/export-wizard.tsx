@@ -16,6 +16,8 @@ import {
   Search,
   Sheet,
   Sparkles,
+  Store,
+  Table2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -28,6 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
+import type { ExportPlatformOption, PlatformMapping } from "@/lib/catalog/platforms/types";
 
 export type ExportScope = "selected" | "sheet" | "all";
 export type ExportFormat = "xlsx" | "csv" | "json";
@@ -53,9 +56,15 @@ export type ExportProgressUpdate = {
   percent: number | null;
 };
 
+/** "generic" = the sheet as it is; otherwise an `ExportPlatformOption` id. */
+export const GENERIC_PLATFORM = "generic";
+
 export type ExportRequest = {
   scope: ExportScope;
   format: ExportFormat;
+  platform: string;
+  /** Field id → column key, for a store platform. */
+  mapping: PlatformMapping;
   /** Keys of the chosen columns, in sheet order. */
   columnKeys: string[];
   onProgress: (update: ExportProgressUpdate) => void;
@@ -64,13 +73,8 @@ export type ExportRequest = {
 
 export type ExportResult = { blob: Blob; filename: string; rows: number; columns: number };
 
-const WIZARD_STEPS = [
-  { id: "rows", label: "Rows" },
-  { id: "format", label: "Format" },
-  { id: "columns", label: "Columns" },
-] as const;
-
-type Step = (typeof WIZARD_STEPS)[number]["id"] | "exporting" | "done";
+type WizardStep = "rows" | "platform" | "format" | "columns";
+type Step = WizardStep | "exporting" | "done";
 
 const FORMATS: {
   id: ExportFormat;
@@ -183,6 +187,8 @@ function ChoiceCard({
 /**
  * Guided export shared by every sheet: rows → format → columns → progress.
  * Each tool supplies its own scopes, columns and `onExport` implementation.
+ * With `platforms`, a Platform step follows Rows; a store platform skips
+ * Format (always CSV) and maps columns onto its fields instead.
  */
 export function ExportWizard({
   open,
@@ -192,6 +198,7 @@ export function ExportWizard({
   getColumns,
   onExport,
   formatExtras,
+  platforms,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -202,8 +209,12 @@ export function ExportWizard({
   onExport: (request: ExportRequest) => Promise<ExportResult>;
   /** Extra actions rendered under the formats (e.g. write-back). */
   formatExtras?: ReactNode;
+  /** Store platforms offered next to "As is". */
+  platforms?: ExportPlatformOption[];
 }) {
   const [step, setStep] = useState<Step>("rows");
+  const [platform, setPlatform] = useState(GENERIC_PLATFORM);
+  const [mapping, setMapping] = useState<PlatformMapping>({});
   const [scope, setScope] = useState<ExportScope>(defaultScope);
   const [format, setFormat] = useState<ExportFormat>("xlsx");
   const [columnMode, setColumnMode] = useState<"all" | "custom">("all");
@@ -220,6 +231,8 @@ export function ExportWizard({
     if (open) {
       setStep("rows");
       setScope(defaultScope);
+      setPlatform(GENERIC_PLATFORM);
+      setMapping({});
       setColumnMode("all");
       setColumnSearch("");
       setResult(null);
@@ -237,8 +250,29 @@ export function ExportWizard({
     column.label.toLowerCase().includes(columnSearch.trim().toLowerCase())
   );
 
+  const platformOption = platforms?.find((p) => p.id === platform) ?? null;
+  const wizardSteps: { id: WizardStep; label: string }[] = [
+    { id: "rows", label: "Rows" },
+    ...(platforms?.length ? [{ id: "platform" as const, label: "Platform" }] : []),
+    ...(platformOption ? [] : [{ id: "format" as const, label: "Format" }]),
+    { id: "columns", label: platformOption ? "Fields" : "Columns" },
+  ];
+  const stepAfter = (from: WizardStep, offset: number) =>
+    wizardSteps[wizardSteps.findIndex((s) => s.id === from) + offset]?.id;
+  const mappedCount = platformOption ? platformOption.fields.filter((f) => mapping[f.id]).length : 0;
+  const missingRequired = platformOption?.fields.some((f) => f.required && !mapping[f.id]) ?? false;
+  const targetLabel = platformOption ? platformOption.title : formatLabel(format);
+
+  const goNext = (from: WizardStep) => {
+    const next = stepAfter(from, 1);
+    if (!next) return;
+    // Columns differ per row scope, so the guess is redone each time.
+    if (next === "columns" && platformOption) setMapping(platformOption.guessMapping(availableColumns));
+    setStep(next);
+  };
+
   const isBusy = step === "exporting";
-  const stepIndex = WIZARD_STEPS.findIndex((s) => s.id === step);
+  const stepIndex = wizardSteps.findIndex((s) => s.id === step);
 
   const startExport = async () => {
     const controller = new AbortController();
@@ -248,7 +282,9 @@ export function ExportWizard({
     try {
       const exported = await onExport({
         scope,
-        format,
+        format: platformOption ? "csv" : format,
+        platform,
+        mapping: platformOption ? mapping : {},
         columnKeys: exportColumns.map((c) => c.key),
         onProgress: setProgress,
         signal: controller.signal,
@@ -256,7 +292,7 @@ export function ExportWizard({
       downloadBlob(exported.blob, exported.filename);
       setResult(exported);
       setStep("done");
-      toast.success(`${formatLabel(format)} exported`, {
+      toast.success(`${targetLabel} file exported`, {
         description: `${exported.rows.toLocaleString()} rows · ${exported.columns} columns`,
       });
     } catch (error) {
@@ -284,8 +320,12 @@ export function ExportWizard({
           <DialogTitle className="text-base">Export data</DialogTitle>
           <DialogDescription className="text-xs">
             {step === "rows" && "Which rows do you want to export?"}
+            {step === "platform" && "Where will you upload this file?"}
             {step === "format" && "Choose the file format."}
-            {step === "columns" && "Choose the columns to include."}
+            {step === "columns" &&
+              (platformOption
+                ? `Match your columns to ${platformOption.title} fields.`
+                : "Choose the columns to include.")}
             {step === "exporting" && "Building your file. Keep this window open."}
             {step === "done" && "Your file has been downloaded."}
           </DialogDescription>
@@ -293,7 +333,7 @@ export function ExportWizard({
 
         {stepIndex >= 0 && (
           <ol className="flex items-center gap-2">
-            {WIZARD_STEPS.map((s, i) => (
+            {wizardSteps.map((s, i) => (
               <li key={s.id} className="flex flex-1 items-center gap-2">
                 <span
                   className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${
@@ -309,7 +349,7 @@ export function ExportWizard({
                 <span className={`text-[11px] font-medium ${i === stepIndex ? "text-foreground" : "text-muted-foreground"}`}>
                   {s.label}
                 </span>
-                {i < WIZARD_STEPS.length - 1 && <span className="h-px flex-1 bg-border" />}
+                {i < wizardSteps.length - 1 && <span className="h-px flex-1 bg-border" />}
               </li>
             ))}
           </ol>
@@ -333,6 +373,73 @@ export function ExportWizard({
           </div>
         )}
 
+        {step === "platform" && (
+          <div className="space-y-2">
+            <ChoiceCard
+              selected={platform === GENERIC_PLATFORM}
+              onClick={() => setPlatform(GENERIC_PLATFORM)}
+              icon={Table2}
+              iconTone="bg-muted text-foreground"
+              title="As is"
+              description="Your columns as they are, in Excel, CSV or JSON"
+            />
+            {platforms?.map((option) => (
+              <ChoiceCard
+                key={option.id}
+                selected={platform === option.id}
+                onClick={() => setPlatform(option.id)}
+                icon={Store}
+                iconTone="bg-emerald-100 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400"
+                title={option.title}
+                description={option.description}
+              />
+            ))}
+          </div>
+        )}
+
+        {step === "columns" && platformOption && (
+          <div className="space-y-3">
+            <div className="max-h-80 divide-y overflow-y-auto rounded-lg border">
+              {platformOption.fields.map((field) => (
+                <div key={field.id} className="flex items-center gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold">
+                      {field.label}
+                      {field.required && <span className="ml-0.5 text-destructive">*</span>}
+                    </div>
+                    {field.hint && <div className="text-[10px] text-muted-foreground">{field.hint}</div>}
+                  </div>
+                  <select
+                    value={mapping[field.id] ?? ""}
+                    onChange={(e) => setMapping((current) => ({ ...current, [field.id]: e.target.value }))}
+                    aria-label={`Column for ${field.label}`}
+                    className={`h-7 w-44 shrink-0 truncate rounded-md border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary/50 ${
+                      mapping[field.id] ? "" : "text-muted-foreground"
+                    }`}
+                  >
+                    <option value="">Not included</option>
+                    {availableColumns.map((column) => (
+                      <option key={column.key} value={column.key}>
+                        {column.label}
+                        {column.tag ? ` (${column.tag})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+            {platformOption.note && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                {platformOption.note}
+              </p>
+            )}
+            <div className="rounded-lg bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">
+              <span className="font-semibold text-foreground">{rowCount.toLocaleString()}</span> rows ·{" "}
+              <span className="font-semibold text-foreground">{mappedCount}</span> fields · {platformOption.title} CSV
+            </div>
+          </div>
+        )}
+
         {step === "format" && (
           <div className="space-y-2">
             {FORMATS.map((f) => (
@@ -350,7 +457,7 @@ export function ExportWizard({
           </div>
         )}
 
-        {step === "columns" && (
+        {step === "columns" && !platformOption && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-2">
               <ChoiceCard
@@ -456,7 +563,7 @@ export function ExportWizard({
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-semibold">
-                  Exporting {rowCount.toLocaleString()} rows to {formatLabel(format)}
+                  Exporting {rowCount.toLocaleString()} rows to {targetLabel}
                 </p>
                 <p className="text-xs text-muted-foreground">{progress.label}</p>
               </div>
@@ -491,12 +598,12 @@ export function ExportWizard({
         )}
 
         <DialogFooter className="flex-row items-center sm:justify-between">
-          {step === "format" || step === "columns" ? (
+          {step === "platform" || step === "format" || step === "columns" ? (
             <Button
               variant="ghost"
               size="sm"
               className="mr-auto gap-1"
-              onClick={() => setStep(step === "columns" ? "format" : "rows")}
+              onClick={() => setStep(stepAfter(step, -1) ?? "rows")}
             >
               <ArrowLeft className="h-3.5 w-3.5" /> Back
             </Button>
@@ -504,12 +611,12 @@ export function ExportWizard({
             <span className="mr-auto" />
           )}
           {step === "rows" && (
-            <Button size="sm" onClick={() => setStep("format")} disabled={rowCount === 0}>
+            <Button size="sm" onClick={() => goNext("rows")} disabled={rowCount === 0}>
               Next
             </Button>
           )}
-          {step === "format" && (
-            <Button size="sm" onClick={() => setStep("columns")}>
+          {(step === "platform" || step === "format") && (
+            <Button size="sm" onClick={() => goNext(step)}>
               Next
             </Button>
           )}
@@ -518,7 +625,9 @@ export function ExportWizard({
               size="sm"
               className="gap-1.5"
               onClick={() => void startExport()}
-              disabled={exportColumns.length === 0 || rowCount === 0}
+              disabled={
+                rowCount === 0 || (platformOption ? missingRequired : exportColumns.length === 0)
+              }
             >
               <Download className="h-3.5 w-3.5" />
               Export {rowCount.toLocaleString()} rows

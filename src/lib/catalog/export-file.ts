@@ -1,4 +1,7 @@
 import { enrichedValueToJson, enrichedValueToText } from "@/lib/export-values";
+import { imageUrlsFromEnriched, splitUrlList } from "@/lib/jobs/row-sources";
+import { buildShopifyCsv } from "@/lib/catalog/platforms/shopify";
+import type { PlatformMapping } from "@/lib/catalog/platforms/types";
 import { hasStoredImageRef, splitStoredImageRefs, storedImagePath } from "@/lib/stored-image-ref";
 import type { ProductRow } from "@/types";
 
@@ -18,6 +21,11 @@ export type ExportProgress = {
   total: number;
   phase: "rows" | "packaging";
 };
+
+/** Key a column is known by in the wizard and in platform mappings. */
+export function exportColumnKey(column: ExportColumn): string {
+  return `${column.source}:${column.key}`;
+}
 
 export class ExportCancelledError extends Error {
   constructor() {
@@ -250,4 +258,69 @@ export async function buildCatalogExport(params: {
   if (isCancelled?.()) throw new ExportCancelledError();
   const buffer = await workbook.xlsx.writeBuffer();
   return new Blob([buffer], { type: MIME.xlsx });
+}
+
+/** Picture links in a cell: Image Finder results, pasted pictures, or plain URLs. */
+function imageLinks(row: ProductRow, column: ExportColumn, pictures: StoredPictures): string[] {
+  if (column.source === "enriched") {
+    const value = row.enrichedData?.[column.key];
+    const found = imageUrlsFromEnriched(value);
+    return found.length > 0 ? found : typeof value === "string" ? splitUrlList(value) : [];
+  }
+  const raw = row.originalData?.[column.key] ?? "";
+  const stored = splitStoredImageRefs(raw)
+    .map((ref) => pictures.links.get(storedImagePath(ref)))
+    .filter((link): link is string => Boolean(link));
+  return [...stored, ...splitUrlList(raw)];
+}
+
+/**
+ * Builds a store import file (only Shopify for now). `products` holds each
+ * product's rows, primary first, so variants stay together under one handle.
+ */
+export async function buildPlatformExport(params: {
+  platform: "shopify";
+  products: ProductRow[][];
+  columns: ExportColumn[];
+  mapping: PlatformMapping;
+  onProgress?: (progress: ExportProgress) => void;
+  isCancelled?: () => boolean;
+}): Promise<Blob> {
+  const { products, mapping, onProgress, isCancelled } = params;
+  const byKey = new Map(params.columns.map((column) => [exportColumnKey(column), column]));
+  const mappedColumns = [...new Set(Object.values(mapping))]
+    .map((key) => byKey.get(key))
+    .filter((column): column is ExportColumn => Boolean(column));
+  const total = products.length;
+  let done = 0;
+
+  onProgress?.({ done: 0, total, phase: "rows" });
+  // csv format = signed links (7 days), which Shopify downloads on import.
+  const pictures = await resolveStoredPictures("csv", [{ name: "all", rows: products.flat() }], mappedColumns);
+  if (isCancelled?.()) throw new ExportCancelledError();
+
+  const csv = await buildShopifyCsv({
+    products,
+    mapping,
+    optionName: byKey.get(mapping["Option1 Value"] ?? "")?.label,
+    text: (row, key) => {
+      const column = byKey.get(key);
+      return column ? textValue(row, column, pictures) : "";
+    },
+    images: (row, key) => {
+      const column = byKey.get(key);
+      return column ? imageLinks(row, column, pictures) : [];
+    },
+    onProduct: async () => {
+      done += 1;
+      if (done % YIELD_EVERY === 0 || done === total) {
+        onProgress?.({ done, total, phase: "rows" });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (isCancelled?.()) throw new ExportCancelledError();
+      }
+    },
+  });
+  onProgress?.({ done: total, total, phase: "packaging" });
+  // No BOM: Shopify may read it as part of the first header.
+  return new Blob([csv], { type: MIME.csv });
 }

@@ -22,7 +22,13 @@ import {
   buildProductGroupIndex,
   partitionRowsForExport,
 } from "@/lib/catalog/product-groups";
-import { buildCatalogExport, type ExportColumn } from "@/lib/catalog/export-file";
+import {
+  buildCatalogExport,
+  buildPlatformExport,
+  exportColumnKey,
+  type ExportColumn,
+} from "@/lib/catalog/export-file";
+import { SHOPIFY_PLATFORM } from "@/lib/catalog/platforms/shopify";
 import {
   ExportWizard,
   type ExportColumnOption,
@@ -38,8 +44,20 @@ function hasEnrichedValue(row: ProductRow, columnId: string): boolean {
   return value !== undefined && value !== null && value !== "";
 }
 
-function columnKey(column: ExportColumn): string {
-  return `${column.source}:${column.key}`;
+/** Products in sheet order, each with its variant rows (primary first). */
+function groupProducts(rows: ProductRow[], groupColumn: string | null | undefined): ProductRow[][] {
+  const index = buildProductGroupIndex(rows, groupColumn);
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const products: ProductRow[][] = [];
+  for (const row of rows) {
+    if (index.primaryIdByRowId.get(row.id) !== row.id) continue;
+    const others = (index.memberIdsByPrimary.get(row.id) ?? [])
+      .filter((id) => id !== row.id)
+      .map((id) => byId.get(id))
+      .filter((member): member is ProductRow => Boolean(member));
+    products.push([row, ...others]);
+  }
+  return products;
 }
 
 export function ExportDialog() {
@@ -138,15 +156,52 @@ export function ExportDialog() {
 
   const getColumns = (scope: ExportScope): ExportColumnOption[] =>
     columnsFor(scope).map((column) => ({
-      key: columnKey(column),
+      key: exportColumnKey(column),
       label: column.label,
       tag: column.source === "enriched" ? "AI" : undefined,
     }));
 
-  const handleExport = async ({ scope, format, columnKeys, onProgress, signal }: ExportRequest) => {
+  const handleExport = async ({
+    scope,
+    format,
+    platform,
+    mapping,
+    columnKeys,
+    onProgress,
+    signal,
+  }: ExportRequest) => {
     const exportRows = rowsFor(scope);
+    const suffix = scope === "selected" ? "selected" : scope === "sheet" ? activeSheet : "export";
+    const reportProgress = (unit: string) => ({ done, total, phase }: { done: number; total: number; phase: string }) =>
+      onProgress(
+        phase === "packaging"
+          ? { label: "Packaging the file…", percent: 100 }
+          : {
+              label: `Writing ${unit} ${done.toLocaleString()} of ${total.toLocaleString()}`,
+              percent: total > 0 ? (done / total) * 100 : 100,
+            }
+      );
+
+    if (platform === SHOPIFY_PLATFORM.id) {
+      onProgress({ label: "Preparing image links…", percent: null });
+      const blob = await buildPlatformExport({
+        platform: "shopify",
+        products: groupProducts(exportRows, productGroupColumn),
+        columns: columnsFor(scope),
+        mapping,
+        isCancelled: () => signal.aborted,
+        onProgress: reportProgress("products"),
+      });
+      return {
+        blob,
+        filename: `${baseName}_${suffix}_shopify.csv`,
+        rows: exportRows.length,
+        columns: Object.values(mapping).filter(Boolean).length,
+      };
+    }
+
     const picked = new Set(columnKeys);
-    const columns = columnsFor(scope).filter((column) => picked.has(columnKey(column)));
+    const columns = columnsFor(scope).filter((column) => picked.has(exportColumnKey(column)));
     const split = partitionRowsForExport(exportRows, productGroupColumn);
     const blob = await buildCatalogExport({
       format,
@@ -156,17 +211,8 @@ export function ExportDialog() {
       ],
       columns,
       isCancelled: () => signal.aborted,
-      onProgress: ({ done, total, phase }) =>
-        onProgress(
-          phase === "packaging"
-            ? { label: "Packaging the file…", percent: 100 }
-            : {
-                label: `Writing rows ${done.toLocaleString()} of ${total.toLocaleString()}`,
-                percent: total > 0 ? (done / total) * 100 : 100,
-              }
-        ),
+      onProgress: reportProgress("rows"),
     });
-    const suffix = scope === "selected" ? "selected" : scope === "sheet" ? activeSheet : "export";
     return {
       blob,
       filename: `${baseName}_${suffix}.${format}`,
@@ -244,6 +290,7 @@ export function ExportDialog() {
         defaultScope={selectedRows.length > 0 ? "selected" : "all"}
         getColumns={getColumns}
         onExport={handleExport}
+        platforms={isPlp ? undefined : [SHOPIFY_PLATFORM]}
         formatExtras={
           isPlp ? (
             <div className="space-y-2 border-t pt-3">
