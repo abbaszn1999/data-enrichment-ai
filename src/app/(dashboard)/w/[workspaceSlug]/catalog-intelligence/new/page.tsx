@@ -25,7 +25,7 @@ import {
   updateImportSession,
 } from "@/lib/supabase";
 import { uploadWorkspaceFile } from "@/lib/supabase-storage";
-import { saveProjectJson, saveSuppliersJson, loadSuppliersJson, uploadImageToStorage, type ProjectJson, type ProjectRow, type SupplierJson } from "@/lib/storage-helpers";
+import { saveProjectJson, saveSuppliersJson, loadSuppliersJson, loadProductsJson, uploadImageToStorage, type ProjectJson, type ProjectRow, type SupplierJson } from "@/lib/storage-helpers";
 import { parseExcelFile } from "@/lib/excel";
 import { attachSheetImages, extractSheetImages, type ParsedSheetForImages, type SheetImage } from "@/lib/sheet-images";
 import {
@@ -121,6 +121,21 @@ export default function NewImportPage() {
     loadSuppliers();
   }, [loadSuppliers]);
 
+  // Matching compares the upload with the workspace's products; with none,
+  // that step is hidden and the project goes straight to Review.
+  const [hasProducts, setHasProducts] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!workspace) return;
+    let cancelled = false;
+    loadProductsJson(workspace.id)
+      .then((products) => !cancelled && setHasProducts(products.length > 0))
+      .catch(() => !cancelled && setHasProducts(true));
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace]);
+  const noProducts = !isPlp && hasProducts === false;
+
   const detected = useMemo(
     () =>
       isPlp && fileData
@@ -195,6 +210,11 @@ export default function NewImportPage() {
     setLoading(true);
 
     try {
+      // Re-check if the product count had not loaded yet when Continue was clicked.
+      const noMasterCatalog =
+        !isPlp && (hasProducts ?? (await loadProductsJson(workspace.id)).length > 0) === false;
+      const skipMatching = isPlp || noMasterCatalog;
+
       // 1. Upload original file to storage (backup)
       await uploadWorkspaceFile(workspace.id, "supplier", file, file.name);
 
@@ -254,6 +274,7 @@ export default function NewImportPage() {
       // session always starts from the defaults for its kind.
       // PLP has no matching step at all — every page starts as "new" and the
       // user always supplies the categories to enrich in this very upload.
+      // A workspace without products has nothing to match against either.
       const projectJson: ProjectJson = {
         kind,
         columns: projectColumns,
@@ -262,19 +283,20 @@ export default function NewImportPage() {
         enrichmentColumns: getDefaultEnrichmentColumns(kind),
         enrichmentSettings: {},
         columnVisibility: {},
-        matchingSkipped: isPlp,
+        matchingSkipped: skipMatching,
+        ...(noMasterCatalog ? { noMasterCatalog: true } : {}),
       };
 
       const storagePath = await saveProjectJson(workspace.id, session.id, projectJson);
 
-      // 6. Update session with storage path (PLP also skips straight to Review)
+      // 6. Update session with storage path (skipped matching goes straight to Review)
       await updateImportSession(session.id, {
         storage_path: storagePath,
-        ...(isPlp ? { status: "review", new_count: fileData.totalRows, existing_count: 0 } : {}),
+        ...(skipMatching ? { status: "review", new_count: fileData.totalRows, existing_count: 0 } : {}),
       } as any);
 
       router.push(
-        isPlp
+        skipMatching
           ? `/w/${slug}/catalog-intelligence/${session.id}/review`
           : `/w/${slug}/catalog-intelligence/${session.id}/rules`
       );
@@ -330,7 +352,7 @@ export default function NewImportPage() {
           transition={{ delay: 0.08 }}
           className="overflow-hidden rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:p-4"
         >
-          <ImportStepper currentStep={1} kind={kind} />
+          <ImportStepper currentStep={1} kind={kind} matching={!noProducts} />
         </motion.section>
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
@@ -633,7 +655,7 @@ export default function NewImportPage() {
                 )}
                 {loading
                   ? "Processing file..."
-                  : isPlp
+                  : isPlp || noProducts
                     ? "Continue to Review Results"
                     : "Continue to Matching Rules"}
               </Button>

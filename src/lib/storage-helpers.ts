@@ -94,6 +94,11 @@ export interface ProjectJson {
    */
   matchingSkipped?: boolean;
   /**
+   * The workspace had no products to match against, so matching was skipped
+   * and its step is hidden from the flow (every row is new).
+   */
+  noMasterCatalog?: boolean;
+  /**
    * Column used to collapse variant/attribute rows into one product
    * (typically Shopify `Handle`). `null` means grouping is explicitly off.
    * Absent means later steps may auto-detect.

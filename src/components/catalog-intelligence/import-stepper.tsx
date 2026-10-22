@@ -14,7 +14,10 @@ export interface ImportStep {
  * The single source of truth for the import flow's steps, shared by the
  * stepper header and the session overview page so numbering never drifts.
  */
-export function getImportSteps(kind: SessionKind = "product"): ImportStep[] {
+export function getImportSteps(
+  kind: SessionKind = "product",
+  { matching = true }: { matching?: boolean } = {}
+): ImportStep[] {
   if (kind === "plp") {
     // PLP pages are always matched against categories.json automatically —
     // there is no user-facing matching step to show or number.
@@ -22,6 +25,14 @@ export function getImportSteps(kind: SessionKind = "product"): ImportStep[] {
       { num: 1, label: "Upload File", segment: null },
       { num: 2, label: "Review Results", segment: "review" },
       { num: 3, label: "PLP Workspace", segment: null },
+    ];
+  }
+  // Without products in the workspace there is nothing to match against.
+  if (!matching) {
+    return [
+      { num: 1, label: "Upload File", segment: null },
+      { num: 2, label: "Review Results", segment: "review" },
+      { num: 3, label: "Enrichment Tool", segment: null },
     ];
   }
   return [
@@ -35,11 +46,14 @@ export function getImportSteps(kind: SessionKind = "product"): ImportStep[] {
 export function ImportStepper({
   currentStep,
   kind = "product",
+  matching = true,
 }: {
   currentStep: number;
   kind?: SessionKind;
+  /** False when the workspace has no products, so the matching step is hidden. */
+  matching?: boolean;
 }) {
-  const steps = getImportSteps(kind);
+  const steps = getImportSteps(kind, { matching });
 
   return (
     <div className="flex w-full items-center overflow-x-auto py-1">

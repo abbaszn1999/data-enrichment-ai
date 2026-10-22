@@ -51,6 +51,8 @@ export default function ReviewPage() {
   const [activeTab, setActiveTab] = useState<"existing" | "new">("existing");
   const [searchTerm, setSearchTerm] = useState("");
   const [kind, setKind] = useState<SessionKind>("product");
+  // Hidden when the workspace had no products to match against.
+  const [matchingStep, setMatchingStep] = useState(true);
   const [productGroupColumn, setProductGroupColumn] = useState<string | null>(null);
 
   const isPlp = kind === "plp";
@@ -72,6 +74,7 @@ export default function ReviewPage() {
       const sessionKind: SessionKind =
         (s?.kind as SessionKind) ?? project?.kind ?? "product";
       setKind(sessionKind);
+      setMatchingStep(!project?.noMasterCatalog);
 
       // Re-run matching client-side so the review never depends on stale storage
       const projectRows = project?.rows ?? [];
@@ -259,7 +262,7 @@ export default function ReviewPage() {
       </section>
 
       <main className="mx-auto max-w-[1500px] space-y-5 p-5 sm:p-7 lg:p-10">
-      <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={isPlp ? 2 : 3} kind={kind} /></section>
+      <section className="rounded-2xl border border-border/60 bg-card p-3 shadow-sm"><ImportStepper currentStep={isPlp || !matchingStep ? 2 : 3} kind={kind} matching={matchingStep} /></section>
 
       {/* Tabs — PLP has no "existing" concept, so it always shows one unified table */}
       <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-3 shadow-sm sm:flex-row sm:items-center">

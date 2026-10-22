@@ -100,10 +100,13 @@ export default function MatchingRulesPage() {
       // PLP has no matching step — categories are always matched
       // automatically. Any session that still lands here (e.g. an older
       // in-flight session) is bounced straight to Review instead.
-      if (sessionKind === "plp") {
+      // A workspace without products has nothing to match against either.
+      const noMasterCatalog = sessionKind !== "plp" && prods.length === 0;
+      if (sessionKind === "plp" || noMasterCatalog) {
         if (s && workspace && project) {
           project.matchingSkipped = true;
-          project.productGroupColumn = null;
+          if (noMasterCatalog) project.noMasterCatalog = true;
+          else project.productGroupColumn = null;
           for (const row of project.rows) row.matchType = row.matchType ?? "new";
           await saveProjectJson(workspace.id, s.id, project);
           await updateImportSession(s.id, { status: "review" } as any).catch(() => {});
