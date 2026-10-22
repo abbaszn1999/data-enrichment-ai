@@ -30,10 +30,17 @@ import {
   shopifyFilesPrefix,
 } from "@/lib/catalog/platforms/shopify-description";
 import {
+  MAGENTO_UPLOAD_SETTING,
+  PICTURES_README,
+  WOOCOMMERCE_UPLOAD_SETTING,
+  uploadedPicturesFolder,
+} from "@/lib/catalog/platforms/description-uploads";
+import {
   DESCRIPTION_IMAGES_HEADER,
-  buildShopifyFilesZip,
+  SHOPIFY_FILES_README,
+  buildDescriptionPicturesZip,
+  descriptionFileLinks,
   prepareShopifyDescriptionImages,
-  shopifyFilesLinks,
   withDescriptionImagesColumn,
 } from "@/lib/visualizer/shopify-export";
 import { getVisualizerPrefix } from "@/lib/visualizer/storage-paths";
@@ -41,6 +48,24 @@ import { getVisualizerPrefix } from "@/lib/visualizer/storage-paths";
 export const maxDuration = 120;
 
 type Ctx = { params: Promise<{ sessionId: string }> };
+
+/**
+ * Store folder the description's pictures will live in, from the link the user
+ * pasted: Shopify's Files folder is known before upload, WooCommerce and
+ * Magento folders only from a picture already uploaded (description-uploads.ts).
+ */
+function descriptionPicturesFolder(options: TablePlatformOptions): string | null {
+  if (options.platform === "shopify") return shopifyFilesPrefix(options.settings[SHOPIFY_FILES_SETTING] ?? "");
+  const setting = options.platform === "woocommerce" ? WOOCOMMERCE_UPLOAD_SETTING : MAGENTO_UPLOAD_SETTING;
+  return uploadedPicturesFolder(options.settings[setting] ?? "");
+}
+
+/** Visualizer store exports: Shopify has every mode, WooCommerce and Magento the two upload steps. */
+function supportedVisualizerExport(options: TablePlatformOptions): boolean {
+  return options.platform === "shopify"
+    ? options.mode !== "pictures"
+    : options.mode === "pictures" || options.mode === "description";
+}
 
 async function exportVisualizerWorkbook(
   request: NextRequest,
@@ -53,17 +78,14 @@ async function exportVisualizerWorkbook(
   const auth = await requireVisualizerAuth({ workspaceId });
   if (!auth.ok) return auth.response;
 
-  // Descriptions keep their pictures only on Shopify (see shopify-description.ts).
-  const filesPrefix = platformOptions
-    ? shopifyFilesPrefix(platformOptions.settings[SHOPIFY_FILES_SETTING] ?? "")
-    : null;
-  if (platformOptions && (platformOptions.platform !== "shopify" || !filesPrefix)) {
+  const picturesOnly = platformOptions?.mode === "pictures";
+  const filesPrefix = platformOptions && !picturesOnly ? descriptionPicturesFolder(platformOptions) : null;
+  if (platformOptions && (!supportedVisualizerExport(platformOptions) || (!picturesOnly && !filesPrefix))) {
     return NextResponse.json(
       {
-        error:
-          platformOptions.platform !== "shopify"
-            ? "Visualizer exports descriptions for Shopify only"
-            : "Paste a picture link from your Shopify store",
+        error: !supportedVisualizerExport(platformOptions)
+          ? "This export is not available for Visualizer"
+          : "Paste a picture link from your store",
       },
       { status: 400, headers: auth.headers }
     );
@@ -106,19 +128,43 @@ async function exportVisualizerWorkbook(
     ? hydrated.rows.filter((row) => options.rowIds!.has(row.id))
     : hydrated.rows;
 
-  if (platformOptions && filesPrefix) {
-    // "description_files": pictures travel in a ZIP for Shopify Files, so no
-    // copies or signed links; otherwise Shopify downloads them as product images.
-    const toFiles = platformOptions.mode === "description_files";
-    const { cdnByPath, signedByPath } = toFiles
-      ? { cdnByPath: shopifyFilesLinks(exportRows, filesPrefix), signedByPath: {} as Record<string, string> }
-      : await prepareShopifyDescriptionImages({
+  if (platformOptions) {
+    const { platform, mode } = platformOptions;
+    const safeName = String(session.name || "visualizer").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
+    const deliver = (buffer: Buffer, contentType: string, extension: string) =>
+      deliverExportFile({
+        admin: auth.admin,
+        path: `${getVisualizerPrefix(workspaceId, sessionId)}/exports/${Date.now()}.${extension}`,
+        buffer,
+        contentType,
+        fileName: `${safeName}-${platform}-${mode}.${extension}`,
+        headers: auth.headers,
+        onStorageError: (message) =>
+          visualizerWarn("export", "Export storage failed; sending file inline", { error: message }),
+      });
+
+    // Step 1 for WooCommerce and Magento: just the pictures, to upload first.
+    if (picturesOnly && platform !== "shopify") {
+      const buffer = await buildDescriptionPicturesZip({
+        admin: auth.admin,
+        rows: exportRows,
+        readme: PICTURES_README[platform],
+      });
+      return deliver(buffer, "application/zip", "zip");
+    }
+
+    // Shopify downloads the pictures itself when they are listed as product
+    // images; every other route has them uploaded by hand to a known folder.
+    const viaProductImages = platform === "shopify" && mode !== "description_files";
+    const { cdnByPath, signedByPath } = viaProductImages
+      ? await prepareShopifyDescriptionImages({
           admin: auth.admin,
           workspaceId,
           sessionId,
           rows: exportRows,
-          filesPrefix,
-        });
+          filesPrefix: filesPrefix!,
+        })
+      : { cdnByPath: descriptionFileLinks(exportRows, filesPrefix!), signedByPath: {} as Record<string, string> };
     const described = {
       ...hydrated,
       rows: hydrated.rows.map((row) =>
@@ -137,31 +183,23 @@ async function exportVisualizerWorkbook(
       exportRows,
       signedByPath
     );
-    // The description's pictures are what Shopify must download and keep.
-    const imageField = platformOptions.mode === "description" ? DESCRIPTION_IMAGES_FIELD : "Product image URL";
-    const mapping = { ...platformOptions.mapping, [imageField]: DESCRIPTION_IMAGES_HEADER };
+    const imageField = mode === "description" ? DESCRIPTION_IMAGES_FIELD : "Product image URL";
     const exported = await serializeTablePlatformExport(table, {
       ...platformOptions,
-      mapping: toFiles ? platformOptions.mapping : mapping,
+      mapping: viaProductImages
+        ? { ...platformOptions.mapping, [imageField]: DESCRIPTION_IMAGES_HEADER }
+        : platformOptions.mapping,
     });
-    const { buffer, contentType, extension } = toFiles
-      ? {
-          buffer: await buildShopifyFilesZip({ admin: auth.admin, rows: exportRows, csv: exported.buffer.toString("utf8") }),
-          contentType: "application/zip",
-          extension: "zip",
-        }
-      : exported;
-    const shopName = String(session.name || "visualizer").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
-    return deliverExportFile({
-      admin: auth.admin,
-      path: `${getVisualizerPrefix(workspaceId, sessionId)}/exports/${Date.now()}.${extension}`,
-      buffer,
-      contentType,
-      fileName: `${shopName}-shopify-${platformOptions.mode}.${extension}`,
-      headers: auth.headers,
-      onStorageError: (message) =>
-        visualizerWarn("export", "Export storage failed; sending file inline", { error: message }),
-    });
+    if (platform === "shopify" && mode === "description_files") {
+      const buffer = await buildDescriptionPicturesZip({
+        admin: auth.admin,
+        rows: exportRows,
+        readme: SHOPIFY_FILES_README,
+        csv: { name: "shopify-products.csv", content: exported.buffer.toString("utf8") },
+      });
+      return deliver(buffer, "application/zip", "zip");
+    }
+    return deliver(exported.buffer, exported.contentType, exported.extension);
   }
 
   // Signing is best-effort: export must still succeed with raw HTML if Storage is flaky.

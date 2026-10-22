@@ -1,5 +1,11 @@
 import type { PlatformCsvInput } from "@/lib/catalog/platforms/common";
 import {
+  MAGENTO_DESCRIPTION_PLATFORM,
+  WOOCOMMERCE_DESCRIPTION_PLATFORM,
+  buildMagentoDescriptionCsv,
+  buildWooCommerceDescriptionCsv,
+} from "@/lib/catalog/platforms/description-uploads";
+import {
   MAGENTO_IMAGES_MODE,
   SHOPIFY_IMAGES_MODE,
   WOOCOMMERCE_IMAGES_MODE,
@@ -24,7 +30,7 @@ export type PlatformId = "shopify" | "woocommerce" | "magento";
 
 type Builder = <Row>(input: PlatformCsvInput<Row>) => Promise<string>;
 
-/** Not every platform has every mode: descriptions with pictures need Shopify's CDN naming. */
+/** Not every platform has every mode ("pictures" is a ZIP built by the export route, not a CSV). */
 const BUILDERS: Record<PlatformId, Partial<Record<ExportMode, Builder>>> = {
   shopify: {
     products: buildShopifyCsv,
@@ -32,8 +38,12 @@ const BUILDERS: Record<PlatformId, Partial<Record<ExportMode, Builder>>> = {
     description: buildShopifyDescriptionCsv,
     description_files: buildShopifyDescriptionOnlyCsv,
   },
-  woocommerce: { products: buildWooCommerceCsv, images: buildWooCommerceImagesCsv },
-  magento: { products: buildMagentoCsv, images: buildMagentoImagesCsv },
+  woocommerce: {
+    products: buildWooCommerceCsv,
+    images: buildWooCommerceImagesCsv,
+    description: buildWooCommerceDescriptionCsv,
+  },
+  magento: { products: buildMagentoCsv, images: buildMagentoImagesCsv, description: buildMagentoDescriptionCsv },
 };
 
 const IMAGE_MODES: Record<PlatformId, ExportPlatformMode> = {
@@ -76,10 +86,16 @@ export const IMAGE_EXPORT_PLATFORMS: ExportPlatformOption[] = EXPORT_PLATFORMS.m
 }));
 
 /**
- * Platforms for Visualizer: only Shopify, because a description's pictures
- * must end up hosted by the store (see shopify-description.ts).
+ * Platforms for Visualizer. A description's pictures must end up hosted by the
+ * store: Shopify through its predictable Files links (shopify-description.ts),
+ * WooCommerce and Magento through a pictures ZIP uploaded first
+ * (description-uploads.ts).
  */
-export const DESCRIPTION_EXPORT_PLATFORMS: ExportPlatformOption[] = [SHOPIFY_DESCRIPTION_PLATFORM];
+export const DESCRIPTION_EXPORT_PLATFORMS: ExportPlatformOption[] = [
+  SHOPIFY_DESCRIPTION_PLATFORM,
+  WOOCOMMERCE_DESCRIPTION_PLATFORM,
+  MAGENTO_DESCRIPTION_PLATFORM,
+];
 
 /** Mapping field that holds the variant option, per platform. */
 export const OPTION_FIELD: Record<PlatformId, string> = {

@@ -10,8 +10,12 @@ import { PLATFORM_IMAGE_LINK_TTL_SEC } from "@/lib/export/table-platform";
 const BUCKET = "workspace-files";
 export const DESCRIPTION_IMAGES_HEADER = "Description images";
 
-/** File name Shopify will keep for a picture: made from its storage path, so it is stable and unique. */
-export function shopifyFileName(path: string): string {
+/**
+ * File name a description picture keeps in the store (Shopify Files, WordPress
+ * Media, Magento Media Gallery): made from its storage path, so it is stable
+ * and unique.
+ */
+export function descriptionFileName(path: string): string {
   const ext = path.match(/\.(jpe?g|png|webp|gif)$/i)?.[1]?.toLowerCase() ?? "jpg";
   return `vz-${createHash("sha256").update(path).digest("hex").slice(0, 20)}.${ext}`;
 }
@@ -41,7 +45,7 @@ export async function prepareShopifyDescriptionImages(params: {
   const signedByPath: Record<string, string> = {};
 
   await mapLimit(paths, 8, async (path) => {
-    const name = shopifyFileName(path);
+    const name = descriptionFileName(path);
     const copyTo = `${folder}/${name}`;
     const copied = await admin.storage.from(BUCKET).copy(path, copyTo);
     // "already exists" means an earlier export made this copy; it can be reused.
@@ -74,7 +78,7 @@ export function withDescriptionImagesColumn(
   };
 }
 
-const FILES_README = `How to import into Shopify
+export const SHOPIFY_FILES_README = `How to import into Shopify
 
 1. In Shopify admin, open Content > Files and click Upload files.
    Select every picture in the "images" folder (keep the file names).
@@ -87,29 +91,30 @@ show once both steps are done. Product images are not changed.
 `;
 
 /**
- * ZIP for the "Shopify Files" route: the description CSV, every description
- * picture under the name the descriptions point at, and the steps to follow.
+ * ZIP of every description picture under the name the descriptions point at,
+ * the steps to follow and, for Shopify, the description CSV itself.
  */
-export async function buildShopifyFilesZip(params: {
+export async function buildDescriptionPicturesZip(params: {
   admin: ReturnType<typeof createAdminClient>;
   rows: VisualizerRow[];
-  csv: string;
+  readme: string;
+  csv?: { name: string; content: string };
 }): Promise<Buffer> {
   const JSZip = (await import("jszip")).default;
   const zip = new JSZip();
-  zip.file("shopify-products.csv", params.csv);
-  zip.file("README.txt", FILES_README);
+  if (params.csv) zip.file(params.csv.name, params.csv.content);
+  zip.file("README.txt", params.readme);
   const folder = zip.folder("images")!;
   await mapLimit(descriptionImagePaths(params.rows), 8, async (path) => {
     const { data } = await params.admin.storage.from(BUCKET).download(path);
-    if (data) folder.file(shopifyFileName(path), Buffer.from(await data.arrayBuffer()));
+    if (data) folder.file(descriptionFileName(path), Buffer.from(await data.arrayBuffer()));
     return path;
   });
   // Pictures are already compressed; storing them keeps the export fast.
   return zip.generateAsync({ type: "nodebuffer", compression: "STORE" });
 }
 
-/** CDN link for every description picture, for descriptions whose pictures go to Shopify Files. */
-export function shopifyFilesLinks(rows: VisualizerRow[], filesPrefix: string): Record<string, string> {
-  return Object.fromEntries(descriptionImagePaths(rows).map((path) => [path, filesPrefix + shopifyFileName(path)]));
+/** Store link for every description picture, given the folder the store keeps them in. */
+export function descriptionFileLinks(rows: VisualizerRow[], filesPrefix: string): Record<string, string> {
+  return Object.fromEntries(descriptionImagePaths(rows).map((path) => [path, filesPrefix + descriptionFileName(path)]));
 }

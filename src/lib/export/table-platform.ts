@@ -14,7 +14,7 @@ export type TablePlatformOptions = {
   settings: Record<string, string>;
 };
 
-const MODES: ExportMode[] = ["products", "images", "description", "description_files"];
+const MODES: ExportMode[] = ["products", "images", "description", "description_files", "pictures"];
 
 function stringRecord(value: unknown): Record<string, string> {
   const out: Record<string, string> = {};

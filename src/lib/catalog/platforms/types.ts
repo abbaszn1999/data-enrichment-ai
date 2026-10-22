@@ -38,9 +38,10 @@ export type ExportPlatformFieldSet = {
 /**
  * "products" creates or updates whole products; "images" only adds pictures;
  * "description" writes a generated description and the pictures it shows;
- * "description_files" writes the description only, its pictures go in a ZIP.
+ * "description_files" writes the description only, its pictures go in a ZIP;
+ * "pictures" is only that ZIP, to upload before exporting descriptions.
  */
-export type ExportMode = "products" | "images" | "description" | "description_files";
+export type ExportMode = "products" | "images" | "description" | "description_files" | "pictures";
 
 export type ExportPlatformMode = ExportPlatformFieldSet & {
   id: ExportMode;

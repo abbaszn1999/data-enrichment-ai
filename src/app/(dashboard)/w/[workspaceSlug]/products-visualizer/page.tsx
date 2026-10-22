@@ -2016,9 +2016,9 @@ export default function ProductsVisualizerPage() {
     const suffix = scope === "selected" ? "selected" : "export";
     return {
       blob,
-      // The Shopify Files route ships the CSV and its pictures together.
+      // Picture exports (Shopify Files, or step 1 for WooCommerce / Magento) are ZIPs.
       filename: forStore
-        ? `${baseName}_${suffix}_${platform}_${mode}.${mode === "description_files" ? "zip" : "csv"}`
+        ? `${baseName}_${suffix}_${platform}_${mode}.${mode === "description_files" || mode === "pictures" ? "zip" : "csv"}`
         : `${baseName}_${suffix}.${format}`,
       rows: exportRows.length,
       columns: forStore ? Object.values(mapping).filter(Boolean).length : columnKeys.length,
