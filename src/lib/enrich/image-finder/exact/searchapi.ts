@@ -130,6 +130,12 @@ export async function callGoogleAiMode(
      * `url` parameter). It takes a single image: a second `url` replaces the first.
      */
     imageUrl?: string;
+    /**
+     * Where Google should search from, as a place name ("United Kingdom").
+     * SearchApi's `location` parameter; it also sets the country (`gl`).
+     * Omit for Google's default.
+     */
+    location?: string;
   } = {}
 ): Promise<GoogleAiModeResult> {
   const params = new URLSearchParams({
@@ -137,6 +143,7 @@ export async function callGoogleAiMode(
     q: query,
   });
   if (options.imageUrl) params.set("url", options.imageUrl);
+  if (options.location) params.set("location", options.location);
 
   const { data, httpStatus, elapsedMs } = await requestSearchApi<GoogleAiModeApiResponse>(
     params,

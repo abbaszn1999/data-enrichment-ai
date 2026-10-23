@@ -65,6 +65,7 @@ import {
   CustomInstructionButton,
   WebsiteRulesButton,
 } from "@/components/catalog-mode-settings";
+import { SourceUrlsSiteSettings } from "@/components/source-urls-site-settings";
 import { FunctionsPanel } from "@/components/functions-panel";
 import {
   LANGUAGE_OPTIONS,
@@ -1912,23 +1913,44 @@ export function Sidebar() {
                   <FinderOutputCard
                     agentId="ci.finder.source-urls"
                     label="Source URLs"
-                    description="The web pages that sell this exact product: the brand's own site, factories and suppliers, wholesalers and retailers. Written to the Source URLs column."
+                    description="The web pages that sell this exact product: the brand's own site, factories and suppliers, wholesalers and retailers. Or set a website to find the item's page on that one shop. Written to the Source URLs column."
                     enabled={runsSourceUrls}
                     expanded={expandedColumns.has(sourceUrlsColumn.id)}
                     disabled={isEnriching}
                     onToggle={() => toggleFinderOutput("sourceUrls")}
                     onExpand={() => toggleColumnExpanded(sourceUrlsColumn.id)}
                   >
+                    <SourceUrlsSiteSettings
+                      website={sourceUrlsColumn.sourceWebsite}
+                      market={sourceUrlsColumn.sourceMarket}
+                      disabled={isEnriching}
+                      onWebsiteChange={(sourceWebsite) =>
+                        updateEnrichmentColumnConfig(sourceUrlsColumn.id, { sourceWebsite })
+                      }
+                      onMarketChange={(sourceMarket) =>
+                        updateEnrichmentColumnConfig(sourceUrlsColumn.id, { sourceMarket })
+                      }
+                    />
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
+                      <label className="text-[10px] font-medium text-muted-foreground">
+                        Custom instruction{sourceUrlsColumn.sourceWebsite ? " (optional, keep it short)" : ""}
+                      </label>
                       <CustomInstructionButton
                         value={sourceUrlsColumn.customInstruction}
                         onSave={(value) =>
                           updateEnrichmentColumnConfig(sourceUrlsColumn.id, { customInstruction: value })
                         }
                         disabled={isEnriching}
-                        placeholder="e.g. Search the Code in quotes first, then the Barcode. Put the manufacturer's own page first."
-                        helpText="Tell the agent what to search on and which pages or sellers you want first. It is added to the search for every row."
+                        placeholder={
+                          sourceUrlsColumn.sourceWebsite
+                            ? "e.g. Prefer the page for the exact colour."
+                            : "e.g. Search the Code in quotes first, then the Barcode. Put the manufacturer's own page first."
+                        }
+                        helpText={
+                          sourceUrlsColumn.sourceWebsite
+                            ? "A short note added after the search request for every row. With a website set, only the first 300 characters are used."
+                            : "Tell the agent what to search on and which pages or sellers you want first. It is added to the search for every row."
+                        }
                       />
                     </div>
                   </FinderOutputCard>

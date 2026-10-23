@@ -603,3 +603,196 @@ describe("Source URLs routing in enrichRow", () => {
     expect(callsTo(fetchMock, OPENAI_RESPONSES_URL)).toHaveLength(1);
   });
 });
+
+describe("Source URLs website mode", () => {
+  const PRODUCT = "https://www.mamasandpapas.com/products/check-jacket-3-6-s07fn6db4";
+  const site = {
+    rowData: { SKU: "S07FN6DB5", Description: "CHECK JACKET BROWN 6-9M", Barcode: "5063229294815", Size: "6-9M" },
+    website: "mamasandpapas.com",
+    retryDelayMs: 0,
+  };
+  const homepageOnly = () => aiModeBody("Here you go: https://www.mamasandpapas.com");
+  const searchParams = (fetchMock: { mock: { calls: Array<[string | URL, RequestInit?]> } }, index: number) =>
+    new URL(String(fetchMock.mock.calls[index]![0])).searchParams;
+
+  beforeEach(() => {
+    process.env.SEARCHAPI_API_KEY = "test-key";
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("asks the short request, sends the market as the location, and keeps the cited product page", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) =>
+      new Response(
+        aiModeBody("https://www.mamasandpapas.com", [{ link: `${PRODUCT}#:~:text=Check`, title: "Check Jacket" }]),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchSourceUrls({ ...site, location: "United Kingdom" });
+
+    expect(result.sources).toEqual([{ title: "Check Jacket", uri: PRODUCT }]);
+    expect(result.attempts).toBe(1);
+    expect(result.costs).toHaveLength(1);
+    const params = searchParams(fetchMock, 0);
+    expect(params.get("location")).toBe("United Kingdom");
+    expect(params.get("q")).toBe(
+      "mamasandpapas.com product page CHECK JACKET BROWN 6-9M, barcode 5063229294815, SKU S07FN6DB5 (6-9M). Return the mamasandpapas.com product page link only."
+    );
+    expect(params.get("q")).not.toMatch(/uk|united kingdom/i);
+  });
+
+  it("sends no location when none is chosen, and finds the same page", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) =>
+      new Response(aiModeBody(`The page is ${PRODUCT}`, [{ link: PRODUCT }]), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await searchSourceUrls(site);
+    expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+    expect(searchParams(fetchMock, 0).has("location")).toBe(false);
+  });
+
+  it("never returns the home page: one simpler second search, then 'not found'", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(homepageOnly(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchSourceUrls(site);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(searchParams(fetchMock, 1).get("q")).toBe(
+      "mamasandpapas.com product page CHECK JACKET BROWN 6-9M, barcode 5063229294815. Return the mamasandpapas.com product page link only."
+    );
+    expect(result.sources).toEqual([]);
+    expect(result.attempts).toBe(2);
+    expect(result.costs).toHaveLength(2);
+    expect(result.notFoundReason).toMatch(/no product page on mamasandpapas\.com/);
+    expect(result.notFoundReason).toMatch(/search 1: returned 1 link, none a product page on mamasandpapas\.com \(1 the home page\); search 2:/);
+  });
+
+  it("finds the page on the simpler second search", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => {
+      calls += 1;
+      return new Response(calls === 1 ? homepageOnly() : aiModeBody("", [{ link: PRODUCT, title: "Check Jacket" }]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await searchSourceUrls({ ...site, location: "United Kingdom" });
+    expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+    expect(result.attempts).toBe(2);
+    // The market applies to the second search too.
+    expect(searchParams(fetchMock, 1).get("location")).toBe("United Kingdom");
+  });
+
+  it("does not pay for a second search that would ask the same thing", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(homepageOnly(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await searchSourceUrls({ rowData: { Title: "Check Jacket" }, website: "mamasandpapas.com" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.attempts).toBe(1);
+    expect(result.costs).toHaveLength(1);
+    expect(result.sources).toEqual([]);
+    expect(result.notFoundReason).toMatch(/\(search 1: returned 1 link/);
+  });
+
+  it("rejects a product page on another website", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(aiModeBody("", [{ link: "https://www.argos.co.uk/product/1234567", title: "Argos" }]), { status: 200 }))
+    );
+    const result = await searchSourceUrls(site);
+    expect(result.sources).toEqual([]);
+    expect(result.notFoundReason).toMatch(/1 on another website/);
+  });
+
+  it("sends the photo with the first search only", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => {
+      calls += 1;
+      return new Response(calls === 1 ? homepageOnly() : aiModeBody("", [{ link: PRODUCT }]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await searchSourceUrls({ ...site, imageUrl: "https://cdn.example.com/jacket.jpg" });
+    expect(searchParams(fetchMock, 0).get("url")).toBe("https://cdn.example.com/jacket.jpg");
+    expect(searchParams(fetchMock, 0).get("q")).toContain("The attached photo shows the product.");
+    expect(searchParams(fetchMock, 1).has("url")).toBe(false);
+  });
+
+  it("leaves the open search alone when no website is set", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(aiModeBody(FOUND_ANSWER), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await searchSourceUrls({ rowData: row, website: "   " });
+    expect(searchParams(fetchMock, 0).get("q")).toBe(buildSourceUrlsQuery({ rowData: row }));
+    expect(searchParams(fetchMock, 0).has("location")).toBe(false);
+    expect(result.sources).toHaveLength(2);
+    expect(result.notFoundReason).toBe("");
+  });
+
+  it("still sends a chosen market with the open search", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(aiModeBody(FOUND_ANSWER), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await searchSourceUrls({ rowData: row, location: "Germany" });
+    expect(searchParams(fetchMock, 0).get("location")).toBe("Germany");
+  });
+
+  describe("through the Source URLs column's settings", () => {
+    const column = getDefaultEnrichmentColumns("product").find((c) => c.id === "sourceUrls")!;
+    const params = (overrides: Partial<typeof column>) => ({
+      productData: site.rowData,
+      settings: { enrichmentModel: "standard" as const, outputLanguage: "English" },
+      kind: "product" as const,
+      enabledColumns: ["sourceUrls"],
+      enrichmentColumns: [{ ...column, enabled: true, ...overrides }],
+    });
+    const stub = () => {
+      const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) =>
+        new Response(aiModeBody("", [{ link: PRODUCT, title: "Check Jacket" }]), { status: 200 })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    };
+
+    it("uses the column's website and chosen market, and skips the default instruction", async () => {
+      const fetchMock = stub();
+      const result = await enrichRow(params({ sourceWebsite: "https://www.MamasAndPapas.com/products/x", sourceMarket: "gb" }));
+      const q = searchParams(fetchMock, 0);
+      expect(q.get("location")).toBe("United Kingdom");
+      expect(q.get("q")).toMatch(/^mamasandpapas\.com product page CHECK JACKET/);
+      expect(q.get("q")).not.toContain("manufacturer");
+      expect(result.data.sourceUrls).toEqual([{ title: "Check Jacket", uri: PRODUCT }]);
+    });
+
+    it("Auto takes the country from the website ending, and stays unset for .com", async () => {
+      const uk = stub();
+      await enrichRow(params({ sourceWebsite: "mamasandpapas.co.uk" }));
+      expect(searchParams(uk, 0).get("location")).toBe("United Kingdom");
+
+      const global = stub();
+      await enrichRow(params({ sourceWebsite: "mamasandpapas.com", sourceMarket: "auto" }));
+      expect(searchParams(global, 0).has("location")).toBe(false);
+    });
+
+    it("Any country overrides Auto", async () => {
+      const fetchMock = stub();
+      await enrichRow(params({ sourceWebsite: "mamasandpapas.co.uk", sourceMarket: "none" }));
+      expect(searchParams(fetchMock, 0).has("location")).toBe(false);
+    });
+
+    it("treats a website that is not a website as the open search, and an unknown market as none", async () => {
+      const fetchMock = stub();
+      await enrichRow(params({ sourceWebsite: "not a website", sourceMarket: "narnia" }));
+      expect(searchParams(fetchMock, 0).get("q")).toContain("Find every web page that sells this exact product");
+      expect(searchParams(fetchMock, 0).has("location")).toBe(false);
+    });
+
+    it("keeps the owner's own short note in website mode", async () => {
+      const fetchMock = stub();
+      await enrichRow(params({ sourceWebsite: "mamasandpapas.com", customInstruction: "Prefer the brown one." }));
+      expect(searchParams(fetchMock, 0).get("q")).toMatch(/\nNote: Prefer the brown one\.$/);
+    });
+  });
+});

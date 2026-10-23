@@ -51,6 +51,19 @@ describe("callGoogleAiMode", () => {
     expect(result.referenceLinks).toEqual([{ link: "https://shop.test/p/1", title: "Shop", snippet: undefined, source: undefined }]);
   });
 
+  it("sends a location only when one is given", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) =>
+      new Response(JSON.stringify({ search_metadata: { status: "Success" }, markdown: "ok" }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callGoogleAiMode("x");
+    await callGoogleAiMode("x", { location: "United Kingdom" });
+
+    expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.has("location")).toBe(false);
+    expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("location")).toBe("United Kingdom");
+  });
+
   it("falls back to markdown when there are no text_blocks", async () => {
     vi.stubGlobal(
       "fetch",

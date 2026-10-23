@@ -12,6 +12,12 @@
  * the pages Google itself cited (`reference_links`): a page Google cited is
  * real by construction, so those are ranked first.
  *
+ * With a Website set (./site.ts) the search is a different, one-sentence
+ * request for that site only; the page comes from the cited pages and the links
+ * in the answer, and it must be a product page on that site (never the home
+ * page). The second try is then a simpler request, or none when there is
+ * nothing simpler to ask. The market goes to the search as its location.
+ *
  * A failed call on attempt 1 (bad key, network, non-200) throws as-is —
  * nothing was billed. A failure on attempt 2 does not throw: attempt 1 already
  * answered, so the result is "none found" with attempt 1's cost and the failure
@@ -37,12 +43,26 @@ import {
   type SourceCandidate,
   type SourceUrlsAttempt,
 } from "./skill";
+import {
+  buildSiteSourceUrlsQuery,
+  describeSiteMiss,
+  pickSitePage,
+  siteDomainOf,
+  type SiteSearchAttempt,
+} from "./site";
 
 export interface SearchSourceUrlsInput {
   rowData: Record<string, string>;
   customInstruction?: string;
   /** One public http(s) photo of the item for Google to look at; omit when the row has none. */
   imageUrl?: string;
+  /**
+   * Website mode: search this one website only (the column's Website setting;
+   * anything URL-like is reduced to a bare domain). Empty = the open search.
+   */
+  website?: string;
+  /** Country to search from, as a place name ("United Kingdom"); sent as the search location, never in the prompt. */
+  location?: string;
   shouldCancel?: () => Promise<boolean>;
   /** Wait before the one retry of a rate-limited or 5xx call (tests shorten it). */
   retryDelayMs?: number;
@@ -149,11 +169,15 @@ async function askGoogle(
   buildQuery: (hasImage: boolean) => string,
   imageUrl: string | undefined,
   costs: AiCallCost[],
-  retryDelayMs: number
+  retryDelayMs: number,
+  location?: string
 ): Promise<{ call: Awaited<ReturnType<typeof callGoogleAiMode>>; usedImage: boolean }> {
   const once = async (query: string, image?: string) => {
     try {
-      const call = await callGoogleAiMode(query, image ? { imageUrl: image } : {});
+      const call = await callGoogleAiMode(query, {
+        ...(image ? { imageUrl: image } : {}),
+        ...(location ? { location } : {}),
+      });
       costs.push(createSearchApiCost(1));
       return call;
     } catch (error) {
@@ -200,7 +224,13 @@ async function runAttempt(
       attempt,
     });
 
-  const { call, usedImage } = await askGoogle(buildQuery, imageUrl, costs, input.retryDelayMs ?? TRANSIENT_RETRY_DELAY_MS);
+  const { call, usedImage } = await askGoogle(
+    buildQuery,
+    imageUrl,
+    costs,
+    input.retryDelayMs ?? TRANSIENT_RETRY_DELAY_MS,
+    input.location
+  );
 
   let answer = parseBestSourceAnswer(call.texts);
   let harvested = false;
@@ -259,12 +289,69 @@ async function runAttempt(
   };
 }
 
+/**
+ * Website mode, one search: the short request for one website (./site.ts), the
+ * page taken from the cited pages and the links in the answer, and kept only if
+ * it is a product page on that website. Returns null when there is nothing
+ * simpler to ask for attempt 2, so no second search is paid for.
+ */
+async function runSiteAttempt(
+  input: SearchSourceUrlsInput,
+  domain: string,
+  attempt: SiteSearchAttempt,
+  costs: AiCallCost[]
+): Promise<AttemptOutcome | null> {
+  const buildQuery = (hasImage: boolean) =>
+    buildSiteSourceUrlsQuery({
+      rowData: input.rowData,
+      domain,
+      customInstruction: input.customInstruction,
+      hasImage,
+      attempt,
+    });
+  if (!buildQuery(false)) return null;
+
+  // The second try is the plain text request: no photo, no note.
+  const imageUrl =
+    attempt === 1 && input.imageUrl && /^https?:\/\//i.test(input.imageUrl) ? input.imageUrl : undefined;
+  const { call, usedImage } = await askGoogle(
+    buildQuery,
+    imageUrl,
+    costs,
+    input.retryDelayMs ?? TRANSIENT_RETRY_DELAY_MS,
+    input.location
+  );
+
+  const pick = pickSitePage(call.texts, call.referenceLinks, domain);
+  console.log("[Source URLs] Google AI Mode call (website)", {
+    attempt,
+    website: domain,
+    location: input.location ?? null,
+    withPhoto: usedImage,
+    httpStatus: call.httpStatus,
+    ms: call.elapsedMs,
+    linksConsidered: pick.considered,
+    kept: pick.page ? 1 : 0,
+    referenceLinks: call.referenceLinks.length,
+  });
+
+  if (pick.page) return { sources: [{ title: pick.page.title, uri: pick.page.url }], summary: "", usedImage };
+  return { sources: [], summary: describeSiteMiss(pick, domain), usedImage };
+}
+
 export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<SearchSourceUrlsResult> {
   const costs: AiCallCost[] = [];
+  const domain = siteDomainOf(input.website);
+  const run = async (attempt: SourceUrlsAttempt): Promise<AttemptOutcome | null> =>
+    domain ? runSiteAttempt(input, domain, attempt, costs) : runAttempt(input, attempt, costs);
+  const missNote = (parts: string) =>
+    domain
+      ? `The web search found no product page on ${domain} for this item (${parts}).`
+      : `The web search found no page for this item (${parts}).`;
 
   let first: AttemptOutcome;
   try {
-    first = await runAttempt(input, 1, costs);
+    first = (await run(1))!;
   } catch (error) {
     if (costs.length > 0) {
       const message = error instanceof Error ? error.message : String(error);
@@ -282,9 +369,9 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
 
   // The first search answered, so a failure of the second must not turn the
   // row into an error: it stays "none found", with the failure in the note.
-  let second: AttemptOutcome;
+  let second: AttemptOutcome | null;
   try {
-    second = await runAttempt(input, 2, costs);
+    second = await run(2);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -292,7 +379,17 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
       costs,
       attempts: 2,
       usedImage: first.usedImage,
-      notFoundReason: `The web search found no page for this item (search 1: ${first.summary}; search 2 failed: ${hideProviderNames(message.slice(0, 200))}).`,
+      notFoundReason: missNote(`search 1: ${first.summary}; search 2 failed: ${hideProviderNames(message.slice(0, 200))}`),
+    };
+  }
+  // Website mode has nothing simpler to ask for: one search was the whole attempt.
+  if (!second) {
+    return {
+      sources: [],
+      costs,
+      attempts: 1,
+      usedImage: first.usedImage,
+      notFoundReason: missNote(`search 1: ${first.summary}`),
     };
   }
   if (second.sources.length > 0) {
@@ -303,6 +400,6 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
     costs,
     attempts: 2,
     usedImage: second.usedImage,
-    notFoundReason: `The web search found no page for this item (search 1: ${first.summary}; search 2: ${second.summary}).`,
+    notFoundReason: missNote(`search 1: ${first.summary}; search 2: ${second.summary}`),
   };
 }
