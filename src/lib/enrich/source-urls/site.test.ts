@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import { DEFAULT_SOURCE_URLS_INSTRUCTION } from "@/types";
 import {
   buildSiteSourceUrlsQuery,
   cleanSiteLink,
   describeSiteMiss,
-  identifySiteProductFields,
+  simplifySiteFields,
+  siteFieldsOf,
+  SITE_MAX_FIELDS,
+  SITE_MAX_FIELD_CHARS,
   pickSitePage,
   siteDomainOf,
   siteInstructionOf,
@@ -34,74 +37,97 @@ describe("siteDomainOf", () => {
   });
 });
 
-describe("identifySiteProductFields", () => {
-  it("finds the description, barcode, SKU and size by their column names", () => {
-    expect(identifySiteProductFields(example)).toEqual({
-      description: "CHECK JACKET BROWN 6-9M",
-      barcode: "5063229294815",
-      sku: "S07FN6DB5",
-      size: "6-9M",
-    });
+describe("siteFieldsOf", () => {
+  it("sends the source columns as the sheet has them: header and value, in sheet order", () => {
+    expect(siteFieldsOf(example)).toEqual([
+      { label: "SKU", value: "S07FN6DB5" },
+      { label: "Description", value: "CHECK JACKET BROWN 6-9M" },
+      { label: "Barcode", value: "5063229294815" },
+      { label: "Size", value: "6-9M" },
+    ]);
   });
 
-  it("understands the usual names for each field, and leaves out what the row does not have", () => {
-    const fields = identifySiteProductFields({ "Item Code": "AB-12", "Product Name": "Widget", EAN13: "4006381333931", Notes: "" });
-    expect(fields).toEqual({ description: "Widget", barcode: "4006381333931", sku: "AB-12", size: "" });
-    expect(identifySiteProductFields({ Title: "Widget" })).toEqual({ description: "Widget", barcode: "", sku: "", size: "" });
+  it("never reads the header for meaning: any language, any layout", () => {
+    const fields = siteFieldsOf({ Artikelbezeichnung: "Akku-Bohrschrauber 18V", EAN: "4006381333931", __EMPTY_2: "BS-18-LI", Farbe: "Blau" });
+    expect(fields.map((f) => `${f.label}: ${f.value}`)).toEqual([
+      "Artikelbezeichnung: Akku-Bohrschrauber 18V",
+      "EAN: 4006381333931",
+      "Col 2: BS-18-LI",
+      "Farbe: Blau",
+    ]);
   });
 
-  it("ignores a barcode that is not a barcode (spreadsheet notation, internal codes)", () => {
-    expect(identifySiteProductFields({ Barcode: "5.06323E+12", Title: "Widget" }).barcode).toBe("");
-    expect(identifySiteProductFields({ Barcode: "FG007370", Title: "Widget" }).barcode).toBe("");
-    expect(identifySiteProductFields({ Barcode: "5063 2292 94815", Title: "Widget" }).barcode).toBe("5063229294815");
+  it("leaves out empty values and image columns, and caps how much one row sends", () => {
+    expect(siteFieldsOf({ A: "", B: "  ", Photo: "https://cdn.example.com/a.jpg", C: "[2 images attached]", Title: "Widget" })).toEqual([
+      { label: "Title", value: "Widget" },
+    ]);
+    const many = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`F${i}`, "x".repeat(400)]));
+    const fields = siteFieldsOf(many);
+    expect(fields).toHaveLength(SITE_MAX_FIELDS);
+    expect(fields.every((f) => f.value.length <= SITE_MAX_FIELD_CHARS)).toBe(true);
   });
 
-  it("prefers a short name over a long description, and cuts a very long one at a word", () => {
-    const fields = identifySiteProductFields({ Description: "Long marketing text ".repeat(30), Name: "Widget Pro" });
-    expect(fields.description).toBe("Widget Pro");
-    const cut = identifySiteProductFields({ Description: "word ".repeat(100) }).description;
-    expect(cut.length).toBeLessThanOrEqual(160);
-    expect(cut.endsWith("word")).toBe(true);
+  it("strips HTML from a value", () => {
+    expect(siteFieldsOf({ Description: "<p>Soft &amp; warm <b>jacket</b></p>" })[0]?.value).toBe("Soft & warm jacket");
+  });
+});
+
+describe("simplifySiteFields", () => {
+  it("keeps the name and any barcode by the shape of the value, and drops codes and sizes", () => {
+    const simple = simplifySiteFields(siteFieldsOf(example));
+    expect(simple.map((f) => f.label)).toEqual(["Description", "Barcode"]);
   });
 
-  it("adds the brand when the name does not carry it", () => {
-    expect(identifySiteProductFields({ Brand: "Acme", Title: "Widget" }).description).toBe("Acme Widget");
-    expect(identifySiteProductFields({ Brand: "Acme", Title: "ACME Widget" }).description).toBe("ACME Widget");
+  it("works whatever the headers are called", () => {
+    const simple = simplifySiteFields(
+      siteFieldsOf({ Col1: "BS-18-LI", Col2: "Akku-Bohrschrauber 18V", Col3: "4006 3813 33931", Col4: "Blau" })
+    );
+    expect(simple.map((f) => f.value)).toEqual(["Akku-Bohrschrauber 18V", "4006 3813 33931"]);
   });
 
-  it("falls back to the first text values when no column is a name", () => {
-    expect(identifySiteProductFields({ A: "Widget", B: "blue", C: "12345" }).description).toBe("Widget blue");
+  it("uses a one-word name when that is all the row has, and nothing when it has no name or barcode", () => {
+    expect(simplifySiteFields(siteFieldsOf({ X: "Widget", Y: "W-1" })).map((f) => f.value)).toEqual(["Widget"]);
+    expect(simplifySiteFields(siteFieldsOf({ X: "W-1", Y: "12" }))).toEqual([]);
   });
 });
 
 describe("buildSiteSourceUrlsQuery", () => {
-  it("is the one short sentence: website, product, barcode, SKU, size, and the link-only ask", () => {
+  it("is one fixed sentence around the source columns, as typed", () => {
     expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN })).toBe(
-      "mamasandpapas.com product page CHECK JACKET BROWN 6-9M, barcode 5063229294815, SKU S07FN6DB5 (6-9M). Return the mamasandpapas.com product page link only."
+      [
+        "mamasandpapas.com product page for this item:",
+        "- SKU: S07FN6DB5",
+        "- Description: CHECK JACKET BROWN 6-9M",
+        "- Barcode: 5063229294815",
+        "- Size: 6-9M",
+        "Return the mamasandpapas.com product page link only.",
+      ].join("\n")
     );
   });
 
-  it("fills in only the fields the row has", () => {
-    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Widget" }, domain: "acme.com" })).toBe(
-      "acme.com product page Widget. Return the acme.com product page link only."
+  it("works for a sheet with unfamiliar headers", () => {
+    expect(
+      buildSiteSourceUrlsQuery({ rowData: { Artikelbezeichnung: "Akku-Bohrschrauber 18V", EAN: "4006381333931" }, domain: "acme.de" })
+    ).toBe(
+      "acme.de product page for this item:\n- Artikelbezeichnung: Akku-Bohrschrauber 18V\n- EAN: 4006381333931\nReturn the acme.de product page link only."
     );
-    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Widget", SKU: "W-1" }, domain: "acme.com" })).toBe(
-      "acme.com product page Widget, SKU W-1. Return the acme.com product page link only."
-    );
+  });
+
+  it("says so plainly when the row has nothing to send", () => {
+    expect(buildSiteSourceUrlsQuery({ rowData: { A: "" }, domain: "acme.com" })).toContain("(no product details were provided)");
   });
 
   it("has no JSON request, no shouting and no rulebook", () => {
     const query = buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, customInstruction: "Prefer the brown one." });
     expect(query).not.toMatch(/json|critical|priority|sources|\{|\}/i);
-    expect(query.length).toBeLessThan(400);
+    expect(query.length).toBeLessThan(500);
   });
 
   it("adds the owner's note after the request, short, and skips the default text", () => {
     const query = buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, customInstruction: "Prefer the brown one." });
     const lines = query.split("\n");
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatch(/Return the mamasandpapas\.com product page link only\.$/);
-    expect(lines[1]).toBe("Note: Prefer the brown one.");
+    expect(lines[lines.length - 2]).toBe("Return the mamasandpapas.com product page link only.");
+    expect(lines[lines.length - 1]).toBe("Note: Prefer the brown one.");
 
     expect(siteInstructionOf(DEFAULT_SOURCE_URLS_INSTRUCTION)).toBe("");
     expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, customInstruction: DEFAULT_SOURCE_URLS_INSTRUCTION })).not.toContain("Note:");
@@ -113,19 +139,24 @@ describe("buildSiteSourceUrlsQuery", () => {
     expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, hasImage: true })).toContain("The attached photo shows the product.");
   });
 
-  it("asks a simpler second question: description and barcode only", () => {
+  it("asks a simpler second question: the name and the barcode only", () => {
     expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, attempt: 2, customInstruction: "x", hasImage: true })).toBe(
-      "mamasandpapas.com product page CHECK JACKET BROWN 6-9M, barcode 5063229294815. Return the mamasandpapas.com product page link only."
+      [
+        "mamasandpapas.com product page for this item:",
+        "- Description: CHECK JACKET BROWN 6-9M",
+        "- Barcode: 5063229294815",
+        "Return the mamasandpapas.com product page link only.",
+      ].join("\n")
     );
   });
 
   it("asks no second question when there is nothing simpler to ask", () => {
-    // Description only: the first request already was the simple one.
-    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Widget" }, domain: "acme.com", attempt: 2 })).toBe("");
-    // Only a SKU: dropping it would leave nothing to search for.
+    // Only a name: the first request already was the simple one.
+    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Check Jacket" }, domain: "acme.com", attempt: 2 })).toBe("");
+    // Only codes: dropping them would leave nothing to search for.
     expect(buildSiteSourceUrlsQuery({ rowData: { SKU: "W-1" }, domain: "acme.com", attempt: 2 })).toBe("");
     // A photo or a note made the first request different, so the plain one is worth asking.
-    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Widget" }, domain: "acme.com", attempt: 2, hasImage: true })).not.toBe("");
+    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Check Jacket" }, domain: "acme.com", attempt: 2, hasImage: true })).not.toBe("");
   });
 });
 
@@ -234,3 +265,4 @@ describe("pickSitePage", () => {
     expect(pick.considered).toBe(1);
   });
 });
+

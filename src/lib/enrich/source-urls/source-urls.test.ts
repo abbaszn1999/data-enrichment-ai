@@ -642,7 +642,14 @@ describe("Source URLs website mode", () => {
     const params = searchParams(fetchMock, 0);
     expect(params.get("location")).toBe("United Kingdom");
     expect(params.get("q")).toBe(
-      "mamasandpapas.com product page CHECK JACKET BROWN 6-9M, barcode 5063229294815, SKU S07FN6DB5 (6-9M). Return the mamasandpapas.com product page link only."
+      [
+        "mamasandpapas.com product page for this item:",
+        "- SKU: S07FN6DB5",
+        "- Description: CHECK JACKET BROWN 6-9M",
+        "- Barcode: 5063229294815",
+        "- Size: 6-9M",
+        "Return the mamasandpapas.com product page link only.",
+      ].join("\n")
     );
     expect(params.get("q")).not.toMatch(/uk|united kingdom/i);
   });
@@ -665,7 +672,12 @@ describe("Source URLs website mode", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(searchParams(fetchMock, 1).get("q")).toBe(
-      "mamasandpapas.com product page CHECK JACKET BROWN 6-9M, barcode 5063229294815. Return the mamasandpapas.com product page link only."
+      [
+        "mamasandpapas.com product page for this item:",
+        "- Description: CHECK JACKET BROWN 6-9M",
+        "- Barcode: 5063229294815",
+        "Return the mamasandpapas.com product page link only.",
+      ].join("\n")
     );
     expect(result.sources).toEqual([]);
     expect(result.attempts).toBe(2);
@@ -761,7 +773,7 @@ describe("Source URLs website mode", () => {
       const result = await enrichRow(params({ sourceWebsite: "https://www.MamasAndPapas.com/products/x", sourceMarket: "gb" }));
       const q = searchParams(fetchMock, 0);
       expect(q.get("location")).toBe("United Kingdom");
-      expect(q.get("q")).toMatch(/^mamasandpapas\.com product page CHECK JACKET/);
+      expect(q.get("q")).toMatch(/^mamasandpapas\.com product page for this item:\n- SKU: S07FN6DB5\n- Description: CHECK JACKET/);
       expect(q.get("q")).not.toContain("manufacturer");
       expect(result.data.sourceUrls).toEqual([{ title: "Check Jacket", uri: PRODUCT }]);
     });

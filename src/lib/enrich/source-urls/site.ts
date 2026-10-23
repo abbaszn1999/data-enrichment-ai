@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Source URLs, website mode: the owner names ONE website (the column's
  * "Website" setting) and the search asks for that item's page on that site
  * only. This is a different job from the open search in ./skill.ts, so it has
@@ -8,12 +8,13 @@
  * long rulebook, Google AI Mode answers with the site's homepage for some items
  * while the right product page sits only in the pages it cited
  * (`reference_links`). A short plain request answers correctly, so:
- *  - the query is one sentence built from the fields the row has;
+ *  - the query is one fixed sentence around the row's source columns exactly as
+ *    the sheet has them (header: value), so it works for any sheet layout;
  *  - no JSON is requested: the page is taken from the cited pages and the links
  *    in the answer, and the `{url, title}` sources are built here in code;
  *  - a page is kept only if it is on the requested website and is a page for
  *    one product (not the homepage, a category or a search page). Anything else
- *    gets one simpler second search, then "not found" — never a homepage.
+ *    gets one simpler second search, then "not found" â€” never a homepage.
  *
  * Pure (no runtime imports beyond helpers), so it is cheap to test.
  */
@@ -25,8 +26,9 @@ import { cleanPageTitle, harvestSourceCandidates, parseBestSourceAnswer } from "
 /** The owner's extra instruction is a short note in this mode; the rest is cut. */
 export const SITE_INSTRUCTION_MAX_CHARS = 300;
 
-const MAX_DESCRIPTION_CHARS = 160;
-const MAX_IDENTIFIER_CHARS = 40;
+/** The row's fields in the query: at most this many, each cut at this length, so one query stays one short request. */
+export const SITE_MAX_FIELDS = 10;
+export const SITE_MAX_FIELD_CHARS = 120;
 
 export type SiteSearchAttempt = 1 | 2;
 
@@ -36,15 +38,8 @@ export function siteDomainOf(setting: string | undefined | null): string | null 
 }
 
 // ---------------------------------------------------------------------------
-// Which row fields describe the item
+// The query: the row's own source columns, as typed
 // ---------------------------------------------------------------------------
-
-export interface SiteProductFields {
-  description: string;
-  barcode: string;
-  sku: string;
-  size: string;
-}
 
 function plain(value: unknown): string {
   return String(value ?? "")
@@ -63,44 +58,6 @@ function isImageValue(value: string): boolean {
   );
 }
 
-type RowEntry = { key: string; value: string };
-
-function rowEntries(rowData: Record<string, string>): RowEntry[] {
-  const entries: RowEntry[] = [];
-  for (const [key, raw] of Object.entries(rowData)) {
-    const value = plain(raw);
-    if (value && !isImageValue(value)) entries.push({ key: key.trim(), value });
-  }
-  return entries;
-}
-
-/** First entry whose header matches the earliest pattern in `patterns` and whose value passes `accept`. */
-function pick(entries: RowEntry[], patterns: RegExp[], accept: (value: string) => boolean): string {
-  for (const pattern of patterns) {
-    const found = entries.find((entry) => pattern.test(entry.key) && accept(entry.value));
-    if (found) return found.value;
-  }
-  return "";
-}
-
-const BARCODE_HEADERS = [/bar\s*-?code/i, /\b(ean|upc|gtin|isbn)\s*-?\d*\b/i];
-const SKU_HEADERS = [
-  /^\s*sku\b|\bsku\s*(code|no\.?|number)?\s*$/i,
-  /\b(item|product|article)\s*(code|no\.?|number|#|id)\b/i,
-  /\b(mpn|part\s*(no\.?|number|#))\b/i,
-  /\b(model|style)(\s*(no\.?|number|code))?\b/i,
-  /^\s*(code|ref(erence)?)\s*$/i,
-];
-const NAME_HEADERS = [
-  /^\s*(product\s*)?(name|title)\s*$/i,
-  /\b(product|item)\s*(name|title)\b/i,
-  /^\s*(item\s*)?desc(ription)?\s*$/i,
-  /\bdesc(ription)?\b/i,
-  /\b(name|title)\b/i,
-];
-const SIZE_HEADERS = [/^\s*(size|sizes)\s*$/i, /\bsize\b/i];
-const BRAND_HEADERS = [/^\s*(brand|manufacturer|vendor|maker)\s*$/i];
-
 function cutAtWord(value: string, max: number): string {
   if (value.length <= max) return value;
   const cut = value.slice(0, max);
@@ -108,42 +65,56 @@ function cutAtWord(value: string, max: number): string {
   return (space > max * 0.6 ? cut.slice(0, space) : cut).trim();
 }
 
-/**
- * Finds the description, barcode, SKU and size in a row by their column names
- * (Description / Title / Name, Barcode / EAN / UPC / GTIN, SKU / Item code /
- * Model, Size). A field the row does not have stays empty and is left out of
- * the query. With no description column at all, the first few text values stand
- * in for one so the search still has the item's name.
- */
-export function identifySiteProductFields(rowData: Record<string, string>): SiteProductFields {
-  const entries = rowEntries(rowData);
-
-  const barcodeRaw = pick(entries, BARCODE_HEADERS, (v) => /^\d[\d\s-]{6,}\d$/.test(v));
-  const barcode = barcodeRaw.replace(/\D/g, "");
-  const validBarcode = barcode.length >= 8 && barcode.length <= 14 ? barcode : "";
-  const sku = pick(entries, SKU_HEADERS, (v) => v.length <= MAX_IDENTIFIER_CHARS && v.replace(/\D/g, "") !== validBarcode);
-  const size = pick(entries, SIZE_HEADERS, (v) => v.length <= 30);
-  const brand = pick(entries, BRAND_HEADERS, (v) => v.length <= 60);
-  let description = pick(entries, NAME_HEADERS, (v) => /[a-z]/i.test(v));
-
-  if (!description) {
-    description = entries
-      .map((entry) => entry.value)
-      .filter((value) => /[a-z]/i.test(value) && value !== sku && value !== size)
-      .slice(0, 3)
-      .join(" ");
-  }
-  description = cutAtWord(description, MAX_DESCRIPTION_CHARS);
-  // A brand that the name does not already carry tells a multi-brand shop which product is meant.
-  if (brand && description && !description.toLowerCase().includes(brand.toLowerCase())) {
-    description = `${brand} ${description}`;
-  }
-  return { description, barcode: validBarcode, sku, size };
+/** Header as the sheet shows it; the importer's placeholder names for unnamed columns read as "Col 1". */
+function labelOf(key: string): string {
+  return key.replace("__EMPTY_", "Col ").replace("__EMPTY", "Col").trim() || "Field";
 }
 
-// ---------------------------------------------------------------------------
-// The query
-// ---------------------------------------------------------------------------
+export interface SiteField {
+  label: string;
+  value: string;
+}
+
+/**
+ * Every non-image column of the row that has a value, in sheet order, with the
+ * header exactly as the owner's sheet has it. Column names are never read for
+ * meaning (the sheets are the owner's or a supplier's, in any layout or
+ * language), so nothing is guessed and nothing the sheet says is left out
+ * except what the caps below cut.
+ */
+export function siteFieldsOf(rowData: Record<string, string>): SiteField[] {
+  const fields: SiteField[] = [];
+  for (const [key, raw] of Object.entries(rowData)) {
+    if (fields.length >= SITE_MAX_FIELDS) break;
+    const value = plain(raw);
+    if (!value || isImageValue(value)) continue;
+    fields.push({ label: labelOf(key), value: cutAtWord(value, SITE_MAX_FIELD_CHARS) });
+  }
+  return fields;
+}
+
+/** An all-digit barcode (EAN / UPC / GTIN length), spaces and hyphens allowed. */
+function isBarcodeValue(value: string): boolean {
+  if (!/^\d[\d\s-]*\d$/.test(value)) return false;
+  const digits = value.replace(/\D/g, "").length;
+  return digits >= 8 && digits <= 14;
+}
+
+/**
+ * The simpler second search keeps what names the item and drops the rest,
+ * judged by the SHAPE of the values, never the headers: every all-digit barcode
+ * and the first value that reads as a name (letters, more than one word).
+ * Codes, sizes and every other value are dropped.
+ */
+export function simplifySiteFields(fields: SiteField[]): SiteField[] {
+  const keep = new Set<SiteField>();
+  for (const field of fields) if (isBarcodeValue(field.value)) keep.add(field);
+  const name =
+    fields.find((f) => /\p{L}/u.test(f.value) && f.value.split(" ").length >= 2) ??
+    fields.find((f) => /\p{L}{3,}/u.test(f.value));
+  if (name) keep.add(name);
+  return fields.filter((f) => keep.has(f));
+}
 
 export interface BuildSiteQueryInput {
   rowData: Record<string, string>;
@@ -151,7 +122,7 @@ export interface BuildSiteQueryInput {
   domain: string;
   customInstruction?: string;
   hasImage?: boolean;
-  /** 1 = the full request; 2 = the simpler one (description and barcode only). Defaults to 1. */
+  /** 1 = the full request; 2 = the simpler one (name and barcode only). Defaults to 1. */
   attempt?: SiteSearchAttempt;
 }
 
@@ -162,37 +133,36 @@ export function siteInstructionOf(customInstruction: string | undefined): string
   return cutAtWord(text, SITE_INSTRUCTION_MAX_CHARS);
 }
 
+function composeSiteQuery(domain: string, fields: SiteField[]): string {
+  const lines = [`${domain} product page for this item:`];
+  if (fields.length > 0) lines.push(...fields.map((f) => `- ${f.label}: ${f.value}`));
+  else lines.push("- (no product details were provided)");
+  lines.push(`Return the ${domain} product page link only.`);
+  return lines.join("\n");
+}
+
 /**
- * `{domain} product page {description}, barcode {barcode}, SKU {sku} ({size}).
- * Return the {domain} product page link only.` Only fields the row has appear.
- * Attempt 2 keeps the description and barcode and drops everything else.
- * Returns "" when attempt 2 would ask the same thing as attempt 1 (nothing to
- * simplify), so no second search is paid for.
+ * The whole request in website mode: one fixed sentence around the row's source
+ * columns, as typed. Attempt 1 sends them all (capped); the photo line and the
+ * owner's short note come after. Attempt 2 sends only the name and the barcode,
+ * no photo, no note, and returns "" when that would be the same question as
+ * attempt 1, so no second search is paid for.
  */
 export function buildSiteSourceUrlsQuery(input: BuildSiteQueryInput): string {
-  const attempt = input.attempt ?? 1;
-  const fields = identifySiteProductFields(input.rowData);
   const { domain } = input;
+  const fields = siteFieldsOf(input.rowData);
+  const first = composeSiteQuery(domain, fields);
 
-  const compose = (parts: { sku: boolean; size: boolean }): string => {
-    const head = `${domain} product page${fields.description ? ` ${fields.description}` : ""}`;
-    const ids: string[] = [];
-    if (fields.barcode) ids.push(`barcode ${fields.barcode}`);
-    if (parts.sku && fields.sku) ids.push(`SKU ${fields.sku}`);
-    const size = parts.size && fields.size ? ` (${fields.size})` : "";
-    return `${head}${ids.length > 0 ? `, ${ids.join(", ")}` : ""}${size}. Return the ${domain} product page link only.`;
-  };
-
-  if (attempt === 2) {
-    if (!fields.description && !fields.barcode) return "";
-    const simple = compose({ sku: false, size: false });
-    return simple === compose({ sku: true, size: true }) && !siteInstructionOf(input.customInstruction) && !input.hasImage
-      ? ""
-      : simple;
+  if ((input.attempt ?? 1) === 2) {
+    const simple = simplifySiteFields(fields);
+    if (simple.length === 0) return "";
+    const second = composeSiteQuery(domain, simple);
+    const firstIsPlain = first === second && !input.hasImage && !siteInstructionOf(input.customInstruction);
+    return firstIsPlain ? "" : second;
   }
 
-  const lines = [compose({ sku: true, size: true })];
-  if (input.hasImage) lines[0] += " The attached photo shows the product.";
+  const lines = [first];
+  if (input.hasImage) lines.push("The attached photo shows the product.");
   const note = siteInstructionOf(input.customInstruction);
   if (note) lines.push(`Note: ${note}`);
   return lines.join("\n");
@@ -343,3 +313,4 @@ export function describeSiteMiss(pick: SiteAnswerPick, domain: string): string {
     .join(", ");
   return `returned ${pick.considered} link${pick.considered === 1 ? "" : "s"}, none a product page on ${domain}${reasons ? ` (${reasons})` : ""}`;
 }
+
