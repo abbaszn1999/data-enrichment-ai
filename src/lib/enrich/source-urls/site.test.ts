@@ -201,6 +201,9 @@ describe("siteLinkProblem", () => {
     expect(siteLinkProblem("https://acme.com/collections/jackets/products/check-jacket", "acme.com")).toBeNull();
     expect(siteLinkProblem("https://acme.com/women/jackets/check-jacket-brown", "acme.com")).toBeNull();
     expect(siteLinkProblem("http://acme.com/p/12345.html", "acme.com")).toBeNull();
+    expect(
+      siteLinkProblem("https://www.toysrus.es/Motor-y-Co-Dinosaurio-R-C-interactivo/p/K1048394", "toysrus.es")
+    ).toBeNull();
   });
 
   it("rejects the home page, with or without a language prefix", () => {

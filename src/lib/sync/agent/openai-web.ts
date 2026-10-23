@@ -15,7 +15,6 @@ import {
 import {
   collectToolImages,
   countWebSearchCalls,
-  looksLikeDirectImageUrl,
   parseJsonObject,
   responseOutputText,
 } from "@/lib/enrich/parse";
@@ -141,10 +140,10 @@ export function resolveGroundedImageSelection(params: {
   }
 
   const url = selection.selectedImageUrl;
-  if (!url || !looksLikeDirectImageUrl(url)) {
+  if (!url) {
     console.log("[Sync Pro OpenAI] abstained", {
       abstained: true,
-      reason: !url ? "null_or_empty_url" : "not_direct_image_url",
+      reason: "null_or_empty_url",
     });
     return null;
   }
@@ -379,7 +378,6 @@ export function resolveGroundedGallerySelection(params: {
   const taken = new Set<string>();
   for (const raw of selection.selectedImageUrls) {
     if (out.length >= limit) break;
-    if (!looksLikeDirectImageUrl(raw)) continue;
     const key = raw.toLowerCase();
     if (taken.has(key) || blocked.has(key)) continue;
     const matched = pool.get(key);

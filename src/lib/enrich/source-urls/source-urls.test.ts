@@ -206,6 +206,7 @@ describe("Source URLs ranking", () => {
     expect(looksLikeListingPage("https://www.walmart.com/ip/Anker-735/1710516052")).toBe(false);
     expect(looksLikeListingPage("https://www.amazon.com/dp/B0CP9Z1S51")).toBe(false);
     expect(looksLikeListingPage("https://shop.example.com/products/widget-wx-1")).toBe(false);
+    expect(looksLikeListingPage("https://www.toysrus.es/Motor-y-Co-Dinosaurio-R-C-interactivo/p/K1048394")).toBe(false);
   });
 
   it("puts pages Google itself cited first, with Google's title, and keeps the others after them", () => {
@@ -709,6 +710,21 @@ describe("Source URLs website mode", () => {
     expect(result.costs).toHaveLength(1);
     expect(result.sources).toEqual([]);
     expect(result.notFoundReason).toMatch(/\(search 1: returned 1 link/);
+  });
+
+  it("keeps a /slug/p/id product page (Toys“R”Us and similar), not treating it as a listing", async () => {
+    const toysrus = "https://www.toysrus.es/Motor-y-Co-Dinosaurio-R-C-interactivo/p/K1048394";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(aiModeBody("", [{ link: toysrus, title: "Dinosaurio R/C" }]), { status: 200 }))
+    );
+    const result = await searchSourceUrls({
+      rowData: { Description: "SS21 DINOSAUR R/C" },
+      website: "toysrus.es",
+      retryDelayMs: 0,
+    });
+    expect(result.sources).toEqual([{ title: "Dinosaurio R/C", uri: toysrus }]);
+    expect(result.notFoundReason).toBe("");
   });
 
   it("rejects a product page on another website", async () => {

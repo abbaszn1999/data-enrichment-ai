@@ -175,6 +175,18 @@ export interface LoadableImages {
   images: ImageUrl[];
   /** How many kept images could not be load-checked from our server. */
   unverified: number;
+  /** Candidates dropped by the load check: gone (404/410), not an image, or unconfirmed where confirmation was required. */
+  failed: number;
+}
+
+export interface KeepLoadableOptions {
+  /**
+   * Candidates for which "could not be checked" is not good enough: they are
+   * kept only when the load check confirmed an image. Used for links whose
+   * address does not look like a picture, so a page that merely refused our
+   * server is never mistaken for one.
+   */
+  requireConfirmed?: (candidate: ImageUrl) => boolean;
 }
 
 /** Store-owner-facing note for images kept without a successful load check. */
@@ -193,7 +205,11 @@ export function unverifiedImagesNote(count: number): string {
  * every candidate here comes from a page the tier itself opened, and is
  * counted so the row can say so. A definite 404/410 or a non-image is dropped.
  */
-export async function keepLoadableImages(candidates: ImageUrl[], limit: number): Promise<LoadableImages> {
+export async function keepLoadableImages(
+  candidates: ImageUrl[],
+  limit: number,
+  options: KeepLoadableOptions = {}
+): Promise<LoadableImages> {
   const checked = await mapLimit(candidates, VERIFY_CONCURRENCY, async (candidate) => {
     const variants = [candidate.imageUrl, decodedVariant(candidate.imageUrl)].filter(
       (value): value is string => Boolean(value)
@@ -204,10 +220,15 @@ export async function keepLoadableImages(candidates: ImageUrl[], limit: number):
       if (check === "ok") return { image: { ...candidate, imageUrl: variant }, unverified: false };
       if (check === "unverified") unverified = true;
     }
-    return unverified ? { image: candidate, unverified: true } : null;
+    if (unverified && !options.requireConfirmed?.(candidate)) return { image: candidate, unverified: true };
+    return null;
   });
 
   const kept = checked.filter((entry): entry is { image: ImageUrl; unverified: boolean } => entry !== null);
   const images = kept.slice(0, limit);
-  return { images: images.map((entry) => entry.image), unverified: images.filter((entry) => entry.unverified).length };
+  return {
+    images: images.map((entry) => entry.image),
+    unverified: images.filter((entry) => entry.unverified).length,
+    failed: checked.length - kept.length,
+  };
 }

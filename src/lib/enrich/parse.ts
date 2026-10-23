@@ -14,6 +14,7 @@ export {
   collectToolSources,
   countWebSearchCalls,
   looksLikeDirectImageUrl,
+  looksLikeWebPageUrl,
   pickImagesFromSelection,
 } from "./tool-results";
 

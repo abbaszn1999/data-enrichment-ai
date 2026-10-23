@@ -15,7 +15,6 @@ import {
 import {
   collectToolImages,
   countWebSearchCalls,
-  looksLikeDirectImageUrl,
   parseJsonObject,
   responseOutputText,
 } from "@/lib/enrich/parse";
@@ -534,7 +533,7 @@ export function articleFromOpenAiResponse(
       if (!raw || typeof raw !== "object") continue;
       const record = raw as { url?: unknown; alt?: unknown };
       const url = typeof record.url === "string" ? record.url.trim() : "";
-      if (!url || !looksLikeDirectImageUrl(url)) continue;
+      if (!url) continue;
       const verified = pool.get(url.toLowerCase());
       if (!verified) continue;
       if (grounded.some((entry) => entry.url === verified)) continue;
@@ -582,7 +581,7 @@ export function articleFromOpenAiResponse(
     rawFeatured && typeof rawFeatured.url === "string"
       ? rawFeatured.url.trim()
       : "";
-  if (featuredUrl && looksLikeDirectImageUrl(featuredUrl)) {
+  if (featuredUrl) {
     const verified = pool.get(featuredUrl.toLowerCase());
     if (verified) {
       featuredImage = {

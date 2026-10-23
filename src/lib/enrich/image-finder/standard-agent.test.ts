@@ -191,12 +191,102 @@ describe("Image Finder agent (one call)", () => {
     expect(result.data.imageUrls).toEqual([]);
   });
 
-  it("explains a found item whose images could not be confirmed", async () => {
+  it("explains a found item whose images could not be confirmed, and which check dropped them", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     stubFetch(oneShotResponse({ status: "found", images: [image(FRONT)], notes: "Shop Test" }, []));
     const result = await enrichRow(params);
     expect(result.data.imageUrls).toEqual([]);
     expect(String(result.data[notFoundKey])).toContain("could not be confirmed");
+    expect(String(result.data[notFoundKey])).toContain("1 returned: 1 from a page that was not opened during the search");
     expect(result.data[matchBasisKey]).toBe("");
+  });
+
+  describe("image links in any shape", () => {
+    // Shops (SAP Commerce / Hybris, CMS media endpoints) serve pictures from addresses with no extension.
+    const TOYSRUS_PAGE = "https://www.toysrus.es/Motor-y-Co-Dinosaurio-R-C-interactivo/p/K1048394";
+    const TOYSRUS_IMAGE =
+      "https://www.toysrus.es/medias/?context=bWFzdGVyfHByb2R1Y3RfaW1hZ2VzfDE5MDE2fGltYWdlL2pwZWd8YURJNUwyZzJZeTh4TWpnNE1URXpOVFF3TXpBek9BfDE4NmY2YzY0MTBlMTg1ZDY2OGNmYTFlMTVkODMzY2MxMGY4NzIyZDQ4NzhjZDljYWUzNDczYTkxNTA1NGM2MDY";
+    const MEDIAS = "https://shop.test/medias/?context=bWFzdGVyfHByb2R1Y3RfaW1hZ2Vz";
+    const ODD = "https://shop.test/zz/?context=abc123";
+    const PAGE_LIKE = "https://shop.test/gallery.html";
+
+    function stubOddFetch(body: unknown, statusFor: (url: string) => number) {
+      const fetchMock = vi.fn(async (...[input]: [string | URL, RequestInit?]) => {
+        const url = String(input);
+        if (url === OPENAI_RESPONSES_URL) return new Response(JSON.stringify(body), { status: 200 });
+        const status = statusFor(url);
+        return status === 200
+          ? new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]), { status: 200, headers: { "content-type": "image/jpeg" } })
+          : new Response(null, { status });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("keeps the Toys“R”Us /medias/?context= gallery the agent returned, even when our server is refused", async () => {
+      stubOddFetch(
+        oneShotResponse(
+          { status: "found", images: [image(TOYSRUS_IMAGE, TOYSRUS_PAGE)], notes: "Opened the Toys“R”Us page." },
+          [TOYSRUS_PAGE]
+        ),
+        () => 403
+      );
+      const result = await enrichRow(params);
+      expect(imageUrlsOf(result.data)).toEqual([TOYSRUS_IMAGE]);
+      expect(result.data[notFoundKey]).toBe("");
+      expect(String(result.data[matchNoteKey])).toContain("could not be load-checked");
+    });
+
+    it("keeps images from a known Source URLs page even when open_page is missing from the tool log", async () => {
+      stubOddFetch(
+        oneShotResponse(
+          { status: "found", images: [image(TOYSRUS_IMAGE, TOYSRUS_PAGE)], notes: "" },
+          []
+        ),
+        () => 200
+      );
+      const result = await enrichRow({ ...params, knownPages: [{ url: TOYSRUS_PAGE, title: "Dinosaurio R/C" }] });
+      expect(imageUrlsOf(result.data)).toEqual([TOYSRUS_IMAGE]);
+      expect(result.data[notFoundKey]).toBe("");
+    });
+
+    it("keeps a link with no extension that loads as an image (the /medias/?context= shape)", async () => {
+      stubOddFetch(oneShotResponse({ status: "found", images: [image(MEDIAS), image(ODD)], notes: "" }), () => 200);
+      const result = await enrichRow(params);
+      expect(imageUrlsOf(result.data)).toEqual([MEDIAS, ODD]);
+      expect(result.data[notFoundKey]).toBe("");
+    });
+
+    it("keeps such a link even when our server is refused, because its page was opened", async () => {
+      stubOddFetch(oneShotResponse({ status: "found", images: [image(ODD)], notes: "" }), () => 403);
+      const result = await enrichRow(params);
+      expect(imageUrlsOf(result.data)).toEqual([ODD]);
+      expect(String(result.data[matchNoteKey])).toContain("could not be load-checked");
+    });
+
+    it("keeps a page-like link only when it was confirmed to load as an image", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      stubOddFetch(oneShotResponse({ status: "found", images: [image(PAGE_LIKE)], notes: "" }), () => 403);
+      const refused = await enrichRow(params);
+      expect(refused.data.imageUrls).toEqual([]);
+      expect(String(refused.data[notFoundKey])).toContain("1 did not load as an image");
+
+      stubOddFetch(oneShotResponse({ status: "found", images: [image(PAGE_LIKE)], notes: "" }), () => 200);
+      const confirmed = await enrichRow(params);
+      expect(imageUrlsOf(confirmed.data)).toEqual([PAGE_LIKE]);
+    });
+
+    it("drops the product page itself, and says it was not an image link", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      stubFetch(oneShotResponse({ status: "found", images: [image(PAGE)], notes: "" }));
+      const result = await enrichRow(params);
+      expect(result.data.imageUrls).toEqual([]);
+      expect(String(result.data[notFoundKey])).toContain("1 returned: 1 not an image link");
+      expect(warn).toHaveBeenCalledWith(
+        "[Image Finder] The agent found the item but no image was kept",
+        expect.objectContaining({ returned: 1, notAnImageLink: 1 })
+      );
+    });
   });
 
   it("puts known pages from a Source URLs column into the prompt, filtered by the website rules", async () => {

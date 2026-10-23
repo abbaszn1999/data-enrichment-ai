@@ -260,10 +260,10 @@ async function runAttempt(
     { allowHttp: true }
   );
   const titles = new Map(candidates.map((c) => [c.url.trim().toLowerCase(), c.title]));
+  const pages = links.filter((link) => !looksLikeListingPage(link.url));
+  const listingPages = links.length - pages.length;
   const sources = rankSources(
-    links
-      .filter((link) => !looksLikeListingPage(link.url))
-      .map((link) => ({ url: link.url, title: titles.get(link.url.toLowerCase()) })),
+    pages.map((link) => ({ url: link.url, title: titles.get(link.url.toLowerCase()) })),
     call.referenceLinks
   );
 
@@ -283,7 +283,16 @@ async function runAttempt(
   if (sources.length > 0) return { sources, summary: "", usedImage };
   if (!answer.readable) return { sources: [], summary: "the answer could not be read", usedImage };
   if (candidates.length === 0) return { sources: [], summary: "returned no pages", usedImage };
-  const why = describeRejected(rejected);
+  // Every drop is counted, the shop-listing filter included, so a miss never hides what we threw away.
+  const why = [describeRejected(rejected), listingPages > 0 ? `${listingPages} a shop listing or search page` : ""]
+    .filter(Boolean)
+    .join(", ");
+  console.warn("[Source URLs] Google returned pages but none were kept", {
+    attempt,
+    returned: candidates.length,
+    rejected,
+    listingPages,
+  });
   return {
     sources: [],
     summary: `returned ${candidates.length} page(s), all rejected${why ? `: ${why}` : ""}`,
@@ -338,6 +347,13 @@ async function runSiteAttempt(
   });
 
   if (pick.page) return { sources: [{ title: pick.page.title, uri: pick.page.url }], summary: "", usedImage };
+  if (pick.considered > 0) {
+    console.warn("[Source URLs] Google returned links but none were kept (website mode)", {
+      attempt,
+      considered: pick.considered,
+      dropped: pick.dropped,
+    });
+  }
   return { sources: [], summary: describeSiteMiss(pick, domains), usedImage };
 }
 
