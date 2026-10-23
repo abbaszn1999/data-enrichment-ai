@@ -4,8 +4,9 @@
  * search runs as a shopper in that country would see it. That is what makes a
  * site that sells in several countries return its page for the right one.
  *
- * Pure (no runtime imports) so the sidebar and the server share one list.
+ * Pure (only the pure domain helpers) so the sidebar and the server share one list.
  */
+import { parseDomainList } from "../domains";
 
 export interface SearchMarket {
   /** Lowercase ISO 3166-1 code, stored in the column's `sourceMarket`. */
@@ -105,6 +106,18 @@ export function marketFromDomain(domain: string | null | undefined): SearchMarke
   return findMarket(TLD_TO_MARKET[tld] ?? tld);
 }
 
+/**
+ * The market for several websites: only when every one of them points to the
+ * same country. A mix (`.co.uk` with `.de`, or with a global `.com`) says
+ * nothing about where to search from, so no location is chosen.
+ */
+export function marketFromDomains(domains: string[]): SearchMarket | null {
+  if (domains.length === 0) return null;
+  const markets = domains.map((domain) => marketFromDomain(domain));
+  const first = markets[0];
+  return first && markets.every((market) => market?.code === first.code) ? first : null;
+}
+
 export interface ResolvedMarket {
   market: SearchMarket | null;
   /** True when the market was decided from the website, not picked by the owner. */
@@ -118,7 +131,10 @@ export interface ResolvedMarket {
  */
 export function resolveSearchMarket(setting: string | undefined, website: string | null | undefined): ResolvedMarket {
   const value = (setting ?? "").trim().toLowerCase();
-  if (value === "" || value === MARKET_AUTO) return { market: marketFromDomain(website), auto: true };
+  if (value === "" || value === MARKET_AUTO) {
+    // `website` is one domain or the saved list ("a.com, b.co.uk").
+    return { market: marketFromDomains(parseDomainList(website ?? "").domains), auto: true };
+  }
   if (value === MARKET_ANY) return { market: null, auto: false };
   return { market: findMarket(value), auto: false };
 }

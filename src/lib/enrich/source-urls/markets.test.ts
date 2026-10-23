@@ -47,6 +47,13 @@ describe("resolveSearchMarket", () => {
     expect(resolveSearchMarket("none", "shop.co.uk")).toEqual({ market: null, auto: false });
   });
 
+  it("with several websites, Auto picks a country only when they all point to the same one", () => {
+    expect(resolveSearchMarket("auto", "a.co.uk, b.uk").market?.code).toBe("gb");
+    expect(resolveSearchMarket("auto", "a.co.uk, b.de").market).toBeNull();
+    expect(resolveSearchMarket("auto", "a.co.uk, b.com").market).toBeNull();
+    expect(resolveSearchMarket("de", "a.co.uk, b.com").market?.code).toBe("de");
+  });
+
   it("sets no location for a code that is not on the list", () => {
     expect(resolveSearchMarket("narnia", "shop.co.uk")).toEqual({ market: null, auto: false });
   });

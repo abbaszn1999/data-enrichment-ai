@@ -47,7 +47,8 @@ import {
   buildSiteSourceUrlsQuery,
   describeSiteMiss,
   pickSitePage,
-  siteDomainOf,
+  joinDomains,
+  siteDomainsOf,
   type SiteSearchAttempt,
 } from "./site";
 
@@ -57,8 +58,9 @@ export interface SearchSourceUrlsInput {
   /** One public http(s) photo of the item for Google to look at; omit when the row has none. */
   imageUrl?: string;
   /**
-   * Website mode: search this one website only (the column's Website setting;
-   * anything URL-like is reduced to a bare domain). Empty = the open search.
+   * Website mode: search these websites only, up to three, one search naming
+   * them all (the column's Website setting; anything URL-like is reduced to a
+   * bare domain). Empty = the open search.
    */
   website?: string;
   /** Country to search from, as a place name ("United Kingdom"); sent as the search location, never in the prompt. */
@@ -297,14 +299,14 @@ async function runAttempt(
  */
 async function runSiteAttempt(
   input: SearchSourceUrlsInput,
-  domain: string,
+  domains: string[],
   attempt: SiteSearchAttempt,
   costs: AiCallCost[]
 ): Promise<AttemptOutcome | null> {
   const buildQuery = (hasImage: boolean) =>
     buildSiteSourceUrlsQuery({
       rowData: input.rowData,
-      domain,
+      domains,
       customInstruction: input.customInstruction,
       hasImage,
       attempt,
@@ -322,10 +324,10 @@ async function runSiteAttempt(
     input.location
   );
 
-  const pick = pickSitePage(call.texts, call.referenceLinks, domain);
+  const pick = pickSitePage(call.texts, call.referenceLinks, domains);
   console.log("[Source URLs] Google AI Mode call (website)", {
     attempt,
-    website: domain,
+    website: joinDomains(domains),
     location: input.location ?? null,
     withPhoto: usedImage,
     httpStatus: call.httpStatus,
@@ -336,17 +338,17 @@ async function runSiteAttempt(
   });
 
   if (pick.page) return { sources: [{ title: pick.page.title, uri: pick.page.url }], summary: "", usedImage };
-  return { sources: [], summary: describeSiteMiss(pick, domain), usedImage };
+  return { sources: [], summary: describeSiteMiss(pick, domains), usedImage };
 }
 
 export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<SearchSourceUrlsResult> {
   const costs: AiCallCost[] = [];
-  const domain = siteDomainOf(input.website);
+  const domains = siteDomainsOf(input.website);
   const run = async (attempt: SourceUrlsAttempt): Promise<AttemptOutcome | null> =>
-    domain ? runSiteAttempt(input, domain, attempt, costs) : runAttempt(input, attempt, costs);
+    domains.length > 0 ? runSiteAttempt(input, domains, attempt, costs) : runAttempt(input, attempt, costs);
   const missNote = (parts: string) =>
-    domain
-      ? `The web search found no product page on ${domain} for this item (${parts}).`
+    domains.length > 0
+      ? `The web search found no product page on ${joinDomains(domains)} for this item (${parts}).`
       : `The web search found no page for this item (${parts}).`;
 
   let first: AttemptOutcome;

@@ -721,6 +721,28 @@ describe("Source URLs website mode", () => {
     expect(result.notFoundReason).toMatch(/1 on another website/);
   });
 
+  it("names up to three websites in one search and keeps the page from whichever has it", async () => {
+    const mint = "https://www.mintvelvet.co.uk/product/check-coat-123";
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) =>
+      new Response(aiModeBody("", [{ link: "https://www.google.com/search?ibp=oshop" }, { link: mint, title: "Check Coat" }]), {
+        status: 200,
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchSourceUrls({
+      ...site,
+      website: "mamasandpapas.com, mintvelvet.co.uk, allbirds.com, extra.com",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.sources).toEqual([{ title: "Check Coat", uri: mint }]);
+    const q = searchParams(fetchMock, 0).get("q")!;
+    expect(q.split("\n")[0]).toBe("mamasandpapas.com, mintvelvet.co.uk or allbirds.com product page for this item:");
+    expect(q.split("\n").at(-1)).toBe("Return the product page link only, from mamasandpapas.com, mintvelvet.co.uk or allbirds.com.");
+    expect(q).not.toContain("extra.com");
+  });
+
   it("sends the photo with the first search only", async () => {
     let calls = 0;
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => {

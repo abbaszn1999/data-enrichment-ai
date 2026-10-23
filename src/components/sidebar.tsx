@@ -1913,7 +1913,7 @@ export function Sidebar() {
                   <FinderOutputCard
                     agentId="ci.finder.source-urls"
                     label="Source URLs"
-                    description="The web pages that sell this exact product: the brand's own site, factories and suppliers, wholesalers and retailers. Or set a website to find the item's page on that one shop. Written to the Source URLs column."
+                    description="The web pages that sell this exact product: the brand's own site, factories and suppliers, wholesalers and retailers. Or set up to 3 websites to find the item's page on those shops. Written to the Source URLs column."
                     enabled={runsSourceUrls}
                     expanded={expandedColumns.has(sourceUrlsColumn.id)}
                     disabled={isEnriching}

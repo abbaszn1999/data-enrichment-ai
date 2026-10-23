@@ -1,7 +1,7 @@
 ﻿/**
- * Source URLs, website mode: the owner names ONE website (the column's
- * "Website" setting) and the search asks for that item's page on that site
- * only. This is a different job from the open search in ./skill.ts, so it has
+ * Source URLs, website mode: the owner names one to three websites (the
+ * column's "Website" setting) and the one search asks for that item's page on
+ * those sites only. All the names go in the same request; Google picks the page. This is a different job from the open search in ./skill.ts, so it has
  * its own tiny query and its own checks, and the open search is not touched.
  *
  * Why a separate path. Asked in the open way, with a JSON output rule and a
@@ -19,7 +19,7 @@
  * Pure (no runtime imports beyond helpers), so it is cheap to test.
  */
 import { DEFAULT_SOURCE_URLS_INSTRUCTION } from "@/types";
-import { hostMatchesDomain, normalizeDomain } from "../domains";
+import { SITE_MAX_DOMAINS, hostMatchesDomain, parseDomainList } from "../domains";
 import type { GoogleAiModeReferenceLink } from "../image-finder/exact/searchapi";
 import { cleanPageTitle, harvestSourceCandidates, parseBestSourceAnswer } from "./skill";
 
@@ -32,9 +32,19 @@ export const SITE_MAX_FIELD_CHARS = 120;
 
 export type SiteSearchAttempt = 1 | 2;
 
-/** The website setting as a bare domain, or null when empty or not a website. */
-export function siteDomainOf(setting: string | undefined | null): string | null {
-  return normalizeDomain(String(setting ?? ""));
+/**
+ * The website setting as bare domains: one to three, separated by commas,
+ * spaces or new lines, in the order typed, without repeats. Anything that is not
+ * a website is ignored; an empty list means the open search.
+ */
+export function siteDomainsOf(setting: string | undefined | null): string[] {
+  return parseDomainList(String(setting ?? "")).domains.slice(0, SITE_MAX_DOMAINS);
+}
+
+/** "a.com", "a.com or b.com", "a.com, b.com or c.com". */
+export function joinDomains(domains: string[]): string {
+  if (domains.length <= 1) return domains[0] ?? "";
+  return `${domains.slice(0, -1).join(", ")} or ${domains[domains.length - 1]}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,8 +128,8 @@ export function simplifySiteFields(fields: SiteField[]): SiteField[] {
 
 export interface BuildSiteQueryInput {
   rowData: Record<string, string>;
-  /** Bare domain, e.g. "mamasandpapas.com". */
-  domain: string;
+  /** Bare domains, e.g. ["mamasandpapas.com"]; up to SITE_MAX_DOMAINS, all named in the one request. */
+  domains: string[];
   customInstruction?: string;
   hasImage?: boolean;
   /** 1 = the full request; 2 = the simpler one (name and barcode only). Defaults to 1. */
@@ -133,11 +143,15 @@ export function siteInstructionOf(customInstruction: string | undefined): string
   return cutAtWord(text, SITE_INSTRUCTION_MAX_CHARS);
 }
 
-function composeSiteQuery(domain: string, fields: SiteField[]): string {
-  const lines = [`${domain} product page for this item:`];
+function composeSiteQuery(domains: string[], fields: SiteField[]): string {
+  const sites = joinDomains(domains);
+  const lines = [`${sites} product page for this item:`];
   if (fields.length > 0) lines.push(...fields.map((f) => `- ${f.label}: ${f.value}`));
   else lines.push("- (no product details were provided)");
-  lines.push(`Return the ${domain} product page link only.`);
+  // One site keeps its exact wording; several are all named, and Google picks the page.
+  lines.push(
+    domains.length > 1 ? `Return the product page link only, from ${sites}.` : `Return the ${sites} product page link only.`
+  );
   return lines.join("\n");
 }
 
@@ -149,14 +163,14 @@ function composeSiteQuery(domain: string, fields: SiteField[]): string {
  * attempt 1, so no second search is paid for.
  */
 export function buildSiteSourceUrlsQuery(input: BuildSiteQueryInput): string {
-  const { domain } = input;
+  const { domains } = input;
   const fields = siteFieldsOf(input.rowData);
-  const first = composeSiteQuery(domain, fields);
+  const first = composeSiteQuery(domains, fields);
 
   if ((input.attempt ?? 1) === 2) {
     const simple = simplifySiteFields(fields);
     if (simple.length === 0) return "";
-    const second = composeSiteQuery(domain, simple);
+    const second = composeSiteQuery(domains, simple);
     const firstIsPlain = first === second && !input.hasImage && !siteInstructionOf(input.customInstruction);
     return firstIsPlain ? "" : second;
   }
@@ -216,6 +230,22 @@ export function siteLinkProblem(raw: string, domain: string): SiteLinkProblem | 
   return null;
 }
 
+/**
+ * The same check against every named website: a link passes if it is a product
+ * page on any of them. There is no ranking between the sites; Google decides
+ * which one to take the page from. When none passes, the reason on a named site
+ * (home page, category) is reported ahead of "on another website".
+ */
+export function siteLinkProblemOn(raw: string, domains: string[]): SiteLinkProblem | null {
+  let reported: SiteLinkProblem = "other_site";
+  for (const domain of domains) {
+    const problem = siteLinkProblem(raw, domain);
+    if (!problem) return null;
+    if (problem !== "other_site") reported = problem;
+  }
+  return reported;
+}
+
 /** The link without a hash fragment or tracking parameters; the rest (e.g. ?variant=) is kept. */
 export function cleanSiteLink(raw: string): string {
   try {
@@ -259,7 +289,7 @@ export interface SiteAnswerPick {
 export function pickSitePage(
   texts: string[],
   referenceLinks: GoogleAiModeReferenceLink[],
-  domain: string
+  domains: string[]
 ): SiteAnswerPick {
   const named = [
     ...parseBestSourceAnswer(texts).sources.map((s) => ({ url: s.url, title: s.title })),
@@ -276,7 +306,7 @@ export function pickSitePage(
       const key = keyOf(item.url);
       if (seen.has(key)) continue;
       seen.add(key);
-      const problem = siteLinkProblem(item.url, domain);
+      const problem = siteLinkProblemOn(item.url, domains);
       if (problem) dropped[problem] = (dropped[problem] ?? 0) + 1;
       else out.push(item);
     }
@@ -287,8 +317,16 @@ export function pickSitePage(
   const citedOnly = valid(cited);
   const namedOnly = valid(named.filter((n) => !citedKeys.has(keyOf(n.url))));
   const best = [...namedAndCited, ...citedOnly, ...namedOnly][0];
+  const siteOf = (url: string) => {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return domains.find((d) => hostMatchesDomain(host, d)) ?? domains[0] ?? "";
+    } catch {
+      return domains[0] ?? "";
+    }
+  };
   const titleOf = (url: string, own?: string) =>
-    cleanPageTitle(cited.find((c) => keyOf(c.url) === keyOf(url))?.title ?? own) || domain;
+    cleanPageTitle(cited.find((c) => keyOf(c.url) === keyOf(url))?.title ?? own) || siteOf(url);
 
   return {
     page: best ? { url: cleanSiteLink(best.url), title: titleOf(best.url, best.title) } : null,
@@ -305,12 +343,12 @@ const PROBLEM_LABELS: Record<SiteLinkProblem, string> = {
 };
 
 /** "returned 3 links, none a product page on shop.com (1 the home page, 2 on another website)". */
-export function describeSiteMiss(pick: SiteAnswerPick, domain: string): string {
+export function describeSiteMiss(pick: SiteAnswerPick, domains: string[]): string {
   if (pick.considered === 0) return "returned no pages";
   const reasons = (Object.keys(PROBLEM_LABELS) as SiteLinkProblem[])
     .filter((problem) => (pick.dropped[problem] ?? 0) > 0)
     .map((problem) => `${pick.dropped[problem]} ${PROBLEM_LABELS[problem]}`)
     .join(", ");
-  return `returned ${pick.considered} link${pick.considered === 1 ? "" : "s"}, none a product page on ${domain}${reasons ? ` (${reasons})` : ""}`;
+  return `returned ${pick.considered} link${pick.considered === 1 ? "" : "s"}, none a product page on ${joinDomains(domains)}${reasons ? ` (${reasons})` : ""}`;
 }
 

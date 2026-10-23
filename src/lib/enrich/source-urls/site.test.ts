@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_SOURCE_URLS_INSTRUCTION } from "@/types";
 import {
   buildSiteSourceUrlsQuery,
@@ -9,9 +9,11 @@ import {
   SITE_MAX_FIELDS,
   SITE_MAX_FIELD_CHARS,
   pickSitePage,
-  siteDomainOf,
+  joinDomains,
+  siteDomainsOf,
   siteInstructionOf,
   siteLinkProblem,
+  siteLinkProblemOn,
   SITE_INSTRUCTION_MAX_CHARS,
 } from "./site";
 
@@ -26,14 +28,31 @@ const example = {
   Image: "https://cdn.example.com/a.jpg",
 };
 
-describe("siteDomainOf", () => {
+describe("siteDomainsOf", () => {
   it("reduces a pasted link to the bare website and rejects what is not one", () => {
-    expect(siteDomainOf("https://www.MamasAndPapas.com/products/x?y=1")).toBe(DOMAIN);
-    expect(siteDomainOf("  mamasandpapas.co.uk ")).toBe("mamasandpapas.co.uk");
-    expect(siteDomainOf("")).toBeNull();
-    expect(siteDomainOf(undefined)).toBeNull();
-    expect(siteDomainOf("not a website")).toBeNull();
-    expect(siteDomainOf("javascript:alert(1)")).toBeNull();
+    expect(siteDomainsOf("https://www.MamasAndPapas.com/products/x?y=1")).toEqual([DOMAIN]);
+    expect(siteDomainsOf("  mamasandpapas.co.uk ")).toEqual(["mamasandpapas.co.uk"]);
+    expect(siteDomainsOf("")).toEqual([]);
+    expect(siteDomainsOf(undefined)).toEqual([]);
+    expect(siteDomainsOf("javascript:alert(1)")).toEqual([]);
+  });
+
+  it("takes up to three websites, in the order typed, without repeats", () => {
+    expect(siteDomainsOf("mamasandpapas.com, https://www.mintvelvet.co.uk/x\nmamasandpapas.com allbirds.com")).toEqual([
+      DOMAIN,
+      "mintvelvet.co.uk",
+      "allbirds.com",
+    ]);
+    expect(siteDomainsOf("a.com, b.com, c.com, d.com")).toEqual(["a.com", "b.com", "c.com"]);
+  });
+});
+
+describe("joinDomains", () => {
+  it("reads as a short list", () => {
+    expect(joinDomains([])).toBe("");
+    expect(joinDomains(["a.com"])).toBe("a.com");
+    expect(joinDomains(["a.com", "b.com"])).toBe("a.com or b.com");
+    expect(joinDomains(["a.com", "b.com", "c.com"])).toBe("a.com, b.com or c.com");
   });
 });
 
@@ -93,7 +112,7 @@ describe("simplifySiteFields", () => {
 
 describe("buildSiteSourceUrlsQuery", () => {
   it("is one fixed sentence around the source columns, as typed", () => {
-    expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN })).toBe(
+    expect(buildSiteSourceUrlsQuery({ rowData: example, domains: [DOMAIN] })).toBe(
       [
         "mamasandpapas.com product page for this item:",
         "- SKU: S07FN6DB5",
@@ -105,42 +124,55 @@ describe("buildSiteSourceUrlsQuery", () => {
     );
   });
 
+  it("names every website in the same one request when there are several", () => {
+    expect(buildSiteSourceUrlsQuery({ rowData: { SKU: "S07FN6DB5" }, domains: [DOMAIN, "mintvelvet.co.uk"] })).toBe(
+      [
+        "mamasandpapas.com or mintvelvet.co.uk product page for this item:",
+        "- SKU: S07FN6DB5",
+        "Return the product page link only, from mamasandpapas.com or mintvelvet.co.uk.",
+      ].join("\n")
+    );
+    expect(
+      buildSiteSourceUrlsQuery({ rowData: { SKU: "S1" }, domains: ["a.com", "b.com", "c.com"], customInstruction: "Brown." })
+    ).toContain("a.com, b.com or c.com product page for this item:");
+  });
+
   it("works for a sheet with unfamiliar headers", () => {
     expect(
-      buildSiteSourceUrlsQuery({ rowData: { Artikelbezeichnung: "Akku-Bohrschrauber 18V", EAN: "4006381333931" }, domain: "acme.de" })
+      buildSiteSourceUrlsQuery({ rowData: { Artikelbezeichnung: "Akku-Bohrschrauber 18V", EAN: "4006381333931" }, domains: ["acme.de"] })
     ).toBe(
       "acme.de product page for this item:\n- Artikelbezeichnung: Akku-Bohrschrauber 18V\n- EAN: 4006381333931\nReturn the acme.de product page link only."
     );
   });
 
   it("says so plainly when the row has nothing to send", () => {
-    expect(buildSiteSourceUrlsQuery({ rowData: { A: "" }, domain: "acme.com" })).toContain("(no product details were provided)");
+    expect(buildSiteSourceUrlsQuery({ rowData: { A: "" }, domains: ["acme.com"] })).toContain("(no product details were provided)");
   });
 
   it("has no JSON request, no shouting and no rulebook", () => {
-    const query = buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, customInstruction: "Prefer the brown one." });
+    const query = buildSiteSourceUrlsQuery({ rowData: example, domains: [DOMAIN], customInstruction: "Prefer the brown one." });
     expect(query).not.toMatch(/json|critical|priority|sources|\{|\}/i);
     expect(query.length).toBeLessThan(500);
   });
 
   it("adds the owner's note after the request, short, and skips the default text", () => {
-    const query = buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, customInstruction: "Prefer the brown one." });
+    const query = buildSiteSourceUrlsQuery({ rowData: example, domains: [DOMAIN], customInstruction: "Prefer the brown one." });
     const lines = query.split("\n");
     expect(lines[lines.length - 2]).toBe("Return the mamasandpapas.com product page link only.");
     expect(lines[lines.length - 1]).toBe("Note: Prefer the brown one.");
 
     expect(siteInstructionOf(DEFAULT_SOURCE_URLS_INSTRUCTION)).toBe("");
-    expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, customInstruction: DEFAULT_SOURCE_URLS_INSTRUCTION })).not.toContain("Note:");
+    expect(buildSiteSourceUrlsQuery({ rowData: example, domains: [DOMAIN], customInstruction: DEFAULT_SOURCE_URLS_INSTRUCTION })).not.toContain("Note:");
     expect(siteInstructionOf("word ".repeat(200)).length).toBeLessThanOrEqual(SITE_INSTRUCTION_MAX_CHARS);
   });
 
   it("mentions the photo only when one is attached", () => {
-    expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN })).not.toContain("photo");
-    expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, hasImage: true })).toContain("The attached photo shows the product.");
+    expect(buildSiteSourceUrlsQuery({ rowData: example, domains: [DOMAIN] })).not.toContain("photo");
+    expect(buildSiteSourceUrlsQuery({ rowData: example, domains: [DOMAIN], hasImage: true })).toContain("The attached photo shows the product.");
   });
 
   it("asks a simpler second question: the name and the barcode only", () => {
-    expect(buildSiteSourceUrlsQuery({ rowData: example, domain: DOMAIN, attempt: 2, customInstruction: "x", hasImage: true })).toBe(
+    expect(buildSiteSourceUrlsQuery({ rowData: example, domains: [DOMAIN], attempt: 2, customInstruction: "x", hasImage: true })).toBe(
       [
         "mamasandpapas.com product page for this item:",
         "- Description: CHECK JACKET BROWN 6-9M",
@@ -152,11 +184,11 @@ describe("buildSiteSourceUrlsQuery", () => {
 
   it("asks no second question when there is nothing simpler to ask", () => {
     // Only a name: the first request already was the simple one.
-    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Check Jacket" }, domain: "acme.com", attempt: 2 })).toBe("");
+    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Check Jacket" }, domains: ["acme.com"], attempt: 2 })).toBe("");
     // Only codes: dropping them would leave nothing to search for.
-    expect(buildSiteSourceUrlsQuery({ rowData: { SKU: "W-1" }, domain: "acme.com", attempt: 2 })).toBe("");
+    expect(buildSiteSourceUrlsQuery({ rowData: { SKU: "W-1" }, domains: ["acme.com"], attempt: 2 })).toBe("");
     // A photo or a note made the first request different, so the plain one is worth asking.
-    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Check Jacket" }, domain: "acme.com", attempt: 2, hasImage: true })).not.toBe("");
+    expect(buildSiteSourceUrlsQuery({ rowData: { Title: "Check Jacket" }, domains: ["acme.com"], attempt: 2, hasImage: true })).not.toBe("");
   });
 });
 
@@ -199,6 +231,31 @@ describe("siteLinkProblem", () => {
   });
 });
 
+describe("siteLinkProblemOn", () => {
+  const sites = [DOMAIN, "mintvelvet.co.uk"];
+
+  it("passes a product page on any of the named websites", () => {
+    expect(siteLinkProblemOn(PRODUCT, sites)).toBeNull();
+    expect(siteLinkProblemOn("https://www.mintvelvet.co.uk/product/check-coat-123", sites)).toBeNull();
+  });
+
+  it("still rejects other websites, and reports a problem on a named site first", () => {
+    expect(siteLinkProblemOn("https://www.google.com/search?q=product&ibp=oshop", sites)).toBe("other_site");
+    expect(siteLinkProblemOn("https://www.mintvelvet.co.uk/", sites)).toBe("homepage");
+    expect(siteLinkProblemOn("https://www.mintvelvet.co.uk/collections/coats", sites)).toBe("listing_page");
+  });
+
+  it("picks the page from whichever named website has it, and titles it with that site", () => {
+    const mint = "https://www.mintvelvet.co.uk/product/check-coat-123";
+    const pick = pickSitePage([], [{ link: "https://www.google.com/search?ibp=oshop" }, { link: mint }], sites);
+    expect(pick.page).toEqual({ url: mint, title: "mintvelvet.co.uk" });
+    expect(describeSiteMiss(pickSitePage([], [], sites), sites)).toBe("returned no pages");
+    expect(describeSiteMiss(pickSitePage([], [{ link: "https://www.amazon.co.uk/dp/B0123456789" }], sites), sites)).toBe(
+      "returned 1 link, none a product page on mamasandpapas.com or mintvelvet.co.uk (1 on another website)"
+    );
+  });
+});
+
 describe("cleanSiteLink", () => {
   it("drops the fragment and tracking parameters but keeps the variant", () => {
     expect(cleanSiteLink(`${PRODUCT}?variant=54315569021265&utm_source=google&srsltid=abc#:~:text=Check`)).toBe(
@@ -212,31 +269,31 @@ describe("pickSitePage", () => {
   const ref = (link: string, title?: string) => ({ link, title });
 
   it("takes the cited product page when the answer only names the home page (the bug this mode fixes)", () => {
-    const pick = pickSitePage(["Here it is: https://www.mamasandpapas.com"], [ref(PRODUCT, "Check Jacket - Mamas & Papas")], DOMAIN);
+    const pick = pickSitePage(["Here it is: https://www.mamasandpapas.com"], [ref(PRODUCT, "Check Jacket - Mamas & Papas")], [DOMAIN]);
     expect(pick.page).toEqual({ url: PRODUCT, title: "Check Jacket - Mamas & Papas" });
     expect(pick.dropped.homepage).toBe(1);
   });
 
   it("takes a product page from the answer when nothing was cited", () => {
-    const pick = pickSitePage([`[Check Jacket](${PRODUCT})`], [], DOMAIN);
+    const pick = pickSitePage([`[Check Jacket](${PRODUCT})`], [], [DOMAIN]);
     expect(pick.page).toEqual({ url: PRODUCT, title: "Check Jacket" });
   });
 
   it("reads JSON when the search still answers with it", () => {
-    const pick = pickSitePage([JSON.stringify({ sources: [{ url: PRODUCT, title: "Check Jacket" }] })], [], DOMAIN);
+    const pick = pickSitePage([JSON.stringify({ sources: [{ url: PRODUCT, title: "Check Jacket" }] })], [], [DOMAIN]);
     expect(pick.page?.url).toBe(PRODUCT);
   });
 
   it("prefers a page that is both named in the answer and cited", () => {
     const other = "https://www.mamasandpapas.com/products/check-coat-s07fn7aa1";
-    const pick = pickSitePage([`Best match: ${PRODUCT}`], [ref(other, "Coat"), ref(PRODUCT, "Jacket")], DOMAIN);
+    const pick = pickSitePage([`Best match: ${PRODUCT}`], [ref(other, "Coat"), ref(PRODUCT, "Jacket")], [DOMAIN]);
     expect(pick.page?.url).toBe(PRODUCT);
     expect(pick.page?.title).toBe("Jacket");
   });
 
   it("keeps only the first valid page, never a second guess", () => {
     const second = "https://www.mamasandpapas.com/products/check-coat-s07fn7aa1";
-    const pick = pickSitePage([], [ref(PRODUCT), ref(second)], DOMAIN);
+    const pick = pickSitePage([], [ref(PRODUCT), ref(second)], [DOMAIN]);
     expect(pick.page?.url).toBe(PRODUCT);
   });
 
@@ -244,24 +301,24 @@ describe("pickSitePage", () => {
     const pick = pickSitePage(
       ["https://www.amazon.co.uk/dp/B0123456789 https://www.mamasandpapas.com/collections/jackets"],
       [ref("https://www.mamasandpapas.com/"), ref("https://www.argos.co.uk/product/1234567")],
-      DOMAIN
+      [DOMAIN]
     );
     expect(pick.page).toBeNull();
     expect(pick.considered).toBe(4);
-    expect(describeSiteMiss(pick, DOMAIN)).toBe(
+    expect(describeSiteMiss(pick, [DOMAIN])).toBe(
       "returned 4 links, none a product page on mamasandpapas.com (2 on another website, 1 the home page, 1 a category or search page)"
     );
   });
 
   it("falls back to the website name for a page with no title, and reports an empty answer", () => {
-    expect(pickSitePage([], [ref(PRODUCT)], DOMAIN).page?.title).toBe(DOMAIN);
-    const none = pickSitePage(["I could not find it."], [], DOMAIN);
+    expect(pickSitePage([], [ref(PRODUCT)], [DOMAIN]).page?.title).toBe(DOMAIN);
+    const none = pickSitePage(["I could not find it."], [], [DOMAIN]);
     expect(none.page).toBeNull();
-    expect(describeSiteMiss(none, DOMAIN)).toBe("returned no pages");
+    expect(describeSiteMiss(none, [DOMAIN])).toBe("returned no pages");
   });
 
   it("counts a page once however many times it appears", () => {
-    const pick = pickSitePage([`${PRODUCT} ${PRODUCT}#reviews`], [ref(`${PRODUCT}?utm_source=x`)], DOMAIN);
+    const pick = pickSitePage([`${PRODUCT} ${PRODUCT}#reviews`], [ref(`${PRODUCT}?utm_source=x`)], [DOMAIN]);
     expect(pick.considered).toBe(1);
   });
 });

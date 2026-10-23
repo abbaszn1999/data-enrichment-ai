@@ -2,7 +2,7 @@
 
 import { useId, useState } from "react";
 import { AlertCircle, Globe, MapPin, X } from "lucide-react";
-import { normalizeDomain } from "@/lib/enrich/domains";
+import { SITE_MAX_DOMAINS, parseDomainList } from "@/lib/enrich/domains";
 import {
   MARKET_ANY,
   MARKET_AUTO,
@@ -48,14 +48,23 @@ export function SourceUrlsSiteSettings(props: {
       if (saved) props.onWebsiteChange("");
       return;
     }
-    const domain = normalizeDomain(text);
-    if (!domain) {
-      setError("Enter a website such as mamasandpapas.com. Paste a page link and only the website is kept.");
+    const { domains, invalid } = parseDomainList(text);
+    if (domains.length === 0 || invalid.length > 0) {
+      setError(
+        invalid.length > 0 && domains.length > 0
+          ? `"${invalid[0]}" is not a website. Use names such as mamasandpapas.com, separated by commas.`
+          : "Enter a website such as mamasandpapas.com. Paste a page link and only the website is kept."
+      );
       return;
     }
+    if (domains.length > SITE_MAX_DOMAINS) {
+      setError(`Add up to ${SITE_MAX_DOMAINS} websites. Remove ${domains.length - SITE_MAX_DOMAINS} to continue.`);
+      return;
+    }
+    const value = domains.join(", ");
     setError(null);
-    setDraft(domain);
-    if (domain !== saved) props.onWebsiteChange(domain);
+    setDraft(value);
+    if (value !== saved) props.onWebsiteChange(value);
   };
 
   const clear = () => {
@@ -66,7 +75,8 @@ export function SourceUrlsSiteSettings(props: {
 
   const marketValue = props.market?.trim() ? props.market : MARKET_AUTO;
   const { market: resolved, auto } = resolveSearchMarket(props.market, saved || null);
-  const tld = saved.split(".").pop() ?? "";
+  const savedDomains = parseDomainList(saved).domains;
+  const several = savedDomains.length > 1;
 
   let marketHint: string;
   if (marketValue === MARKET_ANY) {
@@ -74,16 +84,19 @@ export function SourceUrlsSiteSettings(props: {
   } else if (!auto) {
     marketHint = resolved ? `The search runs as a shopper in ${resolved.name} would see it.` : "No location is sent.";
   } else if (resolved) {
-    marketHint = `Auto chose ${resolved.name} from the .${tld} website. Pick another country to override it.`;
+    marketHint = `Auto chose ${resolved.name} from the website ending${several ? "s" : ""}. Pick another country to override it.`;
+  } else if (several) {
+    marketHint =
+      "These websites do not all point to one country, so no location is sent. Pick a country if they sell in one.";
   } else if (saved) {
-    marketHint = `.${tld} websites do not say which country they sell in, so no location is sent. Pick a country if the shop sells in one.`;
+    marketHint = `This website's ending does not say which country it sells in, so no location is sent. Pick a country if the shop sells in one.`;
   } else {
     marketHint = "Auto sets a country from the website's ending (.co.uk, .de). Pick one to use it for every row.";
   }
 
   const saveHint = saved
-    ? `Searches ${saved} only and returns the item's page there. Never the home page.`
-    : "Optional. Leave empty to search every website.";
+    ? `Searches ${several ? "these websites" : saved} only, in one search, and returns the item's page. Never the home page.`
+    : `Optional. Add up to ${SITE_MAX_DOMAINS} websites, separated by commas. Leave empty to search every website.`;
 
   return (
     <div className="space-y-2.5 rounded-md border border-border/60 bg-background/60 p-2.5">
@@ -94,7 +107,7 @@ export function SourceUrlsSiteSettings(props: {
 
       <div className="space-y-1">
         <label htmlFor={websiteId} className={FIELD_LABEL}>
-          Website
+          Website{` (up to ${SITE_MAX_DOMAINS})`}
         </label>
         <div className="relative">
           <Globe className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
@@ -121,7 +134,7 @@ export function SourceUrlsSiteSettings(props: {
                 setError(null);
               }
             }}
-            placeholder="e.g. mamasandpapas.com"
+            placeholder="e.g. mamasandpapas.com, mintvelvet.co.uk"
             aria-invalid={error ? true : undefined}
             aria-describedby={`${websiteId}-hint`}
             className={`${FIELD_BASE} pl-8 pr-8 placeholder:text-muted-foreground/50 ${
