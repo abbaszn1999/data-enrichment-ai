@@ -21,10 +21,12 @@
  * text while citing the product page. Cited pages are ranked first.
  *
  * A search that fails does not stop the round: the others' answers are used,
- * and the failure is named in the note. Only when not one search of round 1
- * answers does the row fail (and it keeps the charge of any call that was
- * billed). A failure in round 2 leaves the row "none found" with the costs so
- * far.
+ * and the failure is named in the note. When not one search of round 1
+ * answers, round 2 still runs (its requests are worded differently, and a
+ * failure is often tied to one wording). Only when not one search of the whole
+ * row answers does the row fail (and it keeps the charge of any call that was
+ * billed). If some search answered, a failure elsewhere leaves the row "none
+ * found" with the costs so far.
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
 import { hideProviderNames } from "@/lib/provider-names";
@@ -396,6 +398,8 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
   let searchesStarted = 0;
   let usedImage = false;
   let timeLimit = false;
+  /** The failure of the first search that did not answer; thrown if no search answers at all. */
+  let firstFailure: unknown;
 
   const missNote = () =>
     `The web search found no page for this item (${describeTries(summaries)}${timeLimit ? "; stopped searching at the time limit" : ""}).`;
@@ -454,14 +458,19 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
       };
     }
 
-    // Not one search of the first round answered: nothing was learned, so the
-    // row fails as a whole (and may be attempted again). Any billed call keeps its charge.
-    if (roundIndex === 0 && outcomes.length === 0) {
-      const failure = results.find((result) => result.error !== undefined)?.error;
-      const message = failure instanceof Error ? failure.message : String(failure);
-      if (costs.length > 0) throw new EnrichBilledAttemptError(message, costs);
-      throw failure;
-    }
+    // Not one search of this round answered. Google AI Mode often fails one
+    // particular wording every time (a 503 "could not retrieve results"), so
+    // repeating it is pointless: the next round asks the other requests, which
+    // are worded differently. The row only fails when no search at all answered.
+    if (firstFailure === undefined) firstFailure = results.find((result) => result.error !== undefined)?.error;
+  }
+
+  // Not one search of either round answered: nothing was learned, so the row
+  // fails as a whole. Any billed call keeps its charge.
+  if (answered === 0 && firstFailure !== undefined) {
+    const message = firstFailure instanceof Error ? firstFailure.message : String(firstFailure);
+    if (costs.length > 0) throw new EnrichBilledAttemptError(message, costs);
+    throw firstFailure;
   }
 
   return {

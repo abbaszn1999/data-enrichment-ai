@@ -44,13 +44,14 @@ describe("a row's Source URLs search runs at most once, however often the row is
     expect(billedCostsOf(second)).toHaveLength(0);
   });
 
-  it("tries again after a failure that billed nothing", async () => {
-    findSourceUrls.mockRejectedValueOnce(new Error("network down")).mockResolvedValueOnce(found);
+  it("does not search again after a failure either, even one that billed nothing", async () => {
+    // Every search was already tried twice and in different wordings, so a second
+    // whole attempt would only repeat the same failing calls for minutes.
+    findSourceUrls.mockRejectedValueOnce(new Error("Web search failed (503)"));
     const memo = {};
-    await expect(enrichRow(params(memo))).rejects.toThrow("network down");
-    const second = await enrichRow(params(memo));
-    expect(findSourceUrls).toHaveBeenCalledTimes(2);
-    expect(second.costs).toHaveLength(1);
+    await expect(enrichRow(params(memo))).rejects.toThrow("Web search failed (503)");
+    await expect(enrichRow(params(memo))).rejects.toThrow("Web search failed (503)");
+    expect(findSourceUrls).toHaveBeenCalledTimes(1);
   });
 
   it("reuses a search that answered without charging it a second time", async () => {

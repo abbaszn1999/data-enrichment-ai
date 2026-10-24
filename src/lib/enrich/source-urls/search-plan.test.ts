@@ -207,14 +207,31 @@ describe("searchSourceUrls with a plan", () => {
     });
   });
 
-  it("uses every ticked column as the identity when the planner chose none", async () => {
+  it("uses the ticked columns as the identity when the planner chose none, except those the request already contains", async () => {
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     await searchSourceUrls({ ...base, plan: { ...plan, identityColumns: undefined }, maxTries: 1 });
     const query = queryOf(fetchMock, 0);
-    expect(query).toContain("- Barcode: 5063229294815");
+    // The barcode is what request 1 searches for, so it is not repeated as identity.
+    expect(query).not.toContain("- Barcode:");
     expect(query).toContain("- Vendor SKU: S07FN6DB5");
     expect(query).toContain("- Title: Check jacket");
+  });
+
+  it("sends no identity block when the only ticked column is the code the request searches for", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const codeOnly: SourceUrlsPlan = {
+      version: 1,
+      source: "planner",
+      columns: ["Code"],
+      steps: [{ name: "Code", text: 'Search toys4less.com for the exact code "{{Code}}".' }],
+    };
+    await searchSourceUrls({ rowData: { Code: "SSP1486359" }, customInstruction: "exact code only", plan: codeOnly, retryDelayMs: 0, maxTries: 1 });
+    const query = queryOf(fetchMock, 0);
+    expect(query).toContain('exact code "SSP1486359"');
+    expect(query).not.toContain("- Code:");
+    expect(query).not.toContain(SOURCE_URLS_IDENTITY_HEADING);
   });
 
   it("skips a request when its column is empty on this row", async () => {

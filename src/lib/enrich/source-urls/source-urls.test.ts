@@ -369,12 +369,26 @@ describe("searchSourceUrls", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("throws, and never starts round 2, when not one search of round 1 answers", async () => {
+  it("throws only when not one search of either round answers, after trying both rounds", async () => {
     const fetchMock = vi.fn(async () => new Response("boom", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
     await expect(searchSourceUrls({ ...input, retryDelayMs: 0 })).rejects.toThrow(/failed \(500\)/);
-    // Three searches, each tried twice, and no second round.
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    // Five searches (three in round 1, two in round 2), each tried twice.
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+  });
+
+  it("still runs round 2 when every search of round 1 failed, and uses its answer", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      // Round 1: three searches, each tried twice, all fail. Round 2 answers.
+      return calls <= 6 ? new Response("could not retrieve", { status: 503 }) : new Response(aiModeBody(FOUND_ANSWER), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await searchSourceUrls({ ...input, retryDelayMs: 0 });
+    expect(result.sources.length).toBeGreaterThan(0);
+    // Only the answered calls are billed.
+    expect(result.costs).toHaveLength(2);
   });
 
   it("tries a rate-limited search once more and charges only the answered call", async () => {

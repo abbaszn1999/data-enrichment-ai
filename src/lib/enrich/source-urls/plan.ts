@@ -229,15 +229,26 @@ export function linkIsOnWebsites(url: string, websites: string[] | undefined): b
  * plan's identity columns, or (none chosen) every ticked column that has a
  * value. A column with no value on this row is left out; it never skips a
  * search. Each value is cut so a long description cannot crowd out the request.
+ *
+ * When the planner chose no identity columns, a ticked column whose value is
+ * already written in the request (`requestText`) is left out too: repeating the
+ * code the request is searching for would only add a second copy of it (and,
+ * for a sheet with one ticked code column, an identity block with nothing else).
  */
-export function renderIdentityLines(plan: SourceUrlsPlan, rowData: Record<string, string>): string[] {
+export function renderIdentityLines(
+  plan: SourceUrlsPlan,
+  rowData: Record<string, string>,
+  requestText?: string
+): string[] {
   const fields = productFields(rowData);
   const byKey = new Map(fields.map((field) => [normalizeName(field.name), field]));
   const wanted = plan.identityColumns?.length ? plan.identityColumns : fields.map((field) => field.name);
   const lines: string[] = [];
   for (const name of wanted) {
     const field = byKey.get(normalizeName(name));
-    if (field?.value) lines.push(`${field.name}: ${field.value.slice(0, SOURCE_URLS_IDENTITY_VALUE_CHARS)}`);
+    if (!field?.value) continue;
+    if (!plan.identityColumns?.length && requestText && requestText.toLowerCase().includes(field.value.trim().toLowerCase())) continue;
+    lines.push(`${field.name}: ${field.value.slice(0, SOURCE_URLS_IDENTITY_VALUE_CHARS)}`);
   }
   return lines;
 }
@@ -337,10 +348,9 @@ export function planRounds(
 
   const usable: PlannedTry[] = [];
   if (plan?.source === "planner") {
-    const identity = renderIdentityLines(plan, rowData);
     for (const step of plan.steps) {
       const text = renderPlanStep(step, rowData);
-      if (text !== null) usable.push({ label: step.name, text, identity });
+      if (text !== null) usable.push({ label: step.name, text, identity: renderIdentityLines(plan, rowData, text) });
     }
   }
   if (usable.length === 0) usable.push({});

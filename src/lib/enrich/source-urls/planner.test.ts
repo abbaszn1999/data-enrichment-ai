@@ -275,6 +275,15 @@ describe("planner brief and skill", () => {
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/ONLY when the owner asked for a specific number/);
   });
 
+  it("lets the owner's 'exact code only' beat the default cautions, and keeps requests to plain web search", () => {
+    const skill = SOURCE_URLS_PLANNER_INSTRUCTIONS;
+    expect(skill).toMatch(/THE OWNER'S WORD WINS/);
+    expect(skill).toMatch(/exact code only/);
+    expect(skill).toMatch(/do NOT write that a code match alone is not proof/);
+    expect(skill).toMatch(/do NOT add that a different colour, size or model does not count/);
+    expect(skill).toMatch(/can only search the web\. Never ask it to use a website's own search box/);
+  });
+
   it("tells the planner a code is not unique and that the app adds the product's identity itself", () => {
     const skill = SOURCE_URLS_PLANNER_INSTRUCTIONS;
     // Only a barcode may stand alone; a code is never proof.

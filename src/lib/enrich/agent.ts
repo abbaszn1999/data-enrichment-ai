@@ -72,10 +72,12 @@ export async function enrichRow(
 /**
  * The Source URLs search for one row, at most once per row however many times
  * the row is attempted. A search that answered is reused (its cost was charged
- * with the attempt that made it). One that failed after billing is not run
- * again: the next attempt fails at once with the same message, so a row can
- * never bill more than one search plan (up to five searches) in total. A
- * failure that billed nothing is safe to try again.
+ * with the attempt that made it). One that failed is not run again: the next
+ * attempt fails at once with the same message. A failed search is already
+ * tried twice (each call is retried once) and across different wordings, so
+ * a second whole attempt would only repeat the same failing calls for minutes,
+ * and a row can never bill more than one search plan (up to five searches) in
+ * total. The user can run the failed row again later.
  */
 async function findSourceUrlsOnce(params: EnrichAgentParams): Promise<EnrichAgentResult> {
   const memo = params.sourceUrlsMemo;
@@ -87,7 +89,7 @@ async function findSourceUrlsOnce(params: EnrichAgentParams): Promise<EnrichAgen
     if (memo) memo.result = result;
     return result;
   } catch (error) {
-    if (memo && !(error instanceof EnrichCancelledError) && billedCostsOf(error).length > 0) {
+    if (memo && !(error instanceof EnrichCancelledError)) {
       memo.failure = error instanceof Error ? error.message : String(error);
     }
     throw error;
