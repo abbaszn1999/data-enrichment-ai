@@ -10,6 +10,7 @@ import {
   SOURCE_URLS_IDENTITY_HEADING,
   buildSourceUrlsQuery,
 } from "./skill";
+import { EnrichCancelledError } from "../openai";
 import { searchSourceUrls, SOURCE_URLS_MAX_TRIES, SOURCE_URLS_TRIES_BUDGET_MS } from "./search";
 
 const aiModeBody = (answer: string, referenceLinks: Array<{ link: string; title?: string }> = []) =>
@@ -270,6 +271,71 @@ describe("searchSourceUrls with a plan", () => {
     expect(query).toContain(LIVE_LINKS_RULE);
     expect(query).toContain('return {"sources":[]}');
     expect(query).toContain('{"sources":[{"url":"https://...","title":"page title"}]}');
+  });
+
+  describe("a slow search does not hold the row", () => {
+    const OTHER = "https://www.mamasandpapas.com/products/check-jacket-other-s07fn6db4";
+    const foundOther = () => aiModeBody(JSON.stringify({ sources: [{ url: OTHER, title: "Other" }] }));
+
+    it("hangs up on a search still waiting after the grace period once another has a page, and bills only the answered ones", async () => {
+      let calls = 0;
+      const fetchMock = vi.fn((..._args: [string | URL, RequestInit?]) => {
+        calls += 1;
+        // Calls 1 and 2 answer at once; call 3 never does (and ignores the abort signal).
+        return calls <= 2 ? Promise.resolve(new Response(found(), { status: 200 })) : new Promise<Response>(() => {});
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const started = Date.now();
+      const result = await searchSourceUrls({ ...base, maxTries: 5, graceMs: 30 });
+      expect(Date.now() - started).toBeLessThan(3000);
+      expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+      // Three searches in round 1, no round 2; the one hung up on is not billed.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(result.costs).toHaveLength(2);
+      expect(result.attempts).toBe(2);
+    });
+
+    it("still merges a search that finishes inside the grace period", async () => {
+      let calls = 0;
+      const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => {
+        calls += 1;
+        const mine = calls;
+        if (mine === 1) return new Response(found(), { status: 200 });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return new Response(mine === 2 ? foundOther() : found(), { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await searchSourceUrls({ ...base, maxTries: 5, graceMs: 2000 });
+      expect(result.costs).toHaveLength(3);
+      // PRODUCT was named by two answers, so it ranks first; the other page is kept too.
+      expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT, OTHER]);
+    });
+
+    it("never starts the grace period for answers that found nothing, so round 2 still runs", async () => {
+      const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await searchSourceUrls({ ...base, maxTries: 5, graceMs: 1 });
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(result.sources).toEqual([]);
+    });
+
+    it("hangs up on every search in flight when Stop is pressed, and ends the row as cancelled", async () => {
+      const fetchMock = vi.fn((..._args: [string | URL, RequestInit?]) => new Promise<Response>(() => {}));
+      vi.stubGlobal("fetch", fetchMock);
+      let polls = 0;
+      const started = Date.now();
+      await expect(
+        searchSourceUrls({
+          ...base,
+          maxTries: 5,
+          cancelPollMs: 10,
+          shouldCancel: async () => ++polls >= 2,
+        })
+      ).rejects.toBeInstanceOf(EnrichCancelledError);
+      expect(Date.now() - started).toBeLessThan(3000);
+      // Round 2 never started.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
   });
 
   it("skips a request when its column is empty on this row", async () => {

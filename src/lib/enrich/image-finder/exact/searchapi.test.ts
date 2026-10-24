@@ -51,6 +51,24 @@ describe("callGoogleAiMode", () => {
     expect(result.referenceLinks).toEqual([{ link: "https://shop.test/p/1", title: "Shop", snippet: undefined, source: undefined }]);
   });
 
+  it("hangs up at once when the caller aborts, even if the transport never answers", async () => {
+    // A fetch that ignores the abort signal and never settles.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const controller = new AbortController();
+    const call = callGoogleAiMode("x", { signal: controller.signal });
+    setTimeout(() => controller.abort(), 10);
+    await expect(call).rejects.toMatchObject({ name: "SearchApiCallError", billed: false });
+    await expect(call).rejects.toThrow(/cancelled/);
+  });
+
+  it("does not even send a call whose signal is already aborted, and gives up at the timeout it is given", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const done = new AbortController();
+    done.abort();
+    await expect(callGoogleAiMode("x", { signal: done.signal })).rejects.toThrow(/cancelled/);
+    await expect(callGoogleAiMode("x", { timeoutMs: 20 })).rejects.toThrow(/timeout/);
+  });
+
   it("sends a location only when one is given", async () => {
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) =>
       new Response(JSON.stringify({ search_metadata: { status: "Success" }, markdown: "ok" }), { status: 200 })

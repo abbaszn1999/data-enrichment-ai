@@ -136,6 +136,10 @@ export async function callGoogleAiMode(
      * Omit for Google's default.
      */
     location?: string;
+    /** Give up on this call after this long. Defaults to the SearchApi client default (120 s). */
+    timeoutMs?: number;
+    /** Aborting it hangs up on the call at once (a search that is no longer needed). It is never billed to us as an answer. */
+    signal?: AbortSignal;
   } = {}
 ): Promise<GoogleAiModeResult> {
   const params = new URLSearchParams({
@@ -147,7 +151,10 @@ export async function callGoogleAiMode(
 
   const { data, httpStatus, elapsedMs } = await requestSearchApi<GoogleAiModeApiResponse>(
     params,
-    "Google AI Mode"
+    "Google AI Mode",
+    options.timeoutMs,
+    undefined,
+    options.signal
   );
 
   const texts = answerTexts(data);
@@ -182,32 +189,51 @@ export async function requestSearchApi<T extends { search_metadata?: { status?: 
   params: URLSearchParams,
   engineLabel: string,
   timeoutMs: number = REQUEST_TIMEOUT_MS,
-  emptyResultPattern?: RegExp
+  emptyResultPattern?: RegExp,
+  /** Aborting it ends the call at once with a SearchApiCallError (never billed as an answer). */
+  signal?: AbortSignal
 ): Promise<{ data: T; httpStatus: number; elapsedMs: number }> {
   params.set("api_key", requireSearchApiKey());
 
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
+  const onCallerAbort = () => controller.abort(new Error("cancelled"));
+  if (signal) {
+    if (signal.aborted) onCallerAbort();
+    else signal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+  // Rejects the moment the call is aborted (timeout or caller), even if the
+  // transport underneath does not notice the signal.
+  const aborted = new Promise<never>((_, reject) => {
+    const fail = () => reject(controller.signal.reason instanceof Error ? controller.signal.reason : new Error("aborted"));
+    if (controller.signal.aborted) fail();
+    else controller.signal.addEventListener("abort", fail, { once: true });
+  });
   let response: Response;
   try {
-    response = await fetch(`${SEARCHAPI_BASE}?${params.toString()}`, {
-      method: "GET",
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
+    response = await Promise.race([
+      fetch(`${SEARCHAPI_BASE}?${params.toString()}`, {
+        method: "GET",
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      }),
+      aborted,
+    ]);
   } catch (error) {
     throw new SearchApiCallError(
       `Web search request failed: ${error instanceof Error ? error.message : String(error)}`,
       false
     );
   } finally {
+    // The timer only covers the wait for the answer to start; the caller's
+    // abort listener stays so a hang-up also ends the reading of the body.
     clearTimeout(timer);
   }
 
   let rawText: string;
   try {
-    rawText = await response.text();
+    rawText = await Promise.race([response.text(), aborted]);
   } catch (error) {
     throw new SearchApiCallError(
       `Web search response could not be read: ${error instanceof Error ? error.message : String(error)}`,

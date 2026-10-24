@@ -63,6 +63,23 @@ export const SOURCE_URLS_MAX_TRIES = 5;
  */
 export const SOURCE_URLS_TRIES_BUDGET_MS = 360_000;
 
+/**
+ * One Google AI Mode call is given up on after this long. Live calls answer in
+ * 7-20 s (the odd one up to a minute); a call that has not answered after 60 s
+ * is almost always stuck, and waiting longer only holds the whole row.
+ */
+export const SOURCE_URLS_CALL_TIMEOUT_MS = 60_000;
+
+/**
+ * Once one search of a round has a usable page, the others get this long to
+ * finish (their pages are merged in and agreement ranks them); whatever is
+ * still waiting then is hung up on, so one slow call never holds the row.
+ */
+export const SOURCE_URLS_GRACE_MS = 12_000;
+
+/** How often a round that is waiting checks whether the owner pressed Stop. */
+export const SOURCE_URLS_CANCEL_POLL_MS = 3_000;
+
 export interface SearchSourceUrlsInput {
   rowData: Record<string, string>;
   customInstruction?: string;
@@ -78,6 +95,10 @@ export interface SearchSourceUrlsInput {
   shouldCancel?: () => Promise<boolean>;
   /** Wait before the one retry of a rate-limited or 5xx call (tests shorten it). */
   retryDelayMs?: number;
+  /** How long the other searches of a round may keep going after one has a usable page. Defaults to SOURCE_URLS_GRACE_MS. */
+  graceMs?: number;
+  /** How often a waiting round checks for Stop. Defaults to SOURCE_URLS_CANCEL_POLL_MS. */
+  cancelPollMs?: number;
   /** Searches per row, first one included (tests and callers may lower it). Defaults to SOURCE_URLS_MAX_TRIES. */
   maxTries?: number;
 }
@@ -184,13 +205,17 @@ async function askGoogle(
   imageUrl: string | undefined,
   costs: AiCallCost[],
   retryDelayMs: number,
-  location?: string
+  location?: string,
+  signal?: AbortSignal
 ): Promise<{ call: Awaited<ReturnType<typeof callGoogleAiMode>>; usedImage: boolean }> {
   const once = async (query: string, image?: string) => {
+    if (signal?.aborted) throw new SearchApiCallError("Web search cancelled", false);
     try {
       const call = await callGoogleAiMode(query, {
         ...(image ? { imageUrl: image } : {}),
         ...(location ? { location } : {}),
+        timeoutMs: SOURCE_URLS_CALL_TIMEOUT_MS,
+        ...(signal ? { signal } : {}),
       });
       costs.push(createSearchApiCost(1));
       return call;
@@ -206,7 +231,7 @@ async function askGoogle(
     try {
       return await once(query, image);
     } catch (error) {
-      if (!isTransientSearchApiError(error)) throw error;
+      if (!isTransientSearchApiError(error) || signal?.aborted) throw error;
       await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
       return once(query, image);
     }
@@ -215,7 +240,7 @@ async function askGoogle(
     try {
       return { call: await run(buildQuery(true), imageUrl), usedImage: true };
     } catch (error) {
-      if (!(error instanceof SearchApiCallError)) throw error;
+      if (!(error instanceof SearchApiCallError) || signal?.aborted) throw error;
       console.warn("[Source URLs] Google AI Mode call with the photo failed; retrying without it", {
         message: error.message.slice(0, 200),
       });
@@ -232,7 +257,8 @@ async function runSearch(
   input: SearchSourceUrlsInput,
   attempt: number,
   costs: AiCallCost[],
-  planned: PlannedTry
+  planned: PlannedTry,
+  signal?: AbortSignal
 ): Promise<AttemptOutcome> {
   const imageUrl = input.imageUrl && /^https?:\/\//i.test(input.imageUrl) ? input.imageUrl : undefined;
   const buildQuery = (hasImage: boolean) =>
@@ -254,7 +280,8 @@ async function runSearch(
     imageUrl,
     costs,
     input.retryDelayMs ?? TRANSIENT_RETRY_DELAY_MS,
-    input.location
+    input.location,
+    signal
   );
 
   let answer = parseBestSourceAnswer(call.texts);
@@ -389,6 +416,8 @@ interface RoundResult {
   outcome?: AttemptOutcome;
   /** The failure of a search that did not answer. */
   error?: unknown;
+  /** Hung up on after another search of the round already had a usable page; not a failure. */
+  skipped?: boolean;
 }
 
 export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<SearchSourceUrlsResult> {
@@ -412,17 +441,56 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
   // Every search of a round is sent at once. Each billed call is already in
   // `costs` the moment it returns, so a search that fails after billing, or a
   // round where only some searches answer, loses no charge.
+  //
+  // The round does not wait for its slowest search: once one search has a
+  // usable page the others get a short grace period, then are hung up on (a
+  // call that never answered is never billed). While it waits, the round also
+  // watches for Stop and hangs up on everything in flight when it is pressed.
   const runRound = async (tries: PlannedTry[]): Promise<RoundResult[]> => {
     const firstNumber = searchesStarted + 1;
     searchesStarted += tries.length;
-    const settled = await Promise.allSettled(
-      tries.map((planned, index) => runSearch(input, firstNumber + index, costs, planned))
-    );
-    return settled.map((result, index) =>
-      result.status === "fulfilled"
-        ? { planned: tries[index]!, outcome: result.value }
-        : { planned: tries[index]!, error: result.reason }
-    );
+    const controller = new AbortController();
+    const graceMs = input.graceMs ?? SOURCE_URLS_GRACE_MS;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let stoppedByOwner = false;
+    const poller = input.shouldCancel
+      ? setInterval(() => {
+          if (stoppedByOwner || controller.signal.aborted) return;
+          void input.shouldCancel!().then(
+            (stop) => {
+              if (stop && !controller.signal.aborted) {
+                stoppedByOwner = true;
+                controller.abort();
+              }
+            },
+            () => undefined
+          );
+        }, input.cancelPollMs ?? SOURCE_URLS_CANCEL_POLL_MS)
+      : undefined;
+    const results: RoundResult[] = tries.map((planned) => ({ planned }));
+    try {
+      await Promise.all(
+        tries.map(async (planned, index) => {
+          try {
+            const outcome = await runSearch(input, firstNumber + index, costs, planned, controller.signal);
+            results[index] = { planned, outcome };
+            if (outcome.sources.length > 0 && graceTimer === undefined && !controller.signal.aborted) {
+              graceTimer = setTimeout(() => controller.abort(), graceMs);
+            }
+          } catch (error) {
+            results[index] =
+              controller.signal.aborted && !stoppedByOwner ? { planned, skipped: true } : { planned, error };
+          }
+        })
+      );
+    } finally {
+      if (graceTimer !== undefined) clearTimeout(graceTimer);
+      if (poller !== undefined) clearInterval(poller);
+    }
+    if (stoppedByOwner) {
+      throw new EnrichCancelledError(`Cancelled during Google AI Mode search ${firstNumber}.`, costs);
+    }
+    return results;
   };
 
   for (const [roundIndex, tries] of [rounds.first, rounds.second].entries()) {
@@ -441,6 +509,7 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
     const outcomes: AttemptOutcome[] = [];
     for (const result of results) {
       const label = result.planned.label;
+      if (result.skipped) continue;
       if (result.outcome) {
         outcomes.push(result.outcome);
         answered += 1;
