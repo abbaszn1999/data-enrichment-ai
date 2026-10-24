@@ -7,6 +7,7 @@ import type {
   SourceUrl,
 } from "@/types";
 import type { AiCallCost } from "@/lib/ai-pricing";
+import type { SourceUrlsPlan } from "./source-urls/plan";
 
 /** Settings sent from the Import AI sidebar / API body. */
 export interface EnrichSettings {
@@ -81,6 +82,11 @@ export interface EnrichAgentParams {
    * for the same search again.
    */
   sourceUrlsMemo?: { result?: EnrichAgentResult };
+  /**
+   * Source URLs: the run's plan, the search requests written once from the
+   * custom instruction (see source-urls/plan.ts). Absent means the default query.
+   */
+  sourceUrlsPlan?: SourceUrlsPlan;
 }
 
 export type OpenAiImageResult = {

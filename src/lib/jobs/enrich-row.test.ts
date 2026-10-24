@@ -517,3 +517,88 @@ describe("Lens rows (Google Lens)", () => {
     expect(result).toEqual({ ok: true, remaining: 0, outOfCredits: { fullCredits: 0.04, chargedCredits: 0.02 } });
   });
 });
+
+describe("Source URLs rows: retries, plan and short balance", () => {
+  const sourceUrlsColumn = { id: "sourceUrls", label: "Source URLs", description: "", type: "sourceUrls", customInstruction: "Barcode first." };
+  const onlySourceUrls: CatalogJobSettings = { ...settings, enabledColumns: ["sourceUrls"], enrichmentColumns: [sourceUrlsColumn] };
+  const mixed: CatalogJobSettings = {
+    ...settings,
+    enabledColumns: ["enhancedTitle", "sourceUrls"],
+    enrichmentColumns: [{ id: "enhancedTitle", label: "Title", description: "", type: "text" }, sourceUrlsColumn],
+  };
+  const plan = {
+    version: 1 as const,
+    source: "planner" as const,
+    columns: ["Title"],
+    steps: [{ name: "Title", text: "Find the product page for {{Title}}." }],
+  };
+  const fiveSearches = Array.from({ length: 5 }, () => createSearchApiCost(1));
+
+  beforeEach(() => {
+    enrichRowMock.mockReset();
+    vi.mocked(deductCreditsIdempotent).mockReset();
+    vi.mocked(isInsufficientCredits).mockReset();
+    vi.mocked(isInsufficientCredits).mockImplementation((error) => /insufficient/i.test(error ?? ""));
+  });
+
+  it("hands the run's saved plan to the agent for every row", async () => {
+    enrichRowMock.mockResolvedValueOnce({ data: {}, costs: [] });
+    await processCatalogRow({ sessionId: "s", workspaceId: "w", row, settings: { ...onlySourceUrls, sourceUrlsPlan: plan } });
+    expect(enrichRowMock.mock.calls[0]![0].sourceUrlsPlan).toEqual(plan);
+  });
+
+  it("charges a row that used all five searches and found nothing exactly 5 x 0.04 = 0.2 credits", async () => {
+    enrichRowMock.mockResolvedValueOnce({ data: { sourceUrls: [] }, costs: fiveSearches });
+    const outcome = await processCatalogRow({ sessionId: "s", workspaceId: "w", row, settings: onlySourceUrls });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.cost).toBeCloseTo(0.02, 10);
+    expect(outcome.credits).toBe(0.2);
+    expect(outcome.billedAttempts).toBe(5);
+    expect(outcome.details).toMatchObject({ searchApiCalls: 5, searchApiCost: expect.closeTo(0.02, 10) });
+  });
+
+  it("charges a row that found a page on the 3rd search for 3 searches only", async () => {
+    enrichRowMock.mockResolvedValueOnce({ data: {}, costs: fiveSearches.slice(0, 3) });
+    const outcome = await processCatalogRow({ sessionId: "s", workspaceId: "w", row, settings: onlySourceUrls });
+    expect(outcome.ok && outcome.credits).toBe(0.12);
+  });
+
+  it("charges the searches billed by a failed attempt together with the attempt that follows it", async () => {
+    enrichRowMock
+      .mockRejectedValueOnce(new EnrichBilledAttemptError("search 4 broke", fiveSearches.slice(0, 3)))
+      .mockResolvedValueOnce({ data: {}, costs: fiveSearches.slice(0, 2) });
+    const outcome = await processCatalogRow({ sessionId: "s", workspaceId: "w", row, settings: onlySourceUrls });
+    // 3 + 2 searches, each billed once.
+    expect(outcome.ok && outcome.credits).toBe(0.2);
+    expect(outcome.ok && outcome.billedAttempts).toBe(5);
+  });
+
+  it("charges every search of a row that failed on both attempts", async () => {
+    enrichRowMock.mockRejectedValue(new EnrichBilledAttemptError("search broke", fiveSearches.slice(0, 3)));
+    const outcome = await processCatalogRow({ sessionId: "s", workspaceId: "w", row, settings: onlySourceUrls });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.billed?.credits).toBe(0.24);
+  });
+
+  it("keeps a Source URLs row and takes what is left when the balance runs short, instead of losing five paid searches", async () => {
+    for (const s of [onlySourceUrls, mixed]) {
+      vi.mocked(deductCreditsIdempotent)
+        .mockResolvedValueOnce({ success: false, error: "Insufficient credits", remaining: 0.07 })
+        .mockResolvedValueOnce({ success: true, remaining: 0 });
+      const result = await chargeCatalogRow({
+        runId: "run", sessionId: "s", workspaceId: "w", rowId: "row-1", rowIndex: 0, credits: 0.2, cost: 0.02, tokens: 0, settings: s,
+      });
+      expect(result).toEqual({ ok: true, remaining: 0, outOfCredits: { fullCredits: 0.2, chargedCredits: 0.07 } });
+    }
+  });
+
+  it("still fails an ordinary enrichment row that cannot be paid", async () => {
+    vi.mocked(deductCreditsIdempotent).mockResolvedValueOnce({ success: false, error: "Insufficient credits", remaining: 0.07 });
+    const result = await chargeCatalogRow({
+      runId: "run", sessionId: "s", workspaceId: "w", rowId: "row-1", rowIndex: 0, credits: 0.2, cost: 0.02, tokens: 0, settings: retrySettings,
+    });
+    expect(result).toMatchObject({ ok: false, noCredits: true });
+  });
+});

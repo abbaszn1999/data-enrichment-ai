@@ -1,10 +1,11 @@
 /**
  * Source URLs orchestration: Google AI Mode searches for the exact product. A
- * row that finds no usable page is searched AGAIN with exactly the same query,
- * up to SOURCE_URLS_MAX_TRIES searches in total. Google AI Mode does not answer
- * the same question the same way twice, so repeating it recovers rows that a
- * single search missed; changing the wording on a retry did not do better, so
- * nothing changes between tries (see ./skill.ts for the one query).
+ * row that finds no usable page is searched AGAIN, up to SOURCE_URLS_MAX_TRIES
+ * searches in total. Google AI Mode does not answer the same question the same
+ * way twice, so repeating a search recovers rows that a single search missed;
+ * rewording a retry did not do better. Without a plan the retries are exactly
+ * the same query (see ./skill.ts); with the run's plan (./plan.ts) they are the
+ * plan's requests, which differ by what they search with, not by wording.
  *
  * Every SearchApi call that returned HTTP 200 is billed, so each is added to
  * `costs` the moment it returns — before its answer is read — and an
@@ -16,6 +17,10 @@
  * page, the pages Google cited (`reference_links`) are used: a cited page is
  * real by construction, and Google sometimes names only the home page in its
  * text while citing the product page. Cited pages are ranked first.
+ *
+ * With a plan (./plan.ts) the tries are the plan's requests filled in for the
+ * row, in order, going round again when there are fewer than five; without one
+ * every try asks the same default query.
  *
  * A failed call on the first search (bad key, network, non-200) throws as-is —
  * nothing was billed. A failure on a later search does not throw: an earlier
@@ -33,7 +38,9 @@ import {
   type GoogleAiModeReferenceLink,
 } from "../image-finder/exact/searchapi";
 import { EnrichBilledAttemptError, EnrichCancelledError } from "../openai";
+import { expandTries, type PlannedTry, type SourceUrlsPlan } from "./plan";
 import {
+  buildPlannedQuery,
   buildSourceUrlsQuery,
   cleanPageTitle,
   harvestSourceCandidates,
@@ -59,6 +66,11 @@ export interface SearchSourceUrlsInput {
   imageUrl?: string;
   /** Country to search from, as a place name ("United Kingdom"); sent as the search location, never in the prompt. */
   location?: string;
+  /**
+   * The run's plan (./plan.ts): the requests written once from the custom
+   * instruction. Without one, every try asks today's single query.
+   */
+  plan?: SourceUrlsPlan;
   shouldCancel?: () => Promise<boolean>;
   /** Wait before the one retry of a rate-limited or 5xx call (tests shorten it). */
   retryDelayMs?: number;
@@ -208,19 +220,25 @@ async function askGoogle(
   return { call: await run(buildQuery(false)), usedImage: false };
 }
 
-/** One search, read and checked. The query is the same on every try. */
+/**
+ * One search, read and checked. `planned` is this try's request: a plan step
+ * filled in for the row, or (no plan, or a row no step fits) today's query.
+ */
 async function runSearch(
   input: SearchSourceUrlsInput,
   attempt: number,
-  costs: AiCallCost[]
+  costs: AiCallCost[],
+  planned: PlannedTry
 ): Promise<AttemptOutcome> {
   const imageUrl = input.imageUrl && /^https?:\/\//i.test(input.imageUrl) ? input.imageUrl : undefined;
   const buildQuery = (hasImage: boolean) =>
-    buildSourceUrlsQuery({
-      rowData: input.rowData,
-      customInstruction: input.customInstruction,
-      hasImage,
-    });
+    planned.text !== undefined
+      ? buildPlannedQuery({ text: planned.text, hasImage })
+      : buildSourceUrlsQuery({
+          rowData: input.rowData,
+          customInstruction: input.customInstruction,
+          hasImage,
+        });
 
   const { call, usedImage } = await askGoogle(
     buildQuery,
@@ -268,6 +286,7 @@ async function runSearch(
 
   console.log("[Source URLs] Google AI Mode call", {
     attempt,
+    step: planned.label,
     withPhoto: usedImage,
     httpStatus: call.httpStatus,
     ms: call.elapsedMs,
@@ -320,6 +339,8 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
   const costs: AiCallCost[] = [];
   const maxTries = Math.max(1, Math.min(input.maxTries ?? SOURCE_URLS_MAX_TRIES, SOURCE_URLS_MAX_TRIES));
   const startedAt = Date.now();
+  // The requests for this row, in the order they are tried (see expandTries).
+  const planned = expandTries(input.plan, input.rowData, maxTries);
   const summaries: string[] = [];
   let usedImage = false;
   let timeLimit = false;
@@ -340,7 +361,7 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
 
     let outcome: AttemptOutcome;
     try {
-      outcome = await runSearch(input, attempt, costs);
+      outcome = await runSearch(input, attempt, costs, planned[attempt - 1] ?? {});
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (attempt === 1) {
@@ -363,7 +384,8 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
     if (outcome.sources.length > 0) {
       return { sources: outcome.sources, costs, attempts: attempt, usedImage, notFoundReason: "" };
     }
-    summaries.push(outcome.summary);
+    const label = planned[attempt - 1]?.label;
+    summaries.push(label ? `"${label}" ${outcome.summary}` : outcome.summary);
   }
 
   return {

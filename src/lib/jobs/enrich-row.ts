@@ -221,6 +221,7 @@ export async function processCatalogRow(params: {
         learnedDomains: params.context?.learnedDomains,
         recheck: params.context?.recheck,
         sourceUrlsMemo,
+        sourceUrlsPlan: settings.sourceUrlsPlan,
       });
       const billed = [...failedAttemptCosts, ...enriched.costs];
       const costs = sumCosts(billed);
@@ -326,8 +327,12 @@ export async function chargeCatalogRow(params: {
   const imageFinder = isImageFinderRun(params.settings.kind ?? "product", params.settings.enabledColumns);
   // The search is already done and billed to us (a Lens run has no other cost),
   // so a short balance is handled like the Image Finder's: take what is left and pause.
+  // Source URLs is the same: up to five billed searches are done before the
+  // row is charged, so a short balance must not turn that work into a free row.
   const keepsResultOnShortBalance =
-    imageFinder || isLensRun(params.settings.kind ?? "product", params.settings.enabledColumns);
+    imageFinder ||
+    isLensRun(params.settings.kind ?? "product", params.settings.enabledColumns) ||
+    usesGoogleSourceUrls(params.settings.kind ?? "product", params.settings.enabledColumns);
   const deduct = (amount: number, partial: boolean) =>
     deductCreditsIdempotent({
       ownerUserId: params.settings.ownerUserId,

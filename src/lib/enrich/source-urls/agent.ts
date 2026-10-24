@@ -20,6 +20,7 @@ import { SOURCE_URLS_COLUMN_ID, type SessionKind } from "@/types";
 import { imageFinderNotFoundKey } from "../image-finder/not-found";
 import type { EnrichAgentParams, EnrichAgentResult } from "../types";
 import { resolveSearchMarket } from "./markets";
+import { readStoredPlan } from "./plan";
 import { searchSourceUrls } from "./search";
 
 /** Whether this run's Source URLs column is answered by Google AI Mode. Product sheets only; PLP keeps its own flow. */
@@ -43,6 +44,8 @@ export async function findSourceUrls(params: EnrichAgentParams): Promise<EnrichA
     rowData: params.productData,
     customInstruction: column?.customInstruction,
     location: market?.name,
+    // Checked again here: the plan comes from the job's saved settings.
+    plan: readStoredPlan(params.sourceUrlsPlan),
     imageUrl: firstPublicImage(params.sourceImageUrls),
     shouldCancel: params.shouldCancel,
   });

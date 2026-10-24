@@ -1,4 +1,5 @@
 import type { Json } from "@/types/database";
+import type { SourceUrlsPlan } from "@/lib/enrich/source-urls/plan";
 import type {
   CategoryFormat,
   CategoryItem,
@@ -78,6 +79,12 @@ export interface CatalogJobSettings extends JobRunSettings {
   processedRowIds?: string[];
   /** Image Finder rows that already had their one final re-check in this run. */
   recheckedRowIds?: string[];
+  /**
+   * Source URLs: the search requests the planner wrote once for this run from
+   * the custom instruction, saved so every row (each may run in its own task)
+   * follows the same plan and a resumed run does not plan or charge again.
+   */
+  sourceUrlsPlan?: SourceUrlsPlan;
 }
 
 export interface JobRunRecord {

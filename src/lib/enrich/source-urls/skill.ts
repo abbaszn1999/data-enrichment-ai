@@ -59,17 +59,24 @@ function isImageValue(value: string): boolean {
   return /^https?:\/\/\S+\.(jpe?g|png|webp|gif|avif)(\?\S*)?$/i.test(value);
 }
 
-/** Every non-image column with a value, in sheet order — column names are never consulted for meaning. */
-function productDataLines(rowData: Record<string, string>): string[] {
-  const lines: string[] = [];
+/**
+ * Every non-image column with a value, in sheet order, as plain text. Column
+ * names are never consulted for meaning: the name is only a label.
+ */
+export function productFields(rowData: Record<string, string>): Array<{ name: string; value: string }> {
+  const fields: Array<{ name: string; value: string }> = [];
   for (const [key, raw] of Object.entries(rowData)) {
-    if (lines.length >= MAX_FIELDS) break;
+    if (fields.length >= MAX_FIELDS) break;
     const value = String(raw ?? "").trim();
     if (!value || isImageValue(value)) continue;
     const plain = toPlainText(value);
-    if (plain) lines.push(`- ${displayKey(key)}: ${plain.slice(0, MAX_FIELD_CHARS)}`);
+    if (plain) fields.push({ name: displayKey(key), value: plain.slice(0, MAX_FIELD_CHARS) });
   }
-  return lines;
+  return fields;
+}
+
+function productDataLines(rowData: Record<string, string>): string[] {
+  return productFields(rowData).map((field) => `- ${field.name}: ${field.value}`);
 }
 
 export interface BuildSourceUrlsQueryInput {
@@ -142,6 +149,30 @@ export function buildSourceUrlsQuery(input: BuildSourceUrlsQueryInput): string {
     query = composeQuery(fields, instruction, hasImage);
   }
   return query;
+}
+
+/**
+ * The only fixed part of a planned request. The code adds it to every step,
+ * so the planner can neither drop nor reword it: product pages only, then the
+ * answer format the parser reads.
+ */
+export const SOURCE_URLS_FIXED_RULE = [
+  "Return only full product page links: each link must open the page of one product, this exact item.",
+  "Never return a home page, category, collection, brand, search-results, blog or article page.",
+  "Best first, as JSON only:",
+  '{"sources":[{"url":"https://...","title":"page title"}]}',
+].join("\n");
+
+/**
+ * A planned request for one row: the step's text (already filled in with the
+ * row's values), the photo line when a photo is really sent, and the fixed
+ * rule. The step is cut, never the fixed rule, if it would pass SearchApi's
+ * query limit.
+ */
+export function buildPlannedQuery(input: { text: string; hasImage?: boolean }): string {
+  const photo = input.hasImage ? "\n\nThe attached photo shows the same product." : "";
+  const tail = `${photo}\n\n${SOURCE_URLS_FIXED_RULE}`;
+  return `${input.text.trim().slice(0, Math.max(0, MAX_QUERY_CHARS - tail.length))}${tail}`;
 }
 
 export interface SourceCandidate {

@@ -19,6 +19,9 @@ import {
 import { isImageFinderRun } from "@/lib/enrich/image-finder/agent";
 import { PRODUCT_MODE_COLUMN_IDS } from "@/types";
 import { rowsNeedingRecheck, SheetDomainLearner } from "@/lib/enrich/image-finder/sheet-learning";
+import { isInsufficientCredits } from "./credits";
+import { readStoredPlan } from "@/lib/enrich/source-urls/plan";
+import { chargeSourceUrlsPlan, needsSourceUrlsPlan, prepareSourceUrlsPlan } from "./source-urls-plan";
 import { runJobWithFailureGuard } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
@@ -367,6 +370,72 @@ async function runCatalogWork(
       console.error("[jobs/catalog] commit failed after retries", { runId: run.id, fatalError });
     }
   };
+
+  /**
+   * Source URLs plan. When the owner wrote an instruction, ONE planner call
+   * turns it into the search requests every row will use. Order matters:
+   * the plan is saved first (rows read it from the saved settings), then its
+   * cost is charged once under its own key. A crash between the two is safe:
+   * a resume finds the saved plan and charges again with the same key, which
+   * changes nothing if the first charge went through.
+   */
+  const savePlan = () => withRetry("plan save", () => touchJobHeartbeat(admin, run.id, { settings }, workerToken));
+  const runSourceUrlsPlanning = async () => {
+    let plan = readStoredPlan(settings.sourceUrlsPlan);
+    if (!plan) {
+      plan = await prepareSourceUrlsPlan({
+        settings,
+        rows: pending.map((id) => byId.get(id)).filter((row): row is NonNullable<typeof row> => Boolean(row)),
+        shouldCancel: async () => (await readControl()).stop,
+      });
+      settings.sourceUrlsPlan = plan;
+      try {
+        if (!(await savePlan())) superseded = true;
+      } catch (error) {
+        // Rows would not see a plan that is not saved, so it must not be charged either.
+        fatalError = `Could not save the search plan: ${error instanceof Error ? error.message : String(error)}`;
+        console.error("[jobs/catalog] plan save failed after retries", { runId: run.id, fatalError });
+        return;
+      }
+    }
+
+    const billing = plan.billing;
+    if (!billing || billing.settled) return;
+    const settlement = await chargeSourceUrlsPlan({
+      runId: run.id,
+      sessionId: run.session_id,
+      workspaceId: run.workspace_id,
+      settings,
+      plan,
+    });
+    if (!settlement) return;
+    if (settlement.billingError && !isInsufficientCredits(settlement.billingError)) {
+      // A database problem, not an empty balance: the plan stays unsettled so a resume charges it, and the run goes on.
+      console.error("[jobs/catalog] plan charge failed", { runId: run.id, message: settlement.billingError });
+      return;
+    }
+    plan.billing = { ...billing, settled: true };
+    settings.sourceUrlsPlan = plan;
+    await savePlan().catch((error) =>
+      console.error("[jobs/catalog] could not mark the plan charge as settled", { runId: run.id, error })
+    );
+    if (settlement.balanceExhausted) {
+      // The planner's cost took the last of the balance: no row can be paid for, so pause before starting any.
+      pausedNoCredits = true;
+      stopObserved = true;
+    }
+  };
+  if (pending.length > 0 && needsSourceUrlsPlan(settings)) {
+    try {
+      await runSourceUrlsPlanning();
+    } catch (error) {
+      // Planning is never a reason to lose the run: without a plan every row asks the default query.
+      console.error("[jobs/catalog] Source URLs planning failed", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   let nextIndex = 0;
   const worker = async () => {
