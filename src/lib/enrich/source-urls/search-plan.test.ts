@@ -3,7 +3,13 @@ import { costToCredits, sumCosts } from "@/lib/ai-pricing";
 import { getDefaultEnrichmentColumns } from "@/types";
 import { enrichRow } from "../agent";
 import type { SourceUrlsPlan } from "./plan";
-import { SOURCE_URLS_FIXED_RULE, SOURCE_URLS_IDENTITY_HEADING, buildSourceUrlsQuery } from "./skill";
+import {
+  LIVE_LINKS_RULE,
+  SOURCE_URLS_FIXED_RULE,
+  SOURCE_URLS_FIXED_RULE_CLOSEST,
+  SOURCE_URLS_IDENTITY_HEADING,
+  buildSourceUrlsQuery,
+} from "./skill";
 import { searchSourceUrls, SOURCE_URLS_MAX_TRIES, SOURCE_URLS_TRIES_BUDGET_MS } from "./search";
 
 const aiModeBody = (answer: string, referenceLinks: Array<{ link: string; title?: string }> = []) =>
@@ -232,6 +238,38 @@ describe("searchSourceUrls with a plan", () => {
     expect(query).toContain('exact code "SSP1486359"');
     expect(query).not.toContain("- Code:");
     expect(query).not.toContain(SOURCE_URLS_IDENTITY_HEADING);
+  });
+
+  it("keeps the strict 'this exact item' rule unless the plan allows a closest match", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await searchSourceUrls({ ...base, maxTries: 1 });
+    const strict = queryOf(fetchMock, 0);
+    expect(strict).toContain(SOURCE_URLS_FIXED_RULE);
+    expect(strict).toContain("page of one product, this exact item");
+    expect(strict).not.toContain("the same product it belongs to");
+
+    fetchMock.mockClear();
+    await searchSourceUrls({ ...base, plan: { ...plan, closestMatch: false }, maxTries: 1 });
+    expect(queryOf(fetchMock, 0)).toContain(SOURCE_URLS_FIXED_RULE);
+  });
+
+  it("relaxes the two 'exact item' lines, and nothing else, when the plan allows a closest match", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await searchSourceUrls({ ...base, plan: { ...plan, closestMatch: true }, maxTries: 1 });
+    const query = queryOf(fetchMock, 0);
+    expect(query).toContain(SOURCE_URLS_FIXED_RULE_CLOSEST);
+    expect(query).not.toContain(SOURCE_URLS_FIXED_RULE);
+    expect(query).not.toContain("page of one product, this exact item");
+    expect(query).not.toContain("for this exact item as you can find");
+    expect(query).not.toContain("a page for this exact item");
+    expect(query).toContain("the page of the same product it belongs to");
+    // Still forbidden, still said: pages that are not product pages, dead links, and the answer format.
+    expect(query).toContain("Never return a home page, category, collection, brand, search-results, blog or article page.");
+    expect(query).toContain(LIVE_LINKS_RULE);
+    expect(query).toContain('return {"sources":[]}');
+    expect(query).toContain('{"sources":[{"url":"https://...","title":"page title"}]}');
   });
 
   it("skips a request when its column is empty on this row", async () => {

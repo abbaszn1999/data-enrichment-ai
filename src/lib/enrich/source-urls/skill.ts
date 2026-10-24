@@ -186,6 +186,25 @@ export const SOURCE_URLS_FIXED_RULE = [
   '{"sources":[{"url":"https://...","title":"page title"}]}',
 ].join("\n");
 
+/**
+ * The fixed rule for a plan whose owner allows a fallback to the closest page
+ * of the same product ("if not found bring the most matched item", "the parent
+ * page", "another size is fine"). Everything stays except the two "this exact
+ * item" lines: a size or colour variant is often not written on its product's
+ * page, so insisting on the exact item (and answering empty otherwise) made
+ * Google return nothing, although the page of its sibling size is the answer
+ * the owner asked for. Home, category and search pages stay forbidden.
+ */
+export const SOURCE_URLS_FIXED_RULE_CLOSEST = [
+  "Return as many product page links for this item as you can find, unless the request above asks for a specific number of pages.",
+  "Return only full product page links: each link must open the page of one product, this item or, when the request above allows it, the page of the same product it belongs to (for example the page that lists this item as another size or variant).",
+  "Never return a home page, category, collection, brand, search-results, blog or article page.",
+  LIVE_LINKS_RULE,
+  'If you cannot find a page for this item or for the product it belongs to, return {"sources":[]}. Never fill the list with pages about searching, product matching, product identifiers or SKUs, or with any page that is not a product page.',
+  "Best first, as JSON only:",
+  '{"sources":[{"url":"https://...","title":"page title"}]}',
+].join("\n");
+
 /** What an identity line says it is for: confirming the page, never a search key. */
 export const SOURCE_URLS_IDENTITY_HEADING =
   "The product, only to confirm that a page is this exact item (do not search by these, and a page for a different product does not count):";
@@ -198,9 +217,15 @@ export const SOURCE_URLS_IDENTITY_HEADING =
  * identity lines are dropped from the end first, then the step is cut; the
  * fixed rule is never cut.
  */
-export function buildPlannedQuery(input: { text: string; hasImage?: boolean; identity?: string[] }): string {
+export function buildPlannedQuery(input: {
+  text: string;
+  hasImage?: boolean;
+  identity?: string[];
+  /** The owner allows the closest page of the same product (see SOURCE_URLS_FIXED_RULE_CLOSEST). */
+  closestMatch?: boolean;
+}): string {
   const photo = input.hasImage ? "\n\nThe attached photo shows the same product." : "";
-  const tail = `${photo}\n\n${SOURCE_URLS_FIXED_RULE}`;
+  const tail = `${photo}\n\n${input.closestMatch ? SOURCE_URLS_FIXED_RULE_CLOSEST : SOURCE_URLS_FIXED_RULE}`;
   const room = Math.max(0, MAX_QUERY_CHARS - tail.length);
   const text = input.text.trim();
   const identity = [...(input.identity ?? [])];

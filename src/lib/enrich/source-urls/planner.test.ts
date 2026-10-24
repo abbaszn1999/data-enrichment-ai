@@ -202,6 +202,28 @@ describe("planSourceUrls", () => {
     expect((await planSourceUrls(input)).plan.onlyWebsites).toBeUndefined();
   });
 
+  it("saves closestMatch only when the planner says the owner allows a fallback", async () => {
+    stub({ body: completed({ ...goodPlan, closestMatch: true }) });
+    expect((await planSourceUrls(input)).plan.closestMatch).toBe(true);
+    stub({ body: completed({ ...goodPlan, closestMatch: false }) });
+    expect((await planSourceUrls(input)).plan.closestMatch).toBeUndefined();
+    stub({ body: completed(goodPlan) });
+    expect((await planSourceUrls(input)).plan.closestMatch).toBeUndefined();
+    stub({ body: completed({ ...goodPlan, closestMatch: "yes" }) });
+    expect((await planSourceUrls(input)).plan.closestMatch).toBeUndefined();
+  });
+
+  it("tells the planner when a closest match is allowed, and that a plain 'exact' or 'matching' is not one", () => {
+    const skill = SOURCE_URLS_PLANNER_INSTRUCTIONS;
+    expect(skill).toMatch(/CLOSEST MATCH\. When the owner allows a fallback to the nearest page/);
+    expect(skill).toMatch(/set closestMatch to true/);
+    expect(skill).toMatch(/Do NOT say that a different colour, size or model does not count/);
+    expect(skill).toMatch(/do NOT ask for "the closest code"/);
+    expect(skill).toMatch(/a plain "exact", "matching" or "only this item" is not a fallback/);
+    // The strict default is still there for owners who say nothing about variants.
+    expect(skill).toMatch(/If the owner said nothing about variants, say in every request that it must be this exact product/);
+  });
+
   it("tries once more after an unusable answer and bills BOTH calls", async () => {
     const bad = completed({ steps: [{ name: "x", text: "Find every page you can for this item, please." }], notes: "" });
     const fetchMock = stub({ body: bad }, { body: completed(goodPlan) });
@@ -301,7 +323,8 @@ describe("planner brief and skill", () => {
 
   it("asks for identityColumns in the answer, and never mentions live links itself", () => {
     const schema = buildSourceUrlsPlannerSchema() as { required: string[]; properties: Record<string, { type: string; items?: { type: string } }> };
-    expect(schema.required).toEqual(["steps", "identityColumns", "onlyWebsites", "notes"]);
+    expect(schema.required).toEqual(["steps", "identityColumns", "onlyWebsites", "closestMatch", "notes"]);
+    expect(schema.properties.closestMatch).toMatchObject({ type: "boolean" });
     expect(schema.properties.onlyWebsites).toMatchObject({ type: "array", items: { type: "string" } });
     expect(schema.properties.identityColumns).toMatchObject({ type: "array", items: { type: "string" } });
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/live or dead links/);

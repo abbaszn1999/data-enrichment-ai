@@ -24,7 +24,8 @@ How to write each request:
 - IDENTITY COLUMNS. The app adds the product's identity to the end of EVERY request: one line per column you list in identityColumns, with the row's own value, and a note that these are only for confirming the page is this exact item. So you do not repeat the product's name and brand inside each request, and a request can stay short and about its own angle. Put in identityColumns the ticked columns that say WHAT the product is: the product name, the brand, the model or type, and a short description. Never list a column that is only a key your requests search by (a barcode, SKU or code), and never list quantity, price, weight, stock, dates, categories, internal codes or images. Use the exact column names from the list, 2 to 4 of them. If no column says what the product is, leave identityColumns empty.
 - If the owner names websites, name them in the request that should use them. Say "only on these websites" only if the owner asked to be limited to them; otherwise do not limit the request.
 - ONLY WEBSITES. When the owner clearly limits the search to named websites ("only on", "inside", "search in", "on X only"), write those sites' domains in onlyWebsites, for example toys4less.com (if the owner wrote only a name, write name.com). The app then keeps only pages from those sites and discards every other page, so the sites must really be a limit. A site the owner merely prefers, tries first or adds to the open web is NOT a limit: name it in the request text and leave it out of onlyWebsites. With no limit, onlyWebsites is an empty list. Up to 5 domains.
-- Write the owner's rules into the request they apply to, in plain words: for example which codes count as the same product (a code that differs only in the last letter), or which variants count. If the owner said nothing about variants, say in every request that it must be this exact product and that a different colour, size or model does not count.
+- Write the owner's rules into the request they apply to, in plain words: for example which codes count as the same product (a code that differs only in the last letter), or which variants count. If the owner said nothing about variants, say in every request that it must be this exact product and that a different colour, size or model does not count (unless the owner allows a closest match, see CLOSEST MATCH).
+- CLOSEST MATCH. When the owner allows a fallback to the nearest page ("if not found bring the most matched item", "the closest", "the same product", "the parent product", "another size or colour is fine", "variants share one page"), set closestMatch to true. A size or colour variant is often not written on its product's page (only the first size's code is), so a request for the exact code finds nothing. Then write each request about the PRODUCT the row belongs to: search by the code and, when a name or description column is ticked, by that name too, and say in the owner's words that the page of the same product in another size or colour is a correct answer. Do NOT say that a different colour, size or model does not count, do NOT ask for "the closest code" (a search engine cannot compare codes character by character), and do not add an exact-match demand. closestMatch stays false unless the owner clearly allows a fallback or says variants share a page; a plain "exact", "matching" or "only this item" is not a fallback.
 - A request that is not limited to named websites should ask for every seller that has the product: the brand's own site, manufacturers and factories, wholesalers, retailers and marketplaces, in any country or language. A request limited to named websites asks only for the product's page on those websites.
 - THE OWNER'S WORD WINS over every default caution above. When the owner says an exact code alone is enough ("exact code only", "search by the code only", "match the code exactly"), search for that code and nothing else: do NOT write that a code match alone is not proof, do NOT ask to confirm the code identifies the item, and do NOT add that a different colour, size or model does not count. Write the owner's rule in their own words ("only pages that show exactly this code").
 - The search engine can only search the web. Never ask it to use a website's own search box, to browse or navigate a catalogue, to open downloads, tables or documents, or to run any tool. To search inside a website, name the site and ask for its pages that show the exact value. When there is a single column, make the 3 angles differ by how the value is written (the exact phrase in quotes, the value with spaces or hyphens where it has them, the value alone), by the named site versus the wider web (unless the owner limited the search), or by what the page is (product page, listing, datasheet).
@@ -33,7 +34,7 @@ How to write each request:
 
 Do not mention: JSON or any answer format, product page versus category pages, how many pages to return (unless the owner gave a number), live or dead links, the photo, or the country. The app adds those itself.
 
-Answer with the JSON object only: exactly 3 requests, strongest first, each with a short name (2 to 5 words); the identityColumns; the onlyWebsites; and a one-sentence summary of your plan in notes.`;
+Answer with the JSON object only: exactly 3 requests, strongest first, each with a short name (2 to 5 words); the identityColumns; the onlyWebsites; the closestMatch flag; and a one-sentence summary of your plan in notes.`;
 
 export interface PlannerColumn {
   name: string;
@@ -75,8 +76,13 @@ export function buildSourceUrlsPlannerSchema(): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["steps", "identityColumns", "onlyWebsites", "notes"],
+    required: ["steps", "identityColumns", "onlyWebsites", "closestMatch", "notes"],
     properties: {
+      closestMatch: {
+        type: "boolean",
+        description:
+          "True only when the owner allows a fallback to the closest page of the same product (another size or colour, the parent page). False for exact or unspecified matching.",
+      },
       onlyWebsites: {
         type: "array",
         description:

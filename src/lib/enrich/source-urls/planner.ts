@@ -78,6 +78,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
   let attemptNumber = 0;
   let identityColumns: string[] = [];
   let onlyWebsites: string[] = [];
+  let closestMatch = false;
   let notes = "";
   let retryHint: string | undefined;
   let lastReason = "";
@@ -102,6 +103,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
     // Never a reason to fail: with no usable identity column the app uses every ticked column.
     identityColumns = validateIdentityColumns(selection.identityColumns, columnNames);
     onlyWebsites = validateOnlyWebsites(selection.onlyWebsites);
+    closestMatch = selection.closestMatch === true;
     notes = typeof selection.notes === "string" ? selection.notes.trim().slice(0, 300) : "";
     return { ok: true };
   };
@@ -136,6 +138,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
         steps: steps.map((step) => ({ name: step.name, text: step.text })),
         identityColumns,
         onlyWebsites,
+        closestMatch,
         notes,
         rounds: result.costs.length,
       });
@@ -147,6 +150,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
           columns: columnNames,
           ...(identityColumns.length > 0 ? { identityColumns } : {}),
           ...(onlyWebsites.length > 0 ? { onlyWebsites } : {}),
+          ...(closestMatch ? { closestMatch: true } : {}),
           model: result.model,
           ...(notes ? { notes } : {}),
         },
@@ -162,6 +166,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
       steps = [];
       identityColumns = [];
       onlyWebsites = [];
+      closestMatch = false;
     }
   }
 

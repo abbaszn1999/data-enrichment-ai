@@ -68,6 +68,13 @@ export interface SourceUrlsPlan {
    * limit.
    */
   onlyWebsites?: string[];
+  /**
+   * True only when the owner's instruction allows a fallback to the closest
+   * page of the same product ("if not found bring the most matched item",
+   * "the parent page", "another size is fine"). The code then relaxes the two
+   * "this exact item" lines of the fixed rule. Absent: strict (the default).
+   */
+  closestMatch?: boolean;
   model?: string;
   /** One line from the planner on what it set up. */
   notes?: string;
@@ -277,6 +284,7 @@ export function readStoredPlan(value: unknown): SourceUrlsPlan | undefined {
     columns,
     ...(identityColumns.length > 0 ? { identityColumns } : {}),
     ...(onlyWebsites.length > 0 ? { onlyWebsites } : {}),
+    ...(record.source === "planner" && record.closestMatch === true ? { closestMatch: true } : {}),
     ...(typeof record.model === "string" ? { model: record.model } : {}),
     ...(typeof record.notes === "string" ? { notes: record.notes } : {}),
     ...(typeof record.reason === "string" ? { reason: record.reason } : {}),

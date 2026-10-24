@@ -265,6 +265,21 @@ describe("identity columns", () => {
   });
 });
 
+describe("closest match", () => {
+  const stored = { ...plan(), closestMatch: true };
+
+  it("is kept from a stored planner plan only when it is exactly true", () => {
+    expect(readStoredPlan(JSON.parse(JSON.stringify(stored)))!.closestMatch).toBe(true);
+    expect(readStoredPlan({ ...stored, closestMatch: "true" })!.closestMatch).toBeUndefined();
+    expect(readStoredPlan({ ...stored, closestMatch: false })!.closestMatch).toBeUndefined();
+    expect(readStoredPlan(plan())!.closestMatch).toBeUndefined();
+  });
+
+  it("is never read from a default plan", () => {
+    expect(readStoredPlan({ ...defaultSourceUrlsPlan("planner failed"), closestMatch: true })!.closestMatch).toBeUndefined();
+  });
+});
+
 describe("only websites", () => {
   it("reduces what the planner wrote to a bare domain", () => {
     expect(normalizeWebsite("https://www.Toys4Less.com/products/x?y=1")).toBe("toys4less.com");
