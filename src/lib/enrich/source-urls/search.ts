@@ -1,27 +1,26 @@
 /**
- * Source URLs orchestration: one Google AI Mode search for the exact product
- * and — only when that produced no usable page — one automatic second try with
- * different search angles (see ./skill.ts). Every SearchApi call that returned
- * HTTP 200 is billed, so each is added to `costs` the moment it returns —
- * before its answer is read — and an unreadable answer can never lose the
- * charge.
+ * Source URLs orchestration: Google AI Mode searches for the exact product. A
+ * row that finds no usable page is searched AGAIN with exactly the same query,
+ * up to SOURCE_URLS_MAX_TRIES searches in total. Google AI Mode does not answer
+ * the same question the same way twice, so repeating it recovers rows that a
+ * single search missed; changing the wording on a retry did not do better, so
+ * nothing changes between tries (see ./skill.ts for the one query).
+ *
+ * Every SearchApi call that returned HTTP 200 is billed, so each is added to
+ * `costs` the moment it returns — before its answer is read — and an
+ * unreadable answer can never lose the charge.
  *
  * Every page that is returned passes the code-side checks the Image Finder's
  * Exact Match uses (a full product URL, not a search engine, social or
- * reference site), plus a listing-page filter. The answer is also compared with
- * the pages Google itself cited (`reference_links`): a page Google cited is
- * real by construction, so those are ranked first.
+ * reference site), plus a listing-page filter. When the answer itself names no
+ * page, the pages Google cited (`reference_links`) are used: a cited page is
+ * real by construction, and Google sometimes names only the home page in its
+ * text while citing the product page. Cited pages are ranked first.
  *
- * With a Website set (./site.ts) the search is a different, one-sentence
- * request for that site only; the page comes from the cited pages and the links
- * in the answer, and it must be a product page on that site (never the home
- * page). The second try is then a simpler request, or none when there is
- * nothing simpler to ask. The market goes to the search as its location.
- *
- * A failed call on attempt 1 (bad key, network, non-200) throws as-is —
- * nothing was billed. A failure on attempt 2 does not throw: attempt 1 already
- * answered, so the result is "none found" with attempt 1's cost and the failure
- * in the note.
+ * A failed call on the first search (bad key, network, non-200) throws as-is —
+ * nothing was billed. A failure on a later search does not throw: an earlier
+ * one already answered, so the result is "none found" with the costs so far and
+ * the failure in the note.
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
 import { hideProviderNames } from "@/lib/provider-names";
@@ -41,33 +40,30 @@ import {
   parseBestSourceAnswer,
   SOURCE_URLS_MAX,
   type SourceCandidate,
-  type SourceUrlsAttempt,
 } from "./skill";
-import {
-  buildSiteSourceUrlsQuery,
-  describeSiteMiss,
-  pickSitePage,
-  joinDomains,
-  siteDomainsOf,
-  type SiteSearchAttempt,
-} from "./site";
+
+/** Searches per row when the earlier ones found no usable page: the first plus up to 4 identical retries. */
+export const SOURCE_URLS_MAX_TRIES = 5;
+
+/**
+ * No new search starts after this long on one row, so five slow searches can
+ * never run into the job's row time limit (jobs/config.ts) when Image Finder
+ * shares the row.
+ */
+export const SOURCE_URLS_TRIES_BUDGET_MS = 420_000;
 
 export interface SearchSourceUrlsInput {
   rowData: Record<string, string>;
   customInstruction?: string;
   /** One public http(s) photo of the item for Google to look at; omit when the row has none. */
   imageUrl?: string;
-  /**
-   * Website mode: search these websites only, up to three, one search naming
-   * them all (the column's Website setting; anything URL-like is reduced to a
-   * bare domain). Empty = the open search.
-   */
-  website?: string;
   /** Country to search from, as a place name ("United Kingdom"); sent as the search location, never in the prompt. */
   location?: string;
   shouldCancel?: () => Promise<boolean>;
   /** Wait before the one retry of a rate-limited or 5xx call (tests shorten it). */
   retryDelayMs?: number;
+  /** Searches per row, first one included (tests and callers may lower it). Defaults to SOURCE_URLS_MAX_TRIES. */
+  maxTries?: number;
 }
 
 const TRANSIENT_RETRY_DELAY_MS = 2_000;
@@ -76,7 +72,7 @@ export interface SearchSourceUrlsResult {
   sources: SourceUrl[];
   /** One SearchApi cost per Google AI Mode call that ran. */
   costs: AiCallCost[];
-  /** Number of searches that answered (1 or 2). */
+  /** Number of searches that answered (1 up to the maximum). */
   attempts: number;
   /** Whether a photo was sent with the search that produced the result. */
   usedImage: boolean;
@@ -212,9 +208,10 @@ async function askGoogle(
   return { call: await run(buildQuery(false)), usedImage: false };
 }
 
-async function runAttempt(
+/** One search, read and checked. The query is the same on every try. */
+async function runSearch(
   input: SearchSourceUrlsInput,
-  attempt: SourceUrlsAttempt,
+  attempt: number,
   costs: AiCallCost[]
 ): Promise<AttemptOutcome> {
   const imageUrl = input.imageUrl && /^https?:\/\//i.test(input.imageUrl) ? input.imageUrl : undefined;
@@ -223,7 +220,6 @@ async function runAttempt(
       rowData: input.rowData,
       customInstruction: input.customInstruction,
       hasImage,
-      attempt,
     });
 
   const { call, usedImage } = await askGoogle(
@@ -236,9 +232,12 @@ async function runAttempt(
 
   let answer = parseBestSourceAnswer(call.texts);
   let harvested = false;
-  if (!answer.readable) {
-    // No JSON we can read (typically Google answering with its own list of web
-    // results): use the links in that answer rather than call it "none found".
+  if (answer.sources.length === 0) {
+    // The answer names no page: either no JSON we can read (typically Google
+    // answering with its own list of web results) or an answer that names only
+    // a home page or nothing at all while Google cites product pages. Those
+    // links, in Google's order, still go through the checks below, so they are
+    // used instead of reporting "none found".
     const leads = harvestSourceCandidates(
       call.texts,
       call.referenceLinks.map((ref) => ref.link)
@@ -301,123 +300,77 @@ async function runAttempt(
 }
 
 /**
- * Website mode, one search: the short request for one website (./site.ts), the
- * page taken from the cited pages and the links in the answer, and kept only if
- * it is a product page on that website. Returns null when there is nothing
- * simpler to ask for attempt 2, so no second search is paid for.
+ * "search 1: X; searches 2-5: Y". Searches that ended the same way are joined,
+ * so five identical tries read as one line, not five.
  */
-async function runSiteAttempt(
-  input: SearchSourceUrlsInput,
-  domains: string[],
-  attempt: SiteSearchAttempt,
-  costs: AiCallCost[]
-): Promise<AttemptOutcome | null> {
-  const buildQuery = (hasImage: boolean) =>
-    buildSiteSourceUrlsQuery({
-      rowData: input.rowData,
-      domains,
-      customInstruction: input.customInstruction,
-      hasImage,
-      attempt,
-    });
-  if (!buildQuery(false)) return null;
-
-  // The second try is the plain text request: no photo, no note.
-  const imageUrl =
-    attempt === 1 && input.imageUrl && /^https?:\/\//i.test(input.imageUrl) ? input.imageUrl : undefined;
-  const { call, usedImage } = await askGoogle(
-    buildQuery,
-    imageUrl,
-    costs,
-    input.retryDelayMs ?? TRANSIENT_RETRY_DELAY_MS,
-    input.location
-  );
-
-  const pick = pickSitePage(call.texts, call.referenceLinks, domains);
-  console.log("[Source URLs] Google AI Mode call (website)", {
-    attempt,
-    website: joinDomains(domains),
-    location: input.location ?? null,
-    withPhoto: usedImage,
-    httpStatus: call.httpStatus,
-    ms: call.elapsedMs,
-    linksConsidered: pick.considered,
-    kept: pick.page ? 1 : 0,
-    referenceLinks: call.referenceLinks.length,
-  });
-
-  if (pick.page) return { sources: [{ title: pick.page.title, uri: pick.page.url }], summary: "", usedImage };
-  if (pick.considered > 0) {
-    console.warn("[Source URLs] Google returned links but none were kept (website mode)", {
-      attempt,
-      considered: pick.considered,
-      dropped: pick.dropped,
-    });
+export function describeTries(summaries: string[]): string {
+  const parts: string[] = [];
+  let start = 0;
+  while (start < summaries.length) {
+    let end = start;
+    while (end + 1 < summaries.length && summaries[end + 1] === summaries[start]) end += 1;
+    const label = start === end ? `search ${start + 1}` : `searches ${start + 1}-${end + 1}`;
+    parts.push(`${label}: ${summaries[start]}`);
+    start = end + 1;
   }
-  return { sources: [], summary: describeSiteMiss(pick, domains), usedImage };
+  return parts.join("; ");
 }
 
 export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<SearchSourceUrlsResult> {
   const costs: AiCallCost[] = [];
-  const domains = siteDomainsOf(input.website);
-  const run = async (attempt: SourceUrlsAttempt): Promise<AttemptOutcome | null> =>
-    domains.length > 0 ? runSiteAttempt(input, domains, attempt, costs) : runAttempt(input, attempt, costs);
-  const missNote = (parts: string) =>
-    domains.length > 0
-      ? `The web search found no product page on ${joinDomains(domains)} for this item (${parts}).`
-      : `The web search found no page for this item (${parts}).`;
+  const maxTries = Math.max(1, Math.min(input.maxTries ?? SOURCE_URLS_MAX_TRIES, SOURCE_URLS_MAX_TRIES));
+  const startedAt = Date.now();
+  const summaries: string[] = [];
+  let usedImage = false;
+  let timeLimit = false;
 
-  let first: AttemptOutcome;
-  try {
-    first = (await run(1))!;
-  } catch (error) {
-    if (costs.length > 0) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new EnrichBilledAttemptError(message, costs);
+  const missNote = (extra = "") =>
+    `The web search found no page for this item (${describeTries(summaries)}${extra}${timeLimit ? "; stopped retrying at the time limit" : ""}).`;
+
+  for (let attempt = 1; attempt <= maxTries; attempt += 1) {
+    if (attempt > 1) {
+      if (input.shouldCancel && (await input.shouldCancel().catch(() => false))) {
+        throw new EnrichCancelledError(`Cancelled before Google AI Mode search ${attempt}.`, costs);
+      }
+      if (Date.now() - startedAt > SOURCE_URLS_TRIES_BUDGET_MS) {
+        timeLimit = true;
+        break;
+      }
     }
-    throw error;
-  }
-  if (first.sources.length > 0) {
-    return { sources: first.sources, costs, attempts: 1, usedImage: first.usedImage, notFoundReason: "" };
+
+    let outcome: AttemptOutcome;
+    try {
+      outcome = await runSearch(input, attempt, costs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt === 1) {
+        // Nothing answered yet. Any billed failure keeps its charge.
+        if (costs.length > 0) throw new EnrichBilledAttemptError(message, costs);
+        throw error;
+      }
+      // An earlier search answered, so a failure of a later one must not turn
+      // the row into an error: it stays "none found", with the failure in the note.
+      return {
+        sources: [],
+        costs,
+        attempts: summaries.length,
+        usedImage,
+        notFoundReason: missNote(`; search ${attempt} failed: ${hideProviderNames(message.slice(0, 200))}`),
+      };
+    }
+
+    usedImage = outcome.usedImage;
+    if (outcome.sources.length > 0) {
+      return { sources: outcome.sources, costs, attempts: attempt, usedImage, notFoundReason: "" };
+    }
+    summaries.push(outcome.summary);
   }
 
-  if (input.shouldCancel && (await input.shouldCancel().catch(() => false))) {
-    throw new EnrichCancelledError("Cancelled before the second Google AI Mode search.", costs);
-  }
-
-  // The first search answered, so a failure of the second must not turn the
-  // row into an error: it stays "none found", with the failure in the note.
-  let second: AttemptOutcome | null;
-  try {
-    second = await run(2);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      sources: [],
-      costs,
-      attempts: 2,
-      usedImage: first.usedImage,
-      notFoundReason: missNote(`search 1: ${first.summary}; search 2 failed: ${hideProviderNames(message.slice(0, 200))}`),
-    };
-  }
-  // Website mode has nothing simpler to ask for: one search was the whole attempt.
-  if (!second) {
-    return {
-      sources: [],
-      costs,
-      attempts: 1,
-      usedImage: first.usedImage,
-      notFoundReason: missNote(`search 1: ${first.summary}`),
-    };
-  }
-  if (second.sources.length > 0) {
-    return { sources: second.sources, costs, attempts: 2, usedImage: second.usedImage, notFoundReason: "" };
-  }
   return {
     sources: [],
     costs,
-    attempts: 2,
-    usedImage: second.usedImage,
-    notFoundReason: missNote(`search 1: ${first.summary}; search 2: ${second.summary}`),
+    attempts: summaries.length,
+    usedImage,
+    notFoundReason: missNote(),
   };
 }

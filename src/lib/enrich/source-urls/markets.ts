@@ -4,9 +4,8 @@
  * search runs as a shopper in that country would see it. That is what makes a
  * site that sells in several countries return its page for the right one.
  *
- * Pure (only the pure domain helpers) so the sidebar and the server share one list.
+ * Pure (no runtime imports) so the sidebar and the server share one list.
  */
-import { parseDomainList } from "../domains";
 
 export interface SearchMarket {
   /** Lowercase ISO 3166-1 code, stored in the column's `sourceMarket`. */
@@ -15,7 +14,7 @@ export interface SearchMarket {
   name: string;
 }
 
-/** `sourceMarket` value meaning "do not set a location". Empty / "auto" means "decide from the website". */
+/** `sourceMarket` value meaning "do not set a location". Empty and the older "auto" mean the same. */
 export const MARKET_ANY = "none";
 export const MARKET_AUTO = "auto";
 
@@ -81,60 +80,18 @@ export const SEARCH_MARKETS: SearchMarket[] = [
   { code: "vn", name: "Vietnam" },
 ];
 
-/** Country-code domain endings that are not the ISO code of the same country, or read differently. */
-const TLD_TO_MARKET: Record<string, string> = { uk: "gb" };
-
-/** Two-letter endings that are mostly used as a plain brand domain, so they say nothing about the market. */
-const NEUTRAL_TLDS = new Set(["co", "me", "ai", "io", "tv", "fm", "ly", "to", "cc", "ws", "gg"]);
-
 export function findMarket(code: string | undefined): SearchMarket | null {
   const wanted = (code ?? "").trim().toLowerCase();
   return SEARCH_MARKETS.find((market) => market.code === wanted) ?? null;
 }
 
 /**
- * The market a website's country-code ending points to: `.co.uk` and `.uk` are
- * the United Kingdom, `.de` Germany, `.com.au` Australia. Anything global
- * (`.com`, `.net`, `.shop`, ...) returns null, because it says nothing about
- * where the shop sells (mamasandpapas.com is a UK store).
+ * The market a search uses: a country code uses that country. Empty, "auto"
+ * (an older setting) and "none" set no location, and so does an unknown code
+ * (a hand-edited sheet): nothing is guessed from a website or anywhere else.
  */
-export function marketFromDomain(domain: string | null | undefined): SearchMarket | null {
-  const labels = (domain ?? "").trim().toLowerCase().split(".");
-  if (labels.length < 2) return null;
-  const tld = labels[labels.length - 1] ?? "";
-  if (tld.length !== 2 || NEUTRAL_TLDS.has(tld)) return null;
-  return findMarket(TLD_TO_MARKET[tld] ?? tld);
-}
-
-/**
- * The market for several websites: only when every one of them points to the
- * same country. A mix (`.co.uk` with `.de`, or with a global `.com`) says
- * nothing about where to search from, so no location is chosen.
- */
-export function marketFromDomains(domains: string[]): SearchMarket | null {
-  if (domains.length === 0) return null;
-  const markets = domains.map((domain) => marketFromDomain(domain));
-  const first = markets[0];
-  return first && markets.every((market) => market?.code === first.code) ? first : null;
-}
-
-export interface ResolvedMarket {
-  market: SearchMarket | null;
-  /** True when the market was decided from the website, not picked by the owner. */
-  auto: boolean;
-}
-
-/**
- * The market a search uses. Empty or "auto" decides from the website's ending;
- * "none" sets no location; a country code uses that country. An unknown code
- * (a hand-edited sheet) sets no location rather than guessing.
- */
-export function resolveSearchMarket(setting: string | undefined, website: string | null | undefined): ResolvedMarket {
+export function resolveSearchMarket(setting: string | undefined): SearchMarket | null {
   const value = (setting ?? "").trim().toLowerCase();
-  if (value === "" || value === MARKET_AUTO) {
-    // `website` is one domain or the saved list ("a.com, b.co.uk").
-    return { market: marketFromDomains(parseDomainList(website ?? "").domains), auto: true };
-  }
-  if (value === MARKET_ANY) return { market: null, auto: false };
-  return { market: findMarket(value), auto: false };
+  if (value === "" || value === MARKET_AUTO || value === MARKET_ANY) return null;
+  return findMarket(value);
 }

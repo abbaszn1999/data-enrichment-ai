@@ -88,8 +88,7 @@ export interface EnrichmentColumn {
   blockedDomains?: string[]; // Image Finder: never use these websites (max 100)
   lensMatchScope?: LensMatchScope; // Lens founds: exact matches only (default), exact plus visual matches, or shop listings
   lensProductPagesOnly?: boolean; // Lens founds: drop videos, social, review and category pages (default on)
-  sourceWebsite?: string; // Source URLs: search one website only, as a bare domain ("mamasandpapas.com"); empty = open search
-  sourceMarket?: string; // Source URLs: country to search from (lowercase ISO code, e.g. "gb"); "none" = any country; empty = auto from the website
+  sourceMarket?: string; // Source URLs: country to search from (lowercase ISO code, e.g. "gb"); "none" = any country; empty or "none" = any country
   writingTone?: WritingTone; // Per-column writing tone (for text columns)
   contentLength?: ContentLength; // Per-column content length (for text columns)
 }

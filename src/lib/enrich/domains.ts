@@ -24,9 +24,6 @@ export function normalizeDomain(input: string): string | null {
   return DOMAIN_PATTERN.test(value) ? value : null;
 }
 
-/** The most websites one Source URLs search can name (the column's Website setting). */
-export const SITE_MAX_DOMAINS = 3;
-
 /** Parse free text (one per line, or comma / space separated) into clean, unique domains. */
 export function parseDomainList(text: string): { domains: string[]; invalid: string[] } {
   const domains: string[] = [];

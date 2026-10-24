@@ -16,8 +16,9 @@
  * photo does the heavy lifting when the row has one. The code-side link checks
  * (search.ts) do the policing, not the prompt.
  *
- * Two attempts exist: attempt 1 is the normal prompt; attempt 2 runs only when
- * attempt 1 produced no usable page, and asks for DIFFERENT search angles.
+ * There is one query. A row that finds nothing is searched again with exactly
+ * the same query (search.ts): the answers vary from one search to the next, and
+ * rewording the retry did not do better than repeating it.
  */
 import { extractJsonValues } from "../image-finder/exact/json-extract";
 
@@ -33,8 +34,6 @@ const MAX_FIELDS = 20;
 const MAX_INSTRUCTION_CHARS = 1_500;
 /** SearchApi's documented `q` limit is 8,193 characters; stay under it. */
 const MAX_QUERY_CHARS = 8_000;
-
-export type SourceUrlsAttempt = 1 | 2;
 
 function toPlainText(value: string): string {
   return value
@@ -78,24 +77,21 @@ export interface BuildSourceUrlsQueryInput {
   customInstruction?: string;
   /** A photo of the item is attached to the call. */
   hasImage?: boolean;
-  /** 1 = normal search; 2 = second try with different angles. Defaults to 1. */
-  attempt?: SourceUrlsAttempt;
 }
 
-function composeQuery(fieldLines: string[], instruction: string, hasImage: boolean, attempt: SourceUrlsAttempt): string {
+function composeQuery(fieldLines: string[], instruction: string, hasImage: boolean): string {
   // Wording is deliberate: keep the task line short and plain. Describing a
-  // failed first search ("found nothing usable") made Google AI Mode search that
-  // sentence itself, so attempt 2 only asks for other angles.
+  // failed search ("found nothing usable") made Google AI Mode search that
+  // sentence itself, so nothing about earlier tries is ever said.
   const hasText = fieldLines.length > 0;
   const sellers =
     "from any seller in any country or language: the brand's own site, manufacturers and factories (for example Alibaba, 1688), wholesalers, retailers and marketplaces.";
-  const extraAngles = attempt === 2 ? " Use search angles beyond the obvious ones." : "";
 
   // Photo only: the first line tells Google to identify the item before searching.
   const task =
     !hasText && hasImage
-      ? `Identify the product in the attached photo, then find every web page that sells that exact product, ${sellers}${extraAngles}`
-      : `Find every web page that sells this exact product, ${sellers}${extraAngles}`;
+      ? `Identify the product in the attached photo, then find every web page that sells that exact product, ${sellers}`
+      : `Find every web page that sells this exact product, ${sellers}`;
 
   const lines: string[] = [task];
   if (hasText || !hasImage) {
@@ -104,7 +100,15 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
   // Photo plus text: one plain line. Asking Google to "confirm" pages against the photo made it
   // over-strict when the photo was slightly off.
   if (hasText && hasImage) lines.push("", "The attached photo shows the same product.");
-  lines.push("", "Same product only. A different colour, size or model does not count. Aim for 10 or more pages.");
+  // Strict by default. With an owner's instruction the owner decides which
+  // variants count as the same product (a size, a very similar code), so the
+  // sentence defers to it instead of contradicting it.
+  lines.push(
+    "",
+    instruction
+      ? "Same product only. If the owner's instruction below says which variants count as the same product, follow it. Otherwise a different colour, size or model does not count. Aim for 10 or more pages."
+      : "Same product only. A different colour, size or model does not count. Aim for 10 or more pages."
+  );
   // Last before the output format, and ranked above the default rules, so the
   // owner's way of searching is not drowned out by them.
   if (instruction) {
@@ -128,15 +132,14 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
  * the answer to be parseable).
  */
 export function buildSourceUrlsQuery(input: BuildSourceUrlsQueryInput): string {
-  const attempt = input.attempt ?? 1;
   const instruction = (input.customInstruction ?? "").trim().slice(0, MAX_INSTRUCTION_CHARS);
   const hasImage = Boolean(input.hasImage);
   let fields = productDataLines(input.rowData);
 
-  let query = composeQuery(fields, instruction, hasImage, attempt);
+  let query = composeQuery(fields, instruction, hasImage);
   while (query.length > MAX_QUERY_CHARS && fields.length > 1) {
     fields = fields.slice(0, -1);
-    query = composeQuery(fields, instruction, hasImage, attempt);
+    query = composeQuery(fields, instruction, hasImage);
   }
   return query;
 }
@@ -242,19 +245,21 @@ export function cleanPageTitle(raw: string | undefined): string {
 }
 
 /**
- * Last resort for an answer with no readable JSON. For a product with no code,
- * Google AI Mode often ignores the JSON request and answers with its own list
- * of web results (a markdown table of `[title](url)` links). Those are real
- * search results for the product, in Google's order of relevance, so they are
- * used — still through the code-side checks — instead of reporting "none found"
- * just because the answer was in another shape. Never used to second-guess an
- * answer that was readable and listed no pages.
+ * Used when the answer names no page: either there is no readable JSON (for a
+ * product with no code, Google AI Mode often ignores the JSON request and
+ * answers with its own list of web results, a markdown table of `[title](url)`
+ * links) or the JSON names only a home page or nothing while Google cites
+ * product pages. The links in the answer text and Google's cited
+ * `reference_links` are real search results, in Google's order of relevance, so
+ * they are used — still through the code-side checks — instead of reporting
+ * "none found" just because the answer was in another shape.
  */
 export function harvestSourceCandidates(texts: string[], referenceLinks: string[] = []): SourceCandidate[] {
   const seen = new Set<string>();
   const out: SourceCandidate[] = [];
   const add = (rawUrl: string, title?: string) => {
-    const url = rawUrl.replace(/[.,;:!?)\]]+$/, "").trim();
+    // Google's cited links carry a "#:~:text=..." highlight; the page is the same without it.
+    const url = rawUrl.replace(/#:~:text=.*$/i, "").replace(/[.,;:!?)\]]+$/, "").trim();
     // Plain http:// pages count too: many small manufacturer and factory sites still use it.
     if (!/^https?:\/\//i.test(url)) return;
     const key = url.toLowerCase();
