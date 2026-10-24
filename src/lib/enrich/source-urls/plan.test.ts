@@ -4,12 +4,16 @@ import {
   expandTries,
   placeholdersOf,
   readStoredPlan,
+  renderIdentityLines,
   renderPlanStep,
+  SOURCE_URLS_IDENTITY_MAX_COLUMNS,
+  SOURCE_URLS_IDENTITY_VALUE_CHARS,
   SOURCE_URLS_PLAN_MAX_STEPS,
+  validateIdentityColumns,
   validatePlanSteps,
   type SourceUrlsPlan,
 } from "./plan";
-import { buildPlannedQuery, SOURCE_URLS_FIXED_RULE } from "./skill";
+import { buildPlannedQuery, buildSourceUrlsQuery, LIVE_LINKS_RULE, SOURCE_URLS_FIXED_RULE, SOURCE_URLS_IDENTITY_HEADING } from "./skill";
 
 const COLUMNS = ["Barcode", "Vendor SKU", "Description"];
 const barcode = { name: "Barcode first", text: "Find the product page that sells the product with barcode {{Barcode}}." };
@@ -152,6 +156,67 @@ describe("expandTries", () => {
   });
 });
 
+describe("identity columns", () => {
+  const rowData = { Barcode: "3700802102649", "Vendor SKU": "TA001", Title: "75 Wash-Off Tattoos - Assortment", Brand: "Buki", Qty: "6", Photo: "[1 image attached]" };
+  const withIdentity = (identityColumns?: string[]): SourceUrlsPlan => ({
+    ...plan(),
+    columns: ["Barcode", "Vendor SKU", "Description", "Title", "Brand", "Qty"],
+    ...(identityColumns ? { identityColumns } : {}),
+  });
+
+  it("keeps only ticked columns, once each, in the ticked spelling, at most six", () => {
+    const names = ["Barcode", "Vendor SKU", "Title", "Brand", "Qty", "A", "B", "C"];
+    expect(validateIdentityColumns(["brand", "TITLE", "title", "Nope", 3, null], names)).toEqual(["Brand", "Title"]);
+    expect(validateIdentityColumns(names, names)).toHaveLength(SOURCE_URLS_IDENTITY_MAX_COLUMNS);
+    expect(validateIdentityColumns(undefined, names)).toEqual([]);
+    expect(validateIdentityColumns("Brand", names)).toEqual([]);
+  });
+
+  it("writes one 'Name: value' line per identity column, with this row's values", () => {
+    expect(renderIdentityLines(withIdentity(["Brand", "Title"]), rowData)).toEqual([
+      "Brand: Buki",
+      "Title: 75 Wash-Off Tattoos - Assortment",
+    ]);
+  });
+
+  it("leaves a column with no value on this row out, without skipping anything", () => {
+    expect(renderIdentityLines(withIdentity(["Brand", "Title"]), { ...rowData, Brand: " " })).toEqual([
+      "Title: 75 Wash-Off Tattoos - Assortment",
+    ]);
+    expect(renderIdentityLines(withIdentity(["Brand"]), { Title: "x" })).toEqual([]);
+  });
+
+  it("uses every ticked column with a value when the planner chose none, never an image", () => {
+    const lines = renderIdentityLines(withIdentity(), rowData);
+    expect(lines).toContain("Barcode: 3700802102649");
+    expect(lines).toContain("Qty: 6");
+    expect(lines.some((line) => line.startsWith("Photo"))).toBe(false);
+  });
+
+  it("cuts a long value", () => {
+    const [line] = renderIdentityLines(withIdentity(["Title"]), { Title: "t".repeat(2_000) });
+    expect(line!.length).toBe("Title: ".length + SOURCE_URLS_IDENTITY_VALUE_CHARS);
+  });
+
+  it("goes with every try of a row, whichever step it is, and is saved with the plan", () => {
+    const tries = expandTries(withIdentity(["Brand", "Title"]), rowData, 3);
+    // The row has no Description, so that step is skipped and the other two go round.
+    expect(tries.map((t) => t.label)).toEqual(["Barcode first", "SKU", "Barcode first"]);
+    for (const t of tries) expect(t.identity).toEqual(["Brand: Buki", "Title: 75 Wash-Off Tattoos - Assortment"]);
+    const stored = { ...withIdentity(["Brand", "Title"]), model: "gpt-6.1-sol" };
+    expect(readStoredPlan(JSON.parse(JSON.stringify(stored)))).toEqual(stored);
+  });
+
+  it("drops stored identity columns that are not ticked columns, and keeps a plan without any", () => {
+    expect(readStoredPlan({ ...withIdentity(["Brand", "Hacked"]) })!.identityColumns).toEqual(["Brand"]);
+    expect(readStoredPlan(withIdentity())!.identityColumns).toBeUndefined();
+  });
+
+  it("is not added to the default query", () => {
+    expect(expandTries(undefined, rowData, 1)).toEqual([{}]);
+  });
+});
+
 describe("buildPlannedQuery", () => {
   it("is the filled-in step plus the fixed rule, and nothing else", () => {
     const query = buildPlannedQuery({ text: "Find the page for barcode 111." });
@@ -169,6 +234,43 @@ describe("buildPlannedQuery", () => {
   it("states the product-page rule and the answer format every time", () => {
     expect(SOURCE_URLS_FIXED_RULE).toMatch(/home page, category, collection, brand, search-results, blog or article page/);
     expect(SOURCE_URLS_FIXED_RULE).toContain('{"sources":[{"url":"https://...","title":"page title"}]}');
+  });
+
+  it("puts the identity between the step and the fixed rule, as a list to confirm the page, not to search by", () => {
+    const query = buildPlannedQuery({
+      text: "Find the page for supplier code TA001.",
+      hasImage: true,
+      identity: ["Brand: Buki", "Title: 75 Wash-Off Tattoos - Assortment"],
+    });
+    expect(query).toBe(
+      `Find the page for supplier code TA001.\n\n${SOURCE_URLS_IDENTITY_HEADING}\n- Brand: Buki\n- Title: 75 Wash-Off Tattoos - Assortment\n\nThe attached photo shows the same product.\n\n${SOURCE_URLS_FIXED_RULE}`
+    );
+    expect(SOURCE_URLS_IDENTITY_HEADING).toMatch(/only to confirm.*do not search by these/);
+  });
+
+  it("adds no identity block when there is no identity line", () => {
+    expect(buildPlannedQuery({ text: "Find it.", identity: [] })).toBe(`Find it.\n\n${SOURCE_URLS_FIXED_RULE}`);
+    expect(buildPlannedQuery({ text: "Find it." })).not.toContain(SOURCE_URLS_IDENTITY_HEADING);
+  });
+
+  it("drops identity lines from the end, then cuts the step, and never cuts the fixed rule", () => {
+    const lines = Array.from({ length: 6 }, (_, i) => `Column ${i}: ${"v".repeat(200)}`);
+    const crowded = buildPlannedQuery({ text: "s".repeat(7_000), identity: lines });
+    expect(crowded.length).toBeLessThanOrEqual(8_000);
+    expect(crowded.endsWith(SOURCE_URLS_FIXED_RULE)).toBe(true);
+    expect(crowded).not.toContain("Column 5");
+    const absurd = buildPlannedQuery({ text: "s".repeat(20_000), identity: lines });
+    expect(absurd.length).toBeLessThanOrEqual(8_000);
+    expect(absurd).not.toContain(SOURCE_URLS_IDENTITY_HEADING);
+    expect(absurd.endsWith(SOURCE_URLS_FIXED_RULE)).toBe(true);
+  });
+
+  it("tells Google, in every planned search and in the default one, to return only live links it really found", () => {
+    expect(LIVE_LINKS_RULE).toMatch(/found in your sources and that are live today/);
+    expect(LIVE_LINKS_RULE).toMatch(/Never guess, shorten or build a link/);
+    expect(LIVE_LINKS_RULE).toMatch(/redirects to a home page, a category page or an error page/);
+    expect(SOURCE_URLS_FIXED_RULE).toContain(LIVE_LINKS_RULE);
+    expect(buildSourceUrlsQuery({ rowData: { Title: "x" } })).toContain(LIVE_LINKS_RULE);
   });
 
   it("adds the photo line only when a photo is sent", () => {

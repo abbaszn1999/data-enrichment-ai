@@ -62,7 +62,7 @@ describe("Source URLs query", () => {
     expect(query).toContain("- Brand: Acme");
     expect(query).toContain("Prefer the manufacturer's own site.");
     expect(query).toContain('"sources":[');
-    expect(query.length).toBeLessThan(900);
+    expect(query.length).toBeLessThan(1_300);
   });
 
   it("puts the custom instruction last before the output format and ranks it above the default rules", () => {

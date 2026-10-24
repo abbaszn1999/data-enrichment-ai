@@ -3,7 +3,7 @@ import { costToCredits, sumCosts } from "@/lib/ai-pricing";
 import { getDefaultEnrichmentColumns } from "@/types";
 import { enrichRow } from "../agent";
 import type { SourceUrlsPlan } from "./plan";
-import { SOURCE_URLS_FIXED_RULE, buildSourceUrlsQuery } from "./skill";
+import { SOURCE_URLS_FIXED_RULE, SOURCE_URLS_IDENTITY_HEADING, buildSourceUrlsQuery } from "./skill";
 import { searchSourceUrls, SOURCE_URLS_MAX_TRIES, SOURCE_URLS_TRIES_BUDGET_MS } from "./search";
 
 const aiModeBody = (answer: string, referenceLinks: Array<{ link: string; title?: string }> = []) =>
@@ -21,7 +21,8 @@ const found = () => aiModeBody(JSON.stringify({ sources: [{ url: PRODUCT, title:
 const plan: SourceUrlsPlan = {
   version: 1,
   source: "planner",
-  columns: ["Barcode", "Vendor SKU"],
+  columns: ["Barcode", "Vendor SKU", "Title"],
+  identityColumns: ["Title"],
   steps: [
     { name: "Barcode first", text: "Find the product page that sells the product with barcode {{Barcode}}." },
     { name: "SKU on shops", text: "On shop-a.com and shop-b.com find the page for SKU {{Vendor SKU}}." },
@@ -50,10 +51,10 @@ describe("searchSourceUrls with a plan", () => {
     await searchSourceUrls({ ...base, maxTries: 2 });
 
     expect(queryOf(fetchMock, 0)).toBe(
-      `Find the product page that sells the product with barcode 5063229294815.\n\n${SOURCE_URLS_FIXED_RULE}`
+      `Find the product page that sells the product with barcode 5063229294815.\n\n${SOURCE_URLS_IDENTITY_HEADING}\n- Title: Check jacket\n\n${SOURCE_URLS_FIXED_RULE}`
     );
     expect(queryOf(fetchMock, 1)).toBe(
-      `On shop-a.com and shop-b.com find the page for SKU S07FN6DB5.\n\n${SOURCE_URLS_FIXED_RULE}`
+      `On shop-a.com and shop-b.com find the page for SKU S07FN6DB5.\n\n${SOURCE_URLS_IDENTITY_HEADING}\n- Title: Check jacket\n\n${SOURCE_URLS_FIXED_RULE}`
     );
   });
 
@@ -97,6 +98,43 @@ describe("searchSourceUrls with a plan", () => {
     expect(result.attempts).toBe(2);
     expect(result.costs).toHaveLength(2);
     expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+  });
+
+  it("never sends a bare code: the Buki toy row's code search always carries its brand and name", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const buki = { "Internal code": "TE45200", "Supplier code": "TA001", Barcode: "3700802102649", Name: "75 Wash-Off Tattoos - Assortment", Brand: "Buki", Qty: "6" };
+    const codeOnly: SourceUrlsPlan = {
+      version: 1,
+      source: "planner",
+      columns: Object.keys(buki),
+      identityColumns: ["Brand", "Name"],
+      steps: [
+        { name: "Barcode", text: "Find the pages that show the exact barcode {{Barcode}}." },
+        { name: "Supplier code", text: "Find the page for supplier code {{Supplier code}}." },
+      ],
+    };
+    await searchSourceUrls({ rowData: buki, plan: codeOnly, retryDelayMs: 0, maxTries: 2 });
+    for (const index of [0, 1]) {
+      const query = queryOf(fetchMock, index);
+      expect(query).toContain(SOURCE_URLS_IDENTITY_HEADING);
+      expect(query).toContain("- Brand: Buki");
+      expect(query).toContain("- Name: 75 Wash-Off Tattoos - Assortment");
+      // Not the columns that do not say what the item is.
+      expect(query).not.toContain("TE45200");
+      expect(query).not.toContain("Qty");
+    }
+    expect(queryOf(fetchMock, 1)).toContain("supplier code TA001");
+  });
+
+  it("uses every ticked column as the identity when the planner chose none", async () => {
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await searchSourceUrls({ ...base, plan: { ...plan, identityColumns: undefined }, maxTries: 1 });
+    const query = queryOf(fetchMock, 0);
+    expect(query).toContain("- Barcode: 5063229294815");
+    expect(query).toContain("- Vendor SKU: S07FN6DB5");
+    expect(query).toContain("- Title: Check jacket");
   });
 
   it("skips a request when its column is empty on this row", async () => {

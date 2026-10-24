@@ -16,7 +16,13 @@ import {
   type EnrichResponseParser,
 } from "../openai";
 import type { EnrichToolPolicy } from "../policy";
-import { defaultSourceUrlsPlan, validatePlanSteps, type SourceUrlsPlan, type SourceUrlsPlanStep } from "./plan";
+import {
+  defaultSourceUrlsPlan,
+  validateIdentityColumns,
+  validatePlanSteps,
+  type SourceUrlsPlan,
+  type SourceUrlsPlanStep,
+} from "./plan";
 import {
   buildSourceUrlsPlannerBrief,
   buildSourceUrlsPlannerSchema,
@@ -67,6 +73,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
 
   const costs: AiCallCost[] = [];
   let steps: SourceUrlsPlanStep[] = [];
+  let identityColumns: string[] = [];
   let notes = "";
   let retryHint: string | undefined;
   let lastReason = "";
@@ -81,6 +88,8 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
       console.warn("[Source URLs planner] Some requests were dropped", { dropped: validated.dropped });
     }
     steps = validated.steps;
+    // Never a reason to fail: with no usable identity column the app uses every ticked column.
+    identityColumns = validateIdentityColumns(selection.identityColumns, columnNames);
     notes = typeof selection.notes === "string" ? selection.notes.trim().slice(0, 300) : "";
     return { ok: true };
   };
@@ -112,6 +121,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
       costs.push(...result.costs);
       console.log("[Source URLs planner] Plan ready", {
         steps: steps.map((step) => ({ name: step.name, text: step.text })),
+        identityColumns,
         notes,
         rounds: result.costs.length,
       });
@@ -121,6 +131,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
           source: "planner",
           steps,
           columns: columnNames,
+          ...(identityColumns.length > 0 ? { identityColumns } : {}),
           model: result.model,
           ...(notes ? { notes } : {}),
         },
@@ -134,6 +145,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
       console.warn("[Source URLs planner] Attempt failed; trying once more", { message: lastReason.slice(0, 200) });
       retryHint = lastReason.slice(0, 200);
       steps = [];
+      identityColumns = [];
     }
   }
 

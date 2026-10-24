@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { costToCredits, sumCosts } from "@/lib/ai-pricing";
 import { OPENAI_RESPONSES_URL } from "../openai";
 import { planSourceUrls } from "./planner";
-import { buildSourceUrlsPlannerBrief, SOURCE_URLS_PLANNER_INSTRUCTIONS } from "./planner-skill";
+import { buildSourceUrlsPlannerBrief, buildSourceUrlsPlannerSchema, SOURCE_URLS_PLANNER_INSTRUCTIONS } from "./planner-skill";
 
 const usage = { input_tokens: 3_000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 800 };
 
@@ -118,6 +118,23 @@ describe("planSourceUrls", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the identity columns the planner chose, in the ticked spelling, and drops the rest", async () => {
+    stub({ body: completed({ ...goodPlan, identityColumns: ["vendor sku", "Made up", "Barcode", "BARCODE", 7] }) });
+    const { plan } = await planSourceUrls(input);
+    expect(plan.identityColumns).toEqual(["Vendor SKU", "Barcode"]);
+  });
+
+  it("leaves identityColumns out when the planner chose none, so every ticked column is used", async () => {
+    stub({ body: completed({ ...goodPlan, identityColumns: [] }) });
+    expect((await planSourceUrls(input)).plan.identityColumns).toBeUndefined();
+    stub({ body: completed({ ...goodPlan, identityColumns: ["Nothing ticked"] }) });
+    expect((await planSourceUrls(input)).plan.identityColumns).toBeUndefined();
+    stub({ body: completed(goodPlan) });
+    const { plan } = await planSourceUrls(input);
+    expect(plan.source).toBe("planner");
+    expect(plan.identityColumns).toBeUndefined();
+  });
+
   it("drops a request that names an unknown column but keeps the good ones", async () => {
     stub({
       body: completed({
@@ -202,25 +219,27 @@ describe("planner brief and skill", () => {
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/ONLY when the owner asked for a specific number/);
   });
 
-  it("tells the planner a code is not unique: every non-barcode request names the product", () => {
+  it("tells the planner a code is not unique and that the app adds the product's identity itself", () => {
     const skill = SOURCE_URLS_PLANNER_INSTRUCTIONS;
-    expect(skill).toMatch(/IDENTITY RULE/);
-    // Only a barcode may stand alone.
+    // Only a barcode may stand alone; a code is never proof.
     expect(skill).toMatch(/barcode request may search by the barcode alone/);
     expect(skill).toMatch(/SKUs, supplier or vendor codes, MPNs, model numbers and short codes are reused by unrelated products/);
-    // Everything else carries the product name and brand and says the page must be that product.
-    expect(skill).toMatch(/must also name the product it is for, using the product name column and, when the columns include one, the brand column/);
-    expect(skill).toMatch(/a page for a different kind of product which merely contains the code does not count/);
-    expect(skill).toMatch(/Never write a request that searches by a code alone/);
-    // The owner's order wins, the identity rule applies anyway, and a self-check closes the job.
-    expect(skill).toMatch(/owner's own order always wins, but the identity rule still applies to every request/);
+    expect(skill).toMatch(/Never treat such a code as proof that a page is the product/);
+    // The identity comes from identityColumns, which the app appends to every request.
+    expect(skill).toMatch(/IDENTITY COLUMNS\. The app adds the product's identity to the end of EVERY request/);
+    expect(skill).toMatch(/Never list a column that is only a key your requests search by/);
+    expect(skill).toMatch(/never list quantity, price, weight, stock, dates, categories, internal codes or images/);
+    // The owner's order wins, and a self-check closes the job.
+    expect(skill).toMatch(/the owner's own order always wins/);
     expect(skill).toMatch(/could this return a completely different product\?/);
   });
 
-  it("tells the planner a request that needs the product name must keep it despite the skip-if-empty rule", () => {
-    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/do not add columns a request does not need\. The product name and brand that the identity rule below asks for ARE needed/);
+  it("asks for identityColumns in the answer, and never mentions live links itself", () => {
+    const schema = buildSourceUrlsPlannerSchema() as { required: string[]; properties: Record<string, { type: string; items?: { type: string } }> };
+    expect(schema.required).toEqual(["steps", "identityColumns", "notes"]);
+    expect(schema.properties.identityColumns).toMatchObject({ type: "array", items: { type: "string" } });
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/live or dead links/);
   });
-
   it("tells the planner the rules that keep the plan useful", () => {
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/placeholder written as \{\{Column name\}\}/);
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/differ by what they search with/);

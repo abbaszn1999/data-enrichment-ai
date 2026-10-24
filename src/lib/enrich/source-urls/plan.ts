@@ -49,6 +49,13 @@ export interface SourceUrlsPlan {
   steps: SourceUrlsPlanStep[];
   /** The ticked columns the planner saw (the names a placeholder may use). */
   columns: string[];
+  /**
+   * The ticked columns that say WHAT the product is (name, brand, a short
+   * description), chosen by the planner. The code adds them, with the row's
+   * values, to every planned search as the product's identity. Absent: all
+   * ticked columns are used instead.
+   */
+  identityColumns?: string[];
   model?: string;
   /** One line from the planner on what it set up. */
   notes?: string;
@@ -112,6 +119,45 @@ export function validatePlanSteps(raw: unknown, columnNames: string[]): Validate
   return { steps, dropped };
 }
 
+/** The most identity columns a plan keeps, and the longest value one identity line shows. */
+export const SOURCE_URLS_IDENTITY_MAX_COLUMNS = 6;
+export const SOURCE_URLS_IDENTITY_VALUE_CHARS = 200;
+
+/**
+ * The planner's identity columns, kept only if they are ticked columns (any
+ * letter case; the ticked spelling is kept), each once, at most six. Anything
+ * else is dropped; an empty result means "use every ticked column".
+ */
+export function validateIdentityColumns(raw: unknown, columnNames: string[]): string[] {
+  const byKey = new Map(columnNames.map((name) => [normalizeName(name), name]));
+  const kept: string[] = [];
+  for (const item of Array.isArray(raw) ? raw : []) {
+    if (typeof item !== "string") continue;
+    const name = byKey.get(normalizeName(item));
+    if (name && !kept.includes(name)) kept.push(name);
+    if (kept.length >= SOURCE_URLS_IDENTITY_MAX_COLUMNS) break;
+  }
+  return kept;
+}
+
+/**
+ * The product's identity for one row, one "Name: value" line per column: the
+ * plan's identity columns, or (none chosen) every ticked column that has a
+ * value. A column with no value on this row is left out; it never skips a
+ * search. Each value is cut so a long description cannot crowd out the request.
+ */
+export function renderIdentityLines(plan: SourceUrlsPlan, rowData: Record<string, string>): string[] {
+  const fields = productFields(rowData);
+  const byKey = new Map(fields.map((field) => [normalizeName(field.name), field]));
+  const wanted = plan.identityColumns?.length ? plan.identityColumns : fields.map((field) => field.name);
+  const lines: string[] = [];
+  for (const name of wanted) {
+    const field = byKey.get(normalizeName(name));
+    if (field?.value) lines.push(`${field.name}: ${field.value.slice(0, SOURCE_URLS_IDENTITY_VALUE_CHARS)}`);
+  }
+  return lines;
+}
+
 /**
  * A plan read back from the job's saved settings (which anyone could have
  * hand-edited): anything that is not a well-formed plan is ignored, so a bad
@@ -127,11 +173,13 @@ export function readStoredPlan(value: unknown): SourceUrlsPlan | undefined {
     record.source === "planner" ? validatePlanSteps(record.steps, columns).steps : [];
   if (record.source === "planner" && steps.length === 0) return undefined;
   const billing = record.billing && typeof record.billing === "object" ? record.billing : undefined;
+  const identityColumns = validateIdentityColumns(record.identityColumns, columns);
   return {
     version: 1,
     source: record.source,
     steps,
     columns,
+    ...(identityColumns.length > 0 ? { identityColumns } : {}),
     ...(typeof record.model === "string" ? { model: record.model } : {}),
     ...(typeof record.notes === "string" ? { notes: record.notes } : {}),
     ...(typeof record.reason === "string" ? { reason: record.reason } : {}),
@@ -164,6 +212,8 @@ export interface PlannedTry {
   label?: string;
   /** The request filled in for this row; absent for the default query. */
   text?: string;
+  /** The product's identity lines for this row, added to the request; absent for the default query. */
+  identity?: string[];
 }
 
 /**
@@ -182,9 +232,10 @@ export function expandTries(
   const tries = Math.max(1, Math.floor(maxTries));
   const usable: PlannedTry[] = [];
   if (plan?.source === "planner") {
+    const identity = renderIdentityLines(plan, rowData);
     for (const step of plan.steps) {
       const text = renderPlanStep(step, rowData);
-      if (text !== null) usable.push({ label: step.name, text });
+      if (text !== null) usable.push({ label: step.name, text, identity });
     }
   }
   if (usable.length === 0) return Array.from({ length: tries }, () => ({}));

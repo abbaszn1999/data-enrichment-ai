@@ -236,7 +236,7 @@ async function runSearch(
   const imageUrl = input.imageUrl && /^https?:\/\//i.test(input.imageUrl) ? input.imageUrl : undefined;
   const buildQuery = (hasImage: boolean) =>
     planned.text !== undefined
-      ? buildPlannedQuery({ text: planned.text, hasImage })
+      ? buildPlannedQuery({ text: planned.text, hasImage, identity: planned.identity })
       : buildSourceUrlsQuery({
           rowData: input.rowData,
           customInstruction: input.customInstruction,

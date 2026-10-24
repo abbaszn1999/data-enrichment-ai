@@ -126,6 +126,7 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
   }
   lines.push(
     "",
+    LIVE_LINKS_RULE,
     "Return full product page links (no search or category pages), best first, as JSON only:",
     '{"sources":[{"url":"https://...","title":"page title"}]}'
   );
@@ -152,6 +153,14 @@ export function buildSourceUrlsQuery(input: BuildSourceUrlsQueryInput): string {
 }
 
 /**
+ * Said with every search, planned or default: Google cannot open a page, so it
+ * must not invent or shorten links, and a link that now lands on a home page
+ * or an error page is worse than no link.
+ */
+export const LIVE_LINKS_RULE =
+  "Only return links you found in your sources and that are live today. Never guess, shorten or build a link from a shop's usual pattern. Do not return a link that redirects to a home page, a category page or an error page. If you are not sure a link opens this product's page, leave it out.";
+
+/**
  * The only fixed part of a planned request. The code adds it to every step,
  * so the planner can neither drop nor reword it: as many pages as can be found
  * (unless the step names a number), product pages only, then the answer format
@@ -161,20 +170,32 @@ export const SOURCE_URLS_FIXED_RULE = [
   "Return as many product page links for this exact item as you can find, unless the request above asks for a specific number of pages.",
   "Return only full product page links: each link must open the page of one product, this exact item.",
   "Never return a home page, category, collection, brand, search-results, blog or article page.",
+  LIVE_LINKS_RULE,
   "Best first, as JSON only:",
   '{"sources":[{"url":"https://...","title":"page title"}]}',
 ].join("\n");
 
+/** What an identity line says it is for: confirming the page, never a search key. */
+export const SOURCE_URLS_IDENTITY_HEADING =
+  "The product, only to confirm that a page is this exact item (do not search by these, and a page for a different product does not count):";
+
 /**
  * A planned request for one row: the step's text (already filled in with the
- * row's values), the photo line when a photo is really sent, and the fixed
- * rule. The step is cut, never the fixed rule, if it would pass SearchApi's
- * query limit.
+ * row's values), the photo line when a photo is really sent, the product's
+ * identity (the planner's identity columns with the row's values, one line
+ * each), and the fixed rule. When the query would pass SearchApi's limit the
+ * identity lines are dropped from the end first, then the step is cut; the
+ * fixed rule is never cut.
  */
-export function buildPlannedQuery(input: { text: string; hasImage?: boolean }): string {
+export function buildPlannedQuery(input: { text: string; hasImage?: boolean; identity?: string[] }): string {
   const photo = input.hasImage ? "\n\nThe attached photo shows the same product." : "";
   const tail = `${photo}\n\n${SOURCE_URLS_FIXED_RULE}`;
-  return `${input.text.trim().slice(0, Math.max(0, MAX_QUERY_CHARS - tail.length))}${tail}`;
+  const room = Math.max(0, MAX_QUERY_CHARS - tail.length);
+  const text = input.text.trim();
+  const identity = [...(input.identity ?? [])];
+  const identityBlock = () => (identity.length > 0 ? `\n\n${SOURCE_URLS_IDENTITY_HEADING}\n${identity.map((line) => `- ${line}`).join("\n")}` : "");
+  while (identity.length > 0 && text.length + identityBlock().length > room) identity.pop();
+  return `${`${text}${identityBlock()}`.slice(0, room)}${tail}`;
 }
 
 export interface SourceCandidate {
