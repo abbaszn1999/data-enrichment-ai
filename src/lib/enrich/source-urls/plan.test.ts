@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   cutStepText,
   defaultSourceUrlsPlan,
+  linkIsOnWebsites,
+  normalizeWebsite,
   planRounds,
   placeholdersOf,
   readStoredPlan,
@@ -12,7 +14,9 @@ import {
   SOURCE_URLS_IDENTITY_VALUE_CHARS,
   SOURCE_URLS_PLAN_MAX_STEPS,
   SOURCE_URLS_STEP_MAX_CHARS,
+  siteKey,
   validateIdentityColumns,
+  validateOnlyWebsites,
   validatePlanSteps,
   type SourceUrlsPlan,
 } from "./plan";
@@ -261,7 +265,57 @@ describe("identity columns", () => {
   });
 });
 
+describe("only websites", () => {
+  it("reduces what the planner wrote to a bare domain", () => {
+    expect(normalizeWebsite("https://www.Toys4Less.com/products/x?y=1")).toBe("toys4less.com");
+    expect(normalizeWebsite("  toys4less.com  ")).toBe("toys4less.com");
+    expect(normalizeWebsite("toys4less")).toBe("toys4less");
+    expect(normalizeWebsite("only on toys 4 less")).toBeNull();
+    expect(normalizeWebsite("")).toBeNull();
+    expect(normalizeWebsite(7)).toBeNull();
+  });
+
+  it("keeps each valid site once, at most five, and drops the rest", () => {
+    expect(validateOnlyWebsites(["Toys4Less.com", "www.toys4less.com", "nonsense here", 3, "shop-b.co.uk"])).toEqual(["toys4less.com", "shop-b.co.uk"]);
+    expect(validateOnlyWebsites(["a1a.com", "b2b.com", "c3c.com", "d4d.com", "e5e.com", "f6f.com"])).toHaveLength(5);
+    expect(validateOnlyWebsites(undefined)).toEqual([]);
+  });
+
+  it("names a site by its main label, so subdomains and country endings match", () => {
+    expect(siteKey("toys4less.com")).toBe("toys4less");
+    expect(siteKey("www.shop.toys4less.com")).toBe("toys4less");
+    expect(siteKey("toys4less.co.uk")).toBe("toys4less");
+    expect(siteKey("toys4less")).toBe("toys4less");
+  });
+
+  it("keeps only pages from the named sites, and everything when none is named", () => {
+    const sites = ["toys4less.com"];
+    expect(linkIsOnWebsites("https://toys4less.com/products/slime", sites)).toBe(true);
+    expect(linkIsOnWebsites("https://www.toys4less.com/products/slime", sites)).toBe(true);
+    // A planner that guessed the wrong ending still keeps the shop's own pages.
+    expect(linkIsOnWebsites("https://toys4less.co.uk/products/slime", sites)).toBe(true);
+    expect(linkIsOnWebsites("https://particlesearch.com/features/variant-search", sites)).toBe(false);
+    expect(linkIsOnWebsites("https://example.com/toys4less.com", sites)).toBe(false);
+    expect(linkIsOnWebsites("not a url", sites)).toBe(false);
+    expect(linkIsOnWebsites("https://anything.com/p", undefined)).toBe(true);
+    expect(linkIsOnWebsites("https://anything.com/p", [])).toBe(true);
+  });
+
+  it("is saved with the plan, and a hand-edited bad value is cleaned", () => {
+    const stored = { ...plan(), onlyWebsites: ["toys4less.com"], model: "gpt-6.1-sol" };
+    expect(readStoredPlan(JSON.parse(JSON.stringify(stored)))).toEqual(stored);
+    expect(readStoredPlan({ ...plan(), onlyWebsites: ["toys4less.com", "bad value", 5] })!.onlyWebsites).toEqual(["toys4less.com"]);
+    expect(readStoredPlan({ ...plan(), onlyWebsites: [] })!.onlyWebsites).toBeUndefined();
+  });
+});
+
 describe("buildPlannedQuery", () => {
+  it("tells Google to return an empty list rather than pages about searching or identifiers", () => {
+    expect(SOURCE_URLS_FIXED_RULE).toContain('return {"sources":[]}');
+    expect(SOURCE_URLS_FIXED_RULE).toMatch(/Never fill the list with pages about searching, product matching, product identifiers or SKUs/);
+    expect(buildSourceUrlsQuery({ rowData: { Title: "Check jacket" } })).toContain('return {"sources":[]}');
+  });
+
   it("is the filled-in step plus the fixed rule, and nothing else", () => {
     const query = buildPlannedQuery({ text: "Find the page for barcode 111." });
     expect(query).toBe(`Find the page for barcode 111.\n\n${SOURCE_URLS_FIXED_RULE}`);

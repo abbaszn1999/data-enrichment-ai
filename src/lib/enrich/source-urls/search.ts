@@ -37,7 +37,7 @@ import {
   type GoogleAiModeReferenceLink,
 } from "../image-finder/exact/searchapi";
 import { EnrichBilledAttemptError, EnrichCancelledError } from "../openai";
-import { planRounds, type PlannedTry, type SourceUrlsPlan } from "./plan";
+import { linkIsOnWebsites, planRounds, type PlannedTry, type SourceUrlsPlan } from "./plan";
 import {
   buildPlannedQuery,
   buildSourceUrlsQuery,
@@ -279,8 +279,12 @@ async function runSearch(
     { allowHttp: true }
   );
   const titles = new Map(candidates.map((c) => [c.url.trim().toLowerCase(), c.title]));
-  const pages = links.filter((link) => !looksLikeListingPage(link.url));
-  const listingPages = links.length - pages.length;
+  const notListing = links.filter((link) => !looksLikeListingPage(link.url));
+  const listingPages = links.length - notListing.length;
+  // When the owner limited the search to named websites (the plan's onlyWebsites),
+  // a page from anywhere else is dropped, whatever Google answered.
+  const pages = notListing.filter((link) => linkIsOnWebsites(link.url, input.plan?.onlyWebsites));
+  const otherWebsites = notListing.length - pages.length;
   const sources = rankSources(
     pages.map((link) => ({ url: link.url, title: titles.get(link.url.toLowerCase()) })),
     call.referenceLinks
@@ -304,7 +308,11 @@ async function runSearch(
   if (!answer.readable) return { sources: [], summary: "the answer could not be read", usedImage };
   if (candidates.length === 0) return { sources: [], summary: "returned no pages", usedImage };
   // Every drop is counted, the shop-listing filter included, so a miss never hides what we threw away.
-  const why = [describeRejected(rejected), listingPages > 0 ? `${listingPages} a shop listing or search page` : ""]
+  const why = [
+    describeRejected(rejected),
+    listingPages > 0 ? `${listingPages} a shop listing or search page` : "",
+    otherWebsites > 0 ? `${otherWebsites} not on ${input.plan?.onlyWebsites?.join(", ")}` : "",
+  ]
     .filter(Boolean)
     .join(", ");
   console.warn("[Source URLs] Google returned pages but none were kept", {
@@ -312,6 +320,7 @@ async function runSearch(
     returned: candidates.length,
     rejected,
     listingPages,
+    otherWebsites,
   });
   return {
     sources: [],

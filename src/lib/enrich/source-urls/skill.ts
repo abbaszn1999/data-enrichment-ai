@@ -127,6 +127,7 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
   lines.push(
     "",
     LIVE_LINKS_RULE,
+    NOTHING_FOUND_RULE,
     "Return full product page links (no search or category pages), best first, as JSON only:",
     '{"sources":[{"url":"https://...","title":"page title"}]}'
   );
@@ -161,6 +162,15 @@ export const LIVE_LINKS_RULE =
   "Only return links you found in your sources and that are live today. Never guess, shorten or build a link from a shop's usual pattern. Do not return a link that redirects to a home page, a category page or an error page. If you are not sure a link opens this product's page, leave it out.";
 
 /**
+ * Said with every search: an empty answer is the right answer when the item is
+ * not there. Without it, Google fills the list with pages about the words of
+ * the request itself (articles on SKU matching, product identifiers, variant
+ * search) when it finds nothing.
+ */
+export const NOTHING_FOUND_RULE =
+  'If you cannot find a page for this exact item, return {"sources":[]}. Never fill the list with pages about searching, product matching, product identifiers or SKUs, or with any page that is not a product page.';
+
+/**
  * The only fixed part of a planned request. The code adds it to every step,
  * so the planner can neither drop nor reword it: as many pages as can be found
  * (unless the step names a number), product pages only, then the answer format
@@ -171,6 +181,7 @@ export const SOURCE_URLS_FIXED_RULE = [
   "Return only full product page links: each link must open the page of one product, this exact item.",
   "Never return a home page, category, collection, brand, search-results, blog or article page.",
   LIVE_LINKS_RULE,
+  NOTHING_FOUND_RULE,
   "Best first, as JSON only:",
   '{"sources":[{"url":"https://...","title":"page title"}]}',
 ].join("\n");

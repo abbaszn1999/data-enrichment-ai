@@ -193,6 +193,15 @@ describe("planSourceUrls", () => {
     expect(plan.steps[0]!.text.length).toBeLessThanOrEqual(600);
   });
 
+  it("saves the websites the owner limited the search to, cleaned, and leaves them out when there are none", async () => {
+    stub({ body: completed({ ...goodPlan, onlyWebsites: ["https://www.Toys4Less.com/x", "not a site!", "toys4less.com"] }) });
+    expect((await planSourceUrls(input)).plan.onlyWebsites).toEqual(["toys4less.com"]);
+    stub({ body: completed({ ...goodPlan, onlyWebsites: [] }) });
+    expect((await planSourceUrls(input)).plan.onlyWebsites).toBeUndefined();
+    stub({ body: completed(goodPlan) });
+    expect((await planSourceUrls(input)).plan.onlyWebsites).toBeUndefined();
+  });
+
   it("tries once more after an unusable answer and bills BOTH calls", async () => {
     const bad = completed({ steps: [{ name: "x", text: "Find every page you can for this item, please." }], notes: "" });
     const fetchMock = stub({ body: bad }, { body: completed(goodPlan) });
@@ -283,10 +292,16 @@ describe("planner brief and skill", () => {
 
   it("asks for identityColumns in the answer, and never mentions live links itself", () => {
     const schema = buildSourceUrlsPlannerSchema() as { required: string[]; properties: Record<string, { type: string; items?: { type: string } }> };
-    expect(schema.required).toEqual(["steps", "identityColumns", "notes"]);
+    expect(schema.required).toEqual(["steps", "identityColumns", "onlyWebsites", "notes"]);
+    expect(schema.properties.onlyWebsites).toMatchObject({ type: "array", items: { type: "string" } });
     expect(schema.properties.identityColumns).toMatchObject({ type: "array", items: { type: "string" } });
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/live or dead links/);
   });
+  it("tells the planner to name a site in onlyWebsites only when the owner limits the search to it", () => {
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/ONLY WEBSITES\. When the owner clearly limits the search to named websites/);
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/A site the owner merely prefers, tries first or adds to the open web is NOT a limit/);
+  });
+
   it("tells the planner the rules that keep the plan useful", () => {
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/placeholder written as \{\{Column name\}\}/);
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/EXACTLY 3 requests, strongest first, each from a DIFFERENT ANGLE/);

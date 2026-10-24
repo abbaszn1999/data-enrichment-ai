@@ -23,6 +23,7 @@ How to write each request:
 - A barcode identifies one product on its own, so a barcode request may search by the barcode alone: state the number plainly and ask for the pages that show that exact number. Every other key does NOT identify a product: SKUs, supplier or vendor codes, MPNs, model numbers and short codes are reused by unrelated products and brands across the web (a short code such as "TA001" can be a car part or a light fitting as easily as a toy). Never treat such a code as proof that a page is the product.
 - IDENTITY COLUMNS. The app adds the product's identity to the end of EVERY request: one line per column you list in identityColumns, with the row's own value, and a note that these are only for confirming the page is this exact item. So you do not repeat the product's name and brand inside each request, and a request can stay short and about its own angle. Put in identityColumns the ticked columns that say WHAT the product is: the product name, the brand, the model or type, and a short description. Never list a column that is only a key your requests search by (a barcode, SKU or code), and never list quantity, price, weight, stock, dates, categories, internal codes or images. Use the exact column names from the list, 2 to 4 of them. If no column says what the product is, leave identityColumns empty.
 - If the owner names websites, name them in the request that should use them. Say "only on these websites" only if the owner asked to be limited to them; otherwise do not limit the request.
+- ONLY WEBSITES. When the owner clearly limits the search to named websites ("only on", "inside", "search in", "on X only"), write those sites' domains in onlyWebsites, for example toys4less.com (if the owner wrote only a name, write name.com). The app then keeps only pages from those sites and discards every other page, so the sites must really be a limit. A site the owner merely prefers, tries first or adds to the open web is NOT a limit: name it in the request text and leave it out of onlyWebsites. With no limit, onlyWebsites is an empty list. Up to 5 domains.
 - Write the owner's rules into the request they apply to, in plain words: for example which codes count as the same product (a code that differs only in the last letter), or which variants count. If the owner said nothing about variants, say in every request that it must be this exact product and that a different colour, size or model does not count.
 - A request that is not limited to named websites should ask for every seller that has the product: the brand's own site, manufacturers and factories, wholesalers, retailers and marketplaces, in any country or language. A request limited to named websites asks only for the product's page on those websites.
 - The app already asks the search engine for as many pages for the exact item as it can find. Write a number of pages into a request ONLY when the owner asked for a specific number (for example "up to 3 links"), and then write it into the requests it applies to.
@@ -30,7 +31,7 @@ How to write each request:
 
 Do not mention: JSON or any answer format, product page versus category pages, how many pages to return (unless the owner gave a number), live or dead links, the photo, or the country. The app adds those itself.
 
-Answer with the JSON object only: exactly 3 requests, strongest first, each with a short name (2 to 5 words); the identityColumns; and a one-sentence summary of your plan in notes.`;
+Answer with the JSON object only: exactly 3 requests, strongest first, each with a short name (2 to 5 words); the identityColumns; the onlyWebsites; and a one-sentence summary of your plan in notes.`;
 
 export interface PlannerColumn {
   name: string;
@@ -72,8 +73,14 @@ export function buildSourceUrlsPlannerSchema(): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["steps", "identityColumns", "notes"],
+    required: ["steps", "identityColumns", "onlyWebsites", "notes"],
     properties: {
+      onlyWebsites: {
+        type: "array",
+        description:
+          "Domains (for example toys4less.com) the owner limited the search to. Empty unless the owner clearly said to search only on or inside those sites.",
+        items: { type: "string" },
+      },
       identityColumns: {
         type: "array",
         description:

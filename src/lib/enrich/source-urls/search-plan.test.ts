@@ -174,6 +174,39 @@ describe("searchSourceUrls with a plan", () => {
     expect(queryOf(fetchMock, 3)).toContain("supplier code TA001");
   });
 
+  describe("when the owner limited the search to a website", () => {
+    const JUNK = [
+      { url: "https://particlesearch.com/features/variant-search", title: "Variant search for Shopify" },
+      { url: "https://www.price2spy.com/blog/product-matching-in-ecommerce/", title: "What Is Product Matching in eCommerce?" },
+    ];
+    const limited: SourceUrlsPlan = { ...plan, onlyWebsites: ["mamasandpapas.com"] };
+
+    it("drops pages from other websites and keeps the shop's own page", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(aiModeBody(JSON.stringify({ sources: [...JUNK, { url: PRODUCT, title: "Check Jacket" }] })), { status: 200 }))
+      );
+      const result = await searchSourceUrls({ ...base, plan: limited });
+      expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+    });
+
+    it("treats a round that returns only other websites as not found, so round 2 runs, and says why", async () => {
+      const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(aiModeBody(JSON.stringify({ sources: JUNK })), { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await searchSourceUrls({ ...base, plan: limited });
+      expect(result.sources).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(result.costs).toHaveLength(5);
+      expect(result.notFoundReason).toMatch(/returned 2 page\(s\), all rejected: 2 not on mamasandpapas\.com/);
+    });
+
+    it("keeps those pages when no website was limited", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(aiModeBody(JSON.stringify({ sources: JUNK })), { status: 200 })));
+      const result = await searchSourceUrls({ ...base, maxTries: 1 });
+      expect(result.sources.map((s) => s.uri)).toContain(JUNK[0]!.url);
+    });
+  });
+
   it("uses every ticked column as the identity when the planner chose none", async () => {
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

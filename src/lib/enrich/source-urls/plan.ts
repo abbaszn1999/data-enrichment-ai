@@ -60,6 +60,14 @@ export interface SourceUrlsPlan {
    * ticked columns are used instead.
    */
   identityColumns?: string[];
+  /**
+   * The websites (bare domains, e.g. "toys4less.com") the owner limited the
+   * search to, written by the planner only when the instruction clearly says
+   * "only on / inside this site". The code keeps just the pages from these
+   * sites, so a page from anywhere else can never reach the cell. Absent: no
+   * limit.
+   */
+  onlyWebsites?: string[];
   model?: string;
   /** One line from the planner on what it set up. */
   notes?: string;
@@ -153,6 +161,69 @@ export function validateIdentityColumns(raw: unknown, columnNames: string[]): st
   return kept;
 }
 
+/** The most websites a plan limits the search to. */
+export const SOURCE_URLS_ONLY_WEBSITES_MAX = 5;
+
+/**
+ * A website as the planner wrote it, reduced to a bare lower-case domain
+ * ("https://www.Toys4Less.com/products" -> "toys4less.com"). A name with no
+ * dot ("toys4less") is kept as it is. Anything else (a sentence, an address
+ * with spaces) is not a website and returns null.
+ */
+export function normalizeWebsite(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const host = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+    .replace(/^www\./, "")
+    .split(/[/?#:]/)[0]!
+    .replace(/\.+$/, "");
+  if (!/^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)*$/.test(host)) return null;
+  return host.length >= 3 ? host : null;
+}
+
+/** The planner's websites: valid, each once, at most five. Empty means "no limit". */
+export function validateOnlyWebsites(raw: unknown): string[] {
+  const kept: string[] = [];
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const site = normalizeWebsite(item);
+    if (site && !kept.includes(site)) kept.push(site);
+    if (kept.length >= SOURCE_URLS_ONLY_WEBSITES_MAX) break;
+  }
+  return kept;
+}
+
+const SECOND_LEVEL_LABELS = new Set(["co", "com", "org", "net", "gov", "ac", "edu"]);
+
+/**
+ * The part of a host that names the site, without subdomains or the country
+ * ending: "shop.toys4less.com" and "toys4less.co.uk" are both "toys4less".
+ * Comparing this instead of the full domain means a planner that guessed the
+ * wrong ending (".com" for a ".co.uk" shop) still keeps that shop's pages.
+ */
+export function siteKey(host: string): string {
+  const labels = host.toLowerCase().replace(/^www\./, "").split(".").filter(Boolean);
+  if (labels.length <= 1) return labels[0] ?? "";
+  const last = labels[labels.length - 1]!;
+  const beforeLast = labels[labels.length - 2]!;
+  if (labels.length >= 3 && last.length === 2 && SECOND_LEVEL_LABELS.has(beforeLast)) return labels[labels.length - 3]!;
+  return beforeLast;
+}
+
+/** Whether a page is on one of the websites. No websites means no limit: every page passes. */
+export function linkIsOnWebsites(url: string, websites: string[] | undefined): boolean {
+  if (!websites || websites.length === 0) return true;
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  const key = siteKey(host);
+  return websites.some((site) => siteKey(site) === key);
+}
+
 /**
  * The product's identity for one row, one "Name: value" line per column: the
  * plan's identity columns, or (none chosen) every ticked column that has a
@@ -187,12 +258,14 @@ export function readStoredPlan(value: unknown): SourceUrlsPlan | undefined {
   if (record.source === "planner" && steps.length === 0) return undefined;
   const billing = record.billing && typeof record.billing === "object" ? record.billing : undefined;
   const identityColumns = validateIdentityColumns(record.identityColumns, columns);
+  const onlyWebsites = record.source === "planner" ? validateOnlyWebsites(record.onlyWebsites) : [];
   return {
     version: 1,
     source: record.source,
     steps,
     columns,
     ...(identityColumns.length > 0 ? { identityColumns } : {}),
+    ...(onlyWebsites.length > 0 ? { onlyWebsites } : {}),
     ...(typeof record.model === "string" ? { model: record.model } : {}),
     ...(typeof record.notes === "string" ? { notes: record.notes } : {}),
     ...(typeof record.reason === "string" ? { reason: record.reason } : {}),
