@@ -1,8 +1,8 @@
 /**
  * Source URLs planner: ONE GPT-6.1 Sol call per run (no web search) that reads
  * the owner's custom instruction (if any), the ticked columns and a few sample
- * values, and writes up to 5 search requests (./plan.ts). With no instruction it
- * orders the requests itself, strongest identifier first. The caller bills every round
+ * values, and writes exactly 3 search requests from 3 different angles, strongest
+ * first (./plan.ts). With no instruction it chooses the angles itself. The caller bills every round
  * it returns; this function never throws, so a planner problem can never fail
  * a job: it returns the default plan (today's single query) and the reason.
  */
@@ -18,6 +18,7 @@ import {
 import type { EnrichToolPolicy } from "../policy";
 import {
   defaultSourceUrlsPlan,
+  SOURCE_URLS_PLAN_MAX_STEPS,
   validateIdentityColumns,
   validatePlanSteps,
   type SourceUrlsPlan,
@@ -73,6 +74,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
 
   const costs: AiCallCost[] = [];
   let steps: SourceUrlsPlanStep[] = [];
+  let attemptNumber = 0;
   let identityColumns: string[] = [];
   let notes = "";
   let retryHint: string | undefined;
@@ -80,9 +82,16 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
 
   const parse: EnrichResponseParser = async ({ selection }) => {
     const validated = validatePlanSteps(selection.steps, columnNames);
+    const why = validated.dropped.slice(0, 3).join("; ");
     if (validated.steps.length === 0) {
-      const why = validated.dropped.slice(0, 3).join("; ") || "no steps";
-      throw new Error(`no usable search requests (${why})`);
+      throw new Error(`no usable search requests (${why || "no steps"})`);
+    }
+    // Exactly three is asked for. Fewer is worth one more call, never more;
+    // on the last try the usable ones are kept rather than losing the plan.
+    if (validated.steps.length < SOURCE_URLS_PLAN_MAX_STEPS && attemptNumber < PLANNER_ATTEMPTS) {
+      throw new Error(
+        `only ${validated.steps.length} usable search request(s), exactly ${SOURCE_URLS_PLAN_MAX_STEPS} are needed${why ? ` (${why})` : ""}`
+      );
     }
     if (validated.dropped.length > 0) {
       console.warn("[Source URLs planner] Some requests were dropped", { dropped: validated.dropped });
@@ -95,6 +104,7 @@ export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSo
   };
 
   for (let attempt = 1; attempt <= PLANNER_ATTEMPTS; attempt += 1) {
+    attemptNumber = attempt;
     try {
       const result = await runEnrichOpenAiResponse({
         tier: "standard",

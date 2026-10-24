@@ -1936,7 +1936,7 @@ export function Sidebar() {
                         }
                         disabled={isEnriching}
                         placeholder="e.g. Search by barcode first. If not found, search by vendor SKU on shop-a.com and shop-b.com; a SKU that differs only in the last letter counts as a match. If still not found, use the description as a Google search."
-                        helpText="Optional. Tell the agent what to search by, in what order, and on which websites. Without one, it chooses the order from your columns (barcode, then code, then name and brand). An AI planner turns this into up to 5 search requests once per run; that one call is charged to your credits. Each row then tries them in order until it finds pages, up to 5 searches, each billed."
+                        helpText="Optional. Tell the agent what to search by, in what order, and on which websites. Without one, it chooses the order from your columns (barcode, then code, then name and brand). An AI planner turns this into 3 search requests once per run; that one call is charged to your credits. Each row sends the first request 3 times at once and combines the pages; only if none are found it sends the other two together. Up to 5 searches per row, each billed."
                       />
                     </div>
                   </FinderOutputCard>

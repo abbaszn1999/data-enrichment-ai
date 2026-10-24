@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  cutStepText,
   defaultSourceUrlsPlan,
-  expandTries,
+  planRounds,
   placeholdersOf,
   readStoredPlan,
   renderIdentityLines,
   renderPlanStep,
+  SOURCE_URLS_FIRST_ROUND_SEARCHES,
   SOURCE_URLS_IDENTITY_MAX_COLUMNS,
   SOURCE_URLS_IDENTITY_VALUE_CHARS,
   SOURCE_URLS_PLAN_MAX_STEPS,
+  SOURCE_URLS_STEP_MAX_CHARS,
   validateIdentityColumns,
   validatePlanSteps,
   type SourceUrlsPlan,
@@ -51,32 +54,55 @@ describe("validatePlanSteps", () => {
     expect(result.dropped[0]).toMatch(/unknown column EAN/);
   });
 
-  it("drops a request with no placeholder (it would ask the same thing for every row)", () => {
-    const result = validatePlanSteps([{ name: "x", text: "Find every product page you can for this item." }], COLUMNS);
-    expect(result.steps).toEqual([]);
-    expect(result.dropped[0]).toMatch(/uses no column/);
+  it("keeps a request with no placeholder, a short one, and a repeated one: nothing is dropped for its quality", () => {
+    const noColumn = { name: "Any", text: "Find every product page you can for this item." };
+    const short = { name: "Short", text: "{{Barcode}}" };
+    const result = validatePlanSteps([noColumn, short, noColumn], COLUMNS);
+    expect(result.steps).toEqual([noColumn, short, noColumn]);
+    expect(result.dropped).toEqual([]);
   });
 
-  it("drops empty, too short, too long and repeated requests, and non-objects", () => {
-    const result = validatePlanSteps(
-      [null, "text", { name: "a", text: "{{Barcode}}" }, { name: "b", text: `{{Barcode}} ${"x".repeat(1_600)}` }, barcode, { ...barcode, name: "again" }],
-      COLUMNS
-    );
+  it("cuts a long request to the limit instead of dropping it", () => {
+    const long = { name: "Long", text: `Find the page for barcode {{Barcode}}. ${"word ".repeat(400)}` };
+    const { steps, dropped } = validatePlanSteps([long], COLUMNS);
+    expect(dropped).toEqual([]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.text.length).toBeLessThanOrEqual(SOURCE_URLS_STEP_MAX_CHARS);
+    expect(steps[0]!.text.startsWith("Find the page for barcode {{Barcode}}.")).toBe(true);
+  });
+
+  it("drops only what can never work: not a request, no text, or a column that is not ticked", () => {
+    const result = validatePlanSteps([null, "text", { name: "a", text: "   " }, { name: "b" }, barcode], COLUMNS);
     expect(result.steps).toEqual([barcode]);
-    expect(result.dropped).toHaveLength(5);
+    expect(result.dropped).toHaveLength(4);
   });
 
-  it("keeps at most five steps and names an unnamed one", () => {
+  it("keeps the first three requests and names an unnamed one", () => {
     const many = Array.from({ length: 8 }, (_, i) => ({ name: "", text: `Find the page for product number ${i} with barcode {{Barcode}}.` }));
     const { steps, dropped } = validatePlanSteps(many, COLUMNS);
-    expect(steps).toHaveLength(SOURCE_URLS_PLAN_MAX_STEPS);
+    expect(SOURCE_URLS_PLAN_MAX_STEPS).toBe(3);
+    expect(steps).toHaveLength(3);
     expect(steps[0]!.name).toBe("Step 1");
-    expect(dropped).toHaveLength(3);
+    expect(dropped).toHaveLength(5);
   });
-
   it("treats anything that is not a list as no steps", () => {
     expect(validatePlanSteps(undefined, COLUMNS).steps).toEqual([]);
     expect(validatePlanSteps("nope", COLUMNS).steps).toEqual([]);
+  });
+});
+
+describe("cutStepText", () => {
+  it("leaves a request within the limit untouched", () => {
+    expect(cutStepText("Find the page for {{Barcode}}.")).toBe("Find the page for {{Barcode}}.");
+  });
+
+  it("cuts at a word break and never through the middle of a placeholder", () => {
+    const text = `${"a".repeat(590)} {{Vendor SKU}} tail`;
+    const cut = cutStepText(text);
+    expect(cut.length).toBeLessThanOrEqual(SOURCE_URLS_STEP_MAX_CHARS);
+    expect(cut).not.toContain("{{");
+    expect(cutStepText("word ".repeat(300), 100).length).toBeLessThanOrEqual(100);
+    expect(cutStepText("word ".repeat(300), 100).endsWith("word")).toBe(true);
   });
 });
 
@@ -122,40 +148,57 @@ describe("renderPlanStep", () => {
   });
 });
 
-describe("expandTries", () => {
+describe("planRounds", () => {
   const rowData = { Barcode: "111", "Vendor SKU": "S1", Description: "Jacket" };
+  const labels = (tries: Array<{ label?: string }>) => tries.map((t) => t.label);
 
-  it("tries the steps in the plan's order", () => {
-    const tries = expandTries(plan(), rowData, 3);
-    expect(tries.map((t) => t.label)).toEqual(["Barcode first", "SKU", "Description"]);
+  it("asks the strongest request three times at once, then the other two together", () => {
+    const { first, second } = planRounds(plan(), rowData, 5);
+    expect(labels(first)).toEqual(["Barcode first", "Barcode first", "Barcode first"]);
+    expect(labels(second)).toEqual(["SKU", "Description"]);
+    expect(SOURCE_URLS_FIRST_ROUND_SEARCHES).toBe(3);
   });
 
-  it("goes round again from the first step so all five searches are spent", () => {
-    expect(expandTries(plan(), rowData, 5).map((t) => t.label)).toEqual(["Barcode first", "SKU", "Description", "Barcode first", "SKU"]);
-    expect(expandTries(plan([barcode]), rowData, 5).map((t) => t.label)).toEqual(Array(5).fill("Barcode first"));
+  it("repeats the last other request when only two requests are usable", () => {
+    const { first, second } = planRounds(plan([barcode, sku]), rowData, 5);
+    expect(labels(first)).toEqual(Array(3).fill("Barcode first"));
+    expect(labels(second)).toEqual(["SKU", "SKU"]);
   });
 
-  it("skips steps whose column is empty on this row, and uses the rest", () => {
-    const tries = expandTries(plan(), { ...rowData, Barcode: "" }, 4);
-    expect(tries.map((t) => t.label)).toEqual(["SKU", "Description", "SKU", "Description"]);
+  it("repeats the only request when one is usable, so all five searches are still spent", () => {
+    const { first, second } = planRounds(plan([barcode]), rowData, 5);
+    expect(labels(first)).toEqual(Array(3).fill("Barcode first"));
+    expect(labels(second)).toEqual(Array(2).fill("Barcode first"));
   });
 
-  it("gives a row no step fits the default query (no label, no text), for every try", () => {
-    const tries = expandTries(plan(), { Other: "x" }, 5);
-    expect(tries).toHaveLength(5);
-    expect(tries.every((t) => t.label === undefined && t.text === undefined)).toBe(true);
+  it("skips a request whose column is empty on this row, and uses the rest in the plan's order", () => {
+    const { first, second } = planRounds(plan(), { ...rowData, Barcode: "" }, 5);
+    expect(labels(first)).toEqual(Array(3).fill("SKU"));
+    expect(labels(second)).toEqual(["Description", "Description"]);
+  });
+
+  it("gives a row no request fits the default query (no label, no text) in both rounds", () => {
+    const { first, second } = planRounds(plan(), { Other: "x" }, 5);
+    expect(first).toHaveLength(3);
+    expect(second).toHaveLength(2);
+    expect([...first, ...second].every((t) => t.label === undefined && t.text === undefined)).toBe(true);
   });
 
   it("uses the default query for no plan and for a default plan", () => {
-    expect(expandTries(undefined, rowData, 2)).toEqual([{}, {}]);
-    expect(expandTries(defaultSourceUrlsPlan(), rowData, 2)).toEqual([{}, {}]);
+    expect(planRounds(undefined, rowData, 5)).toEqual({ first: [{}, {}, {}], second: [{}, {}] });
+    expect(planRounds(defaultSourceUrlsPlan(), rowData, 5)).toEqual({ first: [{}, {}, {}], second: [{}, {}] });
   });
 
-  it("never returns fewer than one try", () => {
-    expect(expandTries(plan(), rowData, 0)).toHaveLength(1);
+  it("honours a lower total and never returns fewer than one search", () => {
+    const two = planRounds(plan(), rowData, 2);
+    expect(two.first).toHaveLength(2);
+    expect(two.second).toHaveLength(0);
+    const four = planRounds(plan(), rowData, 4);
+    expect(four.first).toHaveLength(3);
+    expect(labels(four.second)).toEqual(["SKU"]);
+    expect(planRounds(plan(), rowData, 0).first).toHaveLength(1);
   });
 });
-
 describe("identity columns", () => {
   const rowData = { Barcode: "3700802102649", "Vendor SKU": "TA001", Title: "75 Wash-Off Tattoos - Assortment", Brand: "Buki", Qty: "6", Photo: "[1 image attached]" };
   const withIdentity = (identityColumns?: string[]): SourceUrlsPlan => ({
@@ -199,9 +242,10 @@ describe("identity columns", () => {
   });
 
   it("goes with every try of a row, whichever step it is, and is saved with the plan", () => {
-    const tries = expandTries(withIdentity(["Brand", "Title"]), rowData, 3);
-    // The row has no Description, so that step is skipped and the other two go round.
-    expect(tries.map((t) => t.label)).toEqual(["Barcode first", "SKU", "Barcode first"]);
+    const { first, second } = planRounds(withIdentity(["Brand", "Title"]), rowData, 5);
+    const tries = [...first, ...second];
+    // The row has no Description, so that request is skipped: the barcode three times, then the SKU twice.
+    expect(tries.map((t) => t.label)).toEqual(["Barcode first", "Barcode first", "Barcode first", "SKU", "SKU"]);
     for (const t of tries) expect(t.identity).toEqual(["Brand: Buki", "Title: 75 Wash-Off Tattoos - Assortment"]);
     const stored = { ...withIdentity(["Brand", "Title"]), model: "gpt-6.1-sol" };
     expect(readStoredPlan(JSON.parse(JSON.stringify(stored)))).toEqual(stored);
@@ -213,7 +257,7 @@ describe("identity columns", () => {
   });
 
   it("is not added to the default query", () => {
-    expect(expandTries(undefined, rowData, 1)).toEqual([{}]);
+    expect(planRounds(undefined, rowData, 1)).toEqual({ first: [{}], second: [] });
   });
 });
 

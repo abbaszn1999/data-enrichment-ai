@@ -45,20 +45,34 @@ describe("searchSourceUrls with a plan", () => {
     vi.restoreAllMocks();
   });
 
-  it("asks the plan's requests in order, filled in for the row, each followed by the fixed rule", async () => {
+  it("asks the first request in round 1 and the second in round 2, filled in for the row, each followed by the identity and the fixed rule", async () => {
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await searchSourceUrls({ ...base, maxTries: 2 });
+    await searchSourceUrls(base);
 
-    expect(queryOf(fetchMock, 0)).toBe(
-      `Find the product page that sells the product with barcode 5063229294815.\n\n${SOURCE_URLS_IDENTITY_HEADING}\n- Title: Check jacket\n\n${SOURCE_URLS_FIXED_RULE}`
-    );
-    expect(queryOf(fetchMock, 1)).toBe(
-      `On shop-a.com and shop-b.com find the page for SKU S07FN6DB5.\n\n${SOURCE_URLS_IDENTITY_HEADING}\n- Title: Check jacket\n\n${SOURCE_URLS_FIXED_RULE}`
-    );
+    const barcodeQuery = `Find the product page that sells the product with barcode 5063229294815.\n\n${SOURCE_URLS_IDENTITY_HEADING}\n- Title: Check jacket\n\n${SOURCE_URLS_FIXED_RULE}`;
+    const skuQuery = `On shop-a.com and shop-b.com find the page for SKU S07FN6DB5.\n\n${SOURCE_URLS_IDENTITY_HEADING}\n- Title: Check jacket\n\n${SOURCE_URLS_FIXED_RULE}`;
+    expect([0, 1, 2, 3, 4].map((i) => queryOf(fetchMock, i))).toEqual([barcodeQuery, barcodeQuery, barcodeQuery, skuQuery, skuQuery]);
   });
 
-  it("goes round the plan's requests so all five searches are used, and bills each one", async () => {
+  it("sends the three searches of a round at the same moment, not one after another", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return new Response(noPages(), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await searchSourceUrls(base);
+    // Round 1 has three searches, round 2 has two: never more than three at once.
+    expect(peak).toBe(3);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("sends the first request three times, then the second twice, and bills each of the five", async () => {
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const result = await searchSourceUrls(base);
@@ -66,10 +80,10 @@ describe("searchSourceUrls with a plan", () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect([0, 1, 2, 3, 4].map((i) => queryOf(fetchMock, i).split("\n")[0]!.slice(0, 20))).toEqual([
       "Find the product pag",
-      "On shop-a.com and sh",
+      "Find the product pag",
       "Find the product pag",
       "On shop-a.com and sh",
-      "Find the product pag",
+      "On shop-a.com and sh",
     ]);
     expect(result.attempts).toBe(5);
     // Every search is billed exactly once: 5 x $0.004 = $0.02 = 0.2 credits.
@@ -83,21 +97,52 @@ describe("searchSourceUrls with a plan", () => {
 
   it("names the request that ran in the not-found note", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(noPages(), { status: 200 })));
-    const result = await searchSourceUrls({ ...base, maxTries: 2 });
+    const result = await searchSourceUrls(base);
     expect(result.notFoundReason).toBe(
-      'The web search found no page for this item (search 1: "Barcode first" returned no pages; search 2: "SKU on shops" returned no pages).'
+      'The web search found no page for this item (searches 1-3: "Barcode first" returned no pages; searches 4-5: "SKU on shops" returned no pages).'
     );
   });
 
-  it("stops at the first request that finds a page and bills only the searches made", async () => {
+  it("finds the page in round 1, sends no round 2, and bills only the three searches made", async () => {
     let calls = 0;
     const fetchMock = vi.fn(async () => new Response(++calls < 2 ? noPages() : found(), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const result = await searchSourceUrls(base);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(result.attempts).toBe(2);
-    expect(result.costs).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.attempts).toBe(3);
+    expect(result.costs).toHaveLength(3);
     expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+  });
+
+  it("goes to round 2 only when round 1 found nothing, and its two requests are sent together", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(++calls <= 3 ? noPages() : found(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await searchSourceUrls(base);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(result.attempts).toBe(5);
+    expect(result.costs).toHaveLength(5);
+    expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+    // The two round-2 searches are the second request, one for each.
+    expect(queryOf(fetchMock, 3)).toContain("shop-a.com");
+    expect(queryOf(fetchMock, 4)).toContain("shop-a.com");
+  });
+
+  it("puts a page that more of the three answers name first", async () => {
+    const popular = "https://www.mamasandpapas.com/products/check-jacket-3-6-s07fn6db4";
+    const rare = "https://other.example.com/p/check-jacket";
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        // Answer 1 lists the rare page first; answers 2 and 3 both name the popular page.
+        const list = calls === 1 ? [{ url: rare, title: "Rare" }, { url: popular, title: "Popular" }] : [{ url: popular, title: "Popular" }];
+        return new Response(aiModeBody(JSON.stringify({ sources: list })), { status: 200 });
+      })
+    );
+    const result = await searchSourceUrls(base);
+    expect(result.sources.map((s) => s.uri)).toEqual([popular, rare]);
   });
 
   it("never sends a bare code: the Buki toy row's code search always carries its brand and name", async () => {
@@ -114,8 +159,8 @@ describe("searchSourceUrls with a plan", () => {
         { name: "Supplier code", text: "Find the page for supplier code {{Supplier code}}." },
       ],
     };
-    await searchSourceUrls({ rowData: buki, plan: codeOnly, retryDelayMs: 0, maxTries: 2 });
-    for (const index of [0, 1]) {
+    await searchSourceUrls({ rowData: buki, plan: codeOnly, retryDelayMs: 0 });
+    for (const index of [0, 1, 2, 3, 4]) {
       const query = queryOf(fetchMock, index);
       expect(query).toContain(SOURCE_URLS_IDENTITY_HEADING);
       expect(query).toContain("- Brand: Buki");
@@ -124,7 +169,9 @@ describe("searchSourceUrls with a plan", () => {
       expect(query).not.toContain("TE45200");
       expect(query).not.toContain("Qty");
     }
-    expect(queryOf(fetchMock, 1)).toContain("supplier code TA001");
+    // Round 1 is the barcode, three times; round 2 is the supplier code, twice.
+    expect(queryOf(fetchMock, 0)).toContain("exact barcode 3700802102649");
+    expect(queryOf(fetchMock, 3)).toContain("supplier code TA001");
   });
 
   it("uses every ticked column as the identity when the planner chose none", async () => {
@@ -175,13 +222,13 @@ describe("searchSourceUrls with a plan", () => {
         : new Response(found(), { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
-    const result = await searchSourceUrls({ ...base, imageUrl: "https://cdn.example.com/jacket.jpg" });
+    const result = await searchSourceUrls({ ...base, imageUrl: "https://cdn.example.com/jacket.jpg", maxTries: 1 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.costs).toHaveLength(1);
     expect(new URL(String(fetchMock.mock.calls[1]![0])).searchParams.get("q")).not.toContain("attached photo");
   });
 
-  it("keeps what earlier searches billed when a later one fails", async () => {
+  it("keeps what the searches that answered billed when the others fail", async () => {
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -190,7 +237,7 @@ describe("searchSourceUrls with a plan", () => {
     const result = await searchSourceUrls(base);
     expect(result.sources).toEqual([]);
     expect(result.costs).toHaveLength(2);
-    expect(result.notFoundReason).toMatch(/search 3 failed/);
+    expect(result.notFoundReason).toMatch(/searches 1-2: "Barcode first" returned no pages; search 3: "Barcode first" failed: Web search failed \(400\)/);
   });
 
   it("without a plan every try is today's one query", async () => {
@@ -229,7 +276,8 @@ describe("the Source URLs column with a saved plan", () => {
     const result = await enrichRow(params(plan));
     expect(queryOf(fetchMock, 0)).toContain("barcode 5063229294815");
     expect(result.data.sourceUrls).toEqual([{ title: "Check Jacket", uri: PRODUCT }]);
-    expect(result.costs).toHaveLength(1);
+    // The three searches of round 1.
+    expect(result.costs).toHaveLength(3);
   });
 
   it("falls back to the default query, never a crash, when the saved plan is damaged", async () => {

@@ -17,6 +17,7 @@ const goodPlan = {
   steps: [
     { name: "Barcode first", text: "Find the product page that sells the product with barcode {{Barcode}}." },
     { name: "SKU on shops", text: "On shop-a.com and shop-b.com find the page for SKU {{Vendor SKU}}; a SKU differing only in the last letter counts." },
+    { name: "Any seller", text: "Find every seller of the product with barcode {{Barcode}} or SKU {{Vendor SKU}}, in any country." },
   ],
   notes: "Barcode, then SKU on the named shops.",
 };
@@ -68,7 +69,7 @@ describe("planSourceUrls", () => {
     expect(request.text.format).toMatchObject({ type: "json_schema", name: "source_urls_plan", strict: true });
 
     expect(plan).toMatchObject({ version: 1, source: "planner", columns: ["Barcode", "Vendor SKU"], model: "gpt-6.1-sol" });
-    expect(plan.steps.map((s) => s.name)).toEqual(["Barcode first", "SKU on shops"]);
+    expect(plan.steps.map((s) => s.name)).toEqual(["Barcode first", "SKU on shops", "Any seller"]);
     expect(plan.notes).toBe("Barcode, then SKU on the named shops.");
     expect(plan.billing).toBeUndefined();
     // One billed round, priced from the response's usage, no search charge.
@@ -113,7 +114,15 @@ describe("planSourceUrls", () => {
   });
 
   it("still plans with one column when the owner wrote an instruction", async () => {
-    const fetchMock = stub({ body: completed(goodPlan) });
+    const barcodeOnly = {
+      steps: [
+        { name: "Barcode first", text: "Find the product page that sells the product with barcode {{Barcode}}." },
+        { name: "Barcode shops", text: "On any shop find the page that lists barcode {{Barcode}}." },
+        { name: "Barcode anywhere", text: "Find every page that shows the barcode {{Barcode}} in any country." },
+      ],
+      notes: "",
+    };
+    const fetchMock = stub({ body: completed(barcodeOnly) });
     await planSourceUrls({ ...input, columns: [input.columns[0]!] });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -143,7 +152,45 @@ describe("planSourceUrls", () => {
       }),
     });
     const { plan } = await planSourceUrls(input);
+    // The unknown column made the planner try again; the second answer has the same three good steps and the made-up one.
+    expect(plan.steps).toHaveLength(3);
+    expect(plan.steps.some((s) => s.text.includes("{{EAN}}"))).toBe(false);
+  });
+
+  it("asks again, naming the unknown column, when a request uses a column that was not ticked", async () => {
+    const withMadeUp = completed({ steps: [...goodPlan.steps.slice(0, 2), { name: "Made up", text: "Find the product page for EAN {{EAN}} on any site." }], notes: "" });
+    const fetchMock = stub({ body: withMadeUp }, { body: completed(goodPlan) });
+    const { plan } = await planSourceUrls(input);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(plan.steps.map((s) => s.name)).toEqual(["Barcode first", "SKU on shops", "Any seller"]);
+  });
+
+  it("asks again when the answer has fewer than 3 usable requests, and keeps the second answer", async () => {
+    const two = completed({ steps: goodPlan.steps.slice(0, 2), notes: "" });
+    const fetchMock = stub({ body: two }, { body: completed(goodPlan) });
+    const { plan, costs } = await planSourceUrls(input);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(plan.steps).toHaveLength(3);
+    expect(costs).toHaveLength(2);
+    const retryRequest = JSON.parse(String((fetchMock.mock.calls[1]![1] as RequestInit).body));
+    expect(retryRequest.input[0].content.at(-1).text).toMatch(/exactly 3 are needed/);
+  });
+
+  it("uses the 1 or 2 requests of the last answer rather than giving up, when the retry still has fewer than 3", async () => {
+    const two = completed({ steps: goodPlan.steps.slice(0, 2), notes: "" });
+    const fetchMock = stub({ body: two }, { body: two });
+    const { plan } = await planSourceUrls(input);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(plan.source).toBe("planner");
     expect(plan.steps).toHaveLength(2);
+  });
+
+  it("cuts a request longer than 600 characters instead of dropping it", async () => {
+    const long = { name: "Long", text: `Find the product page for barcode {{Barcode}}. ${"Check every shop carefully. ".repeat(40)}` };
+    stub({ body: completed({ steps: [long, ...goodPlan.steps.slice(0, 2)], notes: "" }) });
+    const { plan } = await planSourceUrls(input);
+    expect(plan.steps).toHaveLength(3);
+    expect(plan.steps[0]!.text.length).toBeLessThanOrEqual(600);
   });
 
   it("tries once more after an unusable answer and bills BOTH calls", async () => {
@@ -215,7 +262,7 @@ describe("planner brief and skill", () => {
   });
 
   it("tells the planner to order the searches itself and never to add a page count on its own", () => {
-    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/gave no instruction at all, decide the order yourself/);
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/gave no instruction at all, decide the angles yourself from the columns/);
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/ONLY when the owner asked for a specific number/);
   });
 
@@ -230,7 +277,7 @@ describe("planner brief and skill", () => {
     expect(skill).toMatch(/Never list a column that is only a key your requests search by/);
     expect(skill).toMatch(/never list quantity, price, weight, stock, dates, categories, internal codes or images/);
     // The owner's order wins, and a self-check closes the job.
-    expect(skill).toMatch(/the owner's own order always wins/);
+    expect(skill).toMatch(/Follow the owner's order of steps when they gave one/);
     expect(skill).toMatch(/could this return a completely different product\?/);
   });
 
@@ -242,7 +289,10 @@ describe("planner brief and skill", () => {
   });
   it("tells the planner the rules that keep the plan useful", () => {
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/placeholder written as \{\{Column name\}\}/);
-    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/differ by what they search with/);
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/EXACTLY 3 requests, strongest first, each from a DIFFERENT ANGLE/);
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/AT MOST 600 characters/);
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/Never fill a slot with a mere rewording/);
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/Request 1 is sent three times at once/);
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/Do not mention: JSON/);
   });
 });

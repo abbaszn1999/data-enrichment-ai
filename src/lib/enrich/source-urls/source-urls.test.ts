@@ -272,7 +272,7 @@ describe("searchSourceUrls", () => {
 
   const input = { rowData: row };
 
-  it("returns the pages from one search and records one SearchApi charge", async () => {
+  it("asks Google three times at once, merges the answers, and records one SearchApi charge per search", async () => {
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(aiModeBody(FOUND_ANSWER), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const result = await searchSourceUrls(input);
@@ -280,9 +280,10 @@ describe("searchSourceUrls", () => {
       "https://www.acme.com/products/widget-wx-1",
       "https://shop.example.com/p/widget-wx-1",
     ]);
-    expect(result.attempts).toBe(1);
-    expect(result.costs).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The three answers agree, so the two pages appear once each.
+    expect(result.attempts).toBe(3);
+    expect(result.costs).toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(String(fetchMock.mock.calls[0]![0])).not.toContain("&url=");
   });
 
@@ -303,7 +304,7 @@ describe("searchSourceUrls", () => {
         : new Response(aiModeBody(FOUND_ANSWER), { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
-    const result = await searchSourceUrls({ ...input, imageUrl: "https://cdn.example.com/widget.jpg" });
+    const result = await searchSourceUrls({ ...input, imageUrl: "https://cdn.example.com/widget.jpg", maxTries: 1 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(new URL(String(fetchMock.mock.calls[1]![0])).searchParams.get("q")).not.toContain("attached photo");
     expect(result.usedImage).toBe(false);
@@ -321,7 +322,7 @@ describe("searchSourceUrls", () => {
 
   it("uses Google's web-results answer instead of reporting 'none found', minus listing pages", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(aiModeBody(WEB_RESULTS_ANSWER), { status: 200 })));
-    const result = await searchSourceUrls(input);
+    const result = await searchSourceUrls({ ...input, maxTries: 1 });
     expect(result.sources.map((s) => s.uri)).toEqual([
       "https://www.acme.com/products/widget",
       "https://shop.example.com/p/widget",
@@ -344,7 +345,7 @@ describe("searchSourceUrls", () => {
     expect(result.notFoundReason).toMatch(/searches 1-2: returned no pages/);
   });
 
-  it("keeps the first search's answer when the second search fails", async () => {
+  it("keeps the answer of the search that worked when the others of the round and the next round fail", async () => {
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -358,14 +359,22 @@ describe("searchSourceUrls", () => {
     const result = await searchSourceUrls({ ...input, retryDelayMs: 0 });
     expect(result.sources).toEqual([]);
     expect(result.costs).toHaveLength(1);
-    expect(result.notFoundReason).toMatch(/search 2 failed/);
+    expect(result.notFoundReason).toMatch(/search 1: returned no pages; searches 2-5: failed: Web search failed \(503\)/);
   });
 
-  it("throws when the first search fails, after one retry (nothing was billed)", async () => {
+  it("throws when the only search fails, after one retry (nothing was billed)", async () => {
+    const fetchMock = vi.fn(async () => new Response("boom", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(searchSourceUrls({ ...input, retryDelayMs: 0, maxTries: 1 })).rejects.toThrow(/failed \(500\)/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws, and never starts round 2, when not one search of round 1 answers", async () => {
     const fetchMock = vi.fn(async () => new Response("boom", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
     await expect(searchSourceUrls({ ...input, retryDelayMs: 0 })).rejects.toThrow(/failed \(500\)/);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Three searches, each tried twice, and no second round.
+    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
   it("tries a rate-limited search once more and charges only the answered call", async () => {
@@ -377,7 +386,7 @@ describe("searchSourceUrls", () => {
         : new Response(aiModeBody(FOUND_ANSWER), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const result = await searchSourceUrls({ ...input, retryDelayMs: 0 });
+    const result = await searchSourceUrls({ ...input, retryDelayMs: 0, maxTries: 1 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.sources).toHaveLength(2);
     expect(result.costs).toHaveLength(1);
@@ -386,7 +395,7 @@ describe("searchSourceUrls", () => {
   it("does not retry a request SearchApi rejects outright (4xx)", async () => {
     const fetchMock = vi.fn(async () => new Response("bad request", { status: 400 }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(searchSourceUrls({ ...input, retryDelayMs: 0 })).rejects.toThrow(/failed \(400\)/);
+    await expect(searchSourceUrls({ ...input, retryDelayMs: 0, maxTries: 1 })).rejects.toThrow(/failed \(400\)/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -396,7 +405,7 @@ describe("searchSourceUrls", () => {
       title: `Shop ${i}`,
     }));
     vi.stubGlobal("fetch", vi.fn(async () => new Response(aiModeBody(JSON.stringify({ sources: pages })), { status: 200 })));
-    const result = await searchSourceUrls(input);
+    const result = await searchSourceUrls({ ...input, maxTries: 1 });
     expect(result.sources).toHaveLength(SOURCE_URLS_MAX);
     expect(result.sources[0]).toEqual({ title: "Shop 0", uri: "https://shop0.example.com/p/widget-wx-1" });
     expect(result.attempts).toBe(1);
@@ -420,14 +429,15 @@ describe("searchSourceUrls", () => {
     ]);
   });
 
-  it("does not search a second time when the first search found pages, however few", async () => {
+  it("does not send round 2 when round 1 found pages, however few", async () => {
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) =>
       new Response(aiModeBody(JSON.stringify({ sources: [{ url: "https://shop.example.com/p/widget-wx-1", title: "Shop" }] })), { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
     const result = await searchSourceUrls(input);
     expect(result.sources).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Only the three searches of round 1.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -492,10 +502,10 @@ describe("Source URLs routing in enrichRow", () => {
     const fetchMock = stubBoth({});
     const result = await enrichRow({ ...baseParams, enabledColumns: ["sourceUrls"], enrichmentColumns: [sourceUrls] });
     expect(callsTo(fetchMock, OPENAI_RESPONSES_URL)).toHaveLength(0);
-    expect(callsTo(fetchMock, SEARCHAPI_HOST)).toHaveLength(1);
+    expect(callsTo(fetchMock, SEARCHAPI_HOST)).toHaveLength(3);
     expect(result.data.sourceUrls).toHaveLength(2);
     expect(result.data["sourceUrls__notFoundReason"]).toBe("");
-    expect(result.costs).toHaveLength(1);
+    expect(result.costs).toHaveLength(3);
   });
 
   it("uses the column's custom instruction and the first photo in the Google search", async () => {
@@ -519,13 +529,14 @@ describe("Source URLs routing in enrichRow", () => {
       enrichmentColumns: [titleTag, sourceUrls],
     });
     expect(callsTo(fetchMock, OPENAI_RESPONSES_URL)).toHaveLength(1);
-    expect(callsTo(fetchMock, SEARCHAPI_HOST)).toHaveLength(1);
+    expect(callsTo(fetchMock, SEARCHAPI_HOST)).toHaveLength(3);
     const openAiBody = JSON.parse(String((callsTo(fetchMock, OPENAI_RESPONSES_URL)[0]![1] as RequestInit).body));
     expect(openAiBody.instructions).toContain("Columns to fill (1):");
     expect(openAiBody.instructions).not.toContain("sourceUrls");
     expect(result.data.titleTag).toBe("Widget WX-1 by Acme");
     expect(result.data.sourceUrls).toHaveLength(2);
-    expect(result.costs).toHaveLength(2);
+    // One OpenAI call and three searches.
+    expect(result.costs).toHaveLength(4);
   });
 
   it("keeps the OpenAI columns when the Google search fails, and says why the cell is empty", async () => {
@@ -575,10 +586,11 @@ describe("Source URLs routing in enrichRow", () => {
     };
     const first = await enrichRow(params).catch((e: unknown) => e);
     expect(first).toBeInstanceOf(Error);
-    expect(billedCostsOf(first).filter((c) => (c.searchApiCalls ?? 0) > 0)).toHaveLength(1);
+    expect(billedCostsOf(first).filter((c) => (c.searchApiCalls ?? 0) > 0)).toHaveLength(3);
 
     const second = await enrichRow(params);
-    expect(fetchMock.mock.calls.filter((call) => String(call[0]).startsWith(SEARCHAPI_HOST))).toHaveLength(1);
+    // Round 1 ran once, on the first attempt only.
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).startsWith(SEARCHAPI_HOST))).toHaveLength(3);
     expect(second.data.sourceUrls).toHaveLength(2);
     expect(second.data.titleTag).toBe("Widget WX-1 by Acme");
     // The retry is charged for OpenAI only; Google was charged with the first attempt.
@@ -601,8 +613,8 @@ describe("Source URLs routing in enrichRow", () => {
       enrichmentColumns: [titleTag, sourceUrls],
     }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(Error);
-    // One OpenAI attempt plus one SearchApi search.
-    expect(billedCostsOf(error)).toHaveLength(2);
+    // One OpenAI attempt plus the three SearchApi searches.
+    expect(billedCostsOf(error)).toHaveLength(4);
   });
 
   it("leaves PLP sheets on the OpenAI call", async () => {
@@ -671,7 +683,7 @@ describe("Source URLs retries and the cited-link fallback", () => {
     expect(result.notFoundReason).toBe("The web search found no page for this item (searches 1-5: returned no pages).");
   });
 
-  it("stops at the first search that finds a page", async () => {
+  it("finds pages from one of the three searches of round 1 and sends no round 2", async () => {
     let calls = 0;
     const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => {
       calls += 1;
@@ -686,11 +698,11 @@ describe("Source URLs retries and the cited-link fallback", () => {
     expect(result.notFoundReason).toBe("");
   });
 
-  it("does not retry when the first search finds a page", async () => {
+  it("sends only round 1 (three searches) when it finds pages", async () => {
     const fetchMock = vi.fn(async () => new Response(aiModeBody(FOUND_ANSWER), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     await searchSourceUrls(site);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("honours a lower maxTries and never goes above 5", async () => {
@@ -712,7 +724,7 @@ describe("Source URLs retries and the cited-link fallback", () => {
     vi.stubGlobal("fetch", fetchMock);
     const result = await searchSourceUrls(site);
     expect(result.sources).toEqual([{ title: "Check Jacket", uri: PRODUCT }]);
-    expect(result.attempts).toBe(1);
+    expect(result.attempts).toBe(3);
   });
 
   it("takes a product link written in the answer text when nothing is cited", async () => {
@@ -763,7 +775,7 @@ describe("Source URLs retries and the cited-link fallback", () => {
     expect(searchParams(fetchMock, 0).has("location")).toBe(false);
   });
 
-  it("stops retrying (without an error) once the time budget for the row is used", async () => {
+  it("does not start round 2 (and does not fail) once the time budget for the row is used", async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const fetchMock = vi.fn(async () => {
@@ -772,15 +784,18 @@ describe("Source URLs retries and the cited-link fallback", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const result = await searchSourceUrls(site);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(result.notFoundReason).toMatch(/stopped retrying at the time limit/);
+    // Round 1 (three searches) used the budget, so round 2 never started.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.notFoundReason).toMatch(/stopped searching at the time limit/);
   });
 
-  it("stops before the next search when the row is cancelled", async () => {
+  it("stops before round 2 when the row is cancelled, charging the searches already made", async () => {
     const fetchMock = vi.fn(async () => new Response(noPages(), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(searchSourceUrls({ ...site, shouldCancel: async () => true })).rejects.toThrow(/Cancelled/);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const error = await searchSourceUrls({ ...site, shouldCancel: async () => true }).catch((e: unknown) => e);
+    expect((error as Error).message).toMatch(/Cancelled/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(billedCostsOf(error)).toHaveLength(3);
   });
 
   it("joins searches that ended the same way", () => {

@@ -1,5 +1,5 @@
 /**
- * The Source URLs plan: up to 5 search requests ("steps") that the planner
+ * The Source URLs plan: exactly 3 search requests ("steps"), strongest first, that the planner
  * (./planner.ts) wrote ONCE for a whole run from the owner's custom
  * instruction, the ticked columns and a few sample values. A step is plain
  * text with `{{Column name}}` placeholders. For each row the code fills the
@@ -14,10 +14,14 @@
  */
 import { productFields } from "./skill";
 
-/** The most searches one row gets, so also the most steps a plan can hold. */
-export const SOURCE_URLS_PLAN_MAX_STEPS = 5;
-const STEP_MIN_CHARS = 20;
-const STEP_MAX_CHARS = 1_500;
+/** A plan holds three requests: the first is asked three times at once, the other two together if that finds nothing. */
+export const SOURCE_URLS_PLAN_MAX_STEPS = 3;
+/**
+ * The longest a request may be. The whole search (request, identity, fixed
+ * rule) stays far below SearchApi's 8,000 characters, and short requests keep
+ * Google AI Mode from turning strict or slow. A longer request is cut, never dropped.
+ */
+export const SOURCE_URLS_STEP_MAX_CHARS = 600;
 const STEP_NAME_MAX_CHARS = 60;
 /** One filled-in value; keeps a long description from crowding out the request. */
 const VALUE_MAX_CHARS = 400;
@@ -87,38 +91,47 @@ export interface ValidatedSteps {
 }
 
 /**
- * Keeps the steps that are safe to send. A step must be a real request, use at
- * least one ticked column (a step with no placeholder would ask the same thing
- * for every row), and name only columns the owner ticked (a made-up column
- * could never be filled). Duplicates go; at most 5 stay.
+ * A request cut to its limit: at the last line or word break, and never
+ * through the middle of a `{{ }}` placeholder (half of one would be sent as
+ * literal text).
+ */
+export function cutStepText(text: string, maxChars: number = SOURCE_URLS_STEP_MAX_CHARS): string {
+  if (text.length <= maxChars) return text;
+  let cut = text.slice(0, maxChars);
+  const open = cut.lastIndexOf("{{");
+  if (open > cut.lastIndexOf("}}")) cut = cut.slice(0, open);
+  const lastBreak = Math.max(cut.lastIndexOf("\n"), cut.lastIndexOf(" "));
+  if (lastBreak > maxChars * 0.7) cut = cut.slice(0, lastBreak);
+  return cut.trimEnd();
+}
+
+/**
+ * The planner's requests, as they will be sent. Nothing is removed for being
+ * short, long, repeated or free of placeholders: a long one is cut
+ * (cutStepText), and the first three are kept. Only what can never work is
+ * left out: something that is not a request at all (no text), and a request
+ * naming a column the owner did not tick, whose placeholder could never be
+ * filled. The caller asks the planner again when fewer than three remain.
  */
 export function validatePlanSteps(raw: unknown, columnNames: string[]): ValidatedSteps {
   const known = new Set(columnNames.map(normalizeName));
   const steps: SourceUrlsPlanStep[] = [];
   const dropped: string[] = [];
-  const seen = new Set<string>();
   const list = Array.isArray(raw) ? raw : [];
   list.forEach((item, index) => {
     const label = `step ${index + 1}`;
     if (!item || typeof item !== "object") return void dropped.push(`${label}: not an object`);
     const record = item as { name?: unknown; text?: unknown };
-    const text = typeof record.text === "string" ? record.text.trim() : "";
-    if (text.length < STEP_MIN_CHARS) return void dropped.push(`${label}: too short`);
-    if (text.length > STEP_MAX_CHARS) return void dropped.push(`${label}: too long`);
-    const used = placeholdersOf(text);
-    if (used.length === 0) return void dropped.push(`${label}: uses no column`);
-    const unknown = used.filter((name) => !known.has(normalizeName(name)));
+    const text = cutStepText(typeof record.text === "string" ? record.text.trim() : "");
+    if (!text) return void dropped.push(`${label}: empty`);
+    const unknown = placeholdersOf(text).filter((name) => !known.has(normalizeName(name)));
     if (unknown.length > 0) return void dropped.push(`${label}: unknown column ${unknown.join(", ")}`);
-    const key = text.toLowerCase().replace(/\s+/g, " ");
-    if (seen.has(key)) return void dropped.push(`${label}: repeats an earlier step`);
-    seen.add(key);
     const name = (typeof record.name === "string" ? record.name.trim() : "").slice(0, STEP_NAME_MAX_CHARS);
     if (steps.length < SOURCE_URLS_PLAN_MAX_STEPS) steps.push({ name: name || `Step ${steps.length + 1}`, text });
     else dropped.push(`${label}: more than ${SOURCE_URLS_PLAN_MAX_STEPS} steps`);
   });
   return { steps, dropped };
 }
-
 /** The most identity columns a plan keeps, and the longest value one identity line shows. */
 export const SOURCE_URLS_IDENTITY_MAX_COLUMNS = 6;
 export const SOURCE_URLS_IDENTITY_VALUE_CHARS = 200;
@@ -216,20 +229,39 @@ export interface PlannedTry {
   identity?: string[];
 }
 
+/** Searches in the first round: the strongest request, asked this many times at once. */
+export const SOURCE_URLS_FIRST_ROUND_SEARCHES = 3;
+
+export interface PlannedRounds {
+  /** The strongest request, repeated, all sent at once. */
+  first: PlannedTry[];
+  /** Sent together, only when the first round found nothing. */
+  second: PlannedTry[];
+}
+
 /**
- * The searches one row runs, in order, `maxTries` long. The steps the row can
- * use (every column it needs has a value) are tried in the plan's order. When
- * there are fewer of them than tries, they go round again from the first, so
- * every search is spent and the strongest step is also repeated: the answers
- * vary from one search to the next, so a repeat can find what the first
- * missed. A row that can use none of the steps gets the default query.
+ * The searches one row runs, `maxTries` in all (five). The steps the row can
+ * use (every column it needs has a value) keep the plan's order.
+ *
+ * - First round: the first usable step, three times at once. Google AI Mode
+ *   answers the same question differently each time, so the combined answers
+ *   hold more pages than one.
+ * - Second round, only if the first found nothing: the other usable steps
+ *   together. With fewer than two of them, the last one is repeated so every
+ *   search is spent; with only one usable step, it is the one repeated.
+ *
+ * A row that can use none of the steps (or has no plan) gets the default
+ * query in both rounds.
  */
-export function expandTries(
+export function planRounds(
   plan: SourceUrlsPlan | undefined,
   rowData: Record<string, string>,
   maxTries: number
-): PlannedTry[] {
-  const tries = Math.max(1, Math.floor(maxTries));
+): PlannedRounds {
+  const total = Math.max(1, Math.floor(maxTries));
+  const firstCount = Math.min(SOURCE_URLS_FIRST_ROUND_SEARCHES, total);
+  const secondCount = total - firstCount;
+
   const usable: PlannedTry[] = [];
   if (plan?.source === "planner") {
     const identity = renderIdentityLines(plan, rowData);
@@ -238,6 +270,11 @@ export function expandTries(
       if (text !== null) usable.push({ label: step.name, text, identity });
     }
   }
-  if (usable.length === 0) return Array.from({ length: tries }, () => ({}));
-  return Array.from({ length: tries }, (_, index) => usable[index % usable.length]!);
+  if (usable.length === 0) usable.push({});
+
+  const others = usable.length > 1 ? usable.slice(1) : [usable[0]!];
+  return {
+    first: Array.from({ length: firstCount }, () => usable[0]!),
+    second: Array.from({ length: secondCount }, (_, index) => others[index % others.length]!),
+  };
 }

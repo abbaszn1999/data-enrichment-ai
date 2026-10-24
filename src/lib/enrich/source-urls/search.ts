@@ -1,13 +1,15 @@
 /**
- * Source URLs orchestration: Google AI Mode searches for the exact product. A
- * row that finds no usable page is searched AGAIN, up to SOURCE_URLS_MAX_TRIES
- * searches in total. Google AI Mode does not answer the same question the same
- * way twice, so repeating a search recovers rows that a single search missed;
- * rewording a retry did not do better. Without a plan the retries are exactly
- * the same query (see ./skill.ts); with the run's plan (./plan.ts) they are the
- * plan's requests, which differ by what they search with, not by wording.
+ * Source URLs orchestration: Google AI Mode searches for the exact product, in
+ * two rounds of at most SOURCE_URLS_MAX_TRIES (five) searches in all.
  *
- * Every SearchApi call that returned HTTP 200 is billed, so each is added to
+ * Round 1 sends the strongest request three times AT ONCE. Google AI Mode does
+ * not answer the same question the same way twice, so the combined answers
+ * hold more pages than one, and a page several answers agree on is the best
+ * ranked. If that finds nothing, round 2 sends the other requests together.
+ * Without a plan the requests are exactly the default query (see ./skill.ts);
+ * with the run's plan (./plan.ts) they are its three requests, which differ by
+ * angle, not by wording.
+ * * Every SearchApi call that returned HTTP 200 is billed, so each is added to
  * `costs` the moment it returns — before its answer is read — and an
  * unreadable answer can never lose the charge.
  *
@@ -18,14 +20,11 @@
  * real by construction, and Google sometimes names only the home page in its
  * text while citing the product page. Cited pages are ranked first.
  *
- * With a plan (./plan.ts) the tries are the plan's requests filled in for the
- * row, in order, going round again when there are fewer than five; without one
- * every try asks the same default query.
- *
- * A failed call on the first search (bad key, network, non-200) throws as-is —
- * nothing was billed. A failure on a later search does not throw: an earlier
- * one already answered, so the result is "none found" with the costs so far and
- * the failure in the note.
+ * A search that fails does not stop the round: the others' answers are used,
+ * and the failure is named in the note. Only when not one search of round 1
+ * answers does the row fail (and it keeps the charge of any call that was
+ * billed). A failure in round 2 leaves the row "none found" with the costs so
+ * far.
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
 import { hideProviderNames } from "@/lib/provider-names";
@@ -38,7 +37,7 @@ import {
   type GoogleAiModeReferenceLink,
 } from "../image-finder/exact/searchapi";
 import { EnrichBilledAttemptError, EnrichCancelledError } from "../openai";
-import { expandTries, type PlannedTry, type SourceUrlsPlan } from "./plan";
+import { planRounds, type PlannedTry, type SourceUrlsPlan } from "./plan";
 import {
   buildPlannedQuery,
   buildSourceUrlsQuery,
@@ -49,7 +48,7 @@ import {
   type SourceCandidate,
 } from "./skill";
 
-/** Searches per row when the earlier ones found no usable page: the first plus up to 4 identical retries. */
+/** Searches per row in all: 3 at once in round 1, then up to 2 more together in round 2. */
 export const SOURCE_URLS_MAX_TRIES = 5;
 
 /**
@@ -338,23 +337,81 @@ export function describeTries(summaries: string[]): string {
   return parts.join("; ");
 }
 
+/**
+ * The links of several answers as one list. A page that more answers named
+ * comes first (agreement between independent answers is the best sign that it
+ * really is the product), then the page that ranked higher in its own answer
+ * (cited pages lead each answer, see rankSources), then the order found. Cut
+ * at the safety cap.
+ */
+export function mergeOutcomes(outcomes: Array<{ sources: SourceUrl[] }>, limit: number = SOURCE_URLS_MAX): SourceUrl[] {
+  const pages = new Map<string, { source: SourceUrl; answers: number; best: number; found: number }>();
+  let found = 0;
+  for (const outcome of outcomes) {
+    const countedHere = new Set<string>();
+    outcome.sources.forEach((source, rank) => {
+      const key = pageKey(source.uri);
+      if (countedHere.has(key)) return;
+      countedHere.add(key);
+      const page = pages.get(key);
+      if (page) {
+        page.answers += 1;
+        page.best = Math.min(page.best, rank);
+      } else {
+        pages.set(key, { source, answers: 1, best: rank, found: found++ });
+      }
+    });
+  }
+  return [...pages.values()]
+    .sort((a, b) => b.answers - a.answers || a.best - b.best || a.found - b.found)
+    .slice(0, limit)
+    .map((page) => page.source);
+}
+
+interface RoundResult {
+  planned: PlannedTry;
+  outcome?: AttemptOutcome;
+  /** The failure of a search that did not answer. */
+  error?: unknown;
+}
+
 export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<SearchSourceUrlsResult> {
   const costs: AiCallCost[] = [];
   const maxTries = Math.max(1, Math.min(input.maxTries ?? SOURCE_URLS_MAX_TRIES, SOURCE_URLS_MAX_TRIES));
   const startedAt = Date.now();
-  // The requests for this row, in the order they are tried (see expandTries).
-  const planned = expandTries(input.plan, input.rowData, maxTries);
+  // Round 1: the strongest request, several times at once. Round 2, only if
+  // that found nothing: the other requests together (see planRounds).
+  const rounds = planRounds(input.plan, input.rowData, maxTries);
   const summaries: string[] = [];
+  let answered = 0;
+  let searchesStarted = 0;
   let usedImage = false;
   let timeLimit = false;
 
-  const missNote = (extra = "") =>
-    `The web search found no page for this item (${describeTries(summaries)}${extra}${timeLimit ? "; stopped retrying at the time limit" : ""}).`;
+  const missNote = () =>
+    `The web search found no page for this item (${describeTries(summaries)}${timeLimit ? "; stopped searching at the time limit" : ""}).`;
 
-  for (let attempt = 1; attempt <= maxTries; attempt += 1) {
-    if (attempt > 1) {
+  // Every search of a round is sent at once. Each billed call is already in
+  // `costs` the moment it returns, so a search that fails after billing, or a
+  // round where only some searches answer, loses no charge.
+  const runRound = async (tries: PlannedTry[]): Promise<RoundResult[]> => {
+    const firstNumber = searchesStarted + 1;
+    searchesStarted += tries.length;
+    const settled = await Promise.allSettled(
+      tries.map((planned, index) => runSearch(input, firstNumber + index, costs, planned))
+    );
+    return settled.map((result, index) =>
+      result.status === "fulfilled"
+        ? { planned: tries[index]!, outcome: result.value }
+        : { planned: tries[index]!, error: result.reason }
+    );
+  };
+
+  for (const [roundIndex, tries] of [rounds.first, rounds.second].entries()) {
+    if (tries.length === 0) continue;
+    if (roundIndex > 0) {
       if (input.shouldCancel && (await input.shouldCancel().catch(() => false))) {
-        throw new EnrichCancelledError(`Cancelled before Google AI Mode search ${attempt}.`, costs);
+        throw new EnrichCancelledError(`Cancelled before Google AI Mode search ${searchesStarted + 1}.`, costs);
       }
       if (Date.now() - startedAt > SOURCE_URLS_TRIES_BUDGET_MS) {
         timeLimit = true;
@@ -362,39 +419,46 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
       }
     }
 
-    let outcome: AttemptOutcome;
-    try {
-      outcome = await runSearch(input, attempt, costs, planned[attempt - 1] ?? {});
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (attempt === 1) {
-        // Nothing answered yet. Any billed failure keeps its charge.
-        if (costs.length > 0) throw new EnrichBilledAttemptError(message, costs);
-        throw error;
+    const results = await runRound(tries);
+    const outcomes: AttemptOutcome[] = [];
+    for (const result of results) {
+      const label = result.planned.label;
+      if (result.outcome) {
+        outcomes.push(result.outcome);
+        answered += 1;
+        usedImage = result.outcome.usedImage;
+        summaries.push(label ? `"${label}" ${result.outcome.summary}` : result.outcome.summary);
+      } else {
+        const message = result.error instanceof Error ? result.error.message : String(result.error);
+        summaries.push(`${label ? `"${label}" ` : ""}failed: ${hideProviderNames(message.slice(0, 200))}`);
       }
-      // An earlier search answered, so a failure of a later one must not turn
-      // the row into an error: it stays "none found", with the failure in the note.
+    }
+
+    const merged = mergeOutcomes(outcomes);
+    if (merged.length > 0) {
       return {
-        sources: [],
+        sources: merged,
         costs,
-        attempts: summaries.length,
-        usedImage,
-        notFoundReason: missNote(`; search ${attempt} failed: ${hideProviderNames(message.slice(0, 200))}`),
+        attempts: answered,
+        usedImage: outcomes.some((outcome) => outcome.sources.length > 0 && outcome.usedImage),
+        notFoundReason: "",
       };
     }
 
-    usedImage = outcome.usedImage;
-    if (outcome.sources.length > 0) {
-      return { sources: outcome.sources, costs, attempts: attempt, usedImage, notFoundReason: "" };
+    // Not one search of the first round answered: nothing was learned, so the
+    // row fails as a whole (and may be attempted again). Any billed call keeps its charge.
+    if (roundIndex === 0 && outcomes.length === 0) {
+      const failure = results.find((result) => result.error !== undefined)?.error;
+      const message = failure instanceof Error ? failure.message : String(failure);
+      if (costs.length > 0) throw new EnrichBilledAttemptError(message, costs);
+      throw failure;
     }
-    const label = planned[attempt - 1]?.label;
-    summaries.push(label ? `"${label}" ${outcome.summary}` : outcome.summary);
   }
 
   return {
     sources: [],
     costs,
-    attempts: summaries.length,
+    attempts: answered,
     usedImage,
     notFoundReason: missNote(),
   };

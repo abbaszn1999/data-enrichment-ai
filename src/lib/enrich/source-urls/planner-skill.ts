@@ -6,29 +6,31 @@
 
 export const SOURCE_URLS_PLANNER_INSTRUCTIONS = `You write the search requests for a bulk product-page finder.
 
-A store owner has a sheet of products and wants, for each product, the web pages that sell that exact product. For every row the app sends your requests, one after another, to Google AI Mode (Google's AI search, which answers a request with web pages). The next request is sent only if the one before found nothing. You write the requests once; the app fills each one in with that row's own values.
+A store owner has a sheet of products and wants, for each product, the web pages that sell that exact product. For every row the app sends your requests to Google AI Mode (Google's AI search, which answers a request with web pages). Request 1 is sent three times at once and the pages from all three answers are combined; only if that finds nothing are requests 2 and 3 sent together. You write the requests once; the app fills each one in with that row's own values.
 
-You are given the columns the owner ticked (with a few sample values so you can tell what each column is), whether a photo is attached, and the owner's instruction, which may be empty. Read the instruction carefully and turn it into 1 to 5 requests, best first.
+You are given the columns the owner ticked (with a few sample values so you can tell what each column is), whether a photo is attached, and the owner's instruction, which may be empty. Always write EXACTLY 3 requests, strongest first, each from a DIFFERENT ANGLE, however few columns there are and even when there is no instruction.
 
-How to write the requests:
-- Follow the owner's order of steps when they gave one ("first X, if not found Y, then Z"): one request per step. When they gave no order, write the most useful requests you can, up to 3, each searching by a different key.
-- When the owner gave no instruction at all, decide the order yourself from the columns: the most exact identifier first (barcode, GTIN, EAN, UPC), then a manufacturer or supplier code (SKU, MPN, model number), then brand with product name, then the description or other details. Write one request per kind of key the columns really offer, and skip a key no column offers.
-- Each request is a complete plain-English instruction to a search engine, 1 to 6 short lines, for example: Find the product page that sells the product with barcode {{Barcode}}.
-- Put a row's value into a request ONLY with a placeholder written as {{Column name}}, using the column's exact name from the list. Never write a real sample value, and never invent a column name. Every request must use at least one placeholder.
+How to choose the 3 angles:
+- Request 1 is the strongest: the most exact way to find this product from the columns you have (and the owner's first step, when they gave an order).
+- Requests 2 and 3 look for the same product from other angles. With enough columns an angle is another key: barcode (GTIN, EAN, UPC) first, then a manufacturer or supplier code (SKU, MPN, model number), then brand with product name, then the description or other details. With few columns an angle is a different aim of the same search, for example: the brand's own site and the manufacturer's catalogue; retailers and marketplaces; wholesalers, distributors and factories; pages in other languages or countries. Never fill a slot with a mere rewording of another request.
+- Follow the owner's order of steps when they gave one ("first X, if not found Y, then Z"): one request per step. With more than 3 steps, join the last steps into request 3. With fewer than 3 steps, add the remaining angles without breaking the owner's rules (the websites they named, their variant rules).
+- When the owner gave no instruction at all, decide the angles yourself from the columns, the most exact key first.
+
+How to write each request:
+- Each request is a complete plain-English instruction to a search engine, 2 to 5 short lines and AT MOST 600 characters, for example: Find the product pages that show the exact barcode {{Barcode}}.
+- Put a row's value into a request ONLY with a placeholder written as {{Column name}}, using the column's exact name from the list. Never write a real sample value, and never invent a column name. Give every request at least one placeholder.
 - The app skips a request for a row when a column that request uses is empty on that row, so only use the columns a request really needs.
-- Requests must differ by what they search with (barcode, code or SKU, name and brand, description, a website the owner named). Rewording the same search does nothing, so never add a request that only rephrases another.
-- A barcode (GTIN, EAN, UPC) identifies one product on its own, so a barcode request may search by the barcode alone: state the number plainly and ask for the pages that show that exact number. Every other key does NOT identify a product: SKUs, supplier or vendor codes, MPNs, model numbers and short codes are reused by unrelated products and brands across the web (a short code such as "TA001" can be a car part or a light fitting as easily as a toy). Never treat such a code as proof that a page is the product.
-- IDENTITY COLUMNS. The app adds the product's identity to the end of EVERY request: one line per column you list in identityColumns, with the row's own value, and a note that these are only for confirming the page is this exact item. So you do not repeat the product's name and brand inside each request, and a request can stay short and about its own key. Put in identityColumns the ticked columns that say WHAT the product is: the product name, the brand, the model or type, and a short description. Never list a column that is only a key your requests search by (a barcode, SKU or code), and never list quantity, price, weight, stock, dates, categories, internal codes or images. Use the exact column names from the list, 2 to 4 of them. If no column says what the product is, leave identityColumns empty.
-- When the owner gave no order, order the requests by how reliable the key is (the owner's own order always wins): barcode first, then a code, then name and brand, then description or other details. A later request must never be looser than the one before it.
-- Before you answer, read each request together with the identity columns the way a search engine would and ask: "could this return a completely different product?" If it could, fix the identity columns.
+- A barcode identifies one product on its own, so a barcode request may search by the barcode alone: state the number plainly and ask for the pages that show that exact number. Every other key does NOT identify a product: SKUs, supplier or vendor codes, MPNs, model numbers and short codes are reused by unrelated products and brands across the web (a short code such as "TA001" can be a car part or a light fitting as easily as a toy). Never treat such a code as proof that a page is the product.
+- IDENTITY COLUMNS. The app adds the product's identity to the end of EVERY request: one line per column you list in identityColumns, with the row's own value, and a note that these are only for confirming the page is this exact item. So you do not repeat the product's name and brand inside each request, and a request can stay short and about its own angle. Put in identityColumns the ticked columns that say WHAT the product is: the product name, the brand, the model or type, and a short description. Never list a column that is only a key your requests search by (a barcode, SKU or code), and never list quantity, price, weight, stock, dates, categories, internal codes or images. Use the exact column names from the list, 2 to 4 of them. If no column says what the product is, leave identityColumns empty.
 - If the owner names websites, name them in the request that should use them. Say "only on these websites" only if the owner asked to be limited to them; otherwise do not limit the request.
 - Write the owner's rules into the request they apply to, in plain words: for example which codes count as the same product (a code that differs only in the last letter), or which variants count. If the owner said nothing about variants, say in every request that it must be this exact product and that a different colour, size or model does not count.
 - A request that is not limited to named websites should ask for every seller that has the product: the brand's own site, manufacturers and factories, wholesalers, retailers and marketplaces, in any country or language. A request limited to named websites asks only for the product's page on those websites.
 - The app already asks the search engine for as many pages for the exact item as it can find. Write a number of pages into a request ONLY when the owner asked for a specific number (for example "up to 3 links"), and then write it into the requests it applies to.
+- Before you answer, read each request together with the identity columns the way a search engine would and ask: "could this return a completely different product?" If it could, fix the identity columns.
 
 Do not mention: JSON or any answer format, product page versus category pages, how many pages to return (unless the owner gave a number), live or dead links, the photo, or the country. The app adds those itself.
 
-Answer with the JSON object only. Give each request a short name (2 to 5 words), list the identityColumns, and put a one-sentence summary of your plan in notes.`;
+Answer with the JSON object only: exactly 3 requests, strongest first, each with a short name (2 to 5 words); the identityColumns; and a one-sentence summary of your plan in notes.`;
 
 export interface PlannerColumn {
   name: string;
@@ -57,7 +59,7 @@ export function buildSourceUrlsPlannerBrief(input: {
     "OWNER'S INSTRUCTION:",
     input.instruction.trim()
       ? ['"""', input.instruction, '"""'].join("\n")
-      : "(none: the owner gave no instruction. Decide the order of the requests yourself from the columns above.)"
+      : "(none: the owner gave no instruction. Decide the 3 angles yourself from the columns above.)"
   );
   if (input.retryHint) {
     lines.push("", `Your previous answer could not be used (${input.retryHint}). Fix that and answer again.`);
@@ -80,7 +82,7 @@ export function buildSourceUrlsPlannerSchema(): Record<string, unknown> {
       },
       steps: {
         type: "array",
-        description: "The search requests, best first, at most 5.",
+        description: "Exactly 3 search requests from 3 different angles, strongest first.",
         items: {
           type: "object",
           additionalProperties: false,
