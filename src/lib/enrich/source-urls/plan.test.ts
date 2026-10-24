@@ -160,6 +160,12 @@ describe("buildPlannedQuery", () => {
     expect(query).not.toContain("photo");
   });
 
+  it("asks for as many pages as can be found unless the request names a number", () => {
+    expect(SOURCE_URLS_FIXED_RULE).toMatch(/as many product page links for this exact item as you can find/);
+    expect(SOURCE_URLS_FIXED_RULE).toMatch(/unless the request above asks for a specific number of pages/);
+    expect(buildPlannedQuery({ text: "Find it." })).toContain("as many product page links");
+  });
+
   it("states the product-page rule and the answer format every time", () => {
     expect(SOURCE_URLS_FIXED_RULE).toMatch(/home page, category, collection, brand, search-results, blog or article page/);
     expect(SOURCE_URLS_FIXED_RULE).toContain('{"sources":[{"url":"https://...","title":"page title"}]}');

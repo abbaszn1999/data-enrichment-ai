@@ -79,9 +79,11 @@ export interface EnrichAgentParams {
    * Kept by the caller across the row's attempts. When Source URLs ran next to
    * OpenAI columns and only the OpenAI call failed, the next attempt reuses this
    * Google answer (already charged with the failed attempt) instead of paying
-   * for the same search again.
+   * for the same search again. `failure` is set when the Google search failed
+   * AFTER billing something: the row's next attempt must not run (and bill)
+   * up to five more searches, so it fails with this message instead.
    */
-  sourceUrlsMemo?: { result?: EnrichAgentResult };
+  sourceUrlsMemo?: { result?: EnrichAgentResult; failure?: string };
   /**
    * Source URLs: the run's plan, the search requests written once from the
    * custom instruction (see source-urls/plan.ts). Absent means the default query.

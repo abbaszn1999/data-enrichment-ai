@@ -372,8 +372,8 @@ async function runCatalogWork(
   };
 
   /**
-   * Source URLs plan. When the owner wrote an instruction, ONE planner call
-   * turns it into the search requests every row will use. Order matters:
+   * Source URLs plan. ONE planner call turns the owner's instruction (or, with
+   * none, the ticked columns) into the search requests every row will use. Order matters:
    * the plan is saved first (rows read it from the saved settings), then its
    * cost is charged once under its own key. A crash between the two is safe:
    * a resume finds the saved plan and charges again with the same key, which

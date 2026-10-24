@@ -1,7 +1,8 @@
 /**
  * Source URLs planner: ONE GPT-6.1 Sol call per run (no web search) that reads
- * the owner's custom instruction, the ticked columns and a few sample values,
- * and writes up to 5 search requests (./plan.ts). The caller bills every round
+ * the owner's custom instruction (if any), the ticked columns and a few sample
+ * values, and writes up to 5 search requests (./plan.ts). With no instruction it
+ * orders the requests itself, strongest identifier first. The caller bills every round
  * it returns; this function never throws, so a planner problem can never fail
  * a job: it returns the default plan (today's single query) and the reason.
  */
@@ -57,7 +58,10 @@ const POLICY: EnrichToolPolicy = {
 
 export async function planSourceUrls(input: PlanSourceUrlsInput): Promise<PlanSourceUrlsResult> {
   const columnNames = input.columns.map((column) => column.name);
-  if (!input.instruction.trim() || columnNames.length === 0) {
+  // Nothing to plan, so no call is made and nothing is charged: a sheet with no
+  // usable column, or (with no owner instruction to follow) a single column,
+  // where there is no choice of search key and the default query already says it all.
+  if (columnNames.length === 0 || (!input.instruction.trim() && columnNames.length < 2)) {
     return { plan: defaultSourceUrlsPlan("nothing to plan"), costs: [] };
   }
 

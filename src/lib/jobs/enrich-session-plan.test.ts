@@ -177,15 +177,17 @@ describe("runEnrichSession plans Source URLs once per run and charges the planne
     expect(savedPlans().at(-1)!.billing!.settled).toBe(true);
   });
 
-  it("makes no planner call and no charge without an instruction", async () => {
+  it("plans and charges the planner even when the owner wrote no instruction", async () => {
     settings = {
       ...baseSettings(),
       enrichmentColumns: [{ id: "sourceUrls", label: "Source URLs", description: "", type: "sourceUrls" }],
     };
     const rows = processRow();
     await runEnrichSession("run-1", { processRow: rows });
-    expect(planSourceUrls).not.toHaveBeenCalled();
-    expect(settleProviderUsage).not.toHaveBeenCalled();
+    expect(planSourceUrls).toHaveBeenCalledTimes(1);
+    expect(planSourceUrls).toHaveBeenCalledWith(expect.objectContaining({ instruction: "" }));
+    expect(settleProviderUsage).toHaveBeenCalledTimes(1);
+    expect(settleProviderUsage.mock.calls[0]![0].amount).toBe(costToCredits(call.totalCost));
     expect(rows).toHaveBeenCalledTimes(3);
   });
 

@@ -4,7 +4,7 @@ import { getDefaultEnrichmentColumns } from "@/types";
 import { enrichRow } from "../agent";
 import type { SourceUrlsPlan } from "./plan";
 import { SOURCE_URLS_FIXED_RULE, buildSourceUrlsQuery } from "./skill";
-import { searchSourceUrls } from "./search";
+import { searchSourceUrls, SOURCE_URLS_MAX_TRIES, SOURCE_URLS_TRIES_BUDGET_MS } from "./search";
 
 const aiModeBody = (answer: string, referenceLinks: Array<{ link: string; title?: string }> = []) =>
   JSON.stringify({
@@ -202,5 +202,14 @@ describe("the Source URLs column with a saved plan", () => {
     fetchMock.mockClear();
     await enrichRow(params("garbage"));
     expect(queryOf(fetchMock, 0)).toBe(buildSourceUrlsQuery({ rowData, customInstruction: "Barcode first." }));
+  });
+});
+
+describe("the time a row can spend searching", () => {
+  it("keeps even the worst last search inside the row limit, so no billed search is ever lost to a kill", () => {
+    // The last search may start at the budget and run four 120 s calls (photo, its retry, then without the photo and its retry) plus the 2 s pauses.
+    const worstLastSearchMs = 4 * 120_000 + 2 * 2_000;
+    expect(SOURCE_URLS_MAX_TRIES).toBe(5);
+    expect(SOURCE_URLS_TRIES_BUDGET_MS + worstLastSearchMs).toBeLessThan(900_000);
   });
 });

@@ -55,9 +55,12 @@ export const SOURCE_URLS_MAX_TRIES = 5;
 /**
  * No new search starts after this long on one row, so five slow searches can
  * never run into the job's row time limit (jobs/config.ts) when Image Finder
- * shares the row.
+ * shares the row. The last search to start can itself take up to four
+ * 120 s calls (a photo call and its retry, then the same without the photo),
+ * so 360 s + 4 x 120 s + the retry pauses stays inside the 900 s limit: a row
+ * is never killed with billed searches that nobody charged.
  */
-export const SOURCE_URLS_TRIES_BUDGET_MS = 420_000;
+export const SOURCE_URLS_TRIES_BUDGET_MS = 360_000;
 
 export interface SearchSourceUrlsInput {
   rowData: Record<string, string>;

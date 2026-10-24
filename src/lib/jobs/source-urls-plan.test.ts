@@ -52,10 +52,10 @@ const planned = (billing?: SourceUrlsPlan["billing"]): SourceUrlsPlan => ({
 const call = calculateOpenAiWebSearchCost("gpt-6.1-sol", { input_tokens: 4_000, output_tokens: 1_000 }, 0);
 
 describe("needsSourceUrlsPlan", () => {
-  it("needs a plan only when Source URLs runs and the owner wrote an instruction", () => {
+  it("needs a plan whenever Source URLs runs, with or without an instruction", () => {
     expect(needsSourceUrlsPlan(settings)).toBe(true);
-    expect(needsSourceUrlsPlan({ ...settings, enrichmentColumns: [{ ...sourceUrlsColumn, customInstruction: "  " }] })).toBe(false);
-    expect(needsSourceUrlsPlan({ ...settings, enrichmentColumns: [{ ...sourceUrlsColumn, customInstruction: undefined }] })).toBe(false);
+    expect(needsSourceUrlsPlan({ ...settings, enrichmentColumns: [{ ...sourceUrlsColumn, customInstruction: "  " }] })).toBe(true);
+    expect(needsSourceUrlsPlan({ ...settings, enrichmentColumns: [{ ...sourceUrlsColumn, customInstruction: undefined }] })).toBe(true);
   });
 
   it("does not plan for other columns, PLP sheets or a Lens run", () => {

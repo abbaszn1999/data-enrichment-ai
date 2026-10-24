@@ -90,11 +90,32 @@ describe("planSourceUrls", () => {
     expect(text).toContain("A photo of the product is attached to every search");
   });
 
-  it("makes no call and bills nothing without an instruction or without columns", async () => {
+  it("makes no call and bills nothing without columns, or with one column and no instruction", async () => {
     const fetchMock = stub({ body: completed(goodPlan) });
-    expect((await planSourceUrls({ ...input, instruction: "   " })).plan.source).toBe("default");
     expect((await planSourceUrls({ ...input, columns: [] })).plan.source).toBe("default");
+    expect((await planSourceUrls({ ...input, instruction: "", columns: [] })).plan.source).toBe("default");
+    const single = await planSourceUrls({ ...input, instruction: "   ", columns: [input.columns[0]!] });
+    expect(single.plan.source).toBe("default");
+    expect(single.costs).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("plans from the columns alone when the owner wrote no instruction, billing that call", async () => {
+    const fetchMock = stub({ body: completed(goodPlan) });
+    const { plan, costs } = await planSourceUrls({ ...input, instruction: "  " });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(plan.source).toBe("planner");
+    expect(costs).toHaveLength(1);
+    const request = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    const text = request.input[0].content.at(-1).text as string;
+    expect(text).toContain("the owner gave no instruction");
+    expect(text).toContain("- Barcode: for example");
+  });
+
+  it("still plans with one column when the owner wrote an instruction", async () => {
+    const fetchMock = stub({ body: completed(goodPlan) });
+    await planSourceUrls({ ...input, columns: [input.columns[0]!] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("drops a request that names an unknown column but keeps the good ones", async () => {
@@ -165,6 +186,20 @@ describe("planner brief and skill", () => {
     expect(brief).toContain("No photo is attached.");
     expect(brief).toContain("my words");
     expect(brief).not.toContain("previous answer");
+  });
+
+  it("says so when there is no instruction, and quotes one when there is", () => {
+    const none = buildSourceUrlsPlannerBrief({ columns: input.columns, hasPhoto: false, instruction: " " });
+    expect(none).toContain("the owner gave no instruction");
+    expect(none).not.toContain('"""');
+    const given = buildSourceUrlsPlannerBrief({ columns: input.columns, hasPhoto: false, instruction: "my words" });
+    expect(given).toContain('"""\nmy words\n"""');
+    expect(given).not.toContain("the owner gave no instruction");
+  });
+
+  it("tells the planner to order the searches itself and never to add a page count on its own", () => {
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/gave no instruction at all, decide the order yourself/);
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/ONLY when the owner asked for a specific number/);
   });
 
   it("tells the planner the rules that keep the plan useful", () => {

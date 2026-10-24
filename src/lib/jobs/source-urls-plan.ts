@@ -5,7 +5,7 @@
  * The planner (enrich/source-urls/planner.ts) is a real, billed GPT call, so it
  * is charged like every other AI call: exactly what OpenAI billed, converted to
  * credits, once per run, under its own idempotency key. Nothing is charged when
- * no call was made (no custom instruction, so no planner) or nothing was billed.
+ * no call was made (nothing to plan, see planner.ts) or nothing was billed.
  */
 import { sumCosts } from "@/lib/ai-pricing";
 import { isImageFinderRun } from "@/lib/enrich/image-finder/agent";
@@ -33,17 +33,14 @@ export function sourceUrlsInstructionOf(settings: Pick<CatalogJobSettings, "enri
 }
 
 /**
- * A run needs a plan when Source URLs runs on Google and the owner wrote an
- * instruction. Without an instruction there is nothing to plan: every row asks
- * the default query, and no planner call is made or charged.
+ * A run needs a plan whenever Source URLs runs on Google, with or without a
+ * custom instruction: the planner follows the owner's instruction, or orders
+ * the searches itself from the ticked columns. (When the sheet gives it nothing
+ * to choose between, planSourceUrls makes no call and charges nothing.)
  */
 export function needsSourceUrlsPlan(settings: CatalogJobSettings): boolean {
   const kind = settings.kind ?? "product";
-  return (
-    usesGoogleSourceUrls(kind, settings.enabledColumns) &&
-    !isLensRun(kind, settings.enabledColumns) &&
-    sourceUrlsInstructionOf(settings) !== ""
-  );
+  return usesGoogleSourceUrls(kind, settings.enabledColumns) && !isLensRun(kind, settings.enabledColumns);
 }
 
 /**

@@ -153,10 +153,12 @@ export function buildSourceUrlsQuery(input: BuildSourceUrlsQueryInput): string {
 
 /**
  * The only fixed part of a planned request. The code adds it to every step,
- * so the planner can neither drop nor reword it: product pages only, then the
- * answer format the parser reads.
+ * so the planner can neither drop nor reword it: as many pages as can be found
+ * (unless the step names a number), product pages only, then the answer format
+ * the parser reads.
  */
 export const SOURCE_URLS_FIXED_RULE = [
+  "Return as many product page links for this exact item as you can find, unless the request above asks for a specific number of pages.",
   "Return only full product page links: each link must open the page of one product, this exact item.",
   "Never return a home page, category, collection, brand, search-results, blog or article page.",
   "Best first, as JSON only:",
