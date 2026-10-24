@@ -202,6 +202,25 @@ describe("planner brief and skill", () => {
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/ONLY when the owner asked for a specific number/);
   });
 
+  it("tells the planner a code is not unique: every non-barcode request names the product", () => {
+    const skill = SOURCE_URLS_PLANNER_INSTRUCTIONS;
+    expect(skill).toMatch(/IDENTITY RULE/);
+    // Only a barcode may stand alone.
+    expect(skill).toMatch(/barcode request may search by the barcode alone/);
+    expect(skill).toMatch(/SKUs, supplier or vendor codes, MPNs, model numbers and short codes are reused by unrelated products/);
+    // Everything else carries the product name and brand and says the page must be that product.
+    expect(skill).toMatch(/must also name the product it is for, using the product name column and, when the columns include one, the brand column/);
+    expect(skill).toMatch(/a page for a different kind of product which merely contains the code does not count/);
+    expect(skill).toMatch(/Never write a request that searches by a code alone/);
+    // The owner's order wins, the identity rule applies anyway, and a self-check closes the job.
+    expect(skill).toMatch(/owner's own order always wins, but the identity rule still applies to every request/);
+    expect(skill).toMatch(/could this return a completely different product\?/);
+  });
+
+  it("tells the planner a request that needs the product name must keep it despite the skip-if-empty rule", () => {
+    expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/do not add columns a request does not need\. The product name and brand that the identity rule below asks for ARE needed/);
+  });
+
   it("tells the planner the rules that keep the plan useful", () => {
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/placeholder written as \{\{Column name\}\}/);
     expect(SOURCE_URLS_PLANNER_INSTRUCTIONS).toMatch(/differ by what they search with/);
