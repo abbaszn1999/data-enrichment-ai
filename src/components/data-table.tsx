@@ -2441,12 +2441,28 @@ export function DataTable({
     onColumnSizingChange,
     enableColumnResizing: true,
     enableSorting: !readOnly,
+    // The table must never move to page 1 on its own. By default it resets the
+    // page whenever the rows array changes, which happens on every cell edit,
+    // enrichment update or background refresh, so a user working on page 2 or 3
+    // was thrown back to page 1. The page now changes only when the user picks
+    // one, or when the filters, search, sort or sheet change (below).
+    autoResetPageIndex: false,
   });
 
-  // Reset to first page when filters change
+  // Back to the first page only when the user changes what is shown.
   useEffect(() => {
-    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, [globalFilter, statusFilter, columnFilters]);
+    setPagination((prev) => (prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }));
+  }, [globalFilter, statusFilter, columnFilters, sorting, activeSheet]);
+
+  // If rows are deleted or filtered away so the current page no longer exists,
+  // show the last page that does. While no rows are loaded the page is kept.
+  const filteredRowCount = table.getPrePaginationRowModel().rows.length;
+  const lastPageIndex = Math.max(0, Math.ceil(filteredRowCount / pagination.pageSize) - 1);
+  useEffect(() => {
+    if (filteredRowCount > 0 && pagination.pageIndex > lastPageIndex) {
+      setPagination((prev) => ({ ...prev, pageIndex: lastPageIndex }));
+    }
+  }, [filteredRowCount, lastPageIndex, pagination.pageIndex]);
 
   // Virtual scrolling with dynamic row heights (within current page)
   const { rows: tableRows } = table.getRowModel();
