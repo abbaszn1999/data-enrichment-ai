@@ -22,7 +22,7 @@ import { findProductImages, isImageFinderRun } from "./image-finder/agent";
 import { imageFinderNotFoundKey } from "./image-finder/not-found";
 import { classifyProductCategories, isCategoriesModeRun } from "./categories-agent";
 import { SOURCE_URLS_COLUMN_ID } from "@/types";
-import { findSourceUrls, usesGoogleSourceUrls } from "./source-urls/agent";
+import { findSourceUrls, SOURCE_URLS_SETUP_FAILURE_NOTE, usesGoogleSourceUrls } from "./source-urls/agent";
 import { findLensMatches } from "./lens/agent";
 import { isLensRun } from "./lens/run";
 
@@ -143,7 +143,7 @@ async function withGoogleSourceUrls(
       data: {
         ...main.value.data,
         [SOURCE_URLS_COLUMN_ID]: [],
-        [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: `The web search failed, so no pages were found. Run this column again. (${hideProviderNames(message.slice(0, 200))})`,
+        [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: `${SOURCE_URLS_SETUP_FAILURE_NOTE} Run this column again. (${hideProviderNames(message.slice(0, 200))})`,
       },
       costs: [...main.value.costs, ...billedCostsOf(sources.reason)],
     };

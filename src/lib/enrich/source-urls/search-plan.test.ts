@@ -18,7 +18,6 @@ import {
   SOURCE_URLS_MAX_TRIES,
   SOURCE_URLS_TRIES_BUDGET_MS,
 } from "./search";
-import { EnrichBilledAttemptError } from "../openai";
 
 const aiModeBody = (answer: string, referenceLinks: Array<{ link: string; title?: string }> = []) =>
   JSON.stringify({
@@ -375,9 +374,19 @@ describe("searchSourceUrls with a plan", () => {
       expect(result.costs).toHaveLength(1);
     });
 
-    it("charges nothing for a row where every request came back as an error", async () => {
+    it("ends as Not found, charging nothing, for a row where every request came back as an error", async () => {
       vi.stubGlobal("fetch", vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response("overloaded", { status: 503 })));
-      await expect(searchSourceUrls({ ...base, maxTries: 3 })).rejects.not.toBeInstanceOf(EnrichBilledAttemptError);
+      const result = await searchSourceUrls({ ...base, maxTries: 3 });
+      expect(result.sources).toEqual([]);
+      expect(result.costs).toHaveLength(0);
+      expect(result.notFoundReason).toMatch(/got no answer for this item/);
+    });
+
+    it("still fails the row, not Not found, when the key is missing or refused (the app's own setup)", async () => {
+      vi.stubGlobal("fetch", vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response("invalid api key", { status: 401 })));
+      await expect(searchSourceUrls({ ...base, maxTries: 3 })).rejects.toThrow(/failed \(401\)/);
+      delete process.env.SEARCHAPI_API_KEY;
+      await expect(searchSourceUrls({ ...base, maxTries: 3 })).rejects.toThrow(/SEARCHAPI_API_KEY/);
     });
 
     describe("with the clock under test control", () => {
@@ -413,7 +422,7 @@ describe("searchSourceUrls with a plan", () => {
         expect(result.costs).toHaveLength(3);
       });
 
-      it("cuts a request at 90 s with no page and charges it", async () => {
+      it("cuts a request at 90 s with no page, ends as Not found and charges the three requests", async () => {
         expect(SOURCE_URLS_CALL_TIMEOUT_MS).toBe(90_000);
         vi.stubGlobal("fetch", vi.fn((..._args: [string | URL, RequestInit?]) => new Promise<Response>(() => {})));
         const pending = searchSourceUrls({ ...base, maxTries: 3 }).catch((caught: unknown) => caught);
@@ -425,9 +434,10 @@ describe("searchSourceUrls with a plan", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(settled).toBe(false);
         await vi.advanceTimersByTimeAsync(1_500);
-        const error = await pending;
-        expect(error).toBeInstanceOf(EnrichBilledAttemptError);
-        expect((error as EnrichBilledAttemptError).costs).toHaveLength(3);
+        const result = (await pending) as Awaited<ReturnType<typeof searchSourceUrls>>;
+        expect(result.sources).toEqual([]);
+        expect(result.notFoundReason).toMatch(/got no answer/);
+        expect(result.costs).toHaveLength(3);
       });
     });
   });

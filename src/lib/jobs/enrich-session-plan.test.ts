@@ -4,6 +4,7 @@ import type { SourceUrlsPlan } from "@/lib/enrich/source-urls/plan";
 import type { ProjectRow } from "@/lib/storage-helpers";
 import type { EnrichRowOutcome } from "./enrich-row";
 import type { CatalogProcessRow } from "./enrich-session";
+import { mergeKeepingSourceUrls } from "./enrich-session";
 
 const control = vi.hoisted(() => ({ stop: false, superseded: false }));
 const repo = vi.hoisted(() => ({
@@ -70,10 +71,11 @@ const baseSettings = () => ({
   actorUserId: "actor",
 });
 
-const okOutcome = (rowId: string): EnrichRowOutcome => ({
+const PAGE = { uri: "https://shop.test/products/p1", title: "P1" };
+const okOutcome = (rowId: string, links: unknown[] = [PAGE]): EnrichRowOutcome => ({
   ok: true,
   rowId,
-  data: { sourceUrls: [] },
+  data: { sourceUrls: links, ...(links.length === 0 ? { sourceUrls__notFoundReason: "The web search found no page for this item." } : {}) },
   originalPatches: {},
   credits: 0.04,
   cost: 0.004,
@@ -282,5 +284,147 @@ describe("runEnrichSession plans Source URLs once per run and charges the planne
     await runEnrichSession("run-1", { processRow: rows });
     expect(rows).toHaveBeenCalledTimes(3);
     expect(settleProviderUsage).not.toHaveBeenCalled();
+  });
+});
+
+describe("the second pass over Source URLs rows that were Not found", () => {
+  const retryContext = expect.objectContaining({ sourceUrlsRetry: true });
+
+  it("plans again from the Not-found rows alone, runs only those rows once more, charges each under its own key, and writes what it finds", async () => {
+    // Pass 1: r1 found, r2 and r3 Not found. Pass 2: r2 found, r3 still Not found.
+    const rows = vi.fn<CatalogProcessRow>(async (rowId, context) => {
+      if (rowId === "r1") return okOutcome(rowId);
+      if (context.sourceUrlsRetry && rowId === "r2") return okOutcome(rowId);
+      return okOutcome(rowId, []);
+    });
+    planSourceUrls
+      .mockResolvedValueOnce({ plan: plannedPlan({ billing: undefined }), costs: [call] })
+      .mockResolvedValueOnce({ plan: plannedPlan({ billing: undefined, steps: [{ name: "Fresh", text: "Fresh {{Barcode}}" }] }), costs: [call] });
+
+    await runEnrichSession("run-1", { processRow: rows });
+
+    expect(planSourceUrls).toHaveBeenCalledTimes(2);
+    expect(planSourceUrls.mock.calls[1]![0]).toMatchObject({ columns: [{ name: "Barcode", samples: ["BC2", "BC3"] }] });
+    // Three rows in pass 1, the two misses again in pass 2, once each.
+    expect(rows).toHaveBeenCalledTimes(5);
+    expect(rows.mock.calls.filter((c) => c[1].sourceUrlsRetry).map((c) => c[0]).sort()).toEqual(["r2", "r3"]);
+    expect(rows).toHaveBeenCalledWith("r2", retryContext);
+
+    // Planner: charged twice, the second under its own key.
+    expect(settleProviderUsage.mock.calls.map((c) => c[0].idempotencyKey)).toEqual([
+      "catalog_intelligence:run-1:plan",
+      "catalog_intelligence:run-1:plan:retry",
+    ]);
+    // Rows: three first-pass charges and two second-pass charges flagged as such.
+    const charges = (chargeCatalogRow.mock.calls as unknown[][]).map((c) => c[0] as { rowId: string; sourceUrlsRetry?: boolean });
+    expect(charges).toHaveLength(5);
+    expect(charges.filter((c) => c.sourceUrlsRetry).map((c) => c.rowId).sort()).toEqual(["r2", "r3"]);
+
+    const byId = Object.fromEntries(project.current!.rows.map((r) => [r.id, r]));
+    expect(byId.r2!.enrichedData!.sourceUrls).toEqual([PAGE]);
+    expect(byId.r2!.enrichedData!.sourceUrls__notFoundReason).toBe("");
+    expect(byId.r3!.enrichedData!.sourceUrls).toEqual([]);
+    expect(byId.r3!.enrichedData!.sourceUrls__notFoundReason).toMatch(/no page/);
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.objectContaining({ status: "completed", completedCount: 3 }),
+      expect.anything()
+    );
+  });
+
+  it("makes no second pass, and no second planner call, when every row was found", async () => {
+    const rows = processRow();
+    await runEnrichSession("run-1", { processRow: rows });
+    expect(planSourceUrls).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveBeenCalledTimes(3);
+    expect(settleProviderUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes only one second pass: rows still Not found afterwards are final", async () => {
+    const rows = vi.fn<CatalogProcessRow>(async (rowId) => okOutcome(rowId, []));
+    await runEnrichSession("run-1", { processRow: rows });
+    expect(planSourceUrls).toHaveBeenCalledTimes(2);
+    expect(rows).toHaveBeenCalledTimes(6);
+  });
+
+  it("does not retry a row whose search could not run at all (setup problem)", async () => {
+    const rows = vi.fn<CatalogProcessRow>(async (rowId) => ({
+      ...okOutcome(rowId, []),
+      data: { sourceUrls: [], sourceUrls__notFoundReason: "The web search failed, so no pages were found. Run this column again. (no key)" },
+    }));
+    await runEnrichSession("run-1", { processRow: rows });
+    expect(planSourceUrls).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveBeenCalledTimes(3);
+  });
+
+  it("skips the second pass when Stop was pressed", async () => {
+    const rows = vi.fn<CatalogProcessRow>(async (rowId) => {
+      control.stop = true;
+      return okOutcome(rowId, []);
+    });
+    await runEnrichSession("run-1", { processRow: rows });
+    expect(planSourceUrls).toHaveBeenCalledTimes(1);
+    expect(rows.mock.calls.some((c) => c[1].sourceUrlsRetry)).toBe(false);
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.objectContaining({ status: "cancelled" }),
+      expect.anything()
+    );
+  });
+
+  it("keeps the Not-found result when the second pass fails or still finds nothing, and never charges a row twice under one key", async () => {
+    const rows = vi.fn<CatalogProcessRow>(async (rowId, context) =>
+      context.sourceUrlsRetry ? { ok: false as const, rowId, error: "boom" } : okOutcome(rowId, [])
+    );
+    await runEnrichSession("run-1", { processRow: rows });
+    const byId = Object.fromEntries(project.current!.rows.map((r) => [r.id, r]));
+    expect(byId.r1!.status).toBe("done");
+    expect(byId.r1!.enrichedData!.sourceUrls).toEqual([]);
+    expect(repo.finishJobRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-1",
+      expect.objectContaining({ status: "completed", completedCount: 3, failedCount: 0 }),
+      expect.anything()
+    );
+  });
+
+  it("does not repeat the pass or the planner charge when the run is resumed after it started", async () => {
+    settings.sourceUrlsPlan = plannedPlan({ billing: { ...billing, settled: true } });
+    settings.sourceUrlsRetryStarted = true;
+    settings.sourceUrlsRetriedIds = ["r1", "r2", "r3"];
+    settings.processedRowIds = ["r1", "r2", "r3"];
+    project.current = {
+      rows: ["r1", "r2", "r3"].map((id, i) => ({
+        ...makeRow(id, i + 1),
+        status: "done",
+        enrichedData: { sourceUrls: [], sourceUrls__notFoundReason: "The web search found no page." },
+      })) as unknown as ProjectRow[],
+      columns: ["Barcode"],
+    };
+    const rows = processRow();
+    await runEnrichSession("run-1", { processRow: rows });
+    expect(planSourceUrls).not.toHaveBeenCalled();
+    expect(settleProviderUsage).not.toHaveBeenCalled();
+    expect(rows).not.toHaveBeenCalled();
+  });
+});
+
+describe("mergeKeepingSourceUrls", () => {
+  it("keeps the links a cell already holds when a new search found nothing", () => {
+    const merged = mergeKeepingSourceUrls(
+      { sourceUrls: [PAGE], sourceUrls__notFoundReason: "", titleTag: "old" },
+      { sourceUrls: [], sourceUrls__notFoundReason: "no page", titleTag: "new" }
+    );
+    expect(merged).toMatchObject({ sourceUrls: [PAGE], sourceUrls__notFoundReason: "", titleTag: "new" });
+  });
+
+  it("writes new links and writes an empty cell over an empty cell", () => {
+    expect(mergeKeepingSourceUrls({ sourceUrls: [PAGE] }, { sourceUrls: [{ uri: "https://x.test/p" }] }).sourceUrls).toEqual([{ uri: "https://x.test/p" }]);
+    expect(mergeKeepingSourceUrls({}, { sourceUrls: [], sourceUrls__notFoundReason: "no page" })).toMatchObject({
+      sourceUrls: [],
+      sourceUrls__notFoundReason: "no page",
+    });
   });
 });

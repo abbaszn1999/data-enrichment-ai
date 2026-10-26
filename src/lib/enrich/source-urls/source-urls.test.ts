@@ -362,17 +362,21 @@ describe("searchSourceUrls", () => {
     expect(result.notFoundReason).toMatch(/search 1: returned no pages; searches 2-5: failed: Web search failed \(503\)/);
   });
 
-  it("throws when the only search fails, after one retry (nothing was billed)", async () => {
+  it("ends as Not found, with nothing charged, when the only search fails after one retry", async () => {
     const fetchMock = vi.fn(async () => new Response("boom", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(searchSourceUrls({ ...input, retryDelayMs: 0, maxTries: 1 })).rejects.toThrow(/failed \(500\)/);
+    const result = await searchSourceUrls({ ...input, retryDelayMs: 0, maxTries: 1 });
+    expect(result.sources).toEqual([]);
+    expect(result.costs).toHaveLength(0);
+    expect(result.notFoundReason).toMatch(/failed \(500\)/);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("throws only when not one search of either round answers, after trying both rounds", async () => {
+  it("ends as Not found only after trying both rounds when not one search answers", async () => {
     const fetchMock = vi.fn(async () => new Response("boom", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(searchSourceUrls({ ...input, retryDelayMs: 0 })).rejects.toThrow(/failed \(500\)/);
+    const result = await searchSourceUrls({ ...input, retryDelayMs: 0 });
+    expect(result.sources).toEqual([]);
     // Five searches (three in round 1, two in round 2), each tried twice.
     expect(fetchMock).toHaveBeenCalledTimes(10);
   });
@@ -406,10 +410,12 @@ describe("searchSourceUrls", () => {
     expect(result.costs).toHaveLength(1);
   });
 
-  it("does not retry a request SearchApi rejects outright (4xx)", async () => {
+  it("does not retry a request SearchApi rejects outright (4xx), and ends as Not found", async () => {
     const fetchMock = vi.fn(async () => new Response("bad request", { status: 400 }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(searchSourceUrls({ ...input, retryDelayMs: 0, maxTries: 1 })).rejects.toThrow(/failed \(400\)/);
+    const result = await searchSourceUrls({ ...input, retryDelayMs: 0, maxTries: 1 });
+    expect(result.sources).toEqual([]);
+    expect(result.notFoundReason).toMatch(/failed \(400\)/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -553,7 +559,7 @@ describe("Source URLs routing in enrichRow", () => {
     expect(result.costs).toHaveLength(4);
   });
 
-  it("keeps the OpenAI columns when the Google search fails, and says why the cell is empty", async () => {
+  it("keeps the OpenAI columns and ends the Source URLs cell as Not found when Google errors", async () => {
     stubBoth({ googleStatus: 400, googleBody: "boom" });
     const result = await enrichRow({
       ...baseParams,
@@ -562,15 +568,34 @@ describe("Source URLs routing in enrichRow", () => {
     });
     expect(result.data.titleTag).toBe("Widget WX-1 by Acme");
     expect(result.data.sourceUrls).toEqual([]);
-    expect(String(result.data["sourceUrls__notFoundReason"])).toMatch(/Run this column again/);
+    expect(String(result.data["sourceUrls__notFoundReason"])).toMatch(/got no answer/);
     expect(result.costs).toHaveLength(1);
   });
 
-  it("fails the row when Source URLs is the only column and Google fails", async () => {
+  it("keeps the OpenAI columns and says to run the column again when the search key is refused", async () => {
+    stubBoth({ googleStatus: 401, googleBody: "invalid key" });
+    const result = await enrichRow({
+      ...baseParams,
+      enabledColumns: ["titleTag", "sourceUrls"],
+      enrichmentColumns: [titleTag, sourceUrls],
+    });
+    expect(result.data.titleTag).toBe("Widget WX-1 by Acme");
+    expect(result.data.sourceUrls).toEqual([]);
+    expect(String(result.data["sourceUrls__notFoundReason"])).toMatch(/Run this column again/);
+  });
+
+  it("ends the row as Not found when Source URLs is the only column and Google errors", async () => {
     stubBoth({ googleStatus: 400, googleBody: "boom" });
+    const result = await enrichRow({ ...baseParams, enabledColumns: ["sourceUrls"], enrichmentColumns: [sourceUrls] });
+    expect(result.data.sourceUrls).toEqual([]);
+    expect(String(result.data["sourceUrls__notFoundReason"])).toMatch(/got no answer/);
+  });
+
+  it("fails the row when Source URLs is the only column and the search key is refused", async () => {
+    stubBoth({ googleStatus: 401, googleBody: "invalid key" });
     await expect(
       enrichRow({ ...baseParams, enabledColumns: ["sourceUrls"], enrichmentColumns: [sourceUrls] })
-    ).rejects.toThrow(/failed \(400\)/);
+    ).rejects.toThrow(/failed \(401\)/);
   });
 
   it("reuses the Google answer on the row's next attempt instead of paying for it twice", async () => {

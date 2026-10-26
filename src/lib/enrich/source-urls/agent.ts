@@ -23,6 +23,13 @@ import { resolveSearchMarket } from "./markets";
 import { readStoredPlan } from "./plan";
 import { searchSourceUrls } from "./search";
 
+/**
+ * Starts the note of a Source URLs cell left empty because the search could not
+ * run at all (the app's own setup, see search.ts), as opposed to a "Not found"
+ * on this item. Such a row is not retried automatically: the cause is not the item.
+ */
+export const SOURCE_URLS_SETUP_FAILURE_NOTE = "The web search failed, so no pages were found.";
+
 /** Whether this run's Source URLs column is answered by Google AI Mode. Product sheets only; PLP keeps its own flow. */
 export function usesGoogleSourceUrls(kind: SessionKind, enabledColumns: string[]): boolean {
   return kind === "product" && enabledColumns.includes(SOURCE_URLS_COLUMN_ID);

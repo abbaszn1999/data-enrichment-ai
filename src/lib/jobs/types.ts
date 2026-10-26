@@ -85,6 +85,13 @@ export interface CatalogJobSettings extends JobRunSettings {
    * follows the same plan and a resumed run does not plan or charge again.
    */
   sourceUrlsPlan?: SourceUrlsPlan;
+  /**
+   * Source URLs second pass: set once the run has written its fresh plan for
+   * the rows that were Not found (the saved plan is then that plan), and the
+   * rows already given that pass, so a resumed run never repeats either.
+   */
+  sourceUrlsRetryStarted?: boolean;
+  sourceUrlsRetriedIds?: string[];
 }
 
 export interface JobRunRecord {

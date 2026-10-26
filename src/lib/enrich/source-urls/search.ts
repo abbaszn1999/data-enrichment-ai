@@ -24,10 +24,11 @@
  * A search that fails does not stop the round: the others' answers are used,
  * and the failure is named in the note. When not one search of round 1
  * answers, round 2 still runs (its requests are worded differently, and a
- * failure is often tied to one wording). Only when not one search of the whole
- * row answers does the row fail (and it keeps the charge of any call that was
- * billed). If some search answered, a failure elsewhere leaves the row "none
- * found" with the costs so far.
+ * failure is often tied to one wording). Whatever the reason a row finds no
+ * page (empty answers, timeouts, errors from the provider, no search answering
+ * at all) it ends as "Not found" with the costs so far and the reason in the
+ * note. The one exception is the app's own setup (no key, a key the provider
+ * refuses): that fails the row, because it is not a miss on this item.
  */
 import { createSearchApiCost, type AiCallCost } from "@/lib/ai-pricing";
 import { hideProviderNames } from "@/lib/provider-names";
@@ -442,6 +443,20 @@ export function mergeOutcomes(outcomes: Array<{ sources: SourceUrl[] }>, limit: 
     .map((page) => page.source);
 }
 
+/**
+ * A failure that says the search cannot run at all, whatever the item: no
+ * SearchApi key, or a key the provider refuses (401, 402, 403). Those are not
+ * "Not found" (that would hide a setup problem behind a normal result), so the
+ * row fails. Everything else a search can come back with (an error answer, a
+ * timeout, a hang-up, no pages) is a miss on this item.
+ */
+function isSetupFailure(error: unknown): boolean {
+  if (error instanceof SearchApiCallError) {
+    return error.status === 401 || error.status === 402 || error.status === 403;
+  }
+  return true;
+}
+
 interface RoundResult {
   planned: PlannedTry;
   outcome?: AttemptOutcome;
@@ -475,11 +490,15 @@ async function runSourceUrlsSearch(input: SearchSourceUrlsInput, stats: SearchSt
   let searchesStarted = 0;
   let usedImage = false;
   let timeLimit = false;
-  /** The failure of the first search that did not answer; thrown if no search answers at all. */
-  let firstFailure: unknown;
+  /** A search failure that is the app's own setup, not a miss (see isSetupFailure); thrown if no search answers at all. */
+  let setupFailure: unknown;
 
   const missNote = () =>
-    `The web search found no page for this item (${describeTries(summaries)}${timeLimit ? "; stopped searching at the time limit" : ""}).`;
+    `${
+      answered === 0
+        ? "The web search got no answer for this item"
+        : "The web search found no page for this item"
+    } (${describeTries(summaries)}${timeLimit ? "; stopped searching at the time limit" : ""}).`;
 
   // Every search of a round is sent at once. Each request is already in
   // `costs` the moment it is sent, so a search that is hung up on, or a round
@@ -579,17 +598,22 @@ async function runSourceUrlsSearch(input: SearchSourceUrlsInput, stats: SearchSt
     // particular wording every time (a 503 "could not retrieve results"), so
     // repeating it is pointless: the next round asks the other requests, which
     // are worded differently. The row only fails when no search at all answered.
-    if (firstFailure === undefined) firstFailure = results.find((result) => result.error !== undefined)?.error;
+    if (setupFailure === undefined) {
+      setupFailure = results.find((result) => result.error !== undefined && isSetupFailure(result.error))?.error;
+    }
   }
 
-  // Not one search of either round answered: nothing was learned, so the row
-  // fails as a whole. Any billed call keeps its charge.
-  if (answered === 0 && firstFailure !== undefined) {
-    const message = firstFailure instanceof Error ? firstFailure.message : String(firstFailure);
+  // Not one search answered and the cause is the app's own setup (no key, a key
+  // the provider refuses): that is not a miss on this item, so it fails loudly
+  // instead of being reported as "Not found". Any billed call keeps its charge.
+  if (answered === 0 && setupFailure !== undefined) {
+    const message = setupFailure instanceof Error ? setupFailure.message : String(setupFailure);
     if (costs.length > 0) throw new EnrichBilledAttemptError(message, costs);
-    throw firstFailure;
+    throw setupFailure;
   }
 
+  // Every other way of not finding a page (no pages, empty answers, timeouts,
+  // errors from the provider) ends the same way: "Not found", with the reason.
   return {
     sources: [],
     costs,

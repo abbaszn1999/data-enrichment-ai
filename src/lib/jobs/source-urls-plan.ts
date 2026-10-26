@@ -111,8 +111,9 @@ export async function prepareSourceUrlsPlan(params: {
   return plan;
 }
 
-export function sourceUrlsPlanIdempotencyKey(runId: string): string {
-  return `catalog_intelligence:${runId}:plan`;
+/** The second pass over Not-found rows writes a fresh plan, a second planner call, so it has its own key. */
+export function sourceUrlsPlanIdempotencyKey(runId: string, retry = false): string {
+  return `catalog_intelligence:${runId}:plan${retry ? ":retry" : ""}`;
 }
 
 /**
@@ -127,6 +128,8 @@ export async function chargeSourceUrlsPlan(params: {
   workspaceId: string;
   settings: CatalogJobSettings;
   plan: SourceUrlsPlan;
+  /** The plan of the second pass over Not-found rows. */
+  retry?: boolean;
 }): Promise<UsageSettlement | null> {
   const billing = params.plan.billing;
   if (!billing || billing.credits <= 0) return null;
@@ -138,11 +141,12 @@ export async function chargeSourceUrlsPlan(params: {
     operation: "catalog_intelligence",
     entityType: "catalog_plan",
     entityId: params.sessionId,
-    idempotencyKey: sourceUrlsPlanIdempotencyKey(params.runId),
+    idempotencyKey: sourceUrlsPlanIdempotencyKey(params.runId, params.retry),
     details: {
       sessionId: params.sessionId,
       runId: params.runId,
       planner: "source-urls",
+      ...(params.retry ? { pass: "retry" } : {}),
       model: params.plan.model ?? SOURCE_URLS_PLANNER_OPENAI_MODEL,
       steps: params.plan.steps.length,
       source: params.plan.source,
