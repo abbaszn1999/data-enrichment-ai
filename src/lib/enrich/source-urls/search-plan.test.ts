@@ -14,7 +14,6 @@ import { EnrichCancelledError } from "../openai";
 import {
   searchSourceUrls,
   SOURCE_URLS_CALL_TIMEOUT_MS,
-  SOURCE_URLS_GRACE_MS,
   SOURCE_URLS_MAX_TRIES,
   SOURCE_URLS_TRIES_BUDGET_MS,
 } from "./search";
@@ -279,48 +278,30 @@ describe("searchSourceUrls with a plan", () => {
     expect(query).toContain('{"sources":[{"url":"https://...","title":"page title"}]}');
   });
 
-  describe("a slow search does not hold the row", () => {
+  describe("a round waits for all its searches, up to the call timeout", () => {
     const OTHER = "https://www.mamasandpapas.com/products/check-jacket-other-s07fn6db4";
     const foundOther = () => aiModeBody(JSON.stringify({ sources: [{ url: OTHER, title: "Other" }] }));
 
-    it("hangs up on a search still waiting after the grace period once another has a page, and still charges it, because it was sent", async () => {
-      let calls = 0;
-      const fetchMock = vi.fn((..._args: [string | URL, RequestInit?]) => {
-        calls += 1;
-        // Calls 1 and 2 answer at once; call 3 never does (and ignores the abort signal).
-        return calls <= 2 ? Promise.resolve(new Response(found(), { status: 200 })) : new Promise<Response>(() => {});
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      const started = Date.now();
-      const result = await searchSourceUrls({ ...base, maxTries: 5, graceMs: 30 });
-      expect(Date.now() - started).toBeLessThan(3000);
-      expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
-      // Three searches in round 1, no round 2; the one hung up on was sent, so it is charged too.
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(result.costs).toHaveLength(3);
-      expect(result.attempts).toBe(2);
-    });
-
-    it("still merges a search that finishes inside the grace period", async () => {
+    it("waits for a slow search that has not answered yet, however long after the first page, and merges it", async () => {
       let calls = 0;
       const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => {
         calls += 1;
         const mine = calls;
         if (mine === 1) return new Response(found(), { status: 200 });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise((resolve) => setTimeout(resolve, mine === 2 ? 20 : 60));
         return new Response(mine === 2 ? foundOther() : found(), { status: 200 });
       });
       vi.stubGlobal("fetch", fetchMock);
-      const result = await searchSourceUrls({ ...base, maxTries: 5, graceMs: 2000 });
+      const result = await searchSourceUrls({ ...base, maxTries: 5 });
       expect(result.costs).toHaveLength(3);
       // PRODUCT was named by two answers, so it ranks first; the other page is kept too.
       expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT, OTHER]);
     });
 
-    it("never starts the grace period for answers that found nothing, so round 2 still runs", async () => {
+    it("runs round 2 when round 1 found nothing usable", async () => {
       const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response(noPages(), { status: 200 }));
       vi.stubGlobal("fetch", fetchMock);
-      const result = await searchSourceUrls({ ...base, maxTries: 5, graceMs: 1 });
+      const result = await searchSourceUrls({ ...base, maxTries: 5 });
       expect(fetchMock).toHaveBeenCalledTimes(5);
       expect(result.sources).toEqual([]);
     });
@@ -397,29 +378,60 @@ describe("searchSourceUrls with a plan", () => {
         vi.useRealTimers();
       });
 
-      it("counts down 15 s from the first usable page: merges what answers inside it, hangs up on the rest, charges all three", async () => {
+      it("does not hang up after the first usable page: a search answering at 40 s is still merged, nothing is cut", async () => {
         const OTHER_PAGE = "https://www.mamasandpapas.com/products/check-jacket-other-s07fn6db4";
         let calls = 0;
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (..._args: [string | URL, RequestInit?]) => {
-            calls += 1;
-            const mine = calls;
-            if (mine === 1) return new Response(found(), { status: 200 });
-            // Call 2 answers at 14 s (inside the countdown), call 3 at 16 s (after it).
-            await new Promise((resolve) => setTimeout(resolve, mine === 2 ? 14_000 : 16_000));
-            return new Response(
-              aiModeBody(JSON.stringify({ sources: [{ url: mine === 2 ? OTHER_PAGE : "https://www.mamasandpapas.com/products/late", title: "x" }] })),
-              { status: 200 }
-            );
-          })
-        );
-        expect(SOURCE_URLS_GRACE_MS).toBe(15_000);
+        const fetchMock = vi.fn(async (..._args: [string | URL, RequestInit?]) => {
+          calls += 1;
+          const mine = calls;
+          if (mine === 1) return new Response(found(), { status: 200 });
+          // Call 2 answers at 20 s, call 3 at 40 s: both long after the first page.
+          await new Promise((resolve) => setTimeout(resolve, mine === 2 ? 20_000 : 40_000));
+          return new Response(
+            aiModeBody(JSON.stringify({ sources: [{ url: mine === 2 ? OTHER_PAGE : PRODUCT, title: "x" }] })),
+            { status: 200 }
+          );
+        });
+        vi.stubGlobal("fetch", fetchMock);
         const pending = searchSourceUrls({ ...base, maxTries: 5 });
-        await vi.advanceTimersByTimeAsync(15_000);
+        await vi.advanceTimersByTimeAsync(39_000);
+        let settled = false;
+        void pending.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        // Still waiting for the third search at 39 s.
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1_500);
         const result = await pending;
-        expect(result.sources.map((s) => s.uri).sort()).toEqual([OTHER_PAGE, PRODUCT].sort());
+        expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT, OTHER_PAGE]);
         expect(result.costs).toHaveLength(3);
+        expect(result.attempts).toBe(3);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+      });
+
+      it("at 90 s hangs up on a search that never answered, writes what answered, charges all three, and drops a late answer", async () => {
+        let calls = 0;
+        const fetchMock = vi.fn((..._args: [string | URL, RequestInit?]) => {
+          calls += 1;
+          return calls <= 2 ? Promise.resolve(new Response(found(), { status: 200 })) : new Promise<Response>(() => {});
+        });
+        vi.stubGlobal("fetch", fetchMock);
+        const pending = searchSourceUrls({ ...base, maxTries: 5 });
+        await vi.advanceTimersByTimeAsync(89_000);
+        let settled = false;
+        void pending.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1_500);
+        const result = await pending;
+        expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+        // Round 1 only: the row has a page, so round 2 never runs. The cut request was sent, so it is charged.
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(result.costs).toHaveLength(3);
+        expect(result.attempts).toBe(2);
       });
 
       it("cuts a request at 90 s with no page, ends as Not found and charges the three requests", async () => {

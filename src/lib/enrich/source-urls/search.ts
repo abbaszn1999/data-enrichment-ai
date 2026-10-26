@@ -10,8 +10,8 @@
  * with the run's plan (./plan.ts) they are its three requests, which differ by
  * angle, not by wording.
  * Billing is per request sent: each request is added to `costs` the moment it
- * goes out, and stays there whether it answered, was hung up on (grace period,
- * call timeout, Stop) or its answer was unreadable. Only a request that came
+ * goes out, and stays there whether it answered, was hung up on (call
+ * timeout, Stop) or its answer was unreadable. Only a request that came
  * back as an error, or never left, is taken out again (see askGoogle).
  *
  * Every page that is returned passes the code-side checks the Image Finder's
@@ -68,18 +68,11 @@ export const SOURCE_URLS_TRIES_BUDGET_MS = 360_000;
 /**
  * The one hard cut: a call that has not answered after this long is hung up on.
  * Live calls answer in 7-20 s and the odd one takes a minute, so there is no
- * shorter limit; once one search of a round has a usable page the grace period
- * below ends the wait far sooner. The hung-up request is still charged (it was
- * sent), see askGoogle.
+ * shorter limit. A round waits for all its searches, so this is also the most
+ * a round can take. The hung-up request is still charged (it was sent) and a
+ * late answer is dropped, see askGoogle.
  */
 export const SOURCE_URLS_CALL_TIMEOUT_MS = 90_000;
-
-/**
- * Once one search of a round has a usable page, the others get this long to
- * finish (their pages are merged in and agreement ranks them); whatever is
- * still waiting then is hung up on, so one slow call never holds the row.
- */
-export const SOURCE_URLS_GRACE_MS = 15_000;
 
 /** How often a round that is waiting checks whether the owner pressed Stop. */
 export const SOURCE_URLS_CANCEL_POLL_MS = 3_000;
@@ -99,8 +92,6 @@ export interface SearchSourceUrlsInput {
   shouldCancel?: () => Promise<boolean>;
   /** Wait before the one retry of a rate-limited or 5xx call (tests shorten it). */
   retryDelayMs?: number;
-  /** How long the other searches of a round may keep going after one has a usable page. Defaults to SOURCE_URLS_GRACE_MS. */
-  graceMs?: number;
   /** How often a waiting round checks for Stop. Defaults to SOURCE_URLS_CANCEL_POLL_MS. */
   cancelPollMs?: number;
   /** Searches per row, first one included (tests and callers may lower it). Defaults to SOURCE_URLS_MAX_TRIES. */
@@ -212,9 +203,8 @@ interface SearchStats {
  * it is really sent.
  *
  * Billing is per request SENT: the charge is added to `costs` the moment the
- * request goes out, so an unreadable answer, a request hung up on (the grace
- * period after another search answered, the call timeout, Stop) and a row that
- * is cancelled all keep their charge. The only requests not charged are those
+ * request goes out, so an unreadable answer, a request hung up on (the call
+ * timeout, Stop) and a row that is cancelled all keep their charge. The only requests not charged are those
  * that came back as an error (rate limit, 5xx, network failure; SearchApi does
  * not bill those either) and calls that never left because the row was already
  * stopped.
@@ -462,8 +452,6 @@ interface RoundResult {
   outcome?: AttemptOutcome;
   /** The failure of a search that did not answer. */
   error?: unknown;
-  /** Hung up on after another search of the round already had a usable page; not a failure. */
-  skipped?: boolean;
 }
 
 export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<SearchSourceUrlsResult> {
@@ -504,16 +492,15 @@ async function runSourceUrlsSearch(input: SearchSourceUrlsInput, stats: SearchSt
   // `costs` the moment it is sent, so a search that is hung up on, or a round
   // where only some searches answer, loses no charge.
   //
-  // The round does not wait for its slowest search: once one search has a
-  // usable page the others get a short grace period, then are hung up on (they
-  // were sent, so they are still charged). While it waits, the round also
-  // watches for Stop and hangs up on everything in flight when it is pressed.
+  // The round waits for every search of it: all answer, or the call timeout
+  // (SOURCE_URLS_CALL_TIMEOUT_MS) hangs up on the ones that do not (they were
+  // sent, so they are still charged, and a late answer is dropped). The row is
+  // written once, from what answered. While it waits, the round also watches
+  // for Stop and hangs up on everything in flight when it is pressed.
   const runRound = async (tries: PlannedTry[]): Promise<RoundResult[]> => {
     const firstNumber = searchesStarted + 1;
     searchesStarted += tries.length;
     const controller = new AbortController();
-    const graceMs = input.graceMs ?? SOURCE_URLS_GRACE_MS;
-    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     let stoppedByOwner = false;
     const poller = input.shouldCancel
       ? setInterval(() => {
@@ -536,17 +523,12 @@ async function runSourceUrlsSearch(input: SearchSourceUrlsInput, stats: SearchSt
           try {
             const outcome = await runSearch(input, firstNumber + index, costs, planned, controller.signal, stats);
             results[index] = { planned, outcome };
-            if (outcome.sources.length > 0 && graceTimer === undefined && !controller.signal.aborted) {
-              graceTimer = setTimeout(() => controller.abort(), graceMs);
-            }
           } catch (error) {
-            results[index] =
-              controller.signal.aborted && !stoppedByOwner ? { planned, skipped: true } : { planned, error };
+            results[index] = { planned, error };
           }
         })
       );
     } finally {
-      if (graceTimer !== undefined) clearTimeout(graceTimer);
       if (poller !== undefined) clearInterval(poller);
     }
     if (stoppedByOwner) {
@@ -571,7 +553,6 @@ async function runSourceUrlsSearch(input: SearchSourceUrlsInput, stats: SearchSt
     const outcomes: AttemptOutcome[] = [];
     for (const result of results) {
       const label = result.planned.label;
-      if (result.skipped) continue;
       if (result.outcome) {
         outcomes.push(result.outcome);
         answered += 1;
