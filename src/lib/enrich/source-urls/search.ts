@@ -9,9 +9,10 @@
  * Without a plan the requests are exactly the default query (see ./skill.ts);
  * with the run's plan (./plan.ts) they are its three requests, which differ by
  * angle, not by wording.
- * * Every SearchApi call that returned HTTP 200 is billed, so each is added to
- * `costs` the moment it returns — before its answer is read — and an
- * unreadable answer can never lose the charge.
+ * Billing is per request sent: each request is added to `costs` the moment it
+ * goes out, and stays there whether it answered, was hung up on (grace period,
+ * call timeout, Stop) or its answer was unreadable. Only a request that came
+ * back as an error, or never left, is taken out again (see askGoogle).
  *
  * Every page that is returned passes the code-side checks the Image Finder's
  * Exact Match uses (a full product URL, not a search engine, social or
@@ -57,25 +58,27 @@ export const SOURCE_URLS_MAX_TRIES = 5;
  * No new search starts after this long on one row, so five slow searches can
  * never run into the job's row time limit (jobs/config.ts) when Image Finder
  * shares the row. The last search to start can itself take up to four
- * 120 s calls (a photo call and its retry, then the same without the photo),
- * so 360 s + 4 x 120 s + the retry pauses stays inside the 900 s limit: a row
+ * 90 s calls (a photo call and its retry, then the same without the photo),
+ * so 360 s + 4 x 90 s + the retry pauses stays inside the 900 s limit: a row
  * is never killed with billed searches that nobody charged.
  */
 export const SOURCE_URLS_TRIES_BUDGET_MS = 360_000;
 
 /**
- * One Google AI Mode call is given up on after this long. Live calls answer in
- * 7-20 s (the odd one up to a minute); a call that has not answered after 60 s
- * is almost always stuck, and waiting longer only holds the whole row.
+ * The one hard cut: a call that has not answered after this long is hung up on.
+ * Live calls answer in 7-20 s and the odd one takes a minute, so there is no
+ * shorter limit; once one search of a round has a usable page the grace period
+ * below ends the wait far sooner. The hung-up request is still charged (it was
+ * sent), see askGoogle.
  */
-export const SOURCE_URLS_CALL_TIMEOUT_MS = 60_000;
+export const SOURCE_URLS_CALL_TIMEOUT_MS = 90_000;
 
 /**
  * Once one search of a round has a usable page, the others get this long to
  * finish (their pages are merged in and agreement ranks them); whatever is
  * still waiting then is hung up on, so one slow call never holds the row.
  */
-export const SOURCE_URLS_GRACE_MS = 12_000;
+export const SOURCE_URLS_GRACE_MS = 15_000;
 
 /** How often a round that is waiting checks whether the owner pressed Stop. */
 export const SOURCE_URLS_CANCEL_POLL_MS = 3_000;
@@ -193,23 +196,42 @@ export function rankSources(
   return [...grounded, ...rest].slice(0, limit).map(toSource);
 }
 
+/** What a row sent, for the per-row log: requests sent, answered, hung up on, and failed (not charged). */
+interface SearchStats {
+  sent: number;
+  answered: number;
+  hungUp: number;
+  failed: number;
+}
+
 /**
  * One Google AI Mode call. With a photo it tries the photo first; if that call
  * fails (the photo may be unreachable for Google) it retries once without it,
  * because the text search still stands. The prompt mentions the photo only when
- * it is really sent. Each billed call is added to `costs` right away, before
- * its answer is read, so an unreadable answer can never lose the charge.
+ * it is really sent.
+ *
+ * Billing is per request SENT: the charge is added to `costs` the moment the
+ * request goes out, so an unreadable answer, a request hung up on (the grace
+ * period after another search answered, the call timeout, Stop) and a row that
+ * is cancelled all keep their charge. The only requests not charged are those
+ * that came back as an error (rate limit, 5xx, network failure; SearchApi does
+ * not bill those either) and calls that never left because the row was already
+ * stopped.
  */
 async function askGoogle(
   buildQuery: (hasImage: boolean) => string,
   imageUrl: string | undefined,
   costs: AiCallCost[],
   retryDelayMs: number,
-  location?: string,
-  signal?: AbortSignal
+  location: string | undefined,
+  signal: AbortSignal | undefined,
+  stats: SearchStats
 ): Promise<{ call: Awaited<ReturnType<typeof callGoogleAiMode>>; usedImage: boolean }> {
   const once = async (query: string, image?: string) => {
     if (signal?.aborted) throw new SearchApiCallError("Web search cancelled", false);
+    const charge = createSearchApiCost(1);
+    costs.push(charge);
+    stats.sent += 1;
     try {
       const call = await callGoogleAiMode(query, {
         ...(image ? { imageUrl: image } : {}),
@@ -217,11 +239,18 @@ async function askGoogle(
         timeoutMs: SOURCE_URLS_CALL_TIMEOUT_MS,
         ...(signal ? { signal } : {}),
       });
-      costs.push(createSearchApiCost(1));
+      stats.answered += 1;
       return call;
     } catch (error) {
-      // A billed failure keeps its charge even though there is no answer.
-      if (error instanceof SearchApiCallError && error.billed) costs.push(createSearchApiCost(1));
+      const chargeable = error instanceof SearchApiCallError && (error.billed || error.hungUp);
+      if (chargeable) {
+        if (error instanceof SearchApiCallError && error.hungUp) stats.hungUp += 1;
+      } else {
+        // An error answer or a call that never left: not billed by SearchApi, not charged.
+        const at = costs.indexOf(charge);
+        if (at !== -1) costs.splice(at, 1);
+        stats.failed += 1;
+      }
       throw error;
     }
   };
@@ -258,7 +287,8 @@ async function runSearch(
   attempt: number,
   costs: AiCallCost[],
   planned: PlannedTry,
-  signal?: AbortSignal
+  signal: AbortSignal | undefined,
+  stats: SearchStats
 ): Promise<AttemptOutcome> {
   const imageUrl = input.imageUrl && /^https?:\/\//i.test(input.imageUrl) ? input.imageUrl : undefined;
   const buildQuery = (hasImage: boolean) =>
@@ -281,7 +311,8 @@ async function runSearch(
     costs,
     input.retryDelayMs ?? TRANSIENT_RETRY_DELAY_MS,
     input.location,
-    signal
+    signal,
+    stats
   );
 
   let answer = parseBestSourceAnswer(call.texts);
@@ -421,6 +452,18 @@ interface RoundResult {
 }
 
 export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<SearchSourceUrlsResult> {
+  const stats: SearchStats = { sent: 0, answered: 0, hungUp: 0, failed: 0 };
+  try {
+    return await runSourceUrlsSearch(input, stats);
+  } finally {
+    // One line per row, whatever way it ends: what was sent and what it cost.
+    console.info(
+      `[Source URLs] requests sent ${stats.sent}, answered ${stats.answered}, hung up on ${stats.hungUp}, failed (not charged) ${stats.failed}`
+    );
+  }
+}
+
+async function runSourceUrlsSearch(input: SearchSourceUrlsInput, stats: SearchStats): Promise<SearchSourceUrlsResult> {
   const costs: AiCallCost[] = [];
   const maxTries = Math.max(1, Math.min(input.maxTries ?? SOURCE_URLS_MAX_TRIES, SOURCE_URLS_MAX_TRIES));
   const startedAt = Date.now();
@@ -438,13 +481,13 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
   const missNote = () =>
     `The web search found no page for this item (${describeTries(summaries)}${timeLimit ? "; stopped searching at the time limit" : ""}).`;
 
-  // Every search of a round is sent at once. Each billed call is already in
-  // `costs` the moment it returns, so a search that fails after billing, or a
-  // round where only some searches answer, loses no charge.
+  // Every search of a round is sent at once. Each request is already in
+  // `costs` the moment it is sent, so a search that is hung up on, or a round
+  // where only some searches answer, loses no charge.
   //
   // The round does not wait for its slowest search: once one search has a
-  // usable page the others get a short grace period, then are hung up on (a
-  // call that never answered is never billed). While it waits, the round also
+  // usable page the others get a short grace period, then are hung up on (they
+  // were sent, so they are still charged). While it waits, the round also
   // watches for Stop and hangs up on everything in flight when it is pressed.
   const runRound = async (tries: PlannedTry[]): Promise<RoundResult[]> => {
     const firstNumber = searchesStarted + 1;
@@ -472,7 +515,7 @@ export async function searchSourceUrls(input: SearchSourceUrlsInput): Promise<Se
       await Promise.all(
         tries.map(async (planned, index) => {
           try {
-            const outcome = await runSearch(input, firstNumber + index, costs, planned, controller.signal);
+            const outcome = await runSearch(input, firstNumber + index, costs, planned, controller.signal, stats);
             results[index] = { planned, outcome };
             if (outcome.sources.length > 0 && graceTimer === undefined && !controller.signal.aborted) {
               graceTimer = setTimeout(() => controller.abort(), graceMs);

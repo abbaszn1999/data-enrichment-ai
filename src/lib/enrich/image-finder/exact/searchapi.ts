@@ -34,12 +34,20 @@ export class SearchApiCallError extends Error {
   readonly billed: boolean;
   /** HTTP status of a non-200 answer; undefined for network errors, timeouts and error bodies. */
   readonly status?: number;
+  /**
+   * True when a request that was really sent was hung up on: the caller
+   * aborted it or its timeout fired. Not an error answer, so callers that
+   * charge per request sent still charge it. False for error answers,
+   * network failures and a call that never left.
+   */
+  readonly hungUp: boolean;
 
-  constructor(message: string, billed: boolean, status?: number) {
+  constructor(message: string, billed: boolean, status?: number, hungUp = false) {
     super(message);
     this.name = "SearchApiCallError";
     this.billed = billed;
     this.status = status;
+    this.hungUp = hungUp;
   }
 }
 
@@ -194,6 +202,8 @@ export async function requestSearchApi<T extends { search_metadata?: { status?: 
   signal?: AbortSignal
 ): Promise<{ data: T; httpStatus: number; elapsedMs: number }> {
   params.set("api_key", requireSearchApiKey());
+  // Already stopped: the request never leaves, so there is nothing to charge.
+  if (signal?.aborted) throw new SearchApiCallError("Web search cancelled", false);
 
   const startedAt = Date.now();
   const controller = new AbortController();
@@ -223,7 +233,9 @@ export async function requestSearchApi<T extends { search_metadata?: { status?: 
   } catch (error) {
     throw new SearchApiCallError(
       `Web search request failed: ${error instanceof Error ? error.message : String(error)}`,
-      false
+      false,
+      undefined,
+      controller.signal.aborted
     );
   } finally {
     // The timer only covers the wait for the answer to start; the caller's
@@ -237,7 +249,9 @@ export async function requestSearchApi<T extends { search_metadata?: { status?: 
   } catch (error) {
     throw new SearchApiCallError(
       `Web search response could not be read: ${error instanceof Error ? error.message : String(error)}`,
-      false
+      false,
+      undefined,
+      controller.signal.aborted
     );
   }
   if (!response.ok) {

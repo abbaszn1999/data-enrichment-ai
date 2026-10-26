@@ -11,7 +11,14 @@ import {
   buildSourceUrlsQuery,
 } from "./skill";
 import { EnrichCancelledError } from "../openai";
-import { searchSourceUrls, SOURCE_URLS_MAX_TRIES, SOURCE_URLS_TRIES_BUDGET_MS } from "./search";
+import {
+  searchSourceUrls,
+  SOURCE_URLS_CALL_TIMEOUT_MS,
+  SOURCE_URLS_GRACE_MS,
+  SOURCE_URLS_MAX_TRIES,
+  SOURCE_URLS_TRIES_BUDGET_MS,
+} from "./search";
+import { EnrichBilledAttemptError } from "../openai";
 
 const aiModeBody = (answer: string, referenceLinks: Array<{ link: string; title?: string }> = []) =>
   JSON.stringify({
@@ -277,7 +284,7 @@ describe("searchSourceUrls with a plan", () => {
     const OTHER = "https://www.mamasandpapas.com/products/check-jacket-other-s07fn6db4";
     const foundOther = () => aiModeBody(JSON.stringify({ sources: [{ url: OTHER, title: "Other" }] }));
 
-    it("hangs up on a search still waiting after the grace period once another has a page, and bills only the answered ones", async () => {
+    it("hangs up on a search still waiting after the grace period once another has a page, and still charges it, because it was sent", async () => {
       let calls = 0;
       const fetchMock = vi.fn((..._args: [string | URL, RequestInit?]) => {
         calls += 1;
@@ -289,9 +296,9 @@ describe("searchSourceUrls with a plan", () => {
       const result = await searchSourceUrls({ ...base, maxTries: 5, graceMs: 30 });
       expect(Date.now() - started).toBeLessThan(3000);
       expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
-      // Three searches in round 1, no round 2; the one hung up on is not billed.
+      // Three searches in round 1, no round 2; the one hung up on was sent, so it is charged too.
       expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(result.costs).toHaveLength(2);
+      expect(result.costs).toHaveLength(3);
       expect(result.attempts).toBe(2);
     });
 
@@ -335,6 +342,93 @@ describe("searchSourceUrls with a plan", () => {
       expect(Date.now() - started).toBeLessThan(3000);
       // Round 2 never started.
       expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("charges the requests already sent when Stop is pressed mid-flight", async () => {
+      vi.stubGlobal("fetch", vi.fn((..._args: [string | URL, RequestInit?]) => new Promise<Response>(() => {})));
+      let polls = 0;
+      const error = await searchSourceUrls({
+        ...base,
+        maxTries: 5,
+        cancelPollMs: 10,
+        shouldCancel: async () => ++polls >= 2,
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(EnrichCancelledError);
+      expect((error as EnrichCancelledError).costs).toHaveLength(3);
+    });
+
+    it("does not charge a request that came back as an error (500 or a network failure)", async () => {
+      let calls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (..._args: [string | URL, RequestInit?]) => {
+          calls += 1;
+          const mine = calls;
+          if (mine === 1) return new Response(found(), { status: 200 });
+          if (mine === 2) throw new TypeError("fetch failed");
+          return new Response("overloaded", { status: 503 });
+        })
+      );
+      const result = await searchSourceUrls({ ...base, maxTries: 3 });
+      expect(result.sources.map((s) => s.uri)).toEqual([PRODUCT]);
+      // Only the answered request is charged: the network failure, and the 503 with its one retry, are not.
+      expect(result.costs).toHaveLength(1);
+    });
+
+    it("charges nothing for a row where every request came back as an error", async () => {
+      vi.stubGlobal("fetch", vi.fn(async (..._args: [string | URL, RequestInit?]) => new Response("overloaded", { status: 503 })));
+      await expect(searchSourceUrls({ ...base, maxTries: 3 })).rejects.not.toBeInstanceOf(EnrichBilledAttemptError);
+    });
+
+    describe("with the clock under test control", () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it("counts down 15 s from the first usable page: merges what answers inside it, hangs up on the rest, charges all three", async () => {
+        const OTHER_PAGE = "https://www.mamasandpapas.com/products/check-jacket-other-s07fn6db4";
+        let calls = 0;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (..._args: [string | URL, RequestInit?]) => {
+            calls += 1;
+            const mine = calls;
+            if (mine === 1) return new Response(found(), { status: 200 });
+            // Call 2 answers at 14 s (inside the countdown), call 3 at 16 s (after it).
+            await new Promise((resolve) => setTimeout(resolve, mine === 2 ? 14_000 : 16_000));
+            return new Response(
+              aiModeBody(JSON.stringify({ sources: [{ url: mine === 2 ? OTHER_PAGE : "https://www.mamasandpapas.com/products/late", title: "x" }] })),
+              { status: 200 }
+            );
+          })
+        );
+        expect(SOURCE_URLS_GRACE_MS).toBe(15_000);
+        const pending = searchSourceUrls({ ...base, maxTries: 5 });
+        await vi.advanceTimersByTimeAsync(15_000);
+        const result = await pending;
+        expect(result.sources.map((s) => s.uri).sort()).toEqual([OTHER_PAGE, PRODUCT].sort());
+        expect(result.costs).toHaveLength(3);
+      });
+
+      it("cuts a request at 90 s with no page and charges it", async () => {
+        expect(SOURCE_URLS_CALL_TIMEOUT_MS).toBe(90_000);
+        vi.stubGlobal("fetch", vi.fn((..._args: [string | URL, RequestInit?]) => new Promise<Response>(() => {})));
+        const pending = searchSourceUrls({ ...base, maxTries: 3 }).catch((caught: unknown) => caught);
+        await vi.advanceTimersByTimeAsync(89_000);
+        let settled = false;
+        void pending.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1_500);
+        const error = await pending;
+        expect(error).toBeInstanceOf(EnrichBilledAttemptError);
+        expect((error as EnrichBilledAttemptError).costs).toHaveLength(3);
+      });
     });
   });
 
@@ -447,8 +541,8 @@ describe("the Source URLs column with a saved plan", () => {
 
 describe("the time a row can spend searching", () => {
   it("keeps even the worst last search inside the row limit, so no billed search is ever lost to a kill", () => {
-    // The last search may start at the budget and run four 120 s calls (photo, its retry, then without the photo and its retry) plus the 2 s pauses.
-    const worstLastSearchMs = 4 * 120_000 + 2 * 2_000;
+    // The last search may start at the budget and run four 90 s calls (photo, its retry, then without the photo and its retry) plus the 2 s pauses.
+    const worstLastSearchMs = 4 * SOURCE_URLS_CALL_TIMEOUT_MS + 2 * 2_000;
     expect(SOURCE_URLS_MAX_TRIES).toBe(5);
     expect(SOURCE_URLS_TRIES_BUDGET_MS + worstLastSearchMs).toBeLessThan(900_000);
   });
