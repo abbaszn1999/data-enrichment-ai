@@ -18,6 +18,7 @@ import {
 } from "./enrich-row";
 import { isImageFinderRun } from "@/lib/enrich/image-finder/agent";
 import { PRODUCT_MODE_COLUMN_IDS, SOURCE_URLS_COLUMN_ID } from "@/types";
+import { tagRowFailure, toolForRunColumns } from "@/lib/catalog/failed-rows";
 import { imageFinderNotFoundKey } from "@/lib/enrich/image-finder/not-found";
 import { SOURCE_URLS_SETUP_FAILURE_NOTE } from "@/lib/enrich/source-urls/agent";
 import { rowsNeedingRecheck, SheetDomainLearner } from "@/lib/enrich/image-finder/sheet-learning";
@@ -252,6 +253,8 @@ async function runCatalogWork(
   // rows. The final re-check of Not-found rows is billed under its own
   // `:recheck` key and runs the same agent again (see image-finder/agent.ts).
   const imageFinder = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns);
+  // A failed row says which tool it failed in, so each tool's retry button counts its own.
+  const failureTool = toolForRunColumns(settings.enabledColumns);
   const imageFinderRecheckEnabled = imageFinder;
   const learner = imageFinder
     ? SheetDomainLearner.fromRows(project.rows.filter((row) => row.status === "done"))
@@ -517,16 +520,19 @@ async function runCatalogWork(
             return [];
           }
           row.status = "error";
-          row.errorMessage = outcome.billed && charged?.ok
-            ? `${outcome.error} (${outcome.billed.credits} credits charged for the AI work already done)`
-            : outcome.error;
+          row.errorMessage = tagRowFailure(
+            failureTool,
+            outcome.billed && charged?.ok
+              ? `${outcome.error} (${outcome.billed.credits} credits charged for the AI work already done)`
+              : outcome.error
+          );
           failed += 1;
           processed.add(outcome.rowId);
           return [outcome.rowId];
         }
         if (charged && !charged.ok) {
           row.status = "error";
-          row.errorMessage = charged.error;
+          row.errorMessage = tagRowFailure(failureTool, charged.error);
           if (charged.noCredits) {
             // Do not mark as processed — a future run should retry this row
             // once credits are topped up.

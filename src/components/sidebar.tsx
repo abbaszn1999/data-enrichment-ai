@@ -90,6 +90,7 @@ import {
 import type { EnrichSettings } from "@/lib/enrich";
 import { IMAGE_FINDER_MAX_IMAGES } from "@/lib/enrich/image-finder/brief";
 import { listLensImageColumns } from "@/lib/enrich/lens/image-column";
+import { FAILED_TOOLS, failedInTool, type FailedTool } from "@/lib/catalog/failed-rows";
 import {
   categoryCountLabel,
   categoryFormatOption,
@@ -1247,13 +1248,19 @@ export function Sidebar() {
   }, [workspace?.id, sheetWorkspaceId, projectId, startEnrichPolling]);
 
   const doneCount = rows.filter((r) => r.status === "done").length;
-  const failedCount = rows.filter((r) => r.status === "error").length;
+  // The retry button counts only the rows that failed in the tool that is open
+  // (a row has one status for the whole sheet, so its error message names the tool).
+  const failedTool = (FAILED_TOOLS as readonly string[]).includes(activeTool?.label ?? "")
+    ? (activeTool?.label as FailedTool)
+    : null;
+  const failedCount = failedTool ? rows.filter((r) => failedInTool(r, failedTool)).length : 0;
   const handleRetryFailed = useCallback(() => {
-    const errorRows = rows.filter((r) => r.status === "error");
+    if (!failedTool) return;
+    const errorRows = rows.filter((r) => failedInTool(r, failedTool));
     for (const row of errorRows) {
       setRowStatus(row.id, "pending");
     }
-  }, [rows, setRowStatus]);
+  }, [rows, setRowStatus, failedTool]);
 
   const handleSavePreset = useCallback(() => {
     if (!workspace?.id) return;
@@ -2591,7 +2598,7 @@ export function Sidebar() {
             size="sm"
           >
             <RotateCcw className="h-3.5 w-3.5" />
-            Retry {failedCount} Failed Row{failedCount !== 1 ? "s" : ""}
+            Retry {failedCount} Failed {failedTool} Row{failedCount !== 1 ? "s" : ""}
           </Button>
         )}
 
