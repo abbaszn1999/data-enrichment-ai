@@ -29,6 +29,7 @@ import {
   FileEdit,
   FolderTree,
   Image as ImageIcon,
+  Globe,
   ScanSearch,
   Wrench,
   GripVertical,
@@ -149,13 +150,27 @@ function snapRailWidth(width: number): number {
   return Math.max(clamped, RAIL_NAMES_SNAP_WIDTH);
 }
 
-/** The tools in the left rail: a name the user can read, plus one line on what it does. */
-const SIDEBAR_MODES: { id: CatalogSidebarMode; label: string; hint: string; icon: LucideIcon }[] = [
-  { id: "enrich", label: "Enrichment", hint: "Titles, descriptions, AI text", icon: Sparkles },
-  { id: "categories", label: "Categorize", hint: "Assign store categories", icon: FolderTree },
-  { id: "images", label: "Source / Image Finder", hint: "Product pages and images", icon: ImageIcon },
-  { id: "lens", label: "Lens Source Checker", hint: "Find pages from a picture", icon: ScanSearch },
-  { id: "functions", label: "Sheet Tools", hint: "Bulk edits, prices, cleanup", icon: Wrench },
+/**
+ * One button of the left rail: a name the user can read, plus one line on what
+ * it does. The Source Finder and the Image Finder are two buttons over the same
+ * tool ("images"); the finder output saved with the sheet says which one is open.
+ */
+interface RailTool {
+  id: string;
+  mode: CatalogSidebarMode;
+  finder?: FinderOutput;
+  agentId: string;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+}
+const SIDEBAR_TOOLS: RailTool[] = [
+  { id: "enrich", mode: "enrich", agentId: "ci.mode.enrich", label: "Enrichment", hint: "Titles, descriptions, AI text", icon: Sparkles },
+  { id: "categories", mode: "categories", agentId: "ci.mode.categories", label: "Categorize", hint: "Assign store categories", icon: FolderTree },
+  { id: "sources", mode: "images", finder: "sourceUrls", agentId: "ci.mode.sources", label: "Source Finder", hint: "Product pages for each item", icon: Globe },
+  { id: "images", mode: "images", finder: "images", agentId: "ci.mode.images", label: "Image Finder", hint: "Product images", icon: ImageIcon },
+  { id: "lens", mode: "lens", agentId: "ci.mode.lens", label: "Lens Source Checker", hint: "Find pages from a picture", icon: ScanSearch },
+  { id: "functions", mode: "functions", agentId: "ci.mode.functions", label: "Sheet Tools", hint: "Bulk edits, prices, cleanup", icon: Wrench },
 ];
 
 /** The progress line of a running Source / Image Finder or Lens run, from the columns it generates. */
@@ -218,10 +233,12 @@ function FinderOutputCard({
   enabled: boolean;
   expanded: boolean;
   disabled?: boolean;
-  onToggle: () => void;
+  /** Switches the output on or off. Omitted when the tool itself is the choice: the card then only opens and closes. */
+  onToggle?: () => void;
   onExpand: () => void;
   children: React.ReactNode;
 }) {
+  const toggle = onToggle ?? onExpand;
   return (
     <div
       className={`rounded-md border transition-colors ${
@@ -232,11 +249,11 @@ function FinderOutputCard({
         <button
           type="button"
           className="shrink-0"
-          onClick={onToggle}
-          disabled={disabled}
+          onClick={toggle}
+          disabled={onToggle ? disabled : false}
           data-agent-id={agentId}
-          aria-pressed={enabled}
-          aria-label={enabled ? `Switch off ${label}` : `Switch on ${label}`}
+          aria-pressed={onToggle ? enabled : undefined}
+          aria-label={onToggle ? (enabled ? `Switch off ${label}` : `Switch on ${label}`) : label}
         >
           {enabled ? (
             <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
@@ -247,8 +264,8 @@ function FinderOutputCard({
         <button
           type="button"
           className="min-w-0 flex-1 truncate text-left text-[11px] font-medium leading-none"
-          onClick={onToggle}
-          disabled={disabled}
+          onClick={toggle}
+          disabled={onToggle ? disabled : false}
         >
           <span className={enabled ? "text-foreground" : "text-muted-foreground"}>{label}</span>
         </button>
@@ -360,6 +377,13 @@ export function Sidebar() {
   const runningMode = isEnriching
     ? catalogModeForRunColumns(enrichingTab, enrichingNewColumns)
     : null;
+  // The rail button that shows the running dot (the finder runs show it on Source Finder or Image Finder).
+  const runningToolId =
+    runningMode === "images"
+      ? enrichingNewColumns.includes(SOURCE_URLS_COLUMN_ID)
+        ? "sources"
+        : "images"
+      : runningMode;
   // Layout the user can change: the width of the settings panel and of the tool
   // rail (drag the right edge of either; the rail shows icons only when it is
   // narrow). Both are remembered in this browser; they are read after mount so
@@ -582,7 +606,7 @@ export function Sidebar() {
     mode === "enrich" || mode === "lens" || mode === "functions"
       ? null
       : enrichmentColumns.find((col) => col.id === PRODUCT_MODE_COLUMN_IDS[mode]) ?? null;
-  // Source / Image Finder tool: two outputs the user switches on or off, each with
+  // Source Finder and Image Finder tools: two outputs, one per tool, each with
   // its own custom instruction. Source URLs (Google AI Mode) is the `sourceUrls`
   // column; Images (Image Finder) is `modeColumn`, the Image URLs column, which
   // also owns the website rules. Kept with the sheet in the settings.
@@ -590,8 +614,15 @@ export function Sidebar() {
     mode === "images" ? enrichmentColumns.find((col) => col.id === SOURCE_URLS_COLUMN_ID) ?? null : null;
   // Lens is not a switch of this tool any more: it has its own tool, so a saved
   // "lens" here is ignored by the Source / Image Finder.
-  const finderOutputs: FinderOutput[] = (enrichmentSettings.finderOutputs ?? DEFAULT_FINDER_OUTPUTS).filter(
+  const savedFinderOutputs: FinderOutput[] = (enrichmentSettings.finderOutputs ?? DEFAULT_FINDER_OUTPUTS).filter(
     (output) => output !== "lens"
+  );
+  // The Source Finder and the Image Finder are two tools of the rail, so exactly
+  // one output is always open: a sheet saved with both off opens on Images.
+  const finderOutputs: FinderOutput[] = savedFinderOutputs.length > 0 ? savedFinderOutputs : [...DEFAULT_FINDER_OUTPUTS];
+  const activeFinder: FinderOutput = finderOutputs.includes("sourceUrls") ? "sourceUrls" : "images";
+  const activeTool = SIDEBAR_TOOLS.find(
+    (tool) => tool.mode === mode && (!tool.finder || tool.finder === activeFinder)
   );
   const runsSourceUrls = mode === "images" && !!sourceUrlsColumn && finderOutputs.includes("sourceUrls");
   const runsImages = mode === "images" && !!modeColumn && finderOutputs.includes("images");
@@ -599,29 +630,28 @@ export function Sidebar() {
   const lensColumn =
     mode === "lens" ? enrichmentColumns.find((col) => col.id === LENS_FOUNDS_COLUMN_ID) ?? null : null;
   const runsLens = mode === "lens" && !!lensColumn;
-  // Images and Source URLs never run together: switching one on replaces the
-  // other, and switching the one that is on turns both off.
-  const toggleFinderOutput = (output: FinderOutput) => {
-    updateSettings({ finderOutputs: finderOutputs.includes(output) ? [] : [output] });
-  };
-  // Opens a tool from the rail. Each tool starts with its own finder output
-  // saved, so a sheet reopens on what it was left on.
-  const selectMode = (next: CatalogSidebarMode) => {
-    if (next === "lens") {
-      if (enrichmentSettings.finderOutputs?.[0] !== "lens") updateSettings({ finderOutputs: ["lens"] });
-    } else if (next === "images" && enrichmentSettings.finderOutputs?.includes("lens")) {
-      updateSettings({ finderOutputs: [...DEFAULT_FINDER_OUTPUTS] });
-    }
-    setSidebarMode(next);
-    setSidebarOpen(true);
-  };
-  const toggleColumnExpanded = (id: string) =>
-    setExpandedColumns((prev) => {
+  // Images and Source URLs never run together: each has its own tool in the rail.
+  const [collapsedFinders, setCollapsedFinders] = useState<Set<string>>(new Set());
+  const toggleFinderCollapsed = (id: string) =>
+    setCollapsedFinders((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  // Opens a tool from the rail. Each tool starts with its own finder output
+  // saved, so a sheet reopens on what it was left on.
+  const selectMode = (next: CatalogSidebarMode, finder?: FinderOutput) => {
+    if (next === "lens") {
+      if (enrichmentSettings.finderOutputs?.[0] !== "lens") updateSettings({ finderOutputs: ["lens"] });
+    } else if (next === "images") {
+      const wanted: FinderOutput = finder ?? activeFinder;
+      const saved = enrichmentSettings.finderOutputs;
+      if (!saved || saved.length !== 1 || saved[0] !== wanted) updateSettings({ finderOutputs: [wanted] });
+    }
+    setSidebarMode(next);
+    setSidebarOpen(true);
+  };
   // Image Finder has no count to pick: it always gathers every distinct photo
   // of the exact item its sources show, up to IMAGE_FINDER_MAX_IMAGES.
   const [storeCategoryCount, setStoreCategoryCount] = useState<number | null>(null);
@@ -755,6 +785,22 @@ export function Sidebar() {
     const listed = new Set([...originalColumns, ...enrichedColumnsWithData.map((col) => col.id)]);
     return sourceColumns.filter((col) => listed.has(col));
   }, [enrichedColumnsWithData, originalColumns, sourceColumns]);
+
+  // Opening the Image Finder ticks the sheet's Source URLs column as a source
+  // (when it holds pages), once per visit: the agent then opens those pages
+  // first. The user can untick it; it is not ticked again until they come back.
+  const autoTickedSourceUrlsRef = useRef(false);
+  const inImageFinder = mode === "images" && activeFinder === "images";
+  const hasSourceUrlsData = enrichedColumnsWithData.some((col) => col.id === SOURCE_URLS_COLUMN_ID);
+  useEffect(() => {
+    if (!inImageFinder) {
+      autoTickedSourceUrlsRef.current = false;
+      return;
+    }
+    if (autoTickedSourceUrlsRef.current || !hasSourceUrlsData) return;
+    autoTickedSourceUrlsRef.current = true;
+    if (!sourceColumns.includes(SOURCE_URLS_COLUMN_ID)) toggleSourceColumn(SOURCE_URLS_COLUMN_ID);
+  }, [inImageFinder, hasSourceUrlsData, sourceColumns, toggleSourceColumn]);
 
   const applyStatusPayload = useCallback(
     (payload: {
@@ -1360,12 +1406,12 @@ export function Sidebar() {
                 <ScanSearch className="h-3.5 w-3.5 text-primary" />
               ) : mode === "functions" ? (
                 <Wrench className="h-3.5 w-3.5 text-primary" />
+              ) : mode === "images" && activeFinder === "sourceUrls" ? (
+                <Globe className="h-3.5 w-3.5 text-primary" />
               ) : (
                 <ImageIcon className="h-3.5 w-3.5 text-primary" />
               )}
-              <span className="text-[11px] font-semibold">
-                {SIDEBAR_MODES.find((entry) => entry.id === mode)?.label ?? "Source / Image Finder"}
-              </span>
+              <span className="text-[11px] font-semibold">{activeTool?.label ?? "Image Finder"}</span>
             </div>
           )}
           <Button
@@ -1896,29 +1942,36 @@ export function Sidebar() {
               <div className="flex items-center gap-2">
                 {mode === "lens" ? (
                   <ScanSearch className="h-4 w-4 text-primary" />
+                ) : activeFinder === "sourceUrls" ? (
+                  <Globe className="h-4 w-4 text-primary" />
                 ) : (
                   <ImageIcon className="h-4 w-4 text-primary" />
                 )}
                 <span className="text-xs font-semibold">
-                  {mode === "lens" ? "Find pages from a picture" : "Find on the web"}
+                  {mode === "lens"
+                    ? "Find pages from a picture"
+                    : activeFinder === "sourceUrls"
+                      ? "Find the product pages"
+                      : "Find the product images"}
                 </span>
               </div>
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 {mode === "lens"
                   ? "Sends one picture per row to Google Lens and writes the pages that show the same item to the Lens founds column. It runs on its own and does not use AI."
-                  : "Switch on what to find for each selected product. Each one has its own instructions."}
+                  : activeFinder === "sourceUrls"
+                    ? "Finds the web pages that sell each selected product. Set your instructions below."
+                    : "Finds images of each selected product on the web. Set your instructions below."}
               </p>
               <div className="space-y-0.5">
-                {sourceUrlsColumn && (
+                {sourceUrlsColumn && activeFinder === "sourceUrls" && (
                   <FinderOutputCard
                     agentId="ci.finder.source-urls"
                     label="Source URLs"
                     description="The web pages that sell this exact product: the brand's own site, factories and suppliers, wholesalers and retailers. Name the websites you want in the custom instruction. Written to the Source URLs column."
                     enabled={runsSourceUrls}
-                    expanded={expandedColumns.has(sourceUrlsColumn.id)}
+                    expanded={!collapsedFinders.has(sourceUrlsColumn.id)}
                     disabled={isEnriching}
-                    onToggle={() => toggleFinderOutput("sourceUrls")}
-                    onExpand={() => toggleColumnExpanded(sourceUrlsColumn.id)}
+                    onExpand={() => toggleFinderCollapsed(sourceUrlsColumn.id)}
                   >
                     <SourceUrlsMarketSettings
                       market={sourceUrlsColumn.sourceMarket}
@@ -2010,20 +2063,20 @@ export function Sidebar() {
                     </div>
                   </div>
                 )}
-                {modeColumn && (
+                {modeColumn && activeFinder === "images" && (
                   <FinderOutputCard
                     agentId="ci.finder.images"
                     label="Images"
                     description={`Finds the exact product on the web, starting from your Source URLs or Lens founds column (from the Lens Source Checker) when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
                     enabled={runsImages}
-                    expanded={expandedColumns.has(modeColumn.id)}
+                    expanded={!collapsedFinders.has(modeColumn.id)}
                     disabled={isEnriching}
-                    onToggle={() => toggleFinderOutput("images")}
-                    onExpand={() => toggleColumnExpanded(modeColumn.id)}
+                    onExpand={() => toggleFinderCollapsed(modeColumn.id)}
                   >
                     <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      For the best results, run Source URLs or the Lens Source Checker first, then tick that column
-                      as a source column. The agent opens those pages first and searches further only if none shows the item.
+                      For the best results, run the Source Finder or the Lens Source Checker first. The Source URLs column
+                      is ticked as a source column for you when the sheet has it (the Lens column you tick yourself). The
+                      agent opens those pages first and searches further only if none shows the item.
                     </p>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
@@ -2047,9 +2100,6 @@ export function Sidebar() {
                   </FinderOutputCard>
                 )}
               </div>
-              {mode === "images" && !runsSourceUrls && !runsImages && (
-                <p className="text-[10px] text-amber-600">Switch on one to run.</p>
-              )}
               {runsLens && !lensImageColumn && (
                 <p className="text-[10px] text-amber-600">
                   No picture column found. Pick the column that holds the product pictures under Source Columns.
@@ -2745,20 +2795,20 @@ export function Sidebar() {
         </div>
         <Separator className={railCollapsed ? "w-6" : undefined} />
         <div className={`flex flex-col gap-1 ${railCollapsed ? "items-center" : "px-2"}`}>
-          {SIDEBAR_MODES.map(({ id, label, hint, icon: Icon }) => {
-            const isActive = sidebarOpen && mode === id;
+          {SIDEBAR_TOOLS.map(({ id, mode: toolMode, finder, agentId, label, hint, icon: Icon }) => {
+            const isActive = sidebarOpen && mode === toolMode && (!finder || finder === activeFinder);
             return (
               <Fragment key={id}>
                 {/* Sheet Tools edits the sheet itself, so it sits apart from the tools that run searches and AI. */}
                 {id === "functions" && <Separator className={`my-1 ${railCollapsed ? "w-6" : ""}`} />}
               <button
                 type="button"
-                data-agent-id={`ci.mode.${id}`}
+                data-agent-id={agentId}
                 title={`${label}: ${hint}`}
                 aria-label={label}
                 aria-pressed={isActive}
                 // Opening a tool shows its panel; clicking the open one hides the panel to give the sheet room.
-                onClick={() => (isActive ? setSidebarOpen(false) : selectMode(id))}
+                onClick={() => (isActive ? setSidebarOpen(false) : selectMode(toolMode, finder))}
                 className={`relative flex rounded-md transition-colors ${
                   railCollapsed
                     ? "h-8 w-8 items-center justify-center"
@@ -2776,7 +2826,7 @@ export function Sidebar() {
                     <span className="mt-0.5 block text-[9px] leading-tight text-muted-foreground/80">{hint}</span>
                   </span>
                 )}
-                {runningMode === id && (
+                {runningToolId === id && (
                   <span
                     className={`absolute h-1.5 w-1.5 rounded-full bg-primary animate-pulse ${
                       railCollapsed ? "right-1 top-1" : "right-1.5 top-1.5"
