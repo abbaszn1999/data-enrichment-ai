@@ -2067,16 +2067,14 @@ export function Sidebar() {
                   <FinderOutputCard
                     agentId="ci.finder.images"
                     label="Images"
-                    description={`Finds the exact product on the web, starting from your Source URLs or Lens founds column (from the Lens Source Checker) when it is ticked as a source, and writes up to ${IMAGE_FINDER_MAX_IMAGES} of its images (angles, details, packaging, in use) to the Image URLs column, and the pages they came from to Image sources.`}
+                    description={`Finds up to ${IMAGE_FINDER_MAX_IMAGES} images of each exact product, and the pages they came from.`}
                     enabled={runsImages}
                     expanded={!collapsedFinders.has(modeColumn.id)}
                     disabled={isEnriching}
                     onExpand={() => toggleFinderCollapsed(modeColumn.id)}
                   >
                     <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      For the best results, run the Source Finder or the Lens Source Checker first. The Source URLs column
-                      is ticked as a source column for you when the sheet has it (the Lens column you tick yourself). The
-                      agent opens those pages first and searches further only if none shows the item.
+                      Best after the Source Finder: ticked source pages are opened first.
                     </p>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-medium text-muted-foreground">Custom instruction</label>
