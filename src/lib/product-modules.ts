@@ -17,7 +17,7 @@ export const STORE_ASSISTANT = {
   id: "store_assistant",
   label: "Store Assistant",
   routeSegment: "store-assistant",
-  apiBase: "/api/store-assistant",
+  apiBase: "/api/store-agent",
   creditOperation: "store_assistant",
   creditEntityType: "store_assistant",
 } as const;

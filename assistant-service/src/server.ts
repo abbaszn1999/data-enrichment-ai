@@ -9,6 +9,13 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, USER_HEADER, verifyRequest } from "
 import { RunLimitError, RunRegistry } from "./agent/bridge";
 import { ConversationOwners, executeRun, type RunnerDeps } from "./agent/runner";
 import { loadConfig, type ServiceConfig } from "./config";
+import { createClient } from "@supabase/supabase-js";
+import { SupabaseAgentStoreBackend } from "./store-agent/agent-store/supabase-backend";
+import { WriteBehindAgentStore } from "./store-agent/agent-store/write-behind-store";
+import { keepModelCatalogFresh } from "./store-agent/model-catalog";
+import { StoreAgentRegistry } from "./store-agent/run";
+import { createResilientFetch } from "./store-agent/resilient-fetch";
+import { mountStoreAgentRoutes, shutdownStoreAgent, sweepStoreAgent } from "./store-agent/routes";
 
 const encoder = new TextEncoder();
 const steerSchema = z.object({ runId: z.string().max(80), text: z.string().min(1).max(2000) });
@@ -177,6 +184,39 @@ function safeJson(body: string): unknown {
   }
 }
 
+/** Start the Store Agent on the app when it is configured. Returns its shutdown hook. */
+function startStoreAgent(app: Hono, config: ServiceConfig): (() => Promise<void>) | null {
+  if (!config.storeAgent) {
+    console.log("[store-agent] off (set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and INTEGRATION_ENCRYPTION_KEY)");
+    return null;
+  }
+  mkdirSync(config.storeAgent.workDir, { recursive: true });
+  const log = (message: string, extra?: unknown) => console.log(`[store-agent] ${message}`, extra ?? "");
+  const db = createClient(config.storeAgent.supabaseUrl, config.storeAgent.serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: createResilientFetch(fetch, log) },
+  });
+  const store = new WriteBehindAgentStore(new SupabaseAgentStoreBackend(db), log);
+  const registry = new StoreAgentRegistry();
+  const deps = {
+    db,
+    store,
+    registry,
+    log,
+    cursorApiKey: config.cursorApiKey,
+    workRoot: config.storeAgent.workDir,
+    serperApiKey: config.storeAgent.serperApiKey,
+    secret: config.secret,
+  };
+  mountStoreAgentRoutes(app, deps);
+  // Starting agents then never calls Cursor's rate-limited model list.
+  keepModelCatalogFresh(config.cursorApiKey, log);
+  void sweepStoreAgent(deps, { startup: true });
+  setInterval(() => void sweepStoreAgent(deps, { startup: false }), 60 * 60 * 1000).unref();
+  console.log(`[store-agent] on (work dir: ${config.storeAgent.workDir})`);
+  return () => shutdownStoreAgent(deps);
+}
+
 export async function startServer(config: ServiceConfig = loadConfig()) {
   mkdirSync(config.storeDir, { recursive: true });
   // SQLite appends one row per token. The JSONL store rewrites the whole log
@@ -192,7 +232,8 @@ export async function startServer(config: ServiceConfig = loadConfig()) {
     registry,
     runner: { config, owners, store, log: (message, extra) => console.log(`[assistant] ${message}`, extra ?? "") },
   });
+  const shutdownStore = startStoreAgent(app, config);
   const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host });
   console.log(`[assistant] listening on ${config.host}:${config.port} (billing: ${config.billingMode}, store: ${config.storeDir})`);
-  return server;
+  return { server, shutdown: async () => shutdownStore?.() };
 }

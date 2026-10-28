@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
+  Bot,
   Building2,
   Coins,
   CreditCard,
@@ -28,5 +29,6 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { href: adminRoutes.wallet(), label: "Wallet", icon: Wallet, group: "Money" },
   { href: adminRoutes.jobs(), label: "Jobs", icon: Activity, group: "Ops" },
   { href: adminRoutes.integrations(), label: "Integrations", icon: Plug, group: "Ops" },
+  { href: adminRoutes.storeAgent(), label: "Store Agent", icon: Bot, group: "Ops" },
   { href: adminRoutes.audit(), label: "Activity", icon: ScrollText, group: "Ops" },
 ];

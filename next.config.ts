@@ -68,6 +68,12 @@ const nextConfig: NextConfig = {
         permanent: false,
       },
       {
+        // The Store Agent was tested at this path before it replaced Store Assistant.
+        source: "/w/:slug/store-agent",
+        destination: "/w/:slug/store-assistant",
+        permanent: false,
+      },
+      {
         source: "/api/import/:path*",
         destination: "/api/catalog-intelligence/:path*",
         permanent: false,
@@ -79,7 +85,7 @@ const nextConfig: NextConfig = {
       },
       {
         source: "/api/sync/:path*",
-        destination: "/api/store-assistant/:path*",
+        destination: "/api/store-agent/:path*",
         permanent: false,
       },
       {

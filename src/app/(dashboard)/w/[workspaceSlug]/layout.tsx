@@ -56,7 +56,6 @@ import { useFaWallet } from "@/hooks/use-fa-wallet";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
 import { useWorkspaceStore } from "@/store/workspace-store";
-import { useSyncStore } from "@/store/sync-store";
 import { SubscriptionGate, SubscriptionBanner } from "@/components/subscription-gate";
 import { AutommerceLogo } from "@/components/brand/autommerce-logo";
 import { PageLoader } from "@/components/brand/page-loader";
@@ -112,9 +111,6 @@ export default function WorkspaceLayout({
   // `hasIntegration` (for Sync nav gating) now comes from the single
   // workspace-bootstrap request via useWorkspace — no separate fetch needed.
 
-  // Sync focus mode — hides header + sidebar when chat is active
-  const { isFocusMode: syncFocusMode } = useSyncStore();
-
   // Sync workspace into Zustand store so Sidebar and other components can access it
   const { setWorkspace: setStoreWorkspace, setRole: setStoreRole } = useWorkspaceStore();
   useEffect(() => {
@@ -133,6 +129,7 @@ export default function WorkspaceLayout({
   const isEnrichPage =
     /^\/w\/[^/]+\/catalog-intelligence\/[^/]+$/.test(pathname) &&
     !pathname.endsWith("/new");
+  // Store Assistant: full-height chat + workspace, without the workspace sidebar.
   const isSyncPage =
     pathname === `${basePath}/store-assistant` || pathname.startsWith(`${basePath}/store-assistant/`);
   const isMarketResearchPage = pathname.includes("/market-research");
@@ -148,7 +145,7 @@ export default function WorkspaceLayout({
     isProductsVisualizerProject ||
     isMarketResearchPage ||
     isWebsiteRestructurePage ||
-    (isSyncPage && syncFocusMode);
+    isSyncPage;
   // Immersive mode hides the top header — keep false so Enrich shows it
   const isImmersive = false;
   // Lock main content height so tool UIs (Enrich sidebar/table) scroll internally.

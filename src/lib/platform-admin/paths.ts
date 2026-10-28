@@ -41,4 +41,5 @@ export const adminRoutes = {
   jobs: () => adminPath("/jobs"),
   integrations: () => adminPath("/integrations"),
   audit: () => adminPath("/audit"),
+  storeAgent: () => adminPath("/store-agent"),
 } as const;
