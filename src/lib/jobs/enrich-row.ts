@@ -114,15 +114,29 @@ const GOOGLE_AI_MODE_MODEL = SEARCHAPI_GOOGLE_AI_MODE_MODEL;
 export const PROVIDER_UNAVAILABLE_JOB_ERROR =
   "AI service temporarily unavailable. Unfinished rows were charged only for AI work already done; run them again later.";
 
-/** The Image Finder's final re-check is a second billed pass, so it gets its own key. */
-export function catalogCreditIdempotencyKey(runId: string, rowId: string, recheck = false): string {
-  return `catalog_intelligence:${runId}:${rowId}${recheck ? ":recheck" : ""}`;
+/**
+ * The Image Finder's final re-check and the Source URLs second pass are further
+ * billed passes over the same row, so each gets its own key.
+ */
+export function catalogCreditIdempotencyKey(
+  runId: string,
+  rowId: string,
+  recheck = false,
+  sourceUrlsRetry = false
+): string {
+  return `catalog_intelligence:${runId}:${rowId}${recheck ? ":recheck" : ""}${sourceUrlsRetry ? ":urls-retry" : ""}`;
 }
 
 /** Extra context the Image Finder uses; ignored by other catalog modes. */
 export interface CatalogRowContext {
   learnedDomains?: string[];
   recheck?: boolean;
+  /**
+   * The Source URLs second pass over a row that was Not found: only the Source
+   * URLs column runs (nothing else is searched or re-written), with the run's
+   * fresh plan.
+   */
+  sourceUrlsRetry?: boolean;
 }
 
 /** Rows the user targeted, minus ones this same run already finished. `done` from an earlier run is not skipped. */
@@ -189,7 +203,7 @@ export async function processCatalogRow(params: {
         productData: lensRowData,
         sourceImageUrls,
         knownPages,
-        enabledColumns: settings.enabledColumns,
+        enabledColumns: params.context?.sourceUrlsRetry ? [SOURCE_URLS_COLUMN_ID] : settings.enabledColumns,
         enrichmentColumns: settings.enrichmentColumns.map((c) => ({
           id: c.id,
           label: c.label,
@@ -208,6 +222,7 @@ export async function processCatalogRow(params: {
           blockedDomains: c.blockedDomains,
           lensMatchScope: c.lensMatchScope,
           lensProductPagesOnly: c.lensProductPagesOnly,
+          sourceMarket: c.sourceMarket,
           writingTone: c.writingTone as WritingTone | undefined,
           contentLength: c.contentLength as ContentLength | undefined,
         })),
@@ -220,6 +235,7 @@ export async function processCatalogRow(params: {
         learnedDomains: params.context?.learnedDomains,
         recheck: params.context?.recheck,
         sourceUrlsMemo,
+        sourceUrlsPlan: settings.sourceUrlsPlan,
       });
       const billed = [...failedAttemptCosts, ...enriched.costs];
       const costs = sumCosts(billed);
@@ -308,6 +324,8 @@ export async function chargeCatalogRow(params: {
   billedAttempts?: number;
   settings: CatalogJobSettings;
   recheck?: boolean;
+  /** The charge of the Source URLs second pass (see CatalogRowContext). */
+  sourceUrlsRetry?: boolean;
   /** The row failed or was stopped; this charges only the AI calls already billed. */
   unfinished?: boolean;
   /** Per-provider breakdown stored with the charge (see usageDetails). */
@@ -325,8 +343,12 @@ export async function chargeCatalogRow(params: {
   const imageFinder = isImageFinderRun(params.settings.kind ?? "product", params.settings.enabledColumns);
   // The search is already done and billed to us (a Lens run has no other cost),
   // so a short balance is handled like the Image Finder's: take what is left and pause.
+  // Source URLs is the same: up to five billed searches are done before the
+  // row is charged, so a short balance must not turn that work into a free row.
   const keepsResultOnShortBalance =
-    imageFinder || isLensRun(params.settings.kind ?? "product", params.settings.enabledColumns);
+    imageFinder ||
+    isLensRun(params.settings.kind ?? "product", params.settings.enabledColumns) ||
+    usesGoogleSourceUrls(params.settings.kind ?? "product", params.settings.enabledColumns);
   const deduct = (amount: number, partial: boolean) =>
     deductCreditsIdempotent({
       ownerUserId: params.settings.ownerUserId,
@@ -336,13 +358,14 @@ export async function chargeCatalogRow(params: {
       operation: "catalog_intelligence",
       entityType: params.settings.kind === "plp" ? "catalog_plp_row" : "catalog_row",
       entityId: params.rowId,
-      idempotencyKey: catalogCreditIdempotencyKey(params.runId, params.rowId, params.recheck),
+      idempotencyKey: catalogCreditIdempotencyKey(params.runId, params.rowId, params.recheck, params.sourceUrlsRetry),
       details: {
         sessionId: params.sessionId,
         rowIndex: params.rowIndex,
         enrichmentModel: params.settings.enrichmentModel,
         model: catalogChargeModel(params.settings, imageFinder),
         ...(params.recheck ? { recheck: true } : {}),
+        ...(params.sourceUrlsRetry ? { sourceUrlsRetry: true } : {}),
         ...(params.unfinished ? { unfinished: true } : {}),
         billedAttempts: params.billedAttempts ?? 1,
         totalCost: params.cost,
@@ -419,6 +442,10 @@ export async function executeCatalogRow(
     // Each row runs as its own Render task, so it needs its own poll rather
     // than sharing the session worker's in-memory check.
     shouldCancel: () => isJobCancelRequested(admin, run.id),
-    context: { learnedDomains: input.learnedDomains, recheck: input.recheck },
+    context: {
+      learnedDomains: input.learnedDomains,
+      recheck: input.recheck,
+      sourceUrlsRetry: input.sourceUrlsRetry,
+    },
   });
 }

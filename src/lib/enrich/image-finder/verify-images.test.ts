@@ -232,6 +232,25 @@ describe("keepLoadableImages", () => {
     expect(result.unverified).toBe(1);
   }, 15_000);
 
+  it("counts what the load check dropped, and can require confirmation for page-like links", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("gone")) return Promise.resolve(new Response(null, { status: 404 }));
+        return Promise.resolve(new Response(null, { status: 403 }));
+      })
+    );
+    const result = await keepLoadableImages(
+      [candidate("https://cdn.test/gone.jpg"), candidate("https://cdn.test/gallery.html"), candidate("https://cdn.test/medias/?id=1")],
+      10,
+      { requireConfirmed: (c) => c.imageUrl.endsWith(".html") }
+    );
+    // The page-like link that only refused our server is dropped; the unusual-looking one is kept as unverified.
+    expect(result.images.map((i) => i.imageUrl)).toEqual(["https://cdn.test/medias/?id=1"]);
+    expect(result.unverified).toBe(1);
+    expect(result.failed).toBe(2);
+  }, 15_000);
+
   it("falls back to the percent-decoded link when only that one loads", async () => {
     vi.stubGlobal(
       "fetch",

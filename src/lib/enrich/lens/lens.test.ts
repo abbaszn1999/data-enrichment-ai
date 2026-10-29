@@ -12,7 +12,7 @@ vi.mock("./searchapi-lens", async (importOriginal) => ({
 
 const { findLensMatches, searchLensMatches } = await import("./agent");
 const { parseLensMatches } = await import("./searchapi-lens");
-const { detectLensImageColumn, lensImageForRow, lensImagesFromCell } = await import("./image-column");
+const { detectLensImageColumn, listLensImageColumns, lensImageForRow, lensImagesFromCell } = await import("./image-column");
 const { isLensRun, lensRunConflict } = await import("./run");
 const { normalizeFinderOutputs } = await import("@/types");
 
@@ -282,5 +282,14 @@ describe("Lens picture column", () => {
   it("does not take a text column that only mentions a page link", () => {
     expect(detectLensImageColumn([row({ Notes: "see https://x.test/page" })], ["Notes"])).toBeNull();
     expect(detectLensImageColumn([row({ "Image Src": "https://cdn.test/img?id=1" })], ["Image Src"])).toBe("Image Src");
+  });
+
+  it("lists every picture column for the dropdown, sheet columns first, then Image URLs", () => {
+    const rows = [
+      row({ Name: "A", Front: "vz-storage:w/a.png", Back: "vz-storage:w/b.png", Notes: "see https://x.test/page" }),
+      row({ Name: "B", Front: "vz-storage:w/c.png", Back: "vz-storage:w/d.png", Notes: "" }),
+    ];
+    expect(listLensImageColumns(rows, ["Name", "Front", "Back", "Notes"], ["imageUrls"])).toEqual(["Front", "Back", "imageUrls"]);
+    expect(listLensImageColumns(rows, ["Name", "Notes"])).toEqual([]);
   });
 });

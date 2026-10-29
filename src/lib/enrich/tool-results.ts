@@ -26,7 +26,7 @@ export function looksLikeDirectImageUrl(url: string): boolean {
     if (/\.(jpe?g|png|webp|gif|avif|bmp|svg)(\?|$)/i.test(path)) return true;
     // CDN / search image endpoints often omit extensions
     if (
-      /\/(images?|img|media|cdn|static|assets|product-images?)(\/|$)/i.test(
+      /\/(images?|img|imgs|media|medias|cdn|static|assets|product-?images?|photos?|pictures?|uploads?|files|content\/dam|getimage)(\/|$)/i.test(
         path
       ) &&
       !path.endsWith(".html") &&
@@ -39,6 +39,22 @@ export function looksLikeDirectImageUrl(url: string): boolean {
     return false;
   } catch {
     return false;
+  }
+}
+
+/**
+ * A link that is plainly a web page, not a picture: no path (a home page) or a
+ * path that ends in a page extension. This is the only thing worth refusing
+ * before the load check, because a shop's image address can look like anything
+ * (`/medias/?context=...`, `/getImage?id=12`); whether it really is an image is
+ * decided by loading it, never by guessing from the text of the link.
+ */
+export function looksLikeWebPageUrl(url: string): boolean {
+  try {
+    const path = new URL(url.trim()).pathname.toLowerCase();
+    return path === "" || path === "/" || /\.(html?|php|aspx?|jsp|cfm)$/i.test(path);
+  } catch {
+    return true;
   }
 }
 
@@ -63,8 +79,10 @@ export function collectToolImages(response: OpenAiResponse): ImageUrl[] {
         : /^https:\/\//i.test(thumb)
           ? thumb
           : "";
-      // Reject HTML/page URLs even if they appear in image_url
-      if (!candidate || !looksLikeDirectImageUrl(candidate)) continue;
+      // The tool typed this as an image. Do not guess from the path
+      // (`/medias/?context=…` is a real picture on SAP shops). Refuse only a
+      // link that is plainly a web page.
+      if (!candidate || looksLikeWebPageUrl(candidate)) continue;
       const imageUrl = candidate;
       const key = imageUrl.toLowerCase();
       if (seen.has(key)) continue;
@@ -162,14 +180,27 @@ export function pickImagesFromSelection(
   return out;
 }
 
-/** URLs the hosted web_search tool actually opened (`open_page` / `find_in_page`) in this response. */
+/**
+ * Pages the model used in this response: `open_page` / `find_in_page`, and
+ * `url_citation` annotations (the pages it named in the answer). Search-result
+ * lists are not included — those were not opened.
+ */
 export function collectOpenedPages(response: OpenAiResponse): string[] {
   const pages: string[] = [];
+  const add = (raw: string | undefined) => {
+    const url = String(raw ?? "").trim();
+    if (/^https?:\/\//i.test(url)) pages.push(url);
+  };
   for (const output of response.output ?? []) {
-    if (output.type !== "web_search_call") continue;
-    const action = output.action;
-    if ((action?.type === "open_page" || action?.type === "find_in_page") && action.url) {
-      pages.push(action.url);
+    if (output.type === "web_search_call") {
+      const action = output.action;
+      if (action?.type === "open_page" || action?.type === "find_in_page") add(action.url);
+    }
+    for (const content of output.content ?? []) {
+      for (const annotation of content.annotations ?? []) {
+        if (annotation.type && annotation.type !== "url_citation") continue;
+        add(annotation.url);
+      }
     }
   }
   return pages;

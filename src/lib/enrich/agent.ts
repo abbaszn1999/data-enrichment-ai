@@ -22,7 +22,7 @@ import { findProductImages, isImageFinderRun } from "./image-finder/agent";
 import { imageFinderNotFoundKey } from "./image-finder/not-found";
 import { classifyProductCategories, isCategoriesModeRun } from "./categories-agent";
 import { SOURCE_URLS_COLUMN_ID } from "@/types";
-import { findSourceUrls, usesGoogleSourceUrls } from "./source-urls/agent";
+import { findSourceUrls, SOURCE_URLS_SETUP_FAILURE_NOTE, usesGoogleSourceUrls } from "./source-urls/agent";
 import { findLensMatches } from "./lens/agent";
 import { isLensRun } from "./lens/run";
 
@@ -62,11 +62,38 @@ export async function enrichRow(
   // side, so the row takes as long as the slower of the two.
   if (usesGoogleSourceUrls(kind, enabledColumns)) {
     const others = enabledColumns.filter((id) => id !== SOURCE_URLS_COLUMN_ID);
-    if (others.length === 0) return findSourceUrls(params);
+    if (others.length === 0) return findSourceUrlsOnce(params);
     return withGoogleSourceUrls(params, () => enrichWithOpenAi(params, others));
   }
 
   return enrichWithOpenAi(params, enabledColumns);
+}
+
+/**
+ * The Source URLs search for one row, at most once per row however many times
+ * the row is attempted. A search that answered is reused (its cost was charged
+ * with the attempt that made it). One that failed is not run again: the next
+ * attempt fails at once with the same message. A failed search is already
+ * tried twice (each call is retried once) and across different wordings, so
+ * a second whole attempt would only repeat the same failing calls for minutes,
+ * and a row can never bill more than one search plan (up to five searches) in
+ * total. The user can run the failed row again later.
+ */
+async function findSourceUrlsOnce(params: EnrichAgentParams): Promise<EnrichAgentResult> {
+  const memo = params.sourceUrlsMemo;
+  // Charged with the earlier attempt that produced it: never charge it twice.
+  if (memo?.result) return { data: memo.result.data, costs: [] };
+  if (memo?.failure !== undefined) throw new Error(memo.failure);
+  try {
+    const result = await findSourceUrls(params);
+    if (memo) memo.result = result;
+    return result;
+  } catch (error) {
+    if (memo && !(error instanceof EnrichCancelledError)) {
+      memo.failure = error instanceof Error ? error.message : String(error);
+    }
+    throw error;
+  }
 }
 
 /** Adds costs the OpenAI side billed (or Google billed) to an error so the row is still charged for them. */
@@ -93,15 +120,7 @@ async function withGoogleSourceUrls(
   params: EnrichAgentParams,
   runMain: () => Promise<EnrichAgentResult>
 ): Promise<EnrichAgentResult> {
-  const memo = params.sourceUrlsMemo;
-  const cached = memo?.result;
-  const googleTask: Promise<EnrichAgentResult> = cached
-    ? // Charged with the earlier attempt that produced it: never charge it twice.
-      Promise.resolve({ data: cached.data, costs: [] })
-    : findSourceUrls(params).then((result) => {
-        if (memo) memo.result = result;
-        return result;
-      });
+  const googleTask = findSourceUrlsOnce(params);
   const [main, sources] = await Promise.allSettled([runMain(), googleTask]);
 
   if (main.status === "rejected") {
@@ -124,7 +143,7 @@ async function withGoogleSourceUrls(
       data: {
         ...main.value.data,
         [SOURCE_URLS_COLUMN_ID]: [],
-        [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: `The web search failed, so no pages were found. Run this column again. (${hideProviderNames(message.slice(0, 200))})`,
+        [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: `${SOURCE_URLS_SETUP_FAILURE_NOTE} Run this column again. (${hideProviderNames(message.slice(0, 200))})`,
       },
       costs: [...main.value.costs, ...billedCostsOf(sources.reason)],
     };

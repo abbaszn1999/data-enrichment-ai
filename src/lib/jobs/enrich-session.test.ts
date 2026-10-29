@@ -128,7 +128,7 @@ describe("runEnrichSession charges exactly what OpenAI billed, whatever the outc
     const row = project.current!.rows[0]!;
     expect(row.status).toBe("error");
     expect(row.errorMessage).toBe(
-      "OpenAI enrich returned no parseable JSON output (1.25 credits charged for the AI work already done)"
+      "Image Finder: OpenAI enrich returned no parseable JSON output (1.25 credits charged for the AI work already done)"
     );
   });
 
@@ -147,7 +147,7 @@ describe("runEnrichSession charges exactly what OpenAI billed, whatever the outc
   it("charges nothing when OpenAI billed nothing", async () => {
     await run({ ok: false, rowId: "r1", error: "fetch failed" });
     expect(chargeCatalogRow).not.toHaveBeenCalled();
-    expect(project.current!.rows[0]!.errorMessage).toBe("fetch failed");
+    expect(project.current!.rows[0]!.errorMessage).toBe("Image Finder: fetch failed");
   });
 
   it("pauses the job when the customer has no credits left to pay for a failed row's billed work", async () => {
@@ -267,7 +267,7 @@ describe("runEnrichSession lifecycle guarantees", () => {
     });
     await runEnrichSession("run-1", { processRow });
     expect(rows.map((row) => row.status)).toEqual(["done", "error", "done"]);
-    expect(rows[1]!.errorMessage).toBe("row task exhausted its retries");
+    expect(rows[1]!.errorMessage).toBe("Image Finder: row task exhausted its retries");
     expect(repo.finishJobRun).toHaveBeenCalledWith(
       expect.anything(),
       "run-1",

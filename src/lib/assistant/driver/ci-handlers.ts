@@ -44,11 +44,11 @@ function toolSummary(state: ReturnType<typeof requireSheet>) {
     };
   }
   if (mode === "images") {
-    const output = (state.enrichmentSettings.finderOutputs ?? DEFAULT_FINDER_OUTPUTS).find((o) => o !== "lens") ?? null;
+    const output = (state.enrichmentSettings.finderOutputs ?? DEFAULT_FINDER_OUTPUTS).find((o) => o !== "lens") ?? "images";
     return {
-      tool: "Source / Image Finder",
-      willRun: output === "sourceUrls" ? [label(SOURCE_URLS_COLUMN_ID)] : output === "images" ? [label(PRODUCT_MODE_COLUMN_IDS.images)] : [],
-      finderOutput: output ?? "none",
+      tool: output === "sourceUrls" ? "Source Finder" : "Image Finder",
+      willRun: output === "sourceUrls" ? [label(SOURCE_URLS_COLUMN_ID)] : [label(PRODUCT_MODE_COLUMN_IDS.images)],
+      finderOutput: output,
       sourceColumns: sources,
     };
   }

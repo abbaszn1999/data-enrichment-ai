@@ -47,15 +47,17 @@ export function lensRowText(row: LensRowLike, pictureColumn: string | undefined)
 }
 
 /**
- * The first column that looks like it holds the product pictures: a sheet
- * column where most filled cells hold a pasted picture or an image link, then
- * the Image URLs column Image Finder wrote. Null when nothing looks like one.
+ * Every column that looks like it holds the product pictures, best first: the
+ * sheet columns where most filled cells hold a pasted picture or an image link,
+ * then the Image URLs column Image Finder wrote. These are the choices of the
+ * Lens picture-column dropdown.
  */
-export function detectLensImageColumn(
+export function listLensImageColumns(
   rows: readonly LensRowLike[],
   originalColumns: readonly string[],
   aiColumnIds: readonly string[] = []
-): string | null {
+): string[] {
+  const found: string[] = [];
   for (const column of originalColumns) {
     let filled = 0;
     let withImage = 0;
@@ -68,9 +70,21 @@ export function detectLensImageColumn(
       if (imageUrlsFromText(column, text).length > 0) withImage += 1;
       if (filled >= DETECT_SAMPLE_SIZE) break;
     }
-    if (filled > 0 && withImage / filled >= DETECT_MIN_SHARE) return column;
+    if (filled > 0 && withImage / filled >= DETECT_MIN_SHARE) found.push(column);
   }
   const imageFinder = PRODUCT_MODE_COLUMN_IDS.images;
-  if (aiColumnIds.includes(imageFinder)) return imageFinder;
-  return null;
+  if (aiColumnIds.includes(imageFinder)) found.push(imageFinder);
+  return found;
+}
+
+/**
+ * The column Lens uses when the user has not picked one: the first of
+ * `listLensImageColumns`. Null when nothing looks like a picture column.
+ */
+export function detectLensImageColumn(
+  rows: readonly LensRowLike[],
+  originalColumns: readonly string[],
+  aiColumnIds: readonly string[] = []
+): string | null {
+  return listLensImageColumns(rows, originalColumns, aiColumnIds)[0] ?? null;
 }

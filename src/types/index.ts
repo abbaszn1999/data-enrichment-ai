@@ -88,9 +88,14 @@ export interface EnrichmentColumn {
   blockedDomains?: string[]; // Image Finder: never use these websites (max 100)
   lensMatchScope?: LensMatchScope; // Lens founds: exact matches only (default), exact plus visual matches, or shop listings
   lensProductPagesOnly?: boolean; // Lens founds: drop videos, social, review and category pages (default on)
+  sourceMarket?: string; // Source URLs: country to search from (lowercase ISO code, e.g. "gb"); "none" = any country; empty or "none" = any country
   writingTone?: WritingTone; // Per-column writing tone (for text columns)
   contentLength?: ContentLength; // Per-column content length (for text columns)
 }
+
+/** The Source URLs column's starting instruction. A site-targeted search skips it (it asks for retailers, not one website). */
+export const DEFAULT_SOURCE_URLS_INSTRUCTION =
+  "Return the manufacturer's own product page first, then trusted retailers that sell this exact item. Only real, working product pages.";
 
 export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
   // A new sheet starts with every Enrichment column switched off; they are
@@ -147,8 +152,7 @@ export const DEFAULT_ENRICHMENT_COLUMNS: EnrichmentColumn[] = [
     // Image URLs, `enabled` only controls whether the column shows in the grid,
     // and it appears once it has been generated. See lib/enrich/source-urls.
     enabled: false,
-    customInstruction:
-      "Return the manufacturer's own product page first, then trusted retailers that sell this exact item. Only real, working product pages.",
+    customInstruction: DEFAULT_SOURCE_URLS_INSTRUCTION,
   },
   {
     id: "categories",

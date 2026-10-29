@@ -17,8 +17,14 @@ import {
   type EnrichRowOutcome,
 } from "./enrich-row";
 import { isImageFinderRun } from "@/lib/enrich/image-finder/agent";
-import { PRODUCT_MODE_COLUMN_IDS } from "@/types";
+import { PRODUCT_MODE_COLUMN_IDS, SOURCE_URLS_COLUMN_ID } from "@/types";
+import { tagRowFailure, toolForRunColumns } from "@/lib/catalog/failed-rows";
+import { imageFinderNotFoundKey } from "@/lib/enrich/image-finder/not-found";
+import { SOURCE_URLS_SETUP_FAILURE_NOTE } from "@/lib/enrich/source-urls/agent";
 import { rowsNeedingRecheck, SheetDomainLearner } from "@/lib/enrich/image-finder/sheet-learning";
+import { isInsufficientCredits } from "./credits";
+import { readStoredPlan } from "@/lib/enrich/source-urls/plan";
+import { chargeSourceUrlsPlan, needsSourceUrlsPlan, prepareSourceUrlsPlan } from "./source-urls-plan";
 import { runJobWithFailureGuard } from "./guard";
 import { notifyJobEvent } from "./notify";
 import {
@@ -56,6 +62,36 @@ function splitEnriched(data: Record<string, unknown>): {
     }
   }
   return { enriched, originalPatches };
+}
+
+/**
+ * Writes a row's new results over its old ones. One exception: a Source URLs
+ * search that found nothing never empties a cell that already holds links (a
+ * re-run that misses must not delete what an earlier run found).
+ */
+export function mergeKeepingSourceUrls(
+  existing: Record<string, unknown> | undefined,
+  incoming: Record<string, unknown>
+): Record<string, unknown> {
+  const merged = { ...(existing ?? {}), ...incoming };
+  const incomingLinks = incoming[SOURCE_URLS_COLUMN_ID];
+  const oldLinks = existing?.[SOURCE_URLS_COLUMN_ID];
+  if (Array.isArray(incomingLinks) && incomingLinks.length === 0 && Array.isArray(oldLinks) && oldLinks.length > 0) {
+    const noteKey = imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID);
+    merged[SOURCE_URLS_COLUMN_ID] = oldLinks;
+    if (existing && noteKey in existing) merged[noteKey] = existing[noteKey];
+    else delete merged[noteKey];
+  }
+  return merged;
+}
+
+/** A finished row whose Source URLs search found nothing for this item (not one that could not run at all). */
+function isSourceUrlsMiss(row: { status?: string; enrichedData?: Record<string, unknown> }): boolean {
+  if (row.status !== "done") return false;
+  const links = row.enrichedData?.[SOURCE_URLS_COLUMN_ID];
+  if (!Array.isArray(links) || links.length > 0) return false;
+  const note = String(row.enrichedData?.[imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)] ?? "");
+  return !note.startsWith(SOURCE_URLS_SETUP_FAILURE_NOTE);
 }
 
 /**
@@ -217,6 +253,8 @@ async function runCatalogWork(
   // rows. The final re-check of Not-found rows is billed under its own
   // `:recheck` key and runs the same agent again (see image-finder/agent.ts).
   const imageFinder = isImageFinderRun(settings.kind ?? "product", settings.enabledColumns);
+  // A failed row says which tool it failed in, so each tool's retry button counts its own.
+  const failureTool = toolForRunColumns(settings.enabledColumns);
   const imageFinderRecheckEnabled = imageFinder;
   const learner = imageFinder
     ? SheetDomainLearner.fromRows(project.rows.filter((row) => row.status === "done"))
@@ -271,7 +309,7 @@ async function runCatalogWork(
    * billed before it ended. Returns null when there is nothing to charge.
    * Idempotent per run and row, so a retry never double-charges.
    */
-  const chargeRow = async (outcome: EnrichRowOutcome, recheck: boolean) => {
+  const chargeRow = async (outcome: EnrichRowOutcome, recheck: boolean, sourceUrlsRetry = false) => {
     const usage = outcome.ok ? outcome : outcome.billed;
     if (!usage) return null;
     try {
@@ -289,6 +327,7 @@ async function runCatalogWork(
           details: usage.details,
           settings,
           recheck,
+          sourceUrlsRetry,
           ...(outcome.ok ? {} : { unfinished: true }),
         })
       );
@@ -368,6 +407,76 @@ async function runCatalogWork(
     }
   };
 
+  /**
+   * Source URLs plan. ONE planner call turns the owner's instruction (or, with
+   * none, the ticked columns) into the search requests every row will use. Order matters:
+   * the plan is saved first (rows read it from the saved settings), then its
+   * cost is charged once under its own key. A crash between the two is safe:
+   * a resume finds the saved plan and charges again with the same key, which
+   * changes nothing if the first charge went through.
+   */
+  const savePlan = () => withRetry("plan save", () => touchJobHeartbeat(admin, run.id, { settings }, workerToken));
+  const runSourceUrlsPlanning = async () => {
+    let plan = readStoredPlan(settings.sourceUrlsPlan);
+    if (!plan) {
+      plan = await prepareSourceUrlsPlan({
+        settings,
+        rows: pending.map((id) => byId.get(id)).filter((row): row is NonNullable<typeof row> => Boolean(row)),
+        shouldCancel: async () => (await readControl()).stop,
+      });
+      settings.sourceUrlsPlan = plan;
+      try {
+        if (!(await savePlan())) superseded = true;
+      } catch (error) {
+        // Rows would not see a plan that is not saved, so it must not be charged either.
+        fatalError = `Could not save the search plan: ${error instanceof Error ? error.message : String(error)}`;
+        console.error("[jobs/catalog] plan save failed after retries", { runId: run.id, fatalError });
+        return;
+      }
+    }
+    await settlePlan(plan);
+  };
+  /** Charges a saved plan's planner call once (under the key of its pass); see chargeSourceUrlsPlan. */
+  const settlePlan = async (plan: NonNullable<ReturnType<typeof readStoredPlan>>) => {
+    const billing = plan.billing;
+    if (!billing || billing.settled) return;
+    const settlement = await chargeSourceUrlsPlan({
+      runId: run.id,
+      sessionId: run.session_id,
+      workspaceId: run.workspace_id,
+      settings,
+      plan,
+      retry: settings.sourceUrlsRetryStarted === true,
+    });
+    if (!settlement) return;
+    if (settlement.billingError && !isInsufficientCredits(settlement.billingError)) {
+      // A database problem, not an empty balance: the plan stays unsettled so a resume charges it, and the run goes on.
+      console.error("[jobs/catalog] plan charge failed", { runId: run.id, message: settlement.billingError });
+      return;
+    }
+    plan.billing = { ...billing, settled: true };
+    settings.sourceUrlsPlan = plan;
+    await savePlan().catch((error) =>
+      console.error("[jobs/catalog] could not mark the plan charge as settled", { runId: run.id, error })
+    );
+    if (settlement.balanceExhausted) {
+      // The planner's cost took the last of the balance: no row can be paid for, so pause before starting any.
+      pausedNoCredits = true;
+      stopObserved = true;
+    }
+  };
+  if (pending.length > 0 && needsSourceUrlsPlan(settings)) {
+    try {
+      await runSourceUrlsPlanning();
+    } catch (error) {
+      // Planning is never a reason to lose the run: without a plan every row asks the default query.
+      console.error("[jobs/catalog] Source URLs planning failed", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   let nextIndex = 0;
   const worker = async () => {
     while (true) {
@@ -411,16 +520,19 @@ async function runCatalogWork(
             return [];
           }
           row.status = "error";
-          row.errorMessage = outcome.billed && charged?.ok
-            ? `${outcome.error} (${outcome.billed.credits} credits charged for the AI work already done)`
-            : outcome.error;
+          row.errorMessage = tagRowFailure(
+            failureTool,
+            outcome.billed && charged?.ok
+              ? `${outcome.error} (${outcome.billed.credits} credits charged for the AI work already done)`
+              : outcome.error
+          );
           failed += 1;
           processed.add(outcome.rowId);
           return [outcome.rowId];
         }
         if (charged && !charged.ok) {
           row.status = "error";
-          row.errorMessage = charged.error;
+          row.errorMessage = tagRowFailure(failureTool, charged.error);
           if (charged.noCredits) {
             // Do not mark as processed — a future run should retry this row
             // once credits are topped up.
@@ -445,7 +557,7 @@ async function runCatalogWork(
           row.originalData = { ...row.originalData, ...split.originalPatches };
         }
         if (Object.keys(split.enriched).length > 0) {
-          row.enrichedData = { ...(row.enrichedData ?? {}), ...split.enriched };
+          row.enrichedData = mergeKeepingSourceUrls(row.enrichedData, split.enriched);
         }
         row.status = "done";
         row.errorMessage = undefined;
@@ -467,9 +579,106 @@ async function runCatalogWork(
   }
   await writeQueue.catch(() => undefined);
 
+  if (!shouldHalt()) {
+    await retryNotFoundSourceUrls();
+    await writeQueue.catch(() => undefined);
+  }
+
   if (imageFinderRecheckEnabled && learner && !shouldHalt()) {
     await recheckNotFoundRows();
     await writeQueue.catch(() => undefined);
+  }
+
+  /**
+   * Source URLs second pass, once, when every row has had its turn: the rows of
+   * this run that ended "Not found" (whatever the reason) get a fresh planner
+   * call, written from those rows alone, and the whole search again (template
+   * A three times, then B and C). A row still not found stays "Not found".
+   * Only the Source URLs column runs; nothing else on the row is touched. Each
+   * row is charged for the requests it sends under its own `:urls-retry` key and
+   * the new plan under `:plan:retry`. Stop skips or ends the pass.
+   */
+  async function retryNotFoundSourceUrls(): Promise<void> {
+    if (!needsSourceUrlsPlan(settings)) return;
+    const retried = new Set((settings.sourceUrlsRetriedIds ?? []).map(String));
+    const candidateIds = [...processed].filter((id) => {
+      const row = byId.get(id);
+      return !retried.has(id) && row !== undefined && isSourceUrlsMiss(row);
+    });
+    if (candidateIds.length === 0) return;
+
+    if (!settings.sourceUrlsRetryStarted) {
+      const previous = readStoredPlan(settings.sourceUrlsPlan);
+      const fresh = await prepareSourceUrlsPlan({
+        settings,
+        rows: candidateIds.map((id) => byId.get(id)).filter((row): row is NonNullable<typeof row> => Boolean(row)),
+        shouldCancel: async () => (await readControl()).stop,
+      }).catch(() => null);
+      if (!fresh) return;
+      // A planner that failed would give the default query, worse than the plan the run already has:
+      // keep the old plan, and still charge whatever the failed call billed.
+      settings.sourceUrlsPlan = fresh.source === "planner" || !previous ? fresh : { ...previous, billing: fresh.billing };
+      settings.sourceUrlsRetryStarted = true;
+      try {
+        if (!(await savePlan())) {
+          superseded = true;
+          return;
+        }
+      } catch (error) {
+        fatalError = `Could not save the search plan: ${error instanceof Error ? error.message : String(error)}`;
+        console.error("[jobs/catalog] second-pass plan save failed after retries", { runId: run.id, fatalError });
+        return;
+      }
+    }
+    const plan = readStoredPlan(settings.sourceUrlsPlan);
+    if (plan) await settlePlan(plan).catch((error) =>
+      console.error("[jobs/catalog] second-pass plan charge failed", { runId: run.id, error })
+    );
+    if (shouldHalt()) return;
+    console.log("[jobs/catalog] Source URLs second pass", { runId: run.id, rows: candidateIds.length });
+
+    let next = 0;
+    const retryWorker = async () => {
+      while (!shouldHalt()) {
+        await readControl();
+        if (shouldHalt()) return;
+        const index = next;
+        next += 1;
+        if (index >= candidateIds.length) return;
+        const rowId = candidateIds[index]!;
+        retried.add(rowId);
+        settings.sourceUrlsRetriedIds = [...retried];
+
+        const outcome = await runRow(rowId, { sourceUrlsRetry: true });
+        const charged = await chargeRow(outcome, false, true);
+        if (superseded) return;
+        if ((charged && !charged.ok && charged.noCredits) || (charged?.ok && charged.outOfCredits)) {
+          pausedNoCredits = true;
+        }
+        if (!outcome.ok) {
+          // A failed or stopped second pass keeps the first pass's Not-found result.
+          if (outcome.cancelled) stopObserved = true;
+          if (outcome.providerUnavailable) providerUnavailable = true;
+          continue;
+        }
+        if (charged && !charged.ok) continue;
+        const links = outcome.data[SOURCE_URLS_COLUMN_ID];
+        // Still nothing: the row keeps the first pass's note, and was charged for its requests.
+        if (!Array.isArray(links) || links.length === 0) continue;
+        await commitOrFail(() => {
+          const row = byId.get(rowId);
+          if (!row) return [];
+          row.enrichedData = {
+            ...(row.enrichedData ?? {}),
+            ...splitEnriched(outcome.data).enriched,
+            // Found now: the first pass's "Not found" note no longer applies.
+            [imageFinderNotFoundKey(SOURCE_URLS_COLUMN_ID)]: "",
+          };
+          return [rowId, ...applyPrimaryEnrichmentToGroup(project!.rows, rowId, groupColumn)];
+        });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(JOB_BATCH_SIZE, candidateIds.length) }, () => retryWorker()));
   }
 
   async function recheckNotFoundRows(): Promise<void> {

@@ -16,8 +16,9 @@
  * photo does the heavy lifting when the row has one. The code-side link checks
  * (search.ts) do the policing, not the prompt.
  *
- * Two attempts exist: attempt 1 is the normal prompt; attempt 2 runs only when
- * attempt 1 produced no usable page, and asks for DIFFERENT search angles.
+ * There is one query. A row that finds nothing is searched again with exactly
+ * the same query (search.ts): the answers vary from one search to the next, and
+ * rewording the retry did not do better than repeating it.
  */
 import { extractJsonValues } from "../image-finder/exact/json-extract";
 
@@ -33,8 +34,6 @@ const MAX_FIELDS = 20;
 const MAX_INSTRUCTION_CHARS = 1_500;
 /** SearchApi's documented `q` limit is 8,193 characters; stay under it. */
 const MAX_QUERY_CHARS = 8_000;
-
-export type SourceUrlsAttempt = 1 | 2;
 
 function toPlainText(value: string): string {
   return value
@@ -60,17 +59,24 @@ function isImageValue(value: string): boolean {
   return /^https?:\/\/\S+\.(jpe?g|png|webp|gif|avif)(\?\S*)?$/i.test(value);
 }
 
-/** Every non-image column with a value, in sheet order — column names are never consulted for meaning. */
-function productDataLines(rowData: Record<string, string>): string[] {
-  const lines: string[] = [];
+/**
+ * Every non-image column with a value, in sheet order, as plain text. Column
+ * names are never consulted for meaning: the name is only a label.
+ */
+export function productFields(rowData: Record<string, string>): Array<{ name: string; value: string }> {
+  const fields: Array<{ name: string; value: string }> = [];
   for (const [key, raw] of Object.entries(rowData)) {
-    if (lines.length >= MAX_FIELDS) break;
+    if (fields.length >= MAX_FIELDS) break;
     const value = String(raw ?? "").trim();
     if (!value || isImageValue(value)) continue;
     const plain = toPlainText(value);
-    if (plain) lines.push(`- ${displayKey(key)}: ${plain.slice(0, MAX_FIELD_CHARS)}`);
+    if (plain) fields.push({ name: displayKey(key), value: plain.slice(0, MAX_FIELD_CHARS) });
   }
-  return lines;
+  return fields;
+}
+
+function productDataLines(rowData: Record<string, string>): string[] {
+  return productFields(rowData).map((field) => `- ${field.name}: ${field.value}`);
 }
 
 export interface BuildSourceUrlsQueryInput {
@@ -78,24 +84,21 @@ export interface BuildSourceUrlsQueryInput {
   customInstruction?: string;
   /** A photo of the item is attached to the call. */
   hasImage?: boolean;
-  /** 1 = normal search; 2 = second try with different angles. Defaults to 1. */
-  attempt?: SourceUrlsAttempt;
 }
 
-function composeQuery(fieldLines: string[], instruction: string, hasImage: boolean, attempt: SourceUrlsAttempt): string {
+function composeQuery(fieldLines: string[], instruction: string, hasImage: boolean): string {
   // Wording is deliberate: keep the task line short and plain. Describing a
-  // failed first search ("found nothing usable") made Google AI Mode search that
-  // sentence itself, so attempt 2 only asks for other angles.
+  // failed search ("found nothing usable") made Google AI Mode search that
+  // sentence itself, so nothing about earlier tries is ever said.
   const hasText = fieldLines.length > 0;
   const sellers =
     "from any seller in any country or language: the brand's own site, manufacturers and factories (for example Alibaba, 1688), wholesalers, retailers and marketplaces.";
-  const extraAngles = attempt === 2 ? " Use search angles beyond the obvious ones." : "";
 
   // Photo only: the first line tells Google to identify the item before searching.
   const task =
     !hasText && hasImage
-      ? `Identify the product in the attached photo, then find every web page that sells that exact product, ${sellers}${extraAngles}`
-      : `Find every web page that sells this exact product, ${sellers}${extraAngles}`;
+      ? `Identify the product in the attached photo, then find every web page that sells that exact product, ${sellers}`
+      : `Find every web page that sells this exact product, ${sellers}`;
 
   const lines: string[] = [task];
   if (hasText || !hasImage) {
@@ -104,7 +107,15 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
   // Photo plus text: one plain line. Asking Google to "confirm" pages against the photo made it
   // over-strict when the photo was slightly off.
   if (hasText && hasImage) lines.push("", "The attached photo shows the same product.");
-  lines.push("", "Same product only. A different colour, size or model does not count. Aim for 10 or more pages.");
+  // Strict by default. With an owner's instruction the owner decides which
+  // variants count as the same product (a size, a very similar code), so the
+  // sentence defers to it instead of contradicting it.
+  lines.push(
+    "",
+    instruction
+      ? "Same product only. If the owner's instruction below says which variants count as the same product, follow it. Otherwise a different colour, size or model does not count. Aim for 10 or more pages."
+      : "Same product only. A different colour, size or model does not count. Aim for 10 or more pages."
+  );
   // Last before the output format, and ranked above the default rules, so the
   // owner's way of searching is not drowned out by them.
   if (instruction) {
@@ -115,6 +126,8 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
   }
   lines.push(
     "",
+    LIVE_LINKS_RULE,
+    NOTHING_FOUND_RULE,
     "Return full product page links (no search or category pages), best first, as JSON only:",
     '{"sources":[{"url":"https://...","title":"page title"}]}'
   );
@@ -128,17 +141,97 @@ function composeQuery(fieldLines: string[], instruction: string, hasImage: boole
  * the answer to be parseable).
  */
 export function buildSourceUrlsQuery(input: BuildSourceUrlsQueryInput): string {
-  const attempt = input.attempt ?? 1;
   const instruction = (input.customInstruction ?? "").trim().slice(0, MAX_INSTRUCTION_CHARS);
   const hasImage = Boolean(input.hasImage);
   let fields = productDataLines(input.rowData);
 
-  let query = composeQuery(fields, instruction, hasImage, attempt);
+  let query = composeQuery(fields, instruction, hasImage);
   while (query.length > MAX_QUERY_CHARS && fields.length > 1) {
     fields = fields.slice(0, -1);
-    query = composeQuery(fields, instruction, hasImage, attempt);
+    query = composeQuery(fields, instruction, hasImage);
   }
   return query;
+}
+
+/**
+ * Said with every search, planned or default: Google cannot open a page, so it
+ * must not invent or shorten links, and a link that now lands on a home page
+ * or an error page is worse than no link.
+ */
+export const LIVE_LINKS_RULE =
+  "Only return links you found in your sources and that are live today. Never guess, shorten or build a link from a shop's usual pattern. Do not return a link that redirects to a home page, a category page or an error page. If you are not sure a link opens this product's page, leave it out.";
+
+/**
+ * Said with every search: an empty answer is the right answer when the item is
+ * not there. Without it, Google fills the list with pages about the words of
+ * the request itself (articles on SKU matching, product identifiers, variant
+ * search) when it finds nothing.
+ */
+export const NOTHING_FOUND_RULE =
+  'If you cannot find a page for this exact item, return {"sources":[]}. Never fill the list with pages about searching, product matching, product identifiers or SKUs, or with any page that is not a product page.';
+
+/**
+ * The only fixed part of a planned request. The code adds it to every step,
+ * so the planner can neither drop nor reword it: as many pages as can be found
+ * (unless the step names a number), product pages only, then the answer format
+ * the parser reads.
+ */
+export const SOURCE_URLS_FIXED_RULE = [
+  "Return as many product page links for this exact item as you can find, unless the request above asks for a specific number of pages.",
+  "Return only full product page links: each link must open the page of one product, this exact item.",
+  "Never return a home page, category, collection, brand, search-results, blog or article page.",
+  LIVE_LINKS_RULE,
+  NOTHING_FOUND_RULE,
+  "Best first, as JSON only:",
+  '{"sources":[{"url":"https://...","title":"page title"}]}',
+].join("\n");
+
+/**
+ * The fixed rule for a plan whose owner allows a fallback to the closest page
+ * of the same product ("if not found bring the most matched item", "the parent
+ * page", "another size is fine"). Everything stays except the two "this exact
+ * item" lines: a size or colour variant is often not written on its product's
+ * page, so insisting on the exact item (and answering empty otherwise) made
+ * Google return nothing, although the page of its sibling size is the answer
+ * the owner asked for. Home, category and search pages stay forbidden.
+ */
+export const SOURCE_URLS_FIXED_RULE_CLOSEST = [
+  "Return as many product page links for this item as you can find, unless the request above asks for a specific number of pages.",
+  "Return only full product page links: each link must open the page of one product, this item or, when the request above allows it, the page of the same product it belongs to (for example the page that lists this item as another size or variant).",
+  "Never return a home page, category, collection, brand, search-results, blog or article page.",
+  LIVE_LINKS_RULE,
+  'If you cannot find a page for this item or for the product it belongs to, return {"sources":[]}. Never fill the list with pages about searching, product matching, product identifiers or SKUs, or with any page that is not a product page.',
+  "Best first, as JSON only:",
+  '{"sources":[{"url":"https://...","title":"page title"}]}',
+].join("\n");
+
+/** What an identity line says it is for: confirming the page, never a search key. */
+export const SOURCE_URLS_IDENTITY_HEADING =
+  "The product, only to confirm that a page is this exact item (do not search by these, and a page for a different product does not count):";
+
+/**
+ * A planned request for one row: the step's text (already filled in with the
+ * row's values), the photo line when a photo is really sent, the product's
+ * identity (the planner's identity columns with the row's values, one line
+ * each), and the fixed rule. When the query would pass SearchApi's limit the
+ * identity lines are dropped from the end first, then the step is cut; the
+ * fixed rule is never cut.
+ */
+export function buildPlannedQuery(input: {
+  text: string;
+  hasImage?: boolean;
+  identity?: string[];
+  /** The owner allows the closest page of the same product (see SOURCE_URLS_FIXED_RULE_CLOSEST). */
+  closestMatch?: boolean;
+}): string {
+  const photo = input.hasImage ? "\n\nThe attached photo shows the same product." : "";
+  const tail = `${photo}\n\n${input.closestMatch ? SOURCE_URLS_FIXED_RULE_CLOSEST : SOURCE_URLS_FIXED_RULE}`;
+  const room = Math.max(0, MAX_QUERY_CHARS - tail.length);
+  const text = input.text.trim();
+  const identity = [...(input.identity ?? [])];
+  const identityBlock = () => (identity.length > 0 ? `\n\n${SOURCE_URLS_IDENTITY_HEADING}\n${identity.map((line) => `- ${line}`).join("\n")}` : "");
+  while (identity.length > 0 && text.length + identityBlock().length > room) identity.pop();
+  return `${`${text}${identityBlock()}`.slice(0, room)}${tail}`;
 }
 
 export interface SourceCandidate {
@@ -242,19 +335,21 @@ export function cleanPageTitle(raw: string | undefined): string {
 }
 
 /**
- * Last resort for an answer with no readable JSON. For a product with no code,
- * Google AI Mode often ignores the JSON request and answers with its own list
- * of web results (a markdown table of `[title](url)` links). Those are real
- * search results for the product, in Google's order of relevance, so they are
- * used — still through the code-side checks — instead of reporting "none found"
- * just because the answer was in another shape. Never used to second-guess an
- * answer that was readable and listed no pages.
+ * Used when the answer names no page: either there is no readable JSON (for a
+ * product with no code, Google AI Mode often ignores the JSON request and
+ * answers with its own list of web results, a markdown table of `[title](url)`
+ * links) or the JSON names only a home page or nothing while Google cites
+ * product pages. The links in the answer text and Google's cited
+ * `reference_links` are real search results, in Google's order of relevance, so
+ * they are used — still through the code-side checks — instead of reporting
+ * "none found" just because the answer was in another shape.
  */
 export function harvestSourceCandidates(texts: string[], referenceLinks: string[] = []): SourceCandidate[] {
   const seen = new Set<string>();
   const out: SourceCandidate[] = [];
   const add = (rawUrl: string, title?: string) => {
-    const url = rawUrl.replace(/[.,;:!?)\]]+$/, "").trim();
+    // Google's cited links carry a "#:~:text=..." highlight; the page is the same without it.
+    const url = rawUrl.replace(/#:~:text=.*$/i, "").replace(/[.,;:!?)\]]+$/, "").trim();
     // Plain http:// pages count too: many small manufacturer and factory sites still use it.
     if (!/^https?:\/\//i.test(url)) return;
     const key = url.toLowerCase();
