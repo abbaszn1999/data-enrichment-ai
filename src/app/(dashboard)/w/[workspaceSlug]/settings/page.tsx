@@ -36,6 +36,7 @@ import {
   updateWorkspace,
   deleteWorkspace,
   getWorkspaceIntegration,
+  getWorkspaceIntegrationScopes,
   testWorkspaceIntegration,
   saveWorkspaceIntegration,
   disconnectWorkspaceIntegration,
@@ -44,6 +45,7 @@ import {
 import { cmsTypeLabel, parseSupportedCmsType, DEFAULT_CMS_TYPE } from "@/lib/cms-types";
 import { CmsTypeSelect } from "@/components/cms-type-select";
 import { changeWorkspacePlatform, fetchCategoryPlatform } from "@/lib/categories/platform-client";
+import { ShopifyAccessGuide } from "@/components/settings/shopify-access-guide";
 
 type ConfigField = {
   key: string;
@@ -62,7 +64,7 @@ const INTEGRATION_PROVIDERS = [
     available: true,
     configFields: [
       { key: "store_url", label: "Store URL", type: "url" as const, placeholder: "yourstore.myshopify.com", required: true, helpText: "Your .myshopify.com domain." },
-      { key: "admin_api_token", label: "Admin API Access Token", type: "password" as const, placeholder: "shpat_xxxxxxxxxxxx", required: true, helpText: "Generate from Shopify Admin → Apps → Develop apps → API credentials." },
+      { key: "admin_api_token", label: "Admin API Access Token", type: "password" as const, placeholder: "shpat_xxxxxxxxxxxx", required: true, helpText: "Generate from Shopify Admin → Apps → Develop apps → API credentials, after enabling the scopes listed below." },
     ] satisfies ConfigField[],
   },
   {
@@ -104,6 +106,27 @@ export default function SettingsPage() {
   const [disconnectingIntegration, setDisconnectingIntegration] = useState(false);
   const [integrationError, setIntegrationError] = useState("");
   const [integrationSuccess, setIntegrationSuccess] = useState("");
+  // The connected Shopify token's scopes: undefined until checked, null when Shopify would not say.
+  const [grantedScopes, setGrantedScopes] = useState<string[] | null | undefined>(undefined);
+  const [checkingScopes, setCheckingScopes] = useState(false);
+
+  const checkScopes = async () => {
+    if (!workspace) return;
+    setCheckingScopes(true);
+    try {
+      setGrantedScopes(await getWorkspaceIntegrationScopes(workspace.id));
+    } catch {
+      setGrantedScopes(null);
+    } finally {
+      setCheckingScopes(false);
+    }
+  };
+
+  useEffect(() => {
+    if (integration?.provider === "shopify") void checkScopes();
+    else setGrantedScopes(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [integration?.provider, integration?.updated_at]);
 
   const [categoryCount, setCategoryCount] = useState(0);
   useEffect(() => {
@@ -549,6 +572,14 @@ export default function SettingsPage() {
                     Disconnect
                   </Button>
                 </div>
+                {integration.provider === "shopify" && (
+                  <ShopifyAccessGuide
+                    className="mt-4"
+                    grantedScopes={grantedScopes}
+                    loading={checkingScopes}
+                    onRecheck={() => void checkScopes()}
+                  />
+                )}
               </div>
             ) : (
               <div className="flex flex-col items-start justify-between gap-4 rounded-xl border border-dashed bg-muted/10 p-5 sm:flex-row sm:items-center">
@@ -638,7 +669,7 @@ export default function SettingsPage() {
           if (!open) resetIntegrationDialog();
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {integrationStep === "select"
@@ -809,6 +840,18 @@ export default function SettingsPage() {
                     </div>
                   )}
                 </div>
+              )}
+
+              {selectedProvider === "shopify" && (
+                <ShopifyAccessGuide
+                  grantedScopes={
+                    testedConnection
+                      ? Array.isArray(testedConnection.metadata?.grantedScopes)
+                        ? (testedConnection.metadata.grantedScopes as string[])
+                        : null
+                      : undefined
+                  }
+                />
               )}
             </div>
           )}

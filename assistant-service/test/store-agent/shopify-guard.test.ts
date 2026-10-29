@@ -149,3 +149,12 @@ describe("missingScopes", () => {
     expect(missingScopes(["read_files"], new Set(["read_files"]))).toEqual([]);
   });
 });
+
+describe("Settings access list", () => {
+  it("shows the Store Agent's exact scopes", async () => {
+    const { STORE_AGENT_SCOPES } = await import("../../src/store-agent/shopify/scopes");
+    const { SHOPIFY_TOOL_ACCESS } = await import("../../../src/lib/integrations/shopify-access");
+    const shown = SHOPIFY_TOOL_ACCESS.find((t) => t.id === "store-assistant")?.scopes ?? [];
+    expect([...shown].sort()).toEqual([...STORE_AGENT_SCOPES].sort());
+  });
+});

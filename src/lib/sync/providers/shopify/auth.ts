@@ -40,6 +40,7 @@ export async function testShopifyConnection(config: Record<string, any>): Promis
   const data = await response.json();
   const shop = data?.shop;
   if (!shop) throw new Error("Invalid Shopify response");
+  const grantedScopes = await fetchShopifyGrantedScopes(normalizedStoreUrl, adminApiToken);
 
   return {
     provider: "shopify",
@@ -52,6 +53,27 @@ export async function testShopifyConnection(config: Record<string, any>): Promis
           ? shop.domain.trim()
           : null,
       storeName: shop.name ?? null,
+      grantedScopes,
     },
   };
+}
+
+/**
+ * The access scopes the token was granted, or null when Shopify would not say.
+ * Settings compares them with what each tool needs.
+ */
+export async function fetchShopifyGrantedScopes(storeUrl: string, adminApiToken: string): Promise<string[] | null> {
+  try {
+    const response = await fetch(`${storeUrl}/admin/oauth/access_scopes.json`, {
+      headers: { "X-Shopify-Access-Token": adminApiToken, Accept: "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { access_scopes?: Array<{ handle?: unknown }> };
+    if (!Array.isArray(data?.access_scopes)) return null;
+    return data.access_scopes.flatMap((s) => (typeof s?.handle === "string" ? [s.handle] : [])).sort();
+  } catch {
+    return null;
+  }
 }

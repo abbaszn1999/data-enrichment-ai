@@ -271,6 +271,14 @@ export async function getWorkspaceIntegration(workspaceId: string): Promise<Work
   return data.integration ?? null;
 }
 
+/** The scopes the connected Shopify token has now; null when not Shopify or Shopify would not say. */
+export async function getWorkspaceIntegrationScopes(workspaceId: string): Promise<string[] | null> {
+  const res = await fetch(`/api/integrations/access?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to check store access");
+  return Array.isArray(data.grantedScopes) ? data.grantedScopes : null;
+}
+
 export async function testWorkspaceIntegration(input: {
   workspaceId: string;
   provider: "shopify" | "woocommerce" | "wordpress";
