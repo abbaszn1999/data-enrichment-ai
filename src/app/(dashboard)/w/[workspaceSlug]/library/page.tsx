@@ -25,6 +25,8 @@ type LibraryAgent = {
   tone: { icon: string; glow: string };
   points: string[];
   needsIntegration?: boolean;
+  /** Needs a Shopify or WooCommerce store, not just any connection. */
+  needsStoreAgentStore?: boolean;
 };
 
 const AGENTS: LibraryAgent[] = [
@@ -45,6 +47,7 @@ const AGENTS: LibraryAgent[] = [
     tone: { icon: "bg-sky-500/10 text-sky-500 ring-sky-500/20", glow: "from-sky-500/15" },
     points: ["Edits products in chat", "Works on your live store", "Asks before it changes"],
     needsIntegration: true,
+    needsStoreAgentStore: true,
   },
   {
     path: null,
@@ -151,7 +154,7 @@ function AgentCard({
 export default function LibraryPage() {
   const params = useParams();
   const slug = params.workspaceSlug as string;
-  const { workspace, hasIntegration } = useWorkspaceContext();
+  const { workspace, hasIntegration, hasStoreAgentStore } = useWorkspaceContext();
   const basePath = `/w/${slug}`;
 
   return (
@@ -186,7 +189,8 @@ export default function LibraryPage() {
       <div className="mx-auto max-w-7xl px-6 py-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {AGENTS.map((agent, index) => {
-            const state = !agent.path ? "soon" : agent.needsIntegration && !hasIntegration ? "locked" : "ready";
+            const blocked = (agent.needsIntegration && !hasIntegration) || (agent.needsStoreAgentStore && !hasStoreAgentStore);
+            const state = !agent.path ? "soon" : blocked ? "locked" : "ready";
             // Agents that need a store send you to Settings to connect one first.
             const href =
               state === "soon" ? null : state === "locked" ? `${basePath}/settings` : `${basePath}${agent.path}`;

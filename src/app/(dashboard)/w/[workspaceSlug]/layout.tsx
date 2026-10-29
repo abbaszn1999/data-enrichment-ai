@@ -64,6 +64,7 @@ import { JobInbox } from "@/components/job-inbox";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { WelcomeGiftTicker } from "@/components/billing/welcome-gift-ticker";
 import { FeaturebaseMessenger } from "@/components/featurebase-messenger";
+import { isStoreAgentPlatform } from "@/lib/store-agent/platforms";
 
 /**
  * The floating agent is hidden for now, whatever NEXT_PUBLIC_ASSISTANT_ENABLED
@@ -84,7 +85,8 @@ export default function WorkspaceLayout({
   const slug = params.workspaceSlug as string;
 
   const { user, profile, sessionReady } = useAuth();
-  const { workspace, role, hasIntegration, isLoading: wsLoading, error } = useWorkspace(slug, user);
+  const { workspace, role, hasIntegration, storeProvider, isLoading: wsLoading, error } = useWorkspace(slug, user);
+  const hasStoreAgentStore = isStoreAgentPlatform(storeProvider);
   const permissions = useRole(role);
 
   const isFreeAssessmentPage = pathname.includes("/free-assessment");
@@ -263,10 +265,10 @@ export default function WorkspaceLayout({
       disabled: !hasIntegration,
     },
     {
-      href: hasIntegration ? `${basePath}/store-assistant` : "",
+      href: hasStoreAgentStore ? `${basePath}/store-assistant` : "",
       label: "Store assistant",
       icon: Bot,
-      disabled: !hasIntegration,
+      disabled: !hasStoreAgentStore,
     },
     // Not built yet: visible on the roadmap, unclickable until it ships.
     { href: "", label: "Google Ads", icon: Megaphone, disabled: true, badge: "Soon" },
@@ -516,7 +518,7 @@ export default function WorkspaceLayout({
     : "??";
 
   return (
-    <WorkspaceContext.Provider value={{ workspace, role, wsLoading, hasIntegration: !!hasIntegration }}>
+    <WorkspaceContext.Provider value={{ workspace, role, wsLoading, hasIntegration: !!hasIntegration, hasStoreAgentStore }}>
       <FeaturebaseMessenger userId={user?.id} />
       <div className="h-screen flex flex-col bg-background overflow-hidden">
         {/* Top Header — hidden in immersive mode */}

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { hideProviderNames } from "@/lib/provider-names";
+import { isStoreAgentPlatform } from "./platforms";
 import { signServiceRequest } from "@/lib/assistant/service-client";
 import { getWorkspaceContext, isContextSubscriptionActive, type WorkspaceContext } from "@/lib/workspace-context";
 import { STORE_AGENT_LIMITS, type StoreAgentEvent } from "./protocol";
@@ -72,7 +73,7 @@ export async function authorizeStoreAgent(params: {
   if (!ctx.membershipRole || ctx.membershipRole === "viewer") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  if (ctx.integration?.provider !== "shopify" && ctx.integration?.provider !== "woocommerce") {
+  if (!isStoreAgentPlatform(ctx.integration?.provider)) {
     return NextResponse.json({ error: "NO_STORE" }, { status: 409 });
   }
   if (params.requireCredits) {

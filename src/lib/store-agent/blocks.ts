@@ -2,7 +2,7 @@
 // stream. The service uses it to save the reply; the page uses the same
 // reducer to render it live, so a reloaded chat looks exactly like it did.
 
-import type { ApprovalPreview, QuestionItem, StoreAgentEvent, TodoItem, ToolKind } from "./protocol";
+import type { ApprovalPreview, QuestionItem, StoreAgentEvent, TodoItem, ToolKind, ToolLink } from "./protocol";
 
 export type MessageBlock =
   | { type: "text"; text: string }
@@ -16,6 +16,7 @@ export type MessageBlock =
       detail?: string;
       status: "running" | "ok" | "error";
       summary?: string;
+      links?: ToolLink[];
     }
   | { type: "todos"; items: TodoItem[] }
   | {
@@ -90,7 +91,7 @@ export function reduceReply(state: ReplyState, event: StoreAgentEvent): ReplySta
       const i = blocks.findIndex((b) => b.type === "tool" && b.callId === event.callId);
       if (i >= 0) {
         const b = blocks[i] as Extract<MessageBlock, { type: "tool" }>;
-        blocks[i] = { ...b, status: event.ok ? "ok" : "error", summary: event.summary };
+        blocks[i] = { ...b, status: event.ok ? "ok" : "error", summary: event.summary, ...(event.links?.length ? { links: event.links } : {}) };
       }
       break;
     }

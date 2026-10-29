@@ -81,6 +81,9 @@ export const cancelSchema = z.object({ runId: z.string().uuid() });
 
 export type ToolKind = "store_read" | "store_write" | "web" | "image" | "file" | "plan" | "think" | "agent" | "other";
 
+/** A page a web search found or a web page the agent read. */
+export type ToolLink = { title: string; url: string };
+
 export type TodoItem = { id: string; content: string; status: "pending" | "in_progress" | "completed" | "cancelled" };
 
 /** One question on a question card. */
@@ -101,7 +104,7 @@ export type StoreAgentEvent =
   | { type: "thinking"; delta: string; seq: number }
   | { type: "thinking_done"; ms: number; seq: number }
   | { type: "tool_start"; callId: string; tool: string; kind: ToolKind; title: string; detail?: string; seq: number }
-  | { type: "tool_end"; callId: string; ok: boolean; summary?: string; seq: number }
+  | { type: "tool_end"; callId: string; ok: boolean; summary?: string; links?: ToolLink[]; seq: number }
   | { type: "todos"; items: TodoItem[]; seq: number }
   | {
       type: "approval";

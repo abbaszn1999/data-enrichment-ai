@@ -96,7 +96,8 @@ function ToolBlock({ block }: { block: Extract<MessageBlock, { type: "tool" }> }
   const [open, setOpen] = useState(false);
   const Icon = TOOL_ICON[block.kind] ?? Wrench;
   const failed = block.status === "error";
-  const expandable = !!block.summary;
+  const links = block.links ?? [];
+  const expandable = !!block.summary || links.length > 0;
   return (
     <div className="text-[13px]">
       <button
@@ -122,6 +123,11 @@ function ToolBlock({ block }: { block: Extract<MessageBlock, { type: "tool" }> }
             {block.detail}
           </span>
         )}
+        {block.tool === "webSearch" && links.length > 0 && (
+          <span className="shrink-0 text-[11.5px] text-muted-foreground/80">
+            {links.length} {links.length === 1 ? "result" : "results"}
+          </span>
+        )}
         <span className="ms-auto shrink-0">
           {block.status === "running" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -137,8 +143,35 @@ function ToolBlock({ block }: { block: Extract<MessageBlock, { type: "tool" }> }
           {block.summary}
         </div>
       )}
+      {open && links.length > 0 && (
+        <ul className="ms-8 mt-0.5 space-y-0.5 rounded-md bg-muted/50 px-2 py-1.5">
+          {links.map((link) => (
+            <li key={link.url} className="min-w-0">
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+                className="group/link flex min-w-0 items-baseline gap-2 text-[12px]"
+              >
+                <span dir="auto" className="min-w-0 truncate text-foreground/85 group-hover/link:text-[#6B358D] group-hover/link:underline dark:group-hover/link:text-[#F76D01]">
+                  {link.title}
+                </span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">{hostOf(link.url)}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
 }
 
 function TodosBlock({ block }: { block: Extract<MessageBlock, { type: "todos" }> }) {

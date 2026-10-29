@@ -14,6 +14,8 @@ export interface WorkspaceContextType {
   role: Role | null;
   wsLoading: boolean;
   hasIntegration: boolean;
+  /** A Shopify or WooCommerce store is connected (what the Store Assistant needs). */
+  hasStoreAgentStore: boolean;
 }
 
 export const WorkspaceContext = createContext<WorkspaceContextType>({
@@ -21,6 +23,7 @@ export const WorkspaceContext = createContext<WorkspaceContextType>({
   role: null,
   wsLoading: true,
   hasIntegration: false,
+  hasStoreAgentStore: false,
 });
 
 export const useWorkspaceContext = () => useContext(WorkspaceContext);

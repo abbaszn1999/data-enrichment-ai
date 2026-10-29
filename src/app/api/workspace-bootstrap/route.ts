@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { getWorkspaceContext, isContextSubscriptionActive, clearWorkspaceContextCache } from "@/lib/workspace-context";
 import { getActiveSubscriptionPlans, invalidateSubscriptionCache } from "@/lib/stripe";
+import { publicIntegrationConfig } from "@/lib/integrations/crypto";
 import { ensureOwnerTrial } from "@/lib/trial-server";
 import {
   welcomeGiftFromSubscription,
@@ -66,7 +67,15 @@ export async function GET(request: NextRequest) {
       workspace,
       role: ctx.membershipRole,
       hasIntegration: !!ctx.integration,
-      integration: ctx.integration ?? null,
+      // ctx.integration holds the decrypted credentials: only what the page may show goes out.
+      integration: ctx.integration
+        ? {
+            provider: ctx.integration.provider,
+            integration_name: ctx.integration.integration_name,
+            base_url: ctx.integration.base_url ?? null,
+            config: publicIntegrationConfig(ctx.integration.config),
+          }
+        : null,
       credits: {
         used: bal.used,
         total: bal.monthlyTotal + bal.bonusAvailable,

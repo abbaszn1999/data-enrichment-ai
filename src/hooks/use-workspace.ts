@@ -10,6 +10,8 @@ interface WorkspaceState {
   workspace: Workspace | null;
   role: Role | null;
   hasIntegration: boolean;
+  /** The connected platform ("shopify" | "woocommerce" | "wordpress"), null when none. */
+  storeProvider: string | null;
   isLoading: boolean;
   error: string | null;
 }
@@ -19,6 +21,7 @@ export function useWorkspace(slug: string, user: User | null | undefined) {
     workspace: null,
     role: null,
     hasIntegration: false,
+    storeProvider: null,
     isLoading: true,
     error: null,
   });
@@ -26,7 +29,7 @@ export function useWorkspace(slug: string, user: User | null | undefined) {
   useEffect(() => {
     if (!slug || user === undefined) return;
     if (!user) {
-      setState({ workspace: null, role: null, hasIntegration: false, isLoading: false, error: "Not authenticated" });
+      setState({ workspace: null, role: null, hasIntegration: false, storeProvider: null, isLoading: false, error: "Not authenticated" });
       return;
     }
 
@@ -45,12 +48,12 @@ export function useWorkspace(slug: string, user: User | null | undefined) {
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          setState({ workspace: null, role: null, hasIntegration: false, isLoading: false, error: err?.error || "Failed to load workspace" });
+          setState({ workspace: null, role: null, hasIntegration: false, storeProvider: null, isLoading: false, error: err?.error || "Failed to load workspace" });
           return;
         }
 
         const data = await res.json();
-        const { workspace, role: memberRole, credits, subscription, hasIntegration } = data;
+        const { workspace, role: memberRole, credits, subscription, hasIntegration, integration } = data;
 
         // Seed the shared cache BEFORE committing workspace state, so the
         // dependent hooks read it synchronously on their next render.
@@ -66,12 +69,13 @@ export function useWorkspace(slug: string, user: User | null | undefined) {
           workspace,
           role: (memberRole as Role) ?? null,
           hasIntegration: !!hasIntegration,
+          storeProvider: typeof integration?.provider === "string" ? integration.provider : null,
           isLoading: false,
           error: memberRole ? null : "Not a member",
         });
       } catch (err: any) {
         if (!cancelled) {
-          setState({ workspace: null, role: null, hasIntegration: false, isLoading: false, error: err?.message || "Failed to load workspace" });
+          setState({ workspace: null, role: null, hasIntegration: false, storeProvider: null, isLoading: false, error: err?.message || "Failed to load workspace" });
         }
       }
     }

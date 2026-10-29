@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useTheme } from "next-themes";
 import { ClipboardList, Download, FolderOpen, Loader2, Search, X } from "lucide-react";
+import { themedReport } from "@/lib/store-agent/report-theme";
 import { cn } from "@/lib/utils";
 import { PLAN_TAB_PREFIX, storeAgentApi, type ChatFile, type Plan } from "./api";
 import { FileKindIcon } from "./blocks";
@@ -286,11 +288,14 @@ function FileViewer({ workspaceId, file }: { workspaceId: string; file: ChatFile
  * An HTML report the agent wrote, shown as the page it describes. It runs in
  * a sandboxed frame with an opaque origin: its scripts (charts) work, but
  * cannot reach the app, its cookies or the page around it. Links open in a
- * new tab rather than inside the frame.
+ * new tab rather than inside the frame. It follows the app's light or dark
+ * mode when it was written to (see themedReport).
  */
 function HtmlView({ html, name }: { html: string; name: string }) {
   const [showCode, setShowCode] = useState(false);
-  const doc = /<base\s/i.test(html) ? html : html.replace(/<head(\s[^>]*)?>/i, (m) => `${m}<base target="_blank">`);
+  const { resolvedTheme } = useTheme();
+  const dark = resolvedTheme === "dark";
+  const { doc, themed } = useMemo(() => themedReport(html, dark), [html, dark]);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-end gap-1 border-b px-3 py-1.5 text-[11.5px]">
@@ -318,7 +323,7 @@ function HtmlView({ html, name }: { html: string; name: string }) {
           srcDoc={doc}
           sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
           referrerPolicy="no-referrer"
-          className="min-h-0 w-full flex-1 border-0 bg-white"
+          className={cn("min-h-0 w-full flex-1 border-0", themed && dark ? "bg-background" : "bg-white")}
         />
       )}
     </div>

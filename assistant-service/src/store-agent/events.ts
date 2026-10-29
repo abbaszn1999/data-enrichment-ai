@@ -1,5 +1,5 @@
 import { Kind, parse, type OperationDefinitionNode } from "graphql";
-import type { StoreAgentEventInput, TodoItem, ToolKind } from "../../../src/lib/store-agent/protocol";
+import type { StoreAgentEventInput, TodoItem, ToolKind, ToolLink } from "../../../src/lib/store-agent/protocol";
 
 type Args = Record<string, unknown>;
 type Described = { kind: ToolKind; title: string; detail?: string };
@@ -203,3 +203,65 @@ export function unwrapToolCall(toolCall: { type?: string; args?: unknown; result
 }
 
 export type ToolStart = Extract<StoreAgentEventInput, { type: "tool_start" }>;
+
+const MAX_LINKS = 10;
+
+/** An http(s) link fit to show, or null. */
+function safeLink(url: unknown, title: unknown): ToolLink | null {
+  try {
+    const parsed = new URL(str(url));
+    if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.href.length > 2000) return null;
+    return { url: parsed.href, title: clip(scrub(str(title).trim()) || parsed.hostname, 160) };
+  } catch {
+    return null;
+  }
+}
+
+type WebToolCall = {
+  args?: Args;
+  result?: { success?: Record<string, unknown>; error?: { error?: unknown }; rejected?: { reason?: unknown } };
+};
+
+export type WebCall = { callId: string; tool: "webSearch" | "webFetch"; args: Args; ok: boolean; summary?: string; links: ToolLink[] };
+
+/**
+ * Finished web searches and page reads in the agent's saved conversation
+ * (`Agent.messages.list`). SDK 1.2.0 runs these tools without reporting them
+ * in onDelta, so this is the only place their links show up. Only titles and
+ * links are kept: the result text holds paths on the server.
+ */
+export function webCallsInMessages(messages: readonly unknown[]): WebCall[] {
+  const calls: WebCall[] = [];
+  for (const message of messages) {
+    let turn: { steps?: Array<{ toolCall?: Record<string, unknown>; toolCallId?: unknown }> } | undefined;
+    try {
+      // Protobuf messages: their JSON form is the documented shape.
+      turn = JSON.parse(JSON.stringify((message as { message?: unknown })?.message ?? null))?.agentConversationTurn;
+    } catch {
+      continue;
+    }
+    for (const step of turn?.steps ?? []) {
+      const search = step.toolCall?.webSearchToolCall as WebToolCall | undefined;
+      const fetch = step.toolCall?.webFetchToolCall as WebToolCall | undefined;
+      const call = search ?? fetch;
+      if (!call?.result) continue;
+      const callId = str(step.toolCallId) || str(call.args?.toolCallId);
+      if (!callId) continue;
+      const args = call.args ?? {};
+      const success = call.result.success;
+      const failure = call.result.error?.error ?? call.result.rejected?.reason;
+      const links = search
+        ? ((success?.references as Array<{ url?: unknown; title?: unknown }> | undefined) ?? []).flatMap((r) => safeLink(r.url, r.title) ?? [])
+        : [safeLink(success?.url ?? args.url, "")].flatMap((l) => l ?? []);
+      calls.push({
+        callId,
+        tool: search ? "webSearch" : "webFetch",
+        args,
+        ok: !!success,
+        summary: success ? undefined : clip(scrub(str(failure) || "failed").replace(/\s+/g, " "), 200),
+        links: links.filter((l, i) => links.findIndex((o) => o.url === l.url) === i).slice(0, MAX_LINKS),
+      });
+    }
+  }
+  return calls;
+}

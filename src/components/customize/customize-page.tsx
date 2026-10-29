@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { motion } from "motion/react";
-import { Check, Loader2, Paintbrush, Save, Sparkles } from "lucide-react";
+import { Check, Loader2, Paintbrush, Save, Settings, Sparkles, Unplug } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,7 +36,7 @@ import { SnippetBlock, useAppOrigin } from "./snippet-block";
 export function CustomizePage() {
   const params = useParams<{ workspaceSlug: string }>();
   const slug = params.workspaceSlug ?? "";
-  const { workspace, role } = useWorkspaceContext();
+  const { workspace, role, wsLoading, hasIntegration } = useWorkspaceContext();
   const { canEdit } = useRole(role);
 
   const [kind, setKind] = useState<WidgetKind>("faq");
@@ -171,8 +172,37 @@ export function CustomizePage() {
   const setStyle = kind === "links" ? setLinks : setFaq;
   const templates = kind === "links" ? LINK_TEMPLATES : FAQ_TEMPLATES;
 
-  if (!style) {
+  if (wsLoading || !style) {
     return <PageLoader />;
+  }
+
+  // The navigation hides Customize without a store; this covers a direct link.
+  if (!hasIntegration) {
+    return (
+      <div className="autommerce-dashboard flex h-full min-h-0 items-center justify-center p-8 [font-family:var(--brand-font)]">
+        <div className="max-w-md text-center space-y-6">
+          <div className="mx-auto h-16 w-16 rounded-2xl bg-gradient-to-br from-[#400095]/10 to-[#F76D01]/10 flex items-center justify-center">
+            <Unplug className="h-8 w-8 text-[#6B358D] dark:text-[#F76D01]" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-black">Integration Required</h2>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Customize builds blocks and names for your storefront, so connect a platform in Settings before it can
+              start.
+            </p>
+          </div>
+          <Button
+            asChild
+            className="gap-2 rounded-xl bg-[#400095] text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+          >
+            <Link href={`/w/${slug}/settings`}>
+              <Settings className="h-4 w-4" />
+              Go to Settings
+            </Link>
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (

@@ -350,7 +350,7 @@ export default function WorkspaceDashboardPage() {
   const params = useParams();
   const slug = params.workspaceSlug as string;
   const basePath = `/w/${slug}`;
-  const { workspace, role, wsLoading, hasIntegration } = useWorkspaceContext();
+  const { workspace, role, wsLoading, hasIntegration, hasStoreAgentStore } = useWorkspaceContext();
   const permissions = useRole(role);
   const credits = useCredits(workspace?.id ?? null);
   const { wallet } = useWallet(workspace?.id ?? null);
@@ -442,7 +442,7 @@ export default function WorkspaceDashboardPage() {
       className: "lg:col-span-7",
       surface: "from-[#C40000]/15 via-card to-card",
       tools: [
-        { name: "Store Assistant", path: "/store-assistant", icon: Bot, note: "A conversational store operator", locked },
+        { name: "Store Assistant", path: "/store-assistant", icon: Bot, note: "A conversational store operator", locked: !hasStoreAgentStore },
         { name: "Website Restructure", path: "/website-restructure", icon: LayoutTemplate, note: "Rebuild headers through chat", locked },
         { name: "24h Sync", path: "/growth-sync", icon: RefreshCw, note: "Classify every new product automatically", locked },
       ],

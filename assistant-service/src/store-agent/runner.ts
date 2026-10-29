@@ -9,7 +9,7 @@ import { MemoryAgentStoreBackend } from "./agent-store/memory-backend";
 import { WriteBehindAgentStore } from "./agent-store/write-behind-store";
 import { chargeRun } from "./billing/charge";
 import { IMAGE_GENERATION_USD, contextWindowFor, estimateUsd, usdToCredits, type TokenUsage } from "../../../src/lib/store-agent/pricing";
-import { describeTool, mapTodos, mergeTodos, scrub, summarizeResult, unwrapToolCall } from "./events";
+import { describeTool, mapTodos, mergeTodos, scrub, summarizeResult, unwrapToolCall, webCallsInMessages } from "./events";
 import { oncePerToolCall } from "./call-once";
 import { guidanceText, withGuidance } from "./guidance";
 import { buildMessage, finishBuild, savePlan, startBuild } from "./plans";
@@ -28,6 +28,7 @@ import { createStoreAgentTools } from "./tools";
  * instead of read/edit/grep/ls. No `task`: sub-agents report no token usage,
  * so their cost could not be billed.
  */
+const WEB_SCAN_EVERY_MS = 1500;
 const BUILTIN_TOOLS: ToolName[] = ["mcp", "webSearch", "webFetch", "generateImage", "updateTodos", "readTodos"];
 /** A run that makes this many tool calls is stopped (runaway loops, surprise bills). */
 const MAX_TOOL_CALLS = 200;
@@ -614,12 +615,46 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
     };
 
     const started = new Set<string>();
+    // Web searches and page reads are not reported in onDelta (SDK 1.2.0).
+    // They are read back from the agent's saved conversation after each model
+    // call, and shown once. Calls from earlier turns are marked seen up front.
+    const listMessages = () => Agent.messages.list(agentId!, { runtime: "local", cwd, store });
+    const webSeen = new Set<string>();
+    let webScan: Promise<void> | null = null;
+    let webScanAt = 0;
+    const showWebCalls = () => {
+      if (webScan) return webScan;
+      webScanAt = Date.now();
+      webScan = listMessages()
+        .then((messages) => {
+          for (const call of webCallsInMessages(messages)) {
+            if (webSeen.has(call.callId) || started.has(call.callId)) continue;
+            webSeen.add(call.callId);
+            toolCalls += 1;
+            run.emit({ type: "tool_start", callId: call.callId, tool: call.tool, ...describeTool(call.tool, call.args) });
+            run.emit({ type: "tool_end", callId: call.callId, ok: call.ok, summary: call.summary, links: call.links });
+          }
+        })
+        .catch((e) => log("reading web calls failed", e))
+        .finally(() => {
+          webScan = null;
+        });
+      return webScan;
+    };
+    try {
+      for (const call of webCallsInMessages(await listMessages())) webSeen.add(call.callId);
+    } catch (e) {
+      log("reading earlier web calls failed", e);
+    }
+    let webWatch = false;
     const sendOptions: SendOptions = {
       model: { id: req.model.id, params: req.model.params },
       mode: req.mode,
       local: { customTools },
       onDelta: ({ update }) => {
         const u = update as { type: string; [key: string]: unknown };
+        // After a model call that requested tools, look for finished web tools (from memory, cheap).
+        if (webWatch && Date.now() - webScanAt > WEB_SCAN_EVERY_MS) void showWebCalls();
         switch (u.type) {
           case "text-delta":
             if (typeof u.text === "string" && u.text) run.emit({ type: "text", delta: scrub(u.text) });
@@ -632,6 +667,7 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
             return;
           case "tool-requests-listed":
             modelCalls += 1;
+            webWatch = true;
             return;
           case "token-delta":
             outputTokens += Number(u.tokens) || 0;
@@ -777,6 +813,11 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
       sdkRun = await agent.send(`While you were working I wrote:\n${guidanceText(pending)}`, sendOptions);
       result = await sdkRun.wait();
       addUsage(result.usage);
+    }
+    if (webWatch) {
+      // Web tools the last model calls ran: a read already under way may predate them.
+      await webScan;
+      await showWebCalls();
     }
     status = interruptedRuns.has(run)
       ? "interrupted"
