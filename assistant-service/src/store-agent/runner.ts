@@ -44,7 +44,6 @@ export type StoreAgentDeps = {
   cursorApiKey: string;
   /** Parent folder of every chat's working folder. */
   workRoot: string;
-  serperApiKey?: string;
   log: (message: string, extra?: unknown) => void;
 };
 
@@ -478,7 +477,6 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
         autoRun: req.autoRun,
         autoRunBulk: req.autoRunBulk,
         notes: await loadStoreNotes(db, req.workspaceId),
-        imageSearch: !!deps.serperApiKey,
       })
     );
 
@@ -537,8 +535,6 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
         autoRunBulk: req.autoRunBulk,
         planMode: req.mode === "plan",
         checkpoint,
-        addCost,
-        serperApiKey: deps.serperApiKey,
         log,
       }),
       ...createFileTools(cwd, (relative) => written.add(relative)),

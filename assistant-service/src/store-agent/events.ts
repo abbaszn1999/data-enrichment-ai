@@ -49,8 +49,22 @@ export function describeTool(name: string, args: Args): Described {
       return { kind: "store_write", title: "Changing the store in bulk", detail: clip(str(args.purpose), 140) || undefined };
     case "shopify_schema":
       return { kind: "store_read", title: "Checking the store's API", detail: str(args.type_name) || undefined };
-    case "find_product_images":
-      return { kind: "image", title: "Finding product photos", detail: clip(str(args.query), 120) || undefined };
+    case "woo_api": {
+      const isRead = str(args.method).toUpperCase() === "GET" || !args.method;
+      return {
+        kind: isRead ? "store_read" : "store_write",
+        title: isRead ? "Reading the store" : "Changing the store",
+        detail: clip(str(args.purpose) || str(args.path), 140) || undefined,
+      };
+    }
+    case "woo_export":
+      return { kind: "store_read", title: "Exporting from the store", detail: clip(str(args.purpose) || str(args.name), 140) || undefined };
+    case "woo_bulk_update":
+      return { kind: "store_write", title: "Changing the store in bulk", detail: clip(str(args.purpose), 140) || undefined };
+    case "woo_schema":
+      return { kind: "store_read", title: "Checking the store's API", detail: str(args.path) || undefined };
+    case "woo_image_link":
+      return { kind: "file", title: "Preparing an image for the store", detail: base(args.path) || undefined };
     case "save_store_note":
       return { kind: "other", title: "Remembering for this store", detail: clip(str(args.note), 120) || undefined };
     case "run_script":
@@ -129,29 +143,32 @@ export function summarizeResult(name: string, result: unknown): { ok: boolean; s
   const { text, isError } = resultText(result);
   if (isError) return { ok: false, summary: clip(scrub(text || "failed").replace(/\s+/g, " "), 200) };
   switch (name) {
-    case "shopify_admin": {
+    case "shopify_admin":
+    case "woo_api": {
       try {
-        const parsed = JSON.parse(text) as { userErrors?: string[]; errors?: string[] };
+        const parsed = JSON.parse(text) as { userErrors?: string[]; errors?: string[]; itemErrors?: Array<{ message: string }> };
         if (parsed.userErrors?.length) return { ok: false, summary: clip(parsed.userErrors.join("; "), 200) };
+        if (parsed.itemErrors?.length) return { ok: false, summary: clip(parsed.itemErrors.map((e) => e.message).join("; "), 200) };
         if (parsed.errors?.length) return { ok: false, summary: clip(parsed.errors.join("; "), 200) };
       } catch {
-        if (/saved to shopify-results/.test(text)) return { ok: true, summary: "large result saved to a file" };
+        if (/saved to (shopify|woo)-results/.test(text)) return { ok: true, summary: "large result saved to a file" };
       }
       return { ok: true };
     }
     case "shopify_bulk_export":
     case "shopify_bulk_update":
-    case "find_product_images":
+    case "woo_export":
+    case "woo_bulk_update":
     case "run_script": {
       try {
         const first = text.split("\n")[0] ?? "";
         const parsed = JSON.parse(first) as Record<string, unknown>;
         if (name === "shopify_bulk_export") return { ok: true, summary: `${parsed.topLevelRows ?? parsed.records} records exported` };
-        if (name === "shopify_bulk_update") {
+        if (name === "woo_export") return { ok: true, summary: `${parsed.records} records exported` };
+        if (name === "shopify_bulk_update" || name === "woo_bulk_update") {
           const failed = Number(parsed.failed) || 0;
           return { ok: failed === 0, summary: `${parsed.succeeded} changed${failed ? `, ${failed} failed` : ""}` };
         }
-        if (name === "find_product_images") return { ok: true, summary: `${(parsed.candidates as unknown[] | undefined)?.length ?? 0} photos found` };
         const files = (parsed.files as string[] | undefined) ?? [];
         return { ok: true, summary: files.length ? `wrote ${files.map(base).join(", ")}` : undefined };
       } catch {
@@ -159,6 +176,7 @@ export function summarizeResult(name: string, result: unknown): { ok: boolean; s
       }
     }
     case "shopify_schema":
+    case "woo_schema":
     case "webSearch":
     case "webFetch":
     case "generateImage":

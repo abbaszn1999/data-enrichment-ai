@@ -31,9 +31,6 @@ export type ToolContext = {
   consent?: { declinedAt: number | null; answeredAt: number | null };
   /** Persist state now (a store write happened). */
   checkpoint: () => void;
-  /** Cost of a paid call outside the model (image search), added to the run. */
-  addCost: (usd: number, label: string) => void;
-  serperApiKey?: string;
   log?: (message: string, extra?: unknown) => void;
 };
 

@@ -205,7 +205,6 @@ function startStoreAgent(app: Hono, config: ServiceConfig): (() => Promise<void>
     log,
     cursorApiKey: config.cursorApiKey,
     workRoot: config.storeAgent.workDir,
-    serperApiKey: config.storeAgent.serperApiKey,
     secret: config.secret,
   };
   mountStoreAgentRoutes(app, deps);

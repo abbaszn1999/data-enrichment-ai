@@ -18,8 +18,6 @@ export type ModelParam = { id: string; value: string };
  */
 export const IMAGE_GENERATION_USD = 0.134;
 
-/** One Google Images search through Serper. */
-export const SERPER_USD_PER_QUERY = 0.001;
 
 export type TokenUsage = {
   /** All prompt tokens, including cache reads and cache writes. */

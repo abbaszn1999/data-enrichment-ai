@@ -21,7 +21,7 @@ export interface ServiceConfig {
   /** Dollars per million tokens, used only when the SDK reports no billed cost. */
   rates: TokenRates;
   /** Store Agent: on when Supabase and the integration key are configured. */
-  storeAgent: { supabaseUrl: string; serviceRoleKey: string; workDir: string; serperApiKey?: string } | null;
+  storeAgent: { supabaseUrl: string; serviceRoleKey: string; workDir: string } | null;
 }
 
 export type TokenRates = { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -68,7 +68,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
           serviceRoleKey,
           // Off OneDrive and off the repo: chat folders are scratch space mirrored to Storage.
           workDir: resolve(env.STORE_AGENT_WORK_DIR || join(tmpdir(), "store-agent-work")),
-          serperApiKey: env.SERPER_API_KEY || undefined,
         }
       : null;
   const modelFast = env.ASSISTANT_MODEL_FAST === "true";

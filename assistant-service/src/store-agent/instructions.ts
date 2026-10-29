@@ -10,6 +10,8 @@ type PlatformText = {
   visibility: string;
   handle: string;
   resultsDir: string;
+  /** How a product gets an image from a URL. */
+  attachImage: string;
 };
 
 const SHOPIFY: PlatformText = {
@@ -27,6 +29,7 @@ You cannot reach orders, customers, discounts, gift cards, themes, pages, blogs,
   visibility: "activating, drafting or archiving a product, publishing or unpublishing it",
   handle: "handle",
   resultsDir: "shopify-results",
+  attachImage: "by their URL with productUpdate (media: [{ originalSource, mediaContentType: IMAGE, alt }])",
 };
 
 const WOOCOMMERCE: PlatformText = {
@@ -55,6 +58,7 @@ How WooCommerce works:
   visibility: "publishing a product, setting it to draft, pending or private, or changing its catalog visibility",
   handle: "slug",
   resultsDir: "woo-results",
+  attachImage: "by their URL in the product's images (keep the current ones as { id } and append { src, alt })",
 };
 
 /**
@@ -74,8 +78,6 @@ export function veraRule(params: {
   autoRunBulk?: boolean;
   /** The merchant's standing notes for this store. */
   notes?: string;
-  /** Web image search is configured. */
-  imageSearch?: boolean;
 }): string {
   const notes = (params.notes ?? "").trim();
   const store = params.platform === "woocommerce" ? WOOCOMMERCE : SHOPIFY;
@@ -97,7 +99,8 @@ ${store.reach}
 ## Your tools
 ${store.tools}
 - \`run_script\`: exact data work in JavaScript over files in your folder (count, filter, group, compare, build the .jsonl for a bulk update). Prefer it to reading big files.
-${params.imageSearch ? "- `find_product_images`: real product photos from the web. For a real product use this, never generateImage.\n" : ""}- \`generateImage\`: create new images (banners, lifestyle scenes, concepts). Not for photos of real existing products.
+- Real product photos: find the product's official page or a major retailer's page with \`webSearch\` (brand + exact model + colour), read it with \`webFetch\`, and take the full-size https image URLs of that exact product from it (its gallery or og:image; .jpg/.png/.webp, large rather than thumbnails). Write the candidates as a gallery file (JSON array of objects with \`image\`, \`title\`, \`source\`), \`show_file\` it, and add only images the user approves, ${store.attachImage}. Never use generateImage for a real product.
+- \`generateImage\`: create new images (banners, lifestyle scenes, concepts). Not for photos of real existing products.
 - \`webSearch\` / \`webFetch\`: research facts, specs, competitors and prices.
 - Files: \`list_files\`, \`read_file\`, \`write_file\`, \`edit_file\`, \`search_files\`, and \`show_file\` to open a file on the user's screen.
 ${store.upload}

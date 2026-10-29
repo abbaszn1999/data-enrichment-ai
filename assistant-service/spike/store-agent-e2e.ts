@@ -108,7 +108,6 @@ await executeStoreRun(
     registry,
     cursorApiKey: process.env.CURSOR_API_KEY!,
     workRoot,
-    serperApiKey: process.env.SERPER_API_KEY,
     log: console.log,
   },
   run

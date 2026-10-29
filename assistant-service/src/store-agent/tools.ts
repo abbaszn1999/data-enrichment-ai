@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { SDKCustomTool } from "@cursor/sdk";
-import { SERPER_USD_PER_QUERY } from "../../../src/lib/store-agent/pricing";
 import { MAX_QUESTIONS_PER_CARD } from "../../../src/lib/store-agent/protocol";
 import { mimeFor, resolveInChat } from "./files";
 import { bulkMutationErrors, exportToCsv, parseBulkLines, runBulkMutation, runBulkQuery } from "./shopify/bulk";
@@ -447,61 +446,6 @@ function createShopifyTools(ctx: ToolContext): Record<string, SDKCustomTool> {
 
 function createSharedTools(ctx: ToolContext): Record<string, SDKCustomTool> {
   return {
-    find_product_images: {
-      description:
-        "Search the web (Google Images) for real photos of a product, for example to give a product without images its photo. " +
-        "Search by brand + model + key attribute. Returns candidate image URLs with size and source, saved as a gallery the user sees. " +
-        (ctx.platform === "woocommerce"
-          ? "To use one, add its URL to the product with woo_api (PUT products/{id} with images: [...current images as { id }, { src, alt }]; the first image is the main one). "
-          : "To use one, attach its URL to the product with shopify_admin (productUpdate with media: [{ originalSource, mediaContentType: IMAGE, alt }]). ") +
-        "Prefer official brand or retailer sources and images at least 800px wide. Do not use generateImage for real products.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Search terms, e.g. 'Apple iPhone 17 Pro Max Cosmic Orange back'." },
-          count: { type: "number", description: "Candidates to return (1-12, default 6)." },
-        },
-        required: ["query"],
-      },
-      execute: async (args) => {
-        if (!ctx.serperApiKey) return failure("Image search is not configured on this server.");
-        const query = String(args.query ?? "").trim().slice(0, 200);
-        if (!query) return failure("Give search terms.");
-        const count = Math.max(1, Math.min(12, Math.floor(Number(args.count) || 6)));
-        try {
-          const res = await fetch("https://google.serper.dev/images", {
-            method: "POST",
-            headers: { "X-API-KEY": ctx.serperApiKey, "Content-Type": "application/json" },
-            body: JSON.stringify({ q: query, num: 20 }),
-            signal: ctx.run.signal,
-          });
-          ctx.addCost(SERPER_USD_PER_QUERY, "image search");
-          if (!res.ok) return failure(`Image search failed (${res.status}).`);
-          const data = (await res.json()) as {
-            images?: Array<{ title?: string; imageUrl?: string; imageWidth?: number; imageHeight?: number; source?: string; domain?: string; link?: string }>;
-          };
-          const candidates = (data.images ?? [])
-            .filter((i) => i.imageUrl && /^https:\/\//.test(i.imageUrl) && !/\.(svg|gif)(\?|$)/i.test(i.imageUrl))
-            .sort((a, b) => (b.imageWidth ?? 0) - (a.imageWidth ?? 0))
-            .slice(0, count)
-            .map((i) => ({
-              image: i.imageUrl!,
-              title: i.title ?? "",
-              width: i.imageWidth ?? null,
-              height: i.imageHeight ?? null,
-              source: i.domain ?? i.source ?? "",
-              page: i.link ?? "",
-            }));
-          if (!candidates.length) return text("No usable images found. Try other search terms (brand, exact model, colour).");
-          const slug = query.toLowerCase().replace(/[^a-z0-9؀-ۿ]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "images";
-          const gallery = await writeChatFile(ctx, `images/search-${slug}.json`, JSON.stringify(candidates, null, 2), true);
-          return text(JSON.stringify({ gallery, candidates }));
-        } catch (error) {
-          return failure((error as Error).message);
-        }
-      },
-    },
-
     save_store_note: {
       description:
         "Remember something lasting about this store for every future chat: brand voice, the language for product text, naming or pricing rules, " +
