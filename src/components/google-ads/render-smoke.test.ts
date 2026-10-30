@@ -177,9 +177,34 @@ describe("render smoke", () => {
     useGoogleAds.setState({ scope: {}, view: "library" });
     let html = renderToString(createElement(GoogleAdsShell));
     for (const t of ["Budgets", "Bid strategies", "Negative lists", "Placement exclusions", "Labels"]) expect(html).toContain(t);
+    expect(html).toContain("Every budget in the account");
     useGoogleAds.setState({ scope: {}, view: "adGroups" });
     html = renderToString(createElement(GoogleAdsShell));
     expect(html).toContain("Asset groups");
+  });
+
+  it("builds the Shared library from real objects: portfolio strategies, placement lists, labels", () => {
+    connect();
+    const data = useGoogleAds.getState().accounts["7316204458"]!.data;
+    // A portfolio strategy exists as its own object and campaigns point at it.
+    expect(data.bidStrategies.length).toBeGreaterThan(0);
+    for (const s of data.bidStrategies) {
+      expect(data.campaigns.some((c) => c.bidding.portfolioId === s.id), s.name).toBe(true);
+    }
+    // A campaign's own strategy (no portfolioId) is not a library item.
+    expect(data.campaigns.some((c) => !c.bidding.portfolioId)).toBe(true);
+    // Placement exclusion lists are named lists attached to real campaigns.
+    for (const l of data.placementLists) {
+      expect(l.placements.length).toBeGreaterThan(0);
+      expect(l.campaignIds.every((id) => data.campaigns.some((c) => c.id === id))).toBe(true);
+    }
+    // Labels sit on more than campaigns.
+    expect(data.adGroups.some((g) => g.labels?.length)).toBe(true);
+    expect(data.keywords.some((k) => k.labels?.length)).toBe(true);
+    // The empty account has none of it.
+    connect("9082215570");
+    const empty = useGoogleAds.getState().accounts["9082215570"]!.data;
+    expect([empty.bidStrategies, empty.placementLists, empty.labelDefs].every((x) => x.length === 0)).toBe(true);
   });
 
   it("recommendations are asked of the agent, not applied from the dashboard", () => {

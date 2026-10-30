@@ -190,7 +190,7 @@ export function buildDemoAccount(today = isoDay(new Date())): AccountData {
       name: "Running Shoes – Search",
       type: "SEARCH",
       budgetId: "b_running",
-      bidding: { type: "TARGET_CPA", targetCpa: 18 },
+      bidding: { type: "TARGET_CPA", targetCpa: 18, portfolioId: "ps_search_cpa" },
       servingIssues: ["LIMITED_BY_BUDGET"],
       labels: ["Non-brand", "Top seller"],
       devices: { mobile: 0.15, desktop: 0, tablet: -0.2 },
@@ -215,7 +215,7 @@ export function buildDemoAccount(today = isoDay(new Date())): AccountData {
       name: "PMax – All Products",
       type: "PERFORMANCE_MAX",
       budgetId: "b_pmax",
-      bidding: { type: "TARGET_ROAS", targetRoas: 4 },
+      bidding: { type: "TARGET_ROAS", targetRoas: 4, portfolioId: "ps_feed_roas" },
       networks: { googleSearch: true, searchPartners: true, displayNetwork: true },
       merchantFeed: true,
       labels: ["Feed"],
@@ -764,6 +764,20 @@ export function buildDemoAccount(today = isoDay(new Date())): AccountData {
     keywords,
     negatives,
     negativeLists: [{ id: "nl_universal", name: "Universal negatives", campaignIds: ["c_brand", "c_running", "c_generic"] }],
+    bidStrategies: [
+      { id: "ps_search_cpa", name: "Non-brand Search · Target CPA", type: "TARGET_CPA", targetCpa: 18 },
+      { id: "ps_feed_roas", name: "Feed campaigns · Target ROAS", type: "TARGET_ROAS", targetRoas: 4 },
+    ],
+    placementLists: [
+      { id: "pl_low_quality", name: "Low-quality apps and sites", campaignIds: ["c_remarketing", "c_demandgen"], placements: ["mobileapp::com.freegames.puzzle", "kids-cartoons.example", "news-aggregator-ar.net"] },
+    ],
+    labelDefs: [
+      { id: "lb_brand", name: "Brand", color: "#400095" },
+      { id: "lb_nonbrand", name: "Non-brand", color: "#0E7490" },
+      { id: "lb_top", name: "Top seller", color: "#F76D01" },
+      { id: "lb_feed", name: "Feed", color: "#15803D" },
+      { id: "lb_remarketing", name: "Remarketing", color: "#C40000" },
+    ],
     ads,
     assets,
     assetGroups,
@@ -784,6 +798,14 @@ export function buildDemoAccount(today = isoDay(new Date())): AccountData {
     brandExclusions: [],
   };
   data.campaigns = data.campaigns.map((c) => (c.type === "PERFORMANCE_MAX" ? { ...c, finalUrlExpansion: true } : c));
+
+  // Labels also sit on ad groups, ads and keywords, not only campaigns.
+  const inCampaign = (campaignId: string) => new Set(data.adGroups.filter((g) => g.campaignId === campaignId).map((g) => g.id));
+  const topGroups = inCampaign("c_running");
+  const brandGroups = inCampaign("c_brand");
+  data.adGroups = data.adGroups.map((g) => (topGroups.has(g.id) ? { ...g, labels: ["Top seller"] } : g));
+  data.ads = data.ads.map((a) => (topGroups.has(a.adGroupId) ? { ...a, labels: ["Top seller"] } : a));
+  data.keywords = data.keywords.map((k) => (brandGroups.has(k.adGroupId) ? { ...k, labels: ["Brand"] } : k));
 
   // Conversion counts follow the series so the Goals page agrees with reports.
   const last30Start = addDays(today, -30);
@@ -819,6 +841,9 @@ export function buildEmptyAccount(): AccountData {
     keywords: [],
     negatives: [],
     negativeLists: [],
+    bidStrategies: [],
+    placementLists: [],
+    labelDefs: [],
     ads: [],
     assets: [],
     assetGroups: [],
@@ -867,6 +892,7 @@ export function buildSecondAccount(today = isoDay(new Date())): AccountData {
     recommendations: d.recommendations.filter((r) => !r.campaignId || keep.has(r.campaignId)).slice(0, 3),
     negatives: d.negatives.filter((n) => n.level !== "CAMPAIGN" || keep.has(n.parentId)),
     negativeLists: d.negativeLists.map((l) => ({ ...l, campaignIds: l.campaignIds.filter((id) => keep.has(id)) })),
+    placementLists: d.placementLists.map((l) => ({ ...l, campaignIds: l.campaignIds.filter((id) => keep.has(id)) })).filter((l) => l.campaignIds.length),
     products: [],
     listingGroups: [],
     experiments: [],
