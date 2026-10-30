@@ -1,15 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { AlertOctagon, AlertTriangle, Bell, Bot, CheckCheck, Info, Plus, Trash2, Zap } from "lucide-react";
-import { toast } from "sonner";
+import { AlertOctagon, AlertTriangle, Bell, Bot, CheckCheck, Info, Trash2, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { gid } from "@/lib/google-ads/mutations";
 import { runAgentTurn } from "@/lib/google-ads/agent-runner";
 import { useGoogleAds } from "@/lib/google-ads/store";
 import type { Alert, AutomatedRule, RuleMetric } from "@/lib/google-ads/types";
-import { Input } from "@/components/ui/input";
-import { ACCENT_BTN, Card, EmptyState, Field, Pill, Segmented, SelectBox, Toggle, ViewHeader } from "../ga-ui";
+import { Card, EmptyState, Pill, Segmented, Toggle, ViewHeader } from "../ga-ui";
 import { useGa } from "../use-ga";
 
 const METRIC_LABEL: Record<RuleMetric, string> = {
@@ -134,7 +131,6 @@ export function AlertsFeed({ compact }: { compact?: boolean }) {
 function RulesList() {
   const { data } = useGa();
   const applyDirect = useGoogleAds((s) => s.applyDirect);
-  const [creating, setCreating] = useState(false);
   const names = (ids: string[]) => (ids.length ? ids.map((id) => data.campaigns.find((c) => c.id === id)?.name ?? id).join(", ") : "all enabled campaigns");
 
   return (
@@ -160,92 +156,7 @@ function RulesList() {
           </div>
         </Card>
       ))}
-      {creating ? (
-        <RuleForm onDone={() => setCreating(false)} />
-      ) : (
-        <button type="button" onClick={() => setCreating(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-xs font-semibold hover:bg-muted">
-          <Plus className="h-3.5 w-3.5" /> New rule
-        </button>
-      )}
+      {!data.rules.length && <EmptyState icon={Zap} title="No automated rules" body="Ask the agent to set up a rule, e.g. pause campaigns that overspend." />}
     </div>
-  );
-}
-
-function RuleForm({ onDone }: { onDone: () => void }) {
-  const { data } = useGa();
-  const applyDirect = useGoogleAds((s) => s.applyDirect);
-  const [rule, setRule] = useState<AutomatedRule>({
-    id: gid("rule"),
-    name: "",
-    campaignIds: [],
-    condition: { metric: "cost", op: ">", value: 100, window: "TODAY" },
-    action: "NOTIFY",
-    frequency: "DAILY",
-    enabled: true,
-    createdBy: "USER",
-  });
-  const set = (patch: Partial<AutomatedRule>) => setRule((r) => ({ ...r, ...patch }));
-  const cond = (patch: Partial<AutomatedRule["condition"]>) => setRule((r) => ({ ...r, condition: { ...r.condition, ...patch } }));
-  const needsAmount = rule.action === "RAISE_BUDGET" || rule.action === "LOWER_BUDGET";
-
-  return (
-    <Card className="space-y-3 p-4">
-      <p className="text-sm font-bold">New rule</p>
-      <Field label="Name">
-        <Input value={rule.name} onChange={(e) => set({ name: e.target.value })} placeholder="e.g. Pause campaigns that overspend" />
-      </Field>
-      <Field label="Apply to">
-        <SelectBox
-          value={rule.campaignIds[0] ?? "ALL"}
-          onChange={(v) => set({ campaignIds: v === "ALL" ? [] : [v] })}
-          options={[{ value: "ALL", label: "All enabled campaigns" }, ...data.campaigns.filter((c) => c.status !== "REMOVED").map((c) => ({ value: c.id, label: c.name }))]}
-        />
-      </Field>
-      <div className="grid gap-2 sm:grid-cols-4">
-        <Field label="When">
-          <SelectBox value={rule.condition.metric} onChange={(v) => cond({ metric: v })} options={(Object.keys(METRIC_LABEL) as RuleMetric[]).map((m) => ({ value: m, label: METRIC_LABEL[m] }))} />
-        </Field>
-        <Field label="Is">
-          <SelectBox value={rule.condition.op} onChange={(v) => cond({ op: v })} options={[{ value: ">", label: "above" }, { value: "<", label: "below" }]} />
-        </Field>
-        <Field label="Value">
-          <Input type="number" value={rule.condition.value} onChange={(e) => cond({ value: Number(e.target.value) })} />
-        </Field>
-        <Field label="Over">
-          <SelectBox value={rule.condition.window} onChange={(v) => cond({ window: v })} options={[{ value: "TODAY", label: "Today" }, { value: "LAST_7_DAYS", label: "Last 7 days" }, { value: "LAST_30_DAYS", label: "Last 30 days" }]} />
-        </Field>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-3">
-        <Field label="Then">
-          <SelectBox value={rule.action} onChange={(v) => set({ action: v })} options={(Object.keys(ACTION_LABEL) as AutomatedRule["action"][]).map((a) => ({ value: a, label: ACTION_LABEL[a] }))} />
-        </Field>
-        {needsAmount && (
-          <Field label="By (%)">
-            <Input type="number" value={rule.amount ?? 20} onChange={(e) => set({ amount: Number(e.target.value) })} />
-          </Field>
-        )}
-        <Field label="Check">
-          <SelectBox value={rule.frequency} onChange={(v) => set({ frequency: v })} options={[{ value: "HOURLY", label: "Every hour" }, { value: "DAILY", label: "Every day" }, { value: "WEEKLY", label: "Every week" }]} />
-        </Field>
-      </div>
-      <div className="flex justify-end gap-2">
-        <button type="button" onClick={onDone} className="rounded-lg border border-border/70 px-3 py-1.5 text-xs font-medium hover:bg-muted">Cancel</button>
-        <button
-          type="button"
-          disabled={!rule.name.trim()}
-          onClick={() => {
-            const item = needsAmount ? { ...rule, amount: rule.amount ?? 20 } : rule;
-            const res = applyDirect(`Create rule "${rule.name}"`, [{ kind: "collection.upsert", collection: "rules", items: [item] }]);
-            if (res.ok) {
-              toast.success("Rule created");
-              onDone();
-            }
-          }}
-          className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold", ACCENT_BTN)}
-        >
-          Create rule
-        </button>
-      </div>
-    </Card>
   );
 }

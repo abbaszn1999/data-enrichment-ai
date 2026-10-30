@@ -140,7 +140,10 @@ describe("render smoke", () => {
   it("shows the agreed account-level sidebar and nothing the agent should do", () => {
     connect();
     useGoogleAds.setState({ scope: {}, view: "overview" });
-    const html = part(renderToString(createElement(GoogleAdsShell)), "nav");
+    const page = renderToString(createElement(GoogleAdsShell));
+    // No Pending button in the top bar either: approvals happen in the chat.
+    expect(page).not.toContain('title="Pending changes"');
+    const html = part(page, "nav");
     for (const label of ["Recommendations", "Reports", "Campaigns", "Ad groups", "Ads", "Experiments", "Assets", "Keywords", "Audiences", "Placements &amp; content", "Locations &amp; schedule", "Shared library", "Conversions", "Linked accounts", "Connections", "Account settings", "Documents", "Business profile", "Rules &amp; alerts"]) {
       expect(html, label).toContain(label);
     }
@@ -214,6 +217,60 @@ describe("render smoke", () => {
     expect(html).toContain("Ask agent to apply");
     expect(html).toContain("Ask agent to explain");
     expect(html).not.toContain("Dismiss");
+  });
+
+  it("has no manual add, edit or experiment buttons: the user asks the agent", () => {
+    connect();
+    const page = (view: GaView) => {
+      useGoogleAds.setState({ scope: {}, view });
+      return part(renderToString(createElement(GoogleAdsShell)), "main");
+    };
+    const button = (label: string) => new RegExp(`</svg>\\s*${label}</button>`);
+    expect(page("campaigns")).not.toContain("New campaign");
+    expect(page("adGroups")).not.toMatch(button("Ad group"));
+    const ads = page("ads");
+    expect(ads).not.toContain("Write ads with agent");
+    expect(ads).not.toMatch(button("Ad"));
+    expect(ads).not.toMatch(button("Edit"));
+    expect(ads).toContain("Fix with agent");
+    const experiments = page("experiments");
+    for (const t of ["New experiment", "Apply to campaign", "End experiment", "Start experiment"]) expect(experiments, t).not.toContain(t);
+    expect(experiments).toContain("Confidence");
+    // Keywords keeps the agent shortcuts and loses the manual add buttons.
+    const keywords = page("keywords");
+    expect(keywords).toContain("Keyword ideas");
+    expect(keywords).not.toMatch(button("Keywords"));
+    const negatives = page("negatives");
+    expect(negatives).toContain("Find waste");
+    expect(negatives).not.toMatch(button("Negative keywords"));
+    expect(page("searchTerms")).toMatch(/Analy[sz]e with agent/);
+    expect(negatives).not.toContain('aria-label="Remove"');
+  });
+
+  it("targeting and measurement pages are read-only", () => {
+    connect();
+    const render = (view: GaView, campaignId?: string) => {
+      useGoogleAds.setState({ scope: campaignId ? { campaignId } : {}, view });
+      return part(renderToString(createElement(GoogleAdsShell)), "main");
+    };
+    const campaignId = useGoogleAds.getState().accounts && Object.values(useGoogleAds.getState().accounts)[0]?.data.campaigns[0]?.id;
+    const views: GaView[] = ["audiences", "demographics", "content", "locations", "schedule", "devices", "conversions"];
+    for (const v of views) {
+      for (const html of [render(v), render(v, campaignId)]) {
+        expect(html, v).not.toContain("<input");
+        // A <select> is allowed: it is the campaign picker (a view filter), not an editor.
+        expect(html, v).not.toContain('aria-label="Remove"');
+        expect(html, v).not.toMatch(/<button[^>]*role="switch"/);
+        for (const t of ["Add segment", "Add exclusion", "Add targeting", "Add rule", "Upload a CSV"]) expect(html, `${v}: ${t}`).not.toContain(t);
+        expect(html, v).not.toMatch(/>(All day|8:00[^<]*|Conversion action)<\/button>/);
+      }
+    }
+    expect(render("content")).toMatch(/Find bad placements/);
+    expect(render("conversions")).toMatch(/Check tracking/);
+    // Rules & alerts: rules are created by the agent, there is no manual "New rule".
+    const rules = render("rules");
+    expect(rules).not.toContain("New rule");
+    expect(rules).toContain("Let the agent set it up");
   });
 
   it("business profile is a read-only knowledge base the agent fills", () => {

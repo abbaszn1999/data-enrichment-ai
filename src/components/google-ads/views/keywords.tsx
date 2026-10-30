@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bot, ListX, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { Bot, ListX, Pause, Play, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MATCH_TYPES } from "@/lib/google-ads/constants";
 import { derive, keywordBase, money } from "@/lib/google-ads/metrics";
@@ -12,7 +12,7 @@ import type { EntityStatus, Keyword, MatchType, NegativeKeyword } from "@/lib/go
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { metricColumns } from "../ga-columns";
 import { BulkButton, GaTable, type GaColumn } from "../ga-table";
-import { ACCENT_BTN, Card, EmptyState, Pill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
+import { Card, EmptyState, Pill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
 import { scopedAdGroupIds, useGa } from "../use-ga";
 import { STATUS_FILTERS, SearchBox, filterByStatus, type StatusFilter } from "./campaigns";
 
@@ -73,7 +73,6 @@ function CpcCell({ k, currency, fallback }: { k: Keyword; currency: string; fall
 
 export function KeywordsView() {
   const { data, range, currency, scope, campaign, adGroup } = useGa();
-  const openDialog = useGoogleAds((s) => s.openDialog);
   const applyDirect = useGoogleAds((s) => s.applyDirect);
   const [filter, setFilter] = useState<StatusFilter>("ACTIVE");
   const [query, setQuery] = useState("");
@@ -145,9 +144,6 @@ export function KeywordsView() {
             <button type="button" onClick={() => runAgentTurn("Find new keyword ideas")} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 px-3 text-xs font-semibold hover:bg-muted">
               <Bot className="h-3.5 w-3.5" /> Keyword ideas
             </button>
-            <button type="button" onClick={() => openDialog({ kind: "keywords", adGroupId: scope.adGroupId })} className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold", ACCENT_BTN)}>
-              <Plus className="h-3.5 w-3.5" /> Keywords
-            </button>
           </>
         }
       >
@@ -181,9 +177,7 @@ export function KeywordsView() {
 }
 
 export function NegativesView() {
-  const { data, scope, campaign, adGroup } = useGa();
-  const openDialog = useGoogleAds((s) => s.openDialog);
-  const applyDirect = useGoogleAds((s) => s.applyDirect);
+  const { data, scope } = useGa();
   const [level, setLevel] = useState<"ALL" | NegativeKeyword["level"]>("ALL");
 
   const inScope = (n: NegativeKeyword) => {
@@ -207,16 +201,6 @@ export function NegativesView() {
     { id: "match", header: "Match type", render: (n) => <span className="text-muted-foreground">{MATCH_TYPES[n.matchType].label}</span> },
     { id: "level", header: "Level", render: (n) => <Pill tone={n.level === "LIST" ? "brand" : "neutral"}>{n.level === "LIST" ? "Shared list" : n.level === "CAMPAIGN" ? "Campaign" : "Ad group"}</Pill> },
     { id: "where", header: "Added to", render: (n) => <span className="block max-w-56 truncate text-muted-foreground">{where(n)}</span> },
-    {
-      id: "actions",
-      header: "",
-      align: "right",
-      render: (n) => (
-        <button type="button" onClick={() => applyDirect(`Remove negative ${keywordLabel(n.text, n.matchType)}`, [{ kind: "negative.remove", ids: [n.id] }])} className="rounded p-1 text-muted-foreground hover:bg-red-500/10 hover:text-red-600" aria-label="Remove">
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      ),
-    },
   ];
 
   return (
@@ -228,9 +212,6 @@ export function NegativesView() {
           <>
             <button type="button" onClick={() => runAgentTurn("Where am I wasting budget?")} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 px-3 text-xs font-semibold hover:bg-muted">
               <Bot className="h-3.5 w-3.5" /> Find waste
-            </button>
-            <button type="button" onClick={() => openDialog({ kind: "negatives", campaignId: campaign?.id, adGroupId: adGroup?.id })} className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold", ACCENT_BTN)}>
-              <Plus className="h-3.5 w-3.5" /> Negative keywords
             </button>
           </>
         }

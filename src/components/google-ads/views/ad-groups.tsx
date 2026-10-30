@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bot, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { Bot, Pause, Play, Trash2 } from "lucide-react";
 import { runAgentTurn } from "@/lib/google-ads/agent-runner";
 import { cn } from "@/lib/utils";
 import { LIMITS } from "@/lib/google-ads/constants";
@@ -10,7 +10,7 @@ import { useGoogleAds } from "@/lib/google-ads/store";
 import type { AdGroup, AssetGroup, EntityStatus } from "@/lib/google-ads/types";
 import { metricColumns } from "../ga-columns";
 import { BulkButton, GaTable, type GaColumn } from "../ga-table";
-import { ACCENT_BTN, AdStrengthMeter, Card, ImageTile, Pill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
+import { AdStrengthMeter, Card, ImageTile, Pill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
 import { useGa } from "../use-ga";
 import { STATUS_FILTERS, SearchBox, filterByStatus, type StatusFilter } from "./campaigns";
 
@@ -57,7 +57,6 @@ export function AdGroupsView() {
 function AdGroupsTable() {
   const { data, range, currency, campaign } = useGa();
   const setScope = useGoogleAds((s) => s.setScope);
-  const openDialog = useGoogleAds((s) => s.openDialog);
   const applyDirect = useGoogleAds((s) => s.applyDirect);
   const [filter, setFilter] = useState<StatusFilter>("ACTIVE");
   const [query, setQuery] = useState("");
@@ -139,9 +138,6 @@ function AdGroupsTable() {
           actions={
             <>
               <SearchBox value={query} onChange={setQuery} placeholder="Find an ad group" />
-              <button type="button" onClick={() => openDialog({ kind: "adGroup", campaignId: campaign?.id })} className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold", ACCENT_BTN)}>
-                <Plus className="h-3.5 w-3.5" /> Ad group
-              </button>
             </>
           }
         >

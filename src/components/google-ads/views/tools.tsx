@@ -3,15 +3,15 @@
 import { useMemo, useState } from "react";
 import { useTheme } from "next-themes";
 import { CartesianGrid, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Beaker, Calculator, Check, FlaskConical, Plus, Search, Square } from "lucide-react";
+import { Beaker, Calculator, FlaskConical, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GEO_TARGETS, LANGUAGES } from "@/lib/google-ads/constants";
 import { forecastCampaign, keywordIdeas, type KeywordIdea } from "@/lib/google-ads/analytics";
-import { addDays, money, num } from "@/lib/google-ads/metrics";
+import { money, num } from "@/lib/google-ads/metrics";
 import { gid } from "@/lib/google-ads/mutations";
 import { useGoogleAds } from "@/lib/google-ads/store";
-import type { Experiment, MatchType, MutateOp } from "@/lib/google-ads/types";
+import type { MatchType, MutateOp } from "@/lib/google-ads/types";
 import { Input } from "@/components/ui/input";
 import { BulkButton, GaTable, type GaColumn } from "../ga-table";
 import { ACCENT_BTN, Card, Delta, EmptyState, Field, Pill, SelectBox, ViewHeader } from "../ga-ui";
@@ -110,96 +110,16 @@ export function KeywordPlannerView() {
 
 // ─── Experiments ───────────────────────────────────────────────────────────
 
-const EXP_TEMPLATES: { id: string; label: string; build: (campaignId: string, data: ReturnType<typeof useGa>["data"]) => { change: string; ops: MutateOp[] } }[] = [
-  {
-    id: "troas",
-    label: "Bid to a target ROAS",
-    build: (cid) => ({ change: "Switch bidding to Target ROAS 400%", ops: [{ kind: "campaign.update", campaignId: cid, patch: { bidding: { type: "TARGET_ROAS", targetRoas: 4 } } }] }),
-  },
-  {
-    id: "tcpa",
-    label: "Bid to a target CPA",
-    build: (cid) => ({ change: "Switch bidding to Target CPA $20", ops: [{ kind: "campaign.update", campaignId: cid, patch: { bidding: { type: "TARGET_CPA", targetCpa: 20 } } }] }),
-  },
-  {
-    id: "broad",
-    label: "Broad match keywords",
-    build: (cid, data) => {
-      const groups = new Set(data.adGroups.filter((g) => g.campaignId === cid).map((g) => g.id));
-      const ks = data.keywords.filter((k) => groups.has(k.adGroupId) && k.status === "ENABLED" && k.matchType !== "BROAD");
-      return { change: `Switch ${ks.length} keywords to broad match`, ops: ks.map((k) => ({ kind: "keyword.update" as const, keywordId: k.id, patch: { matchType: "BROAD" as const } })) };
-    },
-  },
-  {
-    id: "aimax",
-    label: "Turn on AI Max for Search",
-    build: (cid) => ({ change: "Enable AI Max (search term matching + URL expansion)", ops: [{ kind: "campaign.update", campaignId: cid, patch: { aiMax: true } }] }),
-  },
-];
-
 export function ExperimentsView() {
   const { data } = useGa();
-  const applyDirect = useGoogleAds((s) => s.applyDirect);
-  const [creating, setCreating] = useState(false);
-  const live = data.campaigns.filter((c) => c.status === "ENABLED");
-  const [base, setBase] = useState(live[0]?.id ?? "");
-  const [tpl, setTpl] = useState(EXP_TEMPLATES[0].id);
-  const [split, setSplit] = useState(50);
-  const [weeks, setWeeks] = useState(4);
-
-  const create = () => {
-    const t = EXP_TEMPLATES.find((x) => x.id === tpl)!;
-    const { change, ops } = t.build(base, data);
-    const today = new Date().toISOString().slice(0, 10);
-    const exp: Experiment = { id: gid("exp"), name: `${t.label} · ${data.campaigns.find((c) => c.id === base)?.name}`, baseCampaignId: base, change, ops, split, status: "RUNNING", startDate: today, endDate: addDays(today, weeks * 7) };
-    const res = applyDirect(`Start experiment "${exp.name}"`, [{ kind: "collection.upsert", collection: "experiments", items: [exp] }]);
-    if (res.ok) {
-      toast.success("Experiment started");
-      setCreating(false);
-    }
-  };
-
-  const applyExperiment = (e: Experiment) => {
-    const res = applyDirect(`Apply experiment "${e.name}" to campaign`, [...e.ops, { kind: "collection.upsert", collection: "experiments", items: [{ ...e, status: "APPLIED" }] }]);
-    if (res.ok) toast.success("Trial changes applied to the original campaign");
-    else toast.error(res.error);
-  };
 
   return (
     <div className="space-y-4">
       <ViewHeader
         title="Experiments"
-        subtitle="Test a change on part of a campaign's traffic before rolling it out. Google splits traffic and reports the difference with statistical confidence."
-        actions={
-          <button type="button" onClick={() => setCreating(true)} className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold", ACCENT_BTN)}>
-            <Plus className="h-3.5 w-3.5" /> New experiment
-          </button>
-        }
+        subtitle="Tests of a change on part of a campaign's traffic before it is rolled out. To start, apply or end one, ask the agent."
       />
-      {creating && (
-        <Card className="space-y-3 p-4">
-          <p className="text-sm font-bold">New custom experiment</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Base campaign">
-              <SelectBox value={base} onChange={setBase} options={live.map((c) => ({ value: c.id, label: c.name }))} />
-            </Field>
-            <Field label="What to test">
-              <SelectBox value={tpl} onChange={setTpl} options={EXP_TEMPLATES.map((t) => ({ value: t.id, label: t.label }))} />
-            </Field>
-            <Field label={`Traffic split: ${split}% to the trial`}>
-              <input type="range" min={10} max={90} step={10} value={split} onChange={(e) => setSplit(Number(e.target.value))} className="w-full accent-[#400095]" />
-            </Field>
-            <Field label="Duration">
-              <SelectBox value={String(weeks)} onChange={(v) => setWeeks(Number(v))} options={[2, 4, 6, 8].map((w) => ({ value: String(w), label: `${w} weeks` }))} />
-            </Field>
-          </div>
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setCreating(false)} className="rounded-lg border border-border/70 px-3 py-1.5 text-xs font-medium hover:bg-muted">Cancel</button>
-            <button type="button" onClick={create} disabled={!base} className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold", ACCENT_BTN)}>Start experiment</button>
-          </div>
-        </Card>
-      )}
-      {data.experiments.length === 0 && !creating && <EmptyState icon={FlaskConical} title="No experiments yet" body="Try a new bid strategy or broad match on half the traffic and see what actually works." />}
+      {data.experiments.length === 0 && <EmptyState icon={FlaskConical} title="No experiments yet" body="Ask the agent to try a new bid strategy or broad match on half the traffic and see what actually works." />}
       <div className="grid gap-3 lg:grid-cols-2">
         {data.experiments.map((e) => {
           const r = e.result;
@@ -237,18 +157,6 @@ export function ExperimentsView() {
                 </div>
               ) : (
                 <p className="mt-3 rounded-xl bg-muted/40 p-3 text-[11px] text-muted-foreground">Collecting data. Results usually need 2–4 weeks. No extra budget: the trial shares the campaign&apos;s budget.</p>
-              )}
-              {e.status === "RUNNING" && (
-                <div className="mt-3 flex gap-2">
-                  {winning && e.ops.length > 0 && (
-                    <button type="button" onClick={() => applyExperiment(e)} className="inline-flex items-center gap-1 rounded-lg bg-[#400095] px-3 py-1.5 text-[11px] font-semibold text-white dark:bg-violet-600">
-                      <Check className="h-3.5 w-3.5" /> Apply to campaign
-                    </button>
-                  )}
-                  <button type="button" onClick={() => applyDirect(`End experiment "${e.name}"`, [{ kind: "collection.upsert", collection: "experiments", items: [{ ...e, status: "ENDED" }] }])} className="inline-flex items-center gap-1 rounded-lg border border-border/70 px-3 py-1.5 text-[11px] font-medium hover:bg-muted">
-                    <Square className="h-3 w-3" /> End experiment
-                  </button>
-                </div>
               )}
             </Card>
           );

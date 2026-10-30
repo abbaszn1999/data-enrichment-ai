@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bot, Pause, Play, Plus, Search, Trash2 } from "lucide-react";
+import { Bot, Pause, Play, Search, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BIDDING, CAMPAIGN_TYPES, SERVING_ISSUES } from "@/lib/google-ads/constants";
 import { accountBase, campaignBase, derive, money } from "@/lib/google-ads/metrics";
@@ -10,7 +10,7 @@ import { useGoogleAds } from "@/lib/google-ads/store";
 import type { Campaign, EntityStatus, Metrics } from "@/lib/google-ads/types";
 import { metricColumns } from "../ga-columns";
 import { BulkButton, GaTable, type GaColumn } from "../ga-table";
-import { ACCENT_BTN, Pill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
+import { Pill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
 import { useGa } from "../use-ga";
 
 export type StatusFilter = "ACTIVE" | "ENABLED" | "PAUSED" | "ALL";
@@ -45,7 +45,6 @@ export function SearchBox({ value, onChange, placeholder }: { value: string; onC
 export function CampaignsView() {
   const { data, range, currency } = useGa();
   const setScope = useGoogleAds((s) => s.setScope);
-  const openEditor = useGoogleAds((s) => s.openEditor);
   const openDialog = useGoogleAds((s) => s.openDialog);
   const applyDirect = useGoogleAds((s) => s.applyDirect);
   const [filter, setFilter] = useState<StatusFilter>("ACTIVE");
@@ -143,9 +142,6 @@ export function CampaignsView() {
         actions={
           <>
             <SearchBox value={query} onChange={setQuery} placeholder="Find a campaign" />
-            <button type="button" onClick={() => openEditor()} className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold", ACCENT_BTN)}>
-              <Plus className="h-3.5 w-3.5" /> New campaign
-            </button>
           </>
         }
       >

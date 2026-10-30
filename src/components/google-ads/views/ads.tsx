@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Bot, FileText, PenLine, Plus } from "lucide-react";
+import { AlertTriangle, Bot, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { adBase, derive, formatMetric } from "@/lib/google-ads/metrics";
 import { runAgentTurn } from "@/lib/google-ads/agent-runner";
 import { useGoogleAds } from "@/lib/google-ads/store";
 import type { Ad } from "@/lib/google-ads/types";
 import { SearchAdPreview } from "../ga-ad-preview";
-import { ACCENT_BTN, AdStrengthMeter, Card, EmptyState, ImageTile, PolicyPill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
+import { AdStrengthMeter, Card, EmptyState, ImageTile, PolicyPill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
 import { scopedAdGroupIds, useGa } from "../use-ga";
 import { STATUS_FILTERS, filterByStatus, type StatusFilter } from "./campaigns";
 
@@ -22,7 +22,6 @@ const AD_TYPE_LABEL: Record<Ad["type"], string> = {
 
 export function AdsView() {
   const { data, scope, campaign, adGroup } = useGa();
-  const openDialog = useGoogleAds((s) => s.openDialog);
   const [filter, setFilter] = useState<StatusFilter>("ACTIVE");
   const [policy, setPolicy] = useState<"ALL" | "ISSUES">("ALL");
   const ids = new Set(scopedAdGroupIds(data, scope));
@@ -36,16 +35,6 @@ export function AdsView() {
       <ViewHeader
         title="Ads"
         subtitle={adGroup ? `In ${adGroup.name}` : campaign ? `In ${campaign.name}` : "Ads across all campaigns"}
-        actions={
-          <>
-            <button type="button" onClick={() => runAgentTurn("Write better ads for my weakest ad group")} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 px-3 text-xs font-semibold hover:bg-muted">
-              <Bot className="h-3.5 w-3.5" /> Write ads with agent
-            </button>
-            <button type="button" onClick={() => openDialog({ kind: "ad", adGroupId: scope.adGroupId })} className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold", ACCENT_BTN)}>
-              <Plus className="h-3.5 w-3.5" /> Ad
-            </button>
-          </>
-        }
       >
         <div className="flex flex-wrap gap-2">
           <Segmented value={filter} onChange={setFilter} options={STATUS_FILTERS} size="xs" />
@@ -76,7 +65,6 @@ export function AdsView() {
 function AdCard({ ad }: { ad: Ad }) {
   const { data, range, currency } = useGa();
   const applyDirect = useGoogleAds((s) => s.applyDirect);
-  const openDialog = useGoogleAds((s) => s.openDialog);
   const group = data.adGroups.find((g) => g.id === ad.adGroupId);
   const campaign = data.campaigns.find((c) => c.id === group?.campaignId);
   const m = derive(adBase(data, ad.id, range));
@@ -132,11 +120,6 @@ function AdCard({ ad }: { ad: Ad }) {
           {ad.headlines.length} headlines · {ad.descriptions.length} descriptions
         </span>
         <span className="ml-auto flex gap-1">
-          {ad.type === "RESPONSIVE_SEARCH_AD" && (
-            <button type="button" onClick={() => openDialog({ kind: "ad", adGroupId: ad.adGroupId, adId: ad.id })} className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 font-medium hover:bg-muted">
-              <PenLine className="h-3 w-3" /> Edit
-            </button>
-          )}
           {(ad.policy === "DISAPPROVED" || ad.adStrength === "POOR") && (
             <button
               type="button"

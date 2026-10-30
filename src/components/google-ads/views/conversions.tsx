@@ -1,18 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Bot, Code2, Copy, Plus, Upload } from "lucide-react";
+import { Bot, Code2, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { CONVERSION_CATEGORIES } from "@/lib/google-ads/constants";
 import { money, num } from "@/lib/google-ads/metrics";
 import { runAgentTurn } from "@/lib/google-ads/agent-runner";
 import { useGoogleAds } from "@/lib/google-ads/store";
-import type { ConversionAction, OfflineImport, ValueRule } from "@/lib/google-ads/types";
-import { gid } from "@/lib/google-ads/mutations";
-import { Input } from "@/components/ui/input";
+import type { ConversionAction } from "@/lib/google-ads/types";
 import { GaTable, type GaColumn } from "../ga-table";
-import { ACCENT_BTN, Card, Pill, SelectBox, Toggle, ViewHeader } from "../ga-ui";
+import { Card, Pill, ViewHeader } from "../ga-ui";
 import { useGa } from "../use-ga";
 
 const STATUS: Record<ConversionAction["status"], { label: string; tone: "good" | "warn" | "bad" | "neutral" }> = {
@@ -43,8 +41,6 @@ export function tagSnippet(account: string, action: ConversionAction) {
 
 export function ConversionsView() {
   const { data, currency } = useGa();
-  const applyDirect = useGoogleAds((s) => s.applyDirect);
-  const openDialog = useGoogleAds((s) => s.openDialog);
   const actions = data.conversions.filter((c) => c.status !== "REMOVED");
   const [tagFor, setTagFor] = useState<string | null>(null);
   const tagAction = actions.find((a) => a.id === tagFor);
@@ -65,14 +61,7 @@ export function ConversionsView() {
       id: "goal",
       header: "Optimization",
       render: (c) => (
-        <span className="flex items-center gap-2">
-          <Toggle
-            checked={c.primary}
-            label="Primary action"
-            onChange={(v) => applyDirect(`Make ${c.name} ${v ? "primary" : "secondary"}`, [{ kind: "conversion.update", actionId: c.id, patch: { primary: v } }])}
-          />
-          <span className="text-[11px] text-muted-foreground">{c.primary ? "Primary" : "Secondary"}</span>
-        </span>
+        <Pill tone={c.primary ? "brand" : "neutral"}>{c.primary ? "Primary" : "Secondary"}</Pill>
       ),
     },
     { id: "status", header: "Status", render: (c) => <Pill tone={STATUS[c.status].tone}>{STATUS[c.status].label}</Pill> },
@@ -108,9 +97,6 @@ export function ConversionsView() {
           <>
             <button type="button" onClick={() => runAgentTurn("Check my conversion tracking")} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 px-3 text-xs font-semibold hover:bg-muted">
               <Bot className="h-3.5 w-3.5" /> Check tracking
-            </button>
-            <button type="button" onClick={() => openDialog({ kind: "conversion" })} className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold", ACCENT_BTN)}>
-              <Plus className="h-3.5 w-3.5" /> Conversion action
             </button>
           </>
         }
@@ -158,20 +144,8 @@ export function ConversionsView() {
 
 function AdvancedMeasurement() {
   const { data } = useGa();
-  const applyDirect = useGoogleAds((s) => s.applyDirect);
   const setView = useGoogleAds((s) => s.setView);
   const ga4 = data.links.find((l) => l.kind === "GA4");
-  const [ruleValue, setRuleValue] = useState("");
-  const [ruleKind, setRuleKind] = useState<ValueRule["condition"]["kind"]>("LOCATION");
-  const [adjust, setAdjust] = useState("10");
-  const purchase = data.conversions.find((c) => c.primary) ?? data.conversions[0];
-
-  const importFile = (file: File) => {
-    const rows = 80 + (file.size % 220);
-    const item: OfflineImport = { id: gid("oi"), at: new Date().toISOString(), fileName: file.name, rows, matched: Math.round(rows * 0.82), conversionActionId: purchase?.id ?? "", status: "PROCESSED" };
-    const res = applyDirect(`Import offline conversions from ${file.name}`, [{ kind: "collection.upsert", collection: "offlineImports", items: [item] }]);
-    if (res.ok) toast.success(`${item.matched} of ${rows} rows matched to ad clicks`);
-  };
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -182,7 +156,7 @@ function AdvancedMeasurement() {
             <p className="text-xs font-semibold">Enhanced conversions</p>
             <p className="text-[11px] text-muted-foreground">Hashed customer data from checkout recovers conversions lost to browsers and cookies (typically +5%).</p>
           </div>
-          <Toggle checked={!!data.account.enhancedConversions} label="Enhanced conversions" onChange={(v) => applyDirect(`Enhanced conversions ${v ? "on" : "off"}`, [{ kind: "account.update", patch: { enhancedConversions: v } }])} />
+          <Pill tone={data.account.enhancedConversions ? "good" : "neutral"}>{data.account.enhancedConversions ? "On" : "Off"}</Pill>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex-1">
@@ -190,50 +164,29 @@ function AdvancedMeasurement() {
             <p className="text-[11px] text-muted-foreground">{ga4?.status === "LINKED" ? `Linked: ${ga4.name}. GA4 key events can be imported as conversions.` : "Not linked. Link GA4 to import its key events and audiences."}</p>
           </div>
           <button type="button" onClick={() => setView("links")} className="rounded-lg border border-border/70 px-2.5 py-1 text-[11px] font-semibold hover:bg-muted">
-            {ga4?.status === "LINKED" ? "Manage" : "Link"}
+            View
           </button>
         </div>
       </Card>
 
       <Card className="p-4">
         <p className="text-sm font-bold">Conversion value rules</p>
-        <p className="mb-3 text-[11px] text-muted-foreground">Tell bidding that some conversions are worth more, e.g. VIP customers or a city with bigger baskets.</p>
+        <p className="mb-3 text-[11px] text-muted-foreground">Tell bidding that some conversions are worth more, e.g. VIP customers or a city with bigger baskets. To add or change a rule, ask the agent.</p>
         {data.valueRules.map((r) => (
           <div key={r.id} className="flex items-center gap-2 border-b border-border/40 py-2 text-xs last:border-b-0">
             <span className="flex-1">
               If <span className="font-semibold">{r.condition.kind.toLowerCase()}</span> is <span className="font-semibold">{r.condition.value}</span>, adjust value by{" "}
               <span className="font-semibold text-emerald-600">+{Math.round(r.adjustment * 100)}%</span>
             </span>
-            <Toggle checked={r.enabled} label="Rule enabled" onChange={(v) => applyDirect(`${v ? "Enable" : "Disable"} value rule`, [{ kind: "collection.upsert", collection: "valueRules", items: [{ ...r, enabled: v }] }])} />
+            <Pill tone={r.enabled ? "good" : "neutral"}>{r.enabled ? "Enabled" : "Disabled"}</Pill>
           </div>
         ))}
-        <div className="mt-3 flex flex-wrap items-end gap-2">
-          <SelectBox value={ruleKind} onChange={setRuleKind} options={[{ value: "LOCATION", label: "Location" }, { value: "DEVICE", label: "Device" }, { value: "AUDIENCE", label: "Audience" }]} className="w-32" />
-          <Input value={ruleValue} onChange={(e) => setRuleValue(e.target.value)} placeholder="e.g. Dubai" className="h-9 w-36" />
-          <Input type="number" value={adjust} onChange={(e) => setAdjust(e.target.value)} className="h-9 w-20" />
-          <span className="pb-2 text-xs text-muted-foreground">%</span>
-          <button
-            type="button"
-            disabled={!ruleValue.trim()}
-            onClick={() => {
-              applyDirect(`Add value rule for ${ruleValue}`, [{ kind: "collection.upsert", collection: "valueRules", items: [{ id: gid("vr"), condition: { kind: ruleKind, value: ruleValue.trim() }, adjustment: Number(adjust) / 100, enabled: true }] }]);
-              setRuleValue("");
-            }}
-            className="h-9 rounded-lg border border-border/70 px-3 text-xs font-semibold hover:bg-muted disabled:opacity-40"
-          >
-            Add rule
-          </button>
-        </div>
+        {!data.valueRules.length && <p className="text-xs text-muted-foreground">No value rules yet.</p>}
       </Card>
 
       <Card className="p-4 lg:col-span-2">
         <p className="text-sm font-bold">Offline conversions</p>
-        <p className="mb-3 text-[11px] text-muted-foreground">Upload sales that happened outside the site (phone orders, store pickups) with the click ID so Google credits the right ads.</p>
-        <label className="mb-3 flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border p-4 text-xs hover:bg-muted/40">
-          <Upload className="h-5 w-5 text-muted-foreground" />
-          <span className="flex-1">Upload a CSV with <code>gclid, conversion_time, value, currency</code></span>
-          <input type="file" accept=".csv" className="hidden" onChange={(e) => e.target.files?.[0] && importFile(e.target.files[0])} />
-        </label>
+        <p className="mb-3 text-[11px] text-muted-foreground">Sales that happened outside the site (phone orders, store pickups), matched to ad clicks so Google credits the right ads. To import a file, send it to the agent.</p>
         {data.offlineImports.map((i) => (
           <div key={i.id} className="flex flex-wrap items-center gap-2 border-t border-border/40 py-2 text-xs">
             <span className="font-semibold">{i.fileName}</span>
@@ -241,6 +194,7 @@ function AdvancedMeasurement() {
             <Pill tone={i.status === "PROCESSED" ? "good" : i.status === "FAILED" ? "bad" : "info"} className="ml-auto">{i.status.toLowerCase()}</Pill>
           </div>
         ))}
+        {!data.offlineImports.length && <p className="text-xs text-muted-foreground">No offline imports yet.</p>}
       </Card>
     </div>
   );

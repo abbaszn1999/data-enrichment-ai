@@ -6,7 +6,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  ClipboardCheck,
   Megaphone,
   Plug,
   Settings2,
@@ -39,7 +38,6 @@ export function GaTopbar() {
 
   const campaign = data.campaigns.find((c) => c.id === scope.campaignId);
   const adGroup = data.adGroups.find((g) => g.id === scope.adGroupId);
-  const pending = acc.changes.filter((c) => c.status === "PENDING").length;
   const unread = data.alerts.filter((a) => !a.read).length;
   return (
     <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-3">
@@ -131,16 +129,7 @@ export function GaTopbar() {
           {unread > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#F76D01] px-1 text-[9px] font-bold text-white">{unread}</span>}
         </button>
 
-        <button
-          type="button"
-          onClick={() => setView("pending")}
-          className="relative inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 px-2.5 text-xs hover:bg-muted"
-          title="Pending changes"
-        >
-          <ClipboardCheck className="h-3.5 w-3.5" />
-          <span className="hidden xl:inline">Pending</span>
-          {pending > 0 && <span className="rounded-full bg-[#F76D01] px-1.5 text-[10px] font-bold text-white">{pending}</span>}
-        </button>
+
       </div>
     </div>
   );
