@@ -158,7 +158,8 @@ export class ChatFiles {
         continue;
       }
       const shown = showNow || !!prev?.shown;
-      const id = await this.store(relative, await fs.readFile(local), "agent", run.id, showNow);
+      // A file written again keeps the run it was made in.
+      const id = await this.store(relative, await fs.readFile(local), "agent", prev ? undefined : run.id, showNow);
       this.known.set(relative, { id, size: stat.size, mtimeMs: stat.mtimeMs, shown });
       run.emit({ type: "file", fileId: id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: open.has(relative), shown });
       this.pendingOpen.delete(relative);
@@ -172,7 +173,7 @@ export class ChatFiles {
    * Upload bytes as a chat file and upsert its row. Returns the file id.
    * `shown` marks it a result; a later upload of the same file never unmarks it.
    */
-  async store(relative: string, bytes: Buffer, createdBy: "agent" | "user", runId: string | null, shown = false): Promise<string> {
+  async store(relative: string, bytes: Buffer, createdBy: "agent" | "user", runId: string | null | undefined, shown = false): Promise<string> {
     const storagePath = this.storagePath(relative);
     const mime = mimeFor(relative);
     const { error: upErr } = await this.db.storage
@@ -185,7 +186,8 @@ export class ChatFiles {
         {
           chat_id: this.chatId,
           workspace_id: this.workspaceId,
-          run_id: runId,
+          // Left out (undefined) for a file written again: it keeps the run it was made in.
+          ...(runId === undefined ? {} : { run_id: runId }),
           name: path.basename(relative).slice(0, 255) || "file",
           kind: createdBy === "user" ? "upload" : kindFor(relative),
           storage_path: storagePath,

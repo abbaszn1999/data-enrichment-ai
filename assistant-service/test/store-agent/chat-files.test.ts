@@ -113,6 +113,13 @@ describe("ChatFiles", () => {
     expect(updates).toEqual([{ values: { shown: true }, id: events()[0]!.fileId }]);
     expect(events().at(-1)).toMatchObject({ name: "exports/p.csv", shown: true, open: true });
 
+    // Written again later: uploaded again, still the run it was made in.
+    expect(upserts[0]).toHaveProperty("run_id");
+    await writeFile(path.join(dir, "exports", "p.jsonl"), '{"a":1}');
+    await files.sync(r);
+    expect(upserts.at(-1)).toMatchObject({ storage_path: `${WS}/${CHAT}/exports/p.jsonl` });
+    expect(upserts.at(-1)).not.toHaveProperty("run_id");
+
     // An Excel file made for the user: a result, not opened.
     await writeFile(path.join(dir, "products.xlsx"), "x");
     files.markShown("products.xlsx");

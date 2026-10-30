@@ -67,6 +67,12 @@ export async function GET(request: NextRequest, { params }: Params) {
     ? await access.admin.from("store_agent_messages").select("run_id, content").eq("chat_id", chatId).eq("role", "user").in("run_id", fileRuns)
     : { data: [] as Array<{ run_id: string; content: string }> };
   const requestByRun = new Map((asks ?? []).map((m) => [String(m.run_id), requestLabel(String(m.content ?? ""))]));
+  // Only when the file was made in that run: older rows had their run overwritten when they were uploaded again.
+  const requestFor = (f: { run_id: string | null; created_at: string }) => {
+    const run = f.run_id ? runById.get(String(f.run_id)) : undefined;
+    if (!run || Date.parse(f.created_at) < Date.parse(String(run.started_at)) - 5_000) return null;
+    return requestByRun.get(String(f.run_id)) ?? null;
+  };
 
   return NextResponse.json({
     chat,
@@ -83,7 +89,7 @@ export async function GET(request: NextRequest, { params }: Params) {
       // Path within the chat folder, for display.
       path: decodeStoragePath(String(f.storage_path).split("/").slice(2).join("/")),
       storage_path: undefined,
-      request: f.run_id ? (requestByRun.get(String(f.run_id)) ?? null) : null,
+      request: requestFor(f),
     })),
     plans: plans.data ?? [],
     live: (live as { run: unknown }).run ?? null,
