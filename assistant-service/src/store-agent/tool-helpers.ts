@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ChatFiles, resolveInChat } from "./files";
+import { INLINE_RESULT_BYTES, byteLength } from "./sdk-output";
 import type { StoreAgentRun } from "./run";
 import type { ShopifyConnection } from "./shopify/client";
 import type { OperationRisk } from "./shopify/scopes";
@@ -34,8 +35,6 @@ export type ToolContext = {
   log?: (message: string, extra?: unknown) => void;
 };
 
-/** Results longer than this go to a file the agent can read in parts. */
-const MAX_INLINE_RESULT = 40_000;
 /** Changes to more records than this are bulk changes: owners and admins approve them. */
 export const BULK_MIN_RECORDS = 26;
 export const MAX_BULK_ROWS = 50_000;
@@ -218,10 +217,10 @@ export async function writeChatFile(ctx: ToolContext, relative: string, content:
   return relative;
 }
 
-/** Keep large results out of the prompt: save them and point the agent at the file. */
+/** Keep large results out of the prompt (and under the SDK's inline limit): save them and point the agent at the file. */
 export async function compactResult(ctx: ToolContext, payload: unknown): Promise<string> {
   const json = JSON.stringify(payload, null, 1);
-  if (json.length <= MAX_INLINE_RESULT) return json;
+  if (byteLength(json) <= INLINE_RESULT_BYTES) return json;
   const relative = `${ctx.platform === "woocommerce" ? "woo-results" : "shopify-results"}/${stamp()}.json`;
   await writeChatFile(ctx, relative, JSON.stringify(payload, null, 2));
   return (

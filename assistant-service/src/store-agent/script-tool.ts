@@ -3,6 +3,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import type { SDKCustomTool } from "@cursor/sdk";
 import { resolveConfined } from "./file-tools";
+import { INLINE_RESULT_BYTES, byteLength, clipToBytes } from "./sdk-output";
 
 /**
  * run_script: plain JavaScript over files in the chat folder, for exact work
@@ -169,10 +170,10 @@ export function createScriptTool(root: string, onWrite: (relative: string) => vo
         }
         const result = value && typeof value === "object" && "result" in value ? value.result : value;
         const json = JSON.stringify(result ?? null, null, 1);
+        const head = JSON.stringify({ files: written });
+        const room = INLINE_RESULT_BYTES - byteLength(head) - 100;
         return text(
-          JSON.stringify({ files: written }) +
-            "\n" +
-            (json.length > 30_000 ? `${json.slice(0, 30_000)}… (truncated; write large results to a file)` : json)
+          `${head}\n${byteLength(json) > room ? `${clipToBytes(json, room)}… (truncated; write large results to a file)` : json}`
         );
       },
     },

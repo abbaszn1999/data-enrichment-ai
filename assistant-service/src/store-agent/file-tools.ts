@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { SDKCustomTool } from "@cursor/sdk";
+import { INLINE_RESULT_BYTES, byteLength, sdkToolOutputPath } from "./sdk-output";
 
 /**
  * File tools confined to one chat folder. They replace Cursor's built-in
@@ -10,6 +11,8 @@ import type { SDKCustomTool } from "@cursor/sdk";
 
 const MAX_READ_LINES = 500;
 const MAX_LINE_CHARS = 2000;
+/** Room left for the "more lines" note. */
+const READ_BUDGET_BYTES = INLINE_RESULT_BYTES - 200;
 const MAX_WRITE_BYTES = 10 * 1024 * 1024;
 const MAX_MATCHES = 100;
 const TEXT_EXT = /\.(md|txt|csv|tsv|json|jsonl|html|xml|svg|yaml|yml|js|mjs|ts|css|log)$/i;
@@ -101,7 +104,15 @@ export function createFileTools(root: string, onWrite: (relative: string) => voi
       annotations: { readOnlyHint: true },
       execute: async (args) => {
         try {
-          const file = await resolveConfined(root, args.path, { mustExist: true });
+          let file: string;
+          try {
+            file = await resolveConfined(root, args.path, { mustExist: true });
+          } catch (error) {
+            // A result the SDK saved because it was too large to return: readable, read-only.
+            const saved = sdkToolOutputPath(root, args.path);
+            if (!saved) throw error;
+            file = saved;
+          }
           const stat = await fs.stat(file);
           if (stat.isDirectory()) return failure("That is a folder; use list_files.");
           if (!TEXT_EXT.test(file)) {
@@ -110,13 +121,20 @@ export function createFileTools(root: string, onWrite: (relative: string) => voi
           const lines = (await fs.readFile(file, "utf8")).split(/\r?\n/);
           const start = Math.max(1, Math.floor(Number(args.offset) || 1));
           const count = Math.min(MAX_READ_LINES, Math.max(1, Math.floor(Number(args.limit) || MAX_READ_LINES)));
-          const slice = lines.slice(start - 1, start - 1 + count);
-          const body = slice
-            .map((line, i) => `${String(start + i).padStart(6)}|${line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}…` : line}`)
-            .join("\n");
-          const end = start - 1 + slice.length;
+          // Whole lines up to the line limit and the size the SDK returns inline.
+          const out: string[] = [];
+          let bytes = 0;
+          for (let i = start - 1; i < lines.length && out.length < count; i++) {
+            const line = lines[i]!;
+            const numbered = `${String(i + 1).padStart(6)}|${line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}…` : line}`;
+            const size = byteLength(numbered) + 1;
+            if (out.length && bytes + size > READ_BUDGET_BYTES) break;
+            out.push(numbered);
+            bytes += size;
+          }
+          const end = start - 1 + out.length;
           const tail = end < lines.length ? `\n… ${lines.length - end} more lines (offset ${end + 1}).` : "";
-          return text(body + tail);
+          return text(out.join("\n") + tail);
         } catch (error) {
           return failure((error as Error).message);
         }
@@ -207,15 +225,24 @@ export function createFileTools(root: string, onWrite: (relative: string) => voi
           };
           await walk(start);
           const out: string[] = [];
+          let bytes = 0;
+          let full = false;
           for (const file of files) {
             const lines = (await fs.readFile(file, "utf8")).split(/\r?\n/);
             const rel = path.relative(realRoot, file).split(path.sep).join("/");
-            lines.forEach((line, i) => {
-              if (out.length < MAX_MATCHES && regex.test(line)) out.push(`${rel}:${i + 1}: ${line.slice(0, 300)}`);
-            });
-            if (out.length >= MAX_MATCHES) break;
+            for (let i = 0; i < lines.length && !full; i++) {
+              if (!regex.test(lines[i]!)) continue;
+              const match = `${rel}:${i + 1}: ${lines[i]!.slice(0, 300)}`;
+              full = out.length >= MAX_MATCHES || bytes + byteLength(match) + 1 > READ_BUDGET_BYTES;
+              if (!full) {
+                out.push(match);
+                bytes += byteLength(match) + 1;
+              }
+            }
+            if (full) break;
           }
-          return text(out.length ? out.join("\n") : "No matches.");
+          const more = full ? "\n… more matches: narrow the pattern or the path." : "";
+          return text(out.length ? out.join("\n") + more : "No matches.");
         } catch (error) {
           return failure((error as Error).message);
         }
