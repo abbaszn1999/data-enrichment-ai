@@ -136,6 +136,7 @@ export default function WorkspaceLayout({
     pathname === `${basePath}/store-assistant` || pathname.startsWith(`${basePath}/store-assistant/`);
   const isMarketResearchPage = pathname.includes("/market-research");
   const isWebsiteRestructurePage = pathname.includes("/website-restructure");
+  const isGoogleAdsPage = pathname.includes("/google-ads");
   const isProductsGalleryPage = pathname.includes("/products-gallery");
   const isProductsGalleryProject = isProductsGalleryPage && searchParams.has("project");
   const isProductsVisualizerPage = pathname.includes("/products-visualizer");
@@ -147,6 +148,7 @@ export default function WorkspaceLayout({
     isProductsVisualizerProject ||
     isMarketResearchPage ||
     isWebsiteRestructurePage ||
+    isGoogleAdsPage ||
     isSyncPage;
   // Immersive mode hides the top header — keep false so Enrich shows it
   const isImmersive = false;
@@ -157,7 +159,8 @@ export default function WorkspaceLayout({
     isSyncPage ||
     isMarketResearchPage ||
     (isFreeAssessmentPage && !isFreeAssessmentWalletPage) ||
-    isWebsiteRestructurePage;
+    isWebsiteRestructurePage ||
+    isGoogleAdsPage;
   // Subscription page should be accessible without an active subscription
   const isSubscriptionPage =
     pathname === `${basePath}/subscription` ||
@@ -270,8 +273,8 @@ export default function WorkspaceLayout({
       icon: Bot,
       disabled: !hasStoreAgentStore,
     },
-    // Not built yet: visible on the roadmap, unclickable until it ships.
-    { href: "", label: "Google Ads", icon: Megaphone, disabled: true, badge: "Soon" },
+    // Front-end prototype on demo data until the Google Ads API is connected.
+    { href: `${basePath}/google-ads`, label: "Google Ads", icon: Megaphone },
     { href: `${basePath}/library`, label: "Library", icon: Library },
   ];
 
@@ -826,7 +829,7 @@ export default function WorkspaceLayout({
               <SubscriptionGate subscription={subscription} isActive={isActive} isLoading={subLoading} role={role}>
                 <div
                   className={
-                    isEnrichPage || isMarketResearchPage || isWebsiteRestructurePage
+                    isEnrichPage || isMarketResearchPage || isWebsiteRestructurePage || isGoogleAdsPage
                       ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden"
                       : "flex min-h-0 flex-1 flex-col"
                   }

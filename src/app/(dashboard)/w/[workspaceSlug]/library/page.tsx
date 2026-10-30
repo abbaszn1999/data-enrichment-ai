@@ -50,7 +50,7 @@ const AGENTS: LibraryAgent[] = [
     needsStoreAgentStore: true,
   },
   {
-    path: null,
+    path: "/google-ads",
     name: "Google Ads",
     blurb: "An agent that plans, writes and tunes Google Ads campaigns from your catalog.",
     icon: Megaphone,
