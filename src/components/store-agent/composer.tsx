@@ -30,7 +30,7 @@ const SECTION_TITLE = Object.fromEntries(FILE_SECTIONS.map((s) => [s.id, s.title
 
 export type PendingAttachment = { key: string; name: string; mime: string; size: number; status: "uploading" | "ready" | "error"; id?: string };
 
-const ACCEPT = "image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,text/markdown,application/json,.csv,.xlsx,.xls,.md";
+const ACCEPT = "image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,text/markdown,application/json,audio/*,video/*,.csv,.tsv,.xlsx,.xlsm,.xls,.md,.docx,.doc,.pptx,.ppt,.jsonl,.xml,.yaml,.yml,.log";
 
 function ContextRing({ used, window }: { used: number; window: number }) {
   if (!used || !window) return null;
@@ -501,7 +501,7 @@ export function Composer({
               <Paperclip className="h-4 w-4" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="top">Attach images, PDF, CSV or Excel</TooltipContent>
+          <TooltipContent side="top">Attach images, documents, tables, audio or video</TooltipContent>
         </Tooltip>
 
         <div className="flex items-center rounded-lg bg-muted p-0.5">

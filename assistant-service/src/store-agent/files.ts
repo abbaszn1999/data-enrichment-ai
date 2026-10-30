@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { attachmentPath } from "../../../src/lib/store-agent/file-kinds";
+import { attachmentPath, classifyAgentFile, type AgentFolder } from "../../../src/lib/store-agent/file-kinds";
 import { decodeStoragePath, encodeStoragePath } from "../../../src/lib/store-agent/storage-key";
 import type { StoreAgentRun } from "./run";
 
@@ -16,6 +16,8 @@ const KIND_BY_EXT: Record<string, string> = {
   ".csv": "csv",
   ".tsv": "csv",
   ".xlsx": "csv",
+  ".docx": "report",
+  ".pdf": "report",
   ".json": "table",
   ".jsonl": "table",
   ".png": "image",
@@ -43,6 +45,12 @@ const MIME_BY_EXT: Record<string, string> = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
   ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 };
 
@@ -64,7 +72,7 @@ export function resolveInChat(cwd: string, relative: string): string {
   return target;
 }
 
-type Known = { id: string; size: number; mtimeMs: number; shown: boolean };
+type Known = { id: string; size: number; mtimeMs: number; shown: boolean; fromStore: boolean; folder: AgentFolder | null };
 
 /**
  * A chat's working folder on disk, mirrored to Storage. The agent reads and
@@ -83,6 +91,24 @@ export class ChatFiles {
   /** Show this file once a later sync manages to upload it. */
   openWhenSynced(relative: string) {
     this.pendingOpen.add(relative);
+  }
+
+  /** Files whose data came from the store, kept when they are written again. */
+  private readonly pendingFromStore = new Set<string>();
+  /** Which folder the agent says a file belongs in, for what the platform cannot tell. */
+  private readonly folderHints = new Map<string, string>();
+
+  /** The store's data, or made from it. */
+  isFromStore(relative: string): boolean {
+    return /^(exports|shopify-results|woo-results)\//.test(relative) || !!this.known.get(relative)?.fromStore || this.pendingFromStore.has(relative);
+  }
+
+  markFromStore(relative: string) {
+    this.pendingFromStore.add(relative);
+  }
+
+  setFolderHint(relative: string, folder: string) {
+    this.folderHints.set(relative, folder);
   }
 
   /** A result for the user, listed with the results but not opened (an Excel file to download). */
@@ -106,17 +132,18 @@ export class ChatFiles {
     await fs.mkdir(this.cwd, { recursive: true });
     const { data, error } = await this.db
       .from("store_agent_files")
-      .select("id, storage_path, size, shown")
+      .select("id, storage_path, size, shown, from_store, folder")
       .eq("chat_id", this.chatId);
     if (error) throw new Error(`Could not load chat files: ${error.message}`);
     const prefix = this.storagePath("");
     for (const row of data ?? []) {
       const relative = String(row.storage_path).startsWith(prefix) ? decodeStoragePath(String(row.storage_path).slice(prefix.length)) : null;
       if (!relative) continue;
+      const saved = { shown: !!row.shown, fromStore: !!row.from_store, folder: (row.folder ?? null) as AgentFolder | null };
       const local = path.join(this.cwd, ...relative.split("/"));
       try {
         const stat = await fs.stat(local);
-        this.known.set(relative, { id: row.id, size: stat.size, mtimeMs: stat.mtimeMs, shown: !!row.shown });
+        this.known.set(relative, { id: row.id, size: stat.size, mtimeMs: stat.mtimeMs, ...saved });
         continue;
       } catch {
         // not on this machine yet
@@ -126,7 +153,7 @@ export class ChatFiles {
       await fs.mkdir(path.dirname(local), { recursive: true });
       await fs.writeFile(local, Buffer.from(await blob.arrayBuffer()));
       const stat = await fs.stat(local);
-      this.known.set(relative, { id: row.id, size: stat.size, mtimeMs: stat.mtimeMs, shown: !!row.shown });
+      this.known.set(relative, { id: row.id, size: stat.size, mtimeMs: stat.mtimeMs, ...saved });
     }
   }
 
@@ -146,22 +173,25 @@ export class ChatFiles {
       const showNow = open.has(relative) || this.pendingShown.has(relative);
       if (unchanged && !showNow) continue;
       if (stat.size > MAX_SYNC_BYTES) continue;
+      const shown = showNow || !!prev?.shown;
+      const fromStore = this.isFromStore(relative);
+      const folder = classifyAgentFile({ path: relative, shown, fromStore, hint: this.folderHints.get(relative) });
       if (unchanged && prev) {
-        if (!prev.shown) {
-          const { error } = await this.db.from("store_agent_files").update({ shown: true }).eq("id", prev.id);
+        if (!prev.shown || prev.folder !== folder) {
+          const { error } = await this.db.from("store_agent_files").update({ shown: true, folder }).eq("id", prev.id);
           if (error) throw new Error(`Could not record ${relative}: ${error.message}`);
           prev.shown = true;
+          prev.folder = folder;
         }
-        run.emit({ type: "file", fileId: prev.id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: open.has(relative), shown: true });
+        run.emit({ type: "file", fileId: prev.id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: open.has(relative), shown: true, folder });
         this.pendingOpen.delete(relative);
         this.pendingShown.delete(relative);
         continue;
       }
-      const shown = showNow || !!prev?.shown;
       // A file written again keeps the run it was made in.
-      const id = await this.store(relative, await fs.readFile(local), "agent", prev ? undefined : run.id, showNow);
-      this.known.set(relative, { id, size: stat.size, mtimeMs: stat.mtimeMs, shown });
-      run.emit({ type: "file", fileId: id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: open.has(relative), shown });
+      const id = await this.store(relative, await fs.readFile(local), "agent", prev ? undefined : run.id, showNow, { folder, fromStore });
+      this.known.set(relative, { id, size: stat.size, mtimeMs: stat.mtimeMs, shown, fromStore, folder });
+      run.emit({ type: "file", fileId: id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: open.has(relative), shown, folder });
       this.pendingOpen.delete(relative);
       this.pendingShown.delete(relative);
       changed.push({ id, relative });
@@ -173,7 +203,7 @@ export class ChatFiles {
    * Upload bytes as a chat file and upsert its row. Returns the file id.
    * `shown` marks it a result; a later upload of the same file never unmarks it.
    */
-  async store(relative: string, bytes: Buffer, createdBy: "agent" | "user", runId: string | null | undefined, shown = false): Promise<string> {
+  async store(relative: string, bytes: Buffer, createdBy: "agent" | "user", runId: string | null | undefined, shown = false, place: { folder?: AgentFolder | null; fromStore?: boolean } = {}): Promise<string> {
     const storagePath = this.storagePath(relative);
     const mime = mimeFor(relative);
     const { error: upErr } = await this.db.storage
@@ -196,6 +226,8 @@ export class ChatFiles {
           created_by: createdBy,
           // Left out when false, so re-uploading a result keeps it one.
           ...(shown ? { shown: true } : {}),
+          ...("folder" in place ? { folder: place.folder } : {}),
+          ...(place.fromStore ? { from_store: true } : {}),
         },
         { onConflict: "storage_path" }
       )
@@ -216,7 +248,7 @@ export class ChatFiles {
     await fs.writeFile(local, bytes);
     const stat = await fs.stat(local);
     // Already stored by the gateway: remember it so sync does not upload it again.
-    this.known.set(relative, { id: fileId, size: stat.size, mtimeMs: stat.mtimeMs, shown: true });
+    this.known.set(relative, { id: fileId, size: stat.size, mtimeMs: stat.mtimeMs, shown: true, fromStore: false, folder: null });
     return relative;
   }
 }

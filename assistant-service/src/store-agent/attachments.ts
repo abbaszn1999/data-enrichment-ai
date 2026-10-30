@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import ExcelJS from "exceljs";
 import { csvField } from "../../../src/lib/store-agent/csv";
+import { assertSafeZip, readPowerPoint, readWord, writeInFolder } from "./documents";
 
 /**
  * Attachments the agent cannot read as text (Excel, PDF) are turned into
@@ -31,10 +32,11 @@ const cellText = (value: unknown): string => {
 
 const safeName = (s: string) => s.replace(/[^\w.\- ()؀-ۿ]+/g, "_").slice(0, 80) || "sheet";
 
-async function convertWorkbook(cwd: string, relative: string): Promise<Conversion> {
+export async function convertWorkbook(cwd: string, relative: string, base = relative.replace(/\.[^./]+$/, "")): Promise<Conversion> {
+  const local = path.join(cwd, ...relative.split("/"));
+  await assertSafeZip(await fs.readFile(local));
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(path.join(cwd, ...relative.split("/")));
-  const base = relative.replace(/\.[^./]+$/, "");
+  await workbook.xlsx.readFile(local);
   const imagesDir = `${base}-images`;
   const sheets = workbook.worksheets.filter((ws) => ws.actualRowCount > 0);
   const made: string[] = [];
@@ -90,7 +92,7 @@ async function convertWorkbook(cwd: string, relative: string): Promise<Conversio
       out.push(withImages ? [(byRow.get(header + 1 + i) ?? []).join(" | "), ...cells] : cells);
     });
     const csv = `${sheets.length === 1 ? base : `${base} - ${safeName(ws.name)}`}.csv`;
-    await fs.writeFile(path.join(cwd, ...csv.split("/")), out.map((r) => r.map(csvField).join(",")).join("\n"), "utf8");
+    await writeInFolder(cwd, csv, out.map((r) => r.map(csvField).join(",")).join("\n"));
     made.push(csv);
     lines.push(
       `${csv} (sheet "${ws.name}": ${data.length} rows, ${columns.length} columns` +
@@ -136,12 +138,36 @@ async function convertPdf(cwd: string, relative: string): Promise<Conversion> {
   };
 }
 
+/** A Word file's page (for the panel) and text (for the agent), beside it or under `base`. */
+export async function convertWord(cwd: string, relative: string, base = relative.replace(/\.[^./]+$/, "")): Promise<Conversion> {
+  const { html, text } = await readWord(await fs.readFile(path.join(cwd, ...relative.split("/"))));
+  await writeInFolder(cwd, `${base}.html`, html);
+  await writeInFolder(cwd, `${base}.txt`, text);
+  return { made: [`${base}.html`, `${base}.txt`], note: `${relative} is a Word file; its text is in ${base}.txt. Read that file.` };
+}
+
+async function convertPowerPoint(cwd: string, relative: string): Promise<Conversion> {
+  const base = relative.replace(/\.[^./]+$/, "");
+  const { text, slides } = await readPowerPoint(await fs.readFile(path.join(cwd, ...relative.split("/"))));
+  if (!text.trim()) return { made: [], note: `${relative} is a PowerPoint file of ${slides} slide(s) with no text in it, so it cannot be read. Tell the user.` };
+  await writeInFolder(cwd, `${base}.txt`, text);
+  return { made: [`${base}.txt`], note: `${relative} is a PowerPoint file (${slides} slides); its text is in ${base}.txt, slide by slide. Read that file. Pictures on the slides are not included.` };
+}
+
 /** Convert an attachment the agent cannot read as it is. Null when it can already. */
 export async function convertAttachment(cwd: string, relative: string): Promise<Conversion | null> {
   const ext = path.extname(relative).toLowerCase();
   try {
     if (ext === ".xlsx" || ext === ".xlsm") return await convertWorkbook(cwd, relative);
     if (ext === ".pdf") return await convertPdf(cwd, relative);
+    if (ext === ".docx") return await convertWord(cwd, relative);
+    if (ext === ".pptx") return await convertPowerPoint(cwd, relative);
+    if (ext === ".doc" || ext === ".ppt") {
+      return { made: [], note: `${relative} is in an old Office format, which cannot be read. Ask the user to save it as .docx or .pptx and attach it again.` };
+    }
+    if (/^\.(mp4|webm|mov|m4v|mp3|wav|ogg|m4a|aac)$/.test(ext)) {
+      return { made: [], note: `${relative} is audio or video. The user can play it in the panel, but you cannot hear or watch it: say so if they ask about its content.` };
+    }
     if (ext === ".xls") {
       return {
         made: [],

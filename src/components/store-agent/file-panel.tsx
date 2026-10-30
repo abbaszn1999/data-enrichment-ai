@@ -5,7 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
 import { ClipboardList, Download, FolderOpen, Loader2, Search, X } from "lucide-react";
 import { parseCsv } from "@/lib/store-agent/csv";
-import { attachmentPath, cellImages, fileSection, isTextFile, isWorkbook, looksLikeImage, type FileSectionId } from "@/lib/store-agent/file-kinds";
+import { cellImages, fileSection, isOfficeDocument, isTextFile, isWorkbook, looksLikeImage, mediaKind, viewBase, type FileSectionId } from "@/lib/store-agent/file-kinds";
 import { themedReport } from "@/lib/store-agent/report-theme";
 import { cn } from "@/lib/utils";
 import { PLAN_TAB_PREFIX, storeAgentApi, type ChatFile, type Plan } from "./api";
@@ -210,9 +210,8 @@ function GalleryView({ items }: { items: GalleryItem[] }) {
  * attached (one .csv per sheet, pictures in their rows). Workbooks Vera
  * made are for download.
  */
-function WorkbookView({ workspaceId, file, files }: { workspaceId: string; file: ChatFile; files: ChatFile[] }) {
-  // An upload is stored apart; its copy in Vera's folder, and the tables made from it, are under attachments/.
-  const base = (file.created_by === "user" ? attachmentPath(file.name) : file.path).replace(/\.[^./]+$/, "");
+function WorkbookView({ workspaceId, file, files, onAsk }: { workspaceId: string; file: ChatFile; files: ChatFile[]; onAsk?: (file: ChatFile) => void }) {
+  const base = viewBase(file);
   const sheets = files.filter((f) => /\.csv$/i.test(f.path) && (f.path === `${base}.csv` || f.path.startsWith(`${base} - `)));
   const [sheetId, setSheetId] = useState<string | null>(null);
   const sheet = sheets.find((s) => s.id === sheetId) ?? sheets[0];
@@ -223,12 +222,7 @@ function WorkbookView({ workspaceId, file, files }: { workspaceId: string; file:
     </a>
   );
   if (!sheet) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
-        <span>Excel files cannot be shown here. Download it to open it in Excel.</span>
-        {download}
-      </div>
-    );
+    return <FileCard workspaceId={workspaceId} file={file} onAsk={onAsk} />;
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -247,13 +241,45 @@ function WorkbookView({ workspaceId, file, files }: { workspaceId: string; file:
         <span className="ms-auto">{download}</span>
       </div>
       <div className="min-h-0 flex-1">
-        <FileViewer key={sheet.id} workspaceId={workspaceId} file={sheet} files={files} />
+        <FileViewer key={sheet.id} workspaceId={workspaceId} file={sheet} files={files} onAsk={onAsk} />
       </div>
     </div>
   );
 }
 
-function FileViewer({ workspaceId, file, files }: { workspaceId: string; file: ChatFile; files: ChatFile[] }) {
+/** Any file with no preview: what it is, and what can be done with it. Never a dead end. */
+function FileCard({ workspaceId, file, onAsk }: { workspaceId: string; file: ChatFile; onAsk?: (file: ChatFile) => void }) {
+  const type = /\.([^./]+)$/.exec(file.name)?.[1]?.toUpperCase() ?? "File";
+  const size = file.size ? `${file.size < 1024 * 1024 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`}` : null;
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="w-full max-w-sm rounded-xl border bg-background p-5 text-center">
+        <FileKindIcon kind={file.kind} mime={file.mime} className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+        <p dir="auto" className="truncate text-[13.5px] font-medium">
+          {file.name}
+        </p>
+        <p className="mt-0.5 text-[11.5px] text-muted-foreground">{[type, size].filter(Boolean).join(" · ")}</p>
+        <div className="mt-4 flex flex-col gap-2">
+          <a
+            href={storeAgentApi.fileUrl(workspaceId, file.id, true)}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-[#400095] text-[12px] font-medium text-white hover:bg-[#6B358D] dark:bg-[#F76D01] dark:hover:bg-[#F76D01]/90"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Download
+          </a>
+          {onAsk && (
+            <button type="button" onClick={() => onAsk(file)} className="h-8 rounded-lg border text-[12px] font-medium hover:bg-muted">
+              Ask Vera to convert it
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FileViewer({ workspaceId, file, files, onAsk }: { workspaceId: string; file: ChatFile; files: ChatFile[]; onAsk?: (file: ChatFile) => void }) {
+  const [truncated, setTruncated] = useState(false);
   const [asTable, setAsTable] = useState(false);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -274,7 +300,11 @@ function FileViewer({ workspaceId, file, files }: { workspaceId: string; file: C
     let alive = true;
     storeAgentApi
       .fileText(workspaceId, file.id)
-      .then((r) => alive && setText(r.text))
+      .then((r) => {
+        if (!alive) return;
+        setText(r.text);
+        setTruncated(!!r.truncated);
+      })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
@@ -289,23 +319,68 @@ function FileViewer({ workspaceId, file, files }: { workspaceId: string; file: C
       </div>
     );
   }
-  if (file.mime === "application/pdf") return <iframe src={url} title={file.name} className="h-full w-full border-0" />;
-  if (isWorkbook(file.name) && !isText) return <WorkbookView workspaceId={workspaceId} file={file} files={files} />;
-  if (!isText) {
+  if (file.mime === "application/pdf" || /\.pdf$/i.test(file.name)) return <iframe src={url} title={file.name} className="h-full w-full border-0" />;
+  if (isWorkbook(file.name) && !isText) return <WorkbookView workspaceId={workspaceId} file={file} files={files} onAsk={onAsk} />;
+  const media = mediaKind(file.name, file.mime);
+  if (media === "video") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-        This file cannot be previewed.
-        <a href={storeAgentApi.fileUrl(workspaceId, file.id, true)} className="font-medium text-[#6B358D] hover:underline dark:text-[#F76D01]">
-          Download {file.name}
-        </a>
+      <div className="flex h-full items-center justify-center bg-black/90 p-4">
+        <video src={url} controls className="max-h-full max-w-full rounded-lg" />
       </div>
     );
   }
+  if (media === "audio") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
+        <p dir="auto" className="max-w-full truncate text-[13px] font-medium">
+          {file.name}
+        </p>
+        <audio src={url} controls className="w-full max-w-md" />
+      </div>
+    );
+  }
+  if (isOfficeDocument(file.name)) {
+    // A Word file opens as the page made from it, a PowerPoint as its text.
+    const base = viewBase(file);
+    const view = files.find((f) => f.path === `${base}.html`) ?? files.find((f) => f.path === `${base}.txt`);
+    if (view) {
+      return (
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex items-center justify-end border-b px-3 py-1.5 text-[11.5px]">
+            <a href={storeAgentApi.fileUrl(workspaceId, file.id, true)} className="inline-flex items-center gap-1.5 font-medium text-[#6B358D] hover:underline dark:text-[#F76D01]">
+              <Download className="h-3.5 w-3.5" />
+              Download {file.name}
+            </a>
+          </div>
+          <div className="min-h-0 flex-1">
+            <FileViewer key={view.id} workspaceId={workspaceId} file={view} files={files} onAsk={onAsk} />
+          </div>
+        </div>
+      );
+    }
+  }
+  if (!isText) return <FileCard workspaceId={workspaceId} file={file} onAsk={onAsk} />;
   if (error) return <div className="p-6 text-sm text-destructive">{error}</div>;
   if (text === null) {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+  if (truncated) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-3 py-1.5 text-[11.5px] text-muted-foreground">
+          This file is large: showing its first part.
+          <a href={storeAgentApi.fileUrl(workspaceId, file.id, true)} className="inline-flex items-center gap-1.5 font-medium text-[#6B358D] hover:underline dark:text-[#F76D01]">
+            <Download className="h-3.5 w-3.5" />
+            Download all of it
+          </a>
+        </div>
+        <pre dir="auto" className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-6 py-5 font-mono text-[12.5px] leading-relaxed">
+          {text}
+        </pre>
       </div>
     );
   }
@@ -410,6 +485,7 @@ export function FilePanel({
   working,
   onOpen,
   onClose,
+  onAskVera,
 }: {
   workspaceId: string;
   files: ChatFile[];
@@ -422,6 +498,8 @@ export function FilePanel({
   working: boolean;
   onOpen: (fileId: string) => void;
   onClose: (fileId: string) => void;
+  /** Ask the agent about a file the panel has no preview for. */
+  onAskVera?: (file: ChatFile) => void;
 }) {
   const tabs = new Map<string, PanelTab>();
   for (const f of files) tabs.set(f.id, { id: f.id, name: f.name, file: f, icon: <FileKindIcon kind={f.kind} mime={f.mime} className="h-3.5 w-3.5 shrink-0" /> });
@@ -546,7 +624,7 @@ export function FilePanel({
         ) : activeTab?.plan ? (
           renderPlan(activeTab.plan)
         ) : (
-          active && <FileViewer key={active.id} workspaceId={workspaceId} file={active} files={files} />
+          active && <FileViewer key={active.id} workspaceId={workspaceId} file={active} files={files} onAsk={onAskVera} />
         )}
       </div>
     </div>

@@ -6,6 +6,7 @@ import type { SDKCustomTool } from "@cursor/sdk";
 import ExcelJS from "exceljs";
 import { parseCsv } from "../../../src/lib/store-agent/csv";
 import { cellImages } from "../../../src/lib/store-agent/file-kinds";
+import { convertWorkbook } from "./attachments";
 import { resolveConfined } from "./file-tools";
 
 /**
@@ -107,13 +108,14 @@ async function loadImage(root: string, value: string): Promise<Uint8Array | stri
 
 const hasArabic = (s: string) => /[؀-ۿ]/.test(s);
 
-export function createExcelTool(root: string, onWrite: (relative: string) => void): Record<string, SDKCustomTool> {
+export function createExcelTool(root: string, onWrite: (relative: string, sources: string[], folder?: string) => void): Record<string, SDKCustomTool> {
   return {
     make_excel: {
       description:
         "Make an Excel workbook (.xlsx) for the user to download, from tables in your folder (.csv, or .json arrays of objects): one sheet per table. " +
         "Give image_column to put each row's picture in its row: that column holds image files from your folder or https links to images. " +
-        "The panel cannot preview .xlsx: show the user the .csv as well, and tell them the .xlsx is ready to download from the files list.",
+        "The user sees it in the panel with its sheets and pictures, and can download it. " +
+        "Set folder to \"reports\" when it is your analysis or comparison; data from the store goes to Store data by itself.",
       inputSchema: {
         type: "object",
         properties: {
@@ -121,6 +123,7 @@ export function createExcelTool(root: string, onWrite: (relative: string) => voi
           output: { type: "string", description: "Where to write the workbook, ending in .xlsx (e.g. reports/products.xlsx)." },
           sheet_names: { type: "array", items: { type: "string" }, description: "Optional names for the sheets, in order." },
           image_column: { type: "string", description: "Optional: the column holding each row's picture." },
+          folder: { type: "string", enum: ["store_data", "reports"], description: "Optional: where it belongs, when it is not plain store data." },
         },
         required: ["sources", "output"],
       },
@@ -190,7 +193,9 @@ export function createExcelTool(root: string, onWrite: (relative: string) => voi
           await fs.mkdir(path.dirname(target), { recursive: true });
           await fs.writeFile(target, new Uint8Array(await workbook.xlsx.writeBuffer()));
           const relative = path.relative(await fs.realpath(root), target).split(path.sep).join("/");
-          onWrite(relative);
+          // What the panel opens: the same sheets and pictures as an uploaded workbook.
+          await convertWorkbook(await fs.realpath(root), relative, `file-views/${relative.replace(/\.[^./]+$/, "")}`);
+          onWrite(relative, sources, typeof args.folder === "string" ? args.folder : undefined);
           const missed = [...problems].map(([why, n]) => `${n} ${why}`).join(", ");
           return text(`Wrote ${relative}: ${report.join("; ")}.${missed ? ` Pictures left out: ${missed}.` : ""}`);
         } catch (error) {

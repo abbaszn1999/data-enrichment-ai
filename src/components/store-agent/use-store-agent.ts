@@ -419,6 +419,7 @@ function applyEvent(chatId: string, event: StoreAgentEvent) {
         path: event.name,
         // Once a result, always one.
         shown: !!prev?.shown || event.shown === true,
+        folder: event.folder ?? prev?.folder ?? null,
         request: prev?.request ?? (s.live.userMessage ? requestLabel(s.live.userMessage.content) : null),
       };
       next.files = prev ? s.files.map((f) => (f.id === file.id ? file : f)) : [...s.files, file];

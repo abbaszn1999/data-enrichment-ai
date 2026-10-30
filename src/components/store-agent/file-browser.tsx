@@ -1,43 +1,20 @@
 "use client";
 
-import { useMemo, useState, type ComponentType } from "react";
-import {
-  ArrowLeft,
-  ChevronRight,
-  ClipboardList,
-  FileSpreadsheet,
-  FileText,
-  Folder,
-  Image as ImageIcon,
-  LayoutGrid,
-  List,
-  Paperclip,
-  Search,
-  Table2,
-  Wrench,
-  X,
-} from "lucide-react";
+import { useMemo, useState } from "react";
+import { ArrowLeft, ChevronRight, ClipboardList, Folder, LayoutGrid, List, Search, X } from "lucide-react";
 import { FILE_SECTIONS, fileSection, isExtractedImage, type FileSectionId } from "@/lib/store-agent/file-kinds";
 import { cn } from "@/lib/utils";
 import { PLAN_TAB_PREFIX, storeAgentApi, type ChatFile, type Plan } from "./api";
 import { FileKindIcon } from "./blocks";
 
-type FolderMeta = {
-  icon: ComponentType<{ className?: string }>;
-  /** Folder tint: the folder glyph and its badge. */
-  tint: string;
-  /** What appears here, for an empty folder. */
-  empty: string;
-};
-
-const FOLDERS: Record<FileSectionId, FolderMeta> = {
-  reports: { icon: FileText, tint: "text-[#6B358D] dark:text-[#B98BE0]", empty: "Reports Vera writes for you appear here." },
-  tables: { icon: Table2, tint: "text-sky-600 dark:text-sky-400", empty: "Tables and product galleries appear here." },
-  excel: { icon: FileSpreadsheet, tint: "text-emerald-600 dark:text-emerald-400", empty: "Excel files Vera makes for you to download appear here." },
-  images: { icon: ImageIcon, tint: "text-rose-500 dark:text-rose-400", empty: "Images Vera creates or finds appear here." },
-  plans: { icon: ClipboardList, tint: "text-[#F76D01]", empty: "Plans from Plan mode appear here." },
-  uploads: { icon: Paperclip, tint: "text-amber-600 dark:text-amber-400", empty: "Files you attach to the chat appear here." },
-  working: { icon: Wrench, tint: "text-muted-foreground", empty: "Files Vera uses while she works appear here." },
+/** What appears in a folder, said when it is empty. */
+const EMPTY_TEXT: Record<FileSectionId, string> = {
+  store_data: "Everything Vera pulls from your store appears here.",
+  reports: "Reports and analysis Vera makes for you appear here.",
+  images: "Images Vera creates or finds on the web appear here.",
+  plans: "Plans from Plan mode appear here.",
+  uploads: "Files you attach to the chat appear here.",
+  working: "Files Vera uses while she works appear here.",
 };
 
 type Entry = {
@@ -136,18 +113,17 @@ function EntryIcon({ entry, workspaceId, large }: { entry: Entry; workspaceId: s
       />
     );
   }
-  const Icon = FOLDERS[entry.section].icon;
   return (
-    <span className={cn(box, "flex shrink-0 items-center justify-center rounded-md bg-muted/60", FOLDERS[entry.section].tint)}>
-      {entry.file ? <FileKindIcon kind={entry.file.kind} mime={entry.file.mime} className={large ? "h-7 w-7" : "h-4 w-4"} /> : <Icon className={large ? "h-7 w-7" : "h-4 w-4"} />}
+    <span className={cn(box, "flex shrink-0 items-center justify-center rounded-md bg-muted/60 text-muted-foreground")}>
+      {entry.file ? <FileKindIcon kind={entry.file.kind} mime={entry.file.mime} className={large ? "h-7 w-7" : "h-4 w-4"} /> : <ClipboardList className={large ? "h-7 w-7" : "h-4 w-4"} />}
     </span>
   );
 }
 
 /**
- * The chat's files as a small file explorer: the fixed folders (Reports,
- * Tables, Excel, Images, Plans, Uploads, Working files) on top, each opened
- * like a folder on a computer, with a path back up and one search.
+ * The chat's files as a small file explorer: the fixed folders (Store data,
+ * Reports, Images, Plans, Uploads, Working files) on top, each opened like a
+ * folder on a computer, with a path back up and one search.
  */
 export function FileBrowser({
   workspaceId,
@@ -270,31 +246,23 @@ export function FileBrowser({
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {showFolders ? (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-2.5">
             {FILE_SECTIONS.map((s) => {
               const list = sections.get(s.id) ?? [];
-              const meta = FOLDERS[s.id];
-              const Icon = meta.icon;
               const latest = list[0];
               return (
                 <button
                   key={s.id}
                   type="button"
                   onClick={() => go(s.id)}
-                  className={cn(
-                    "group flex flex-col items-center gap-2 rounded-xl border bg-background px-3 pb-3 pt-4 text-center transition-all hover:-translate-y-0.5 hover:border-[#6B358D]/40 hover:shadow-md dark:hover:border-[#F76D01]/40",
-                    !list.length && "opacity-60",
-                    s.id === "working" && "border-dashed"
-                  )}
+                  className="flex min-w-0 items-center gap-3 rounded-lg border bg-background px-3.5 py-3 text-start transition-colors hover:border-foreground/25 hover:bg-muted/40"
                 >
-                  <span className="relative">
-                    <Folder className={cn("h-14 w-14 fill-current opacity-20", meta.tint)} strokeWidth={1} />
-                    <Folder className={cn("absolute inset-0 h-14 w-14", meta.tint)} strokeWidth={1.25} />
-                    <Icon className={cn("absolute bottom-2.5 start-1/2 h-4 w-4 -translate-x-1/2 rtl:translate-x-1/2", meta.tint)} />
-                  </span>
-                  <span className="text-[13px] font-semibold">{s.title}</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {list.length ? `${list.length} ${list.length === 1 ? "item" : "items"}${latest ? ` · ${timeAgo(latest.createdAt, now)}` : ""}` : "Empty"}
+                  <Folder className={cn("h-8 w-8 shrink-0 fill-muted", list.length ? "text-muted-foreground" : "text-muted-foreground/40")} strokeWidth={1.25} />
+                  <span className="min-w-0">
+                    <span className={cn("block truncate text-[13px] font-medium", !list.length && "text-muted-foreground")}>{s.title}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">
+                      {list.length ? `${list.length} ${list.length === 1 ? "item" : "items"}${latest ? ` · ${timeAgo(latest.createdAt, now)}` : ""}` : "Empty"}
+                    </span>
                   </span>
                 </button>
               );
@@ -306,8 +274,8 @@ export function FileBrowser({
               <>Nothing matches “{query.trim()}”{folder ? ` in ${TITLE[folder]}` : ""}.</>
             ) : (
               <>
-                <Folder className={cn("h-10 w-10", FOLDERS[folder!].tint)} strokeWidth={1.25} />
-                {FOLDERS[folder!].empty}
+                <Folder className="h-10 w-10 fill-muted text-muted-foreground/50" strokeWidth={1.25} />
+                {EMPTY_TEXT[folder!]}
               </>
             )}
           </div>
@@ -326,7 +294,7 @@ export function FileBrowser({
                     type="button"
                     title={entry.file?.path ?? entry.name}
                     onClick={() => onOpen(entry.openId)}
-                    className="flex min-w-0 flex-col gap-2 rounded-xl border bg-background p-2.5 text-start transition-all hover:-translate-y-0.5 hover:border-[#6B358D]/40 hover:shadow-md dark:hover:border-[#F76D01]/40"
+                    className="flex min-w-0 flex-col gap-2 rounded-lg border bg-background p-2.5 text-start transition-colors hover:border-foreground/25 hover:bg-muted/40"
                   >
                     <EntryIcon entry={entry} workspaceId={workspaceId} large />
                     <span className="min-w-0">
@@ -344,7 +312,7 @@ export function FileBrowser({
                 ))}
               </div>
             ) : (
-              <div className="overflow-hidden rounded-xl border bg-background">
+              <div className="overflow-hidden rounded-lg border bg-background">
                 {entries.map((entry) => (
                   <button
                     key={entry.key}

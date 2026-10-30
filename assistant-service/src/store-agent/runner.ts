@@ -19,6 +19,7 @@ import { missingScopes } from "./shopify/guard";
 import { SCOPE_LABELS, STORE_AGENT_SCOPES } from "./shopify/scopes";
 import { plainMentions } from "../../../src/lib/store-agent/mentions";
 import { mentionContext, type MentionContext } from "./mentions";
+import { createDocumentTool } from "./document-tool";
 import { createExcelTool } from "./excel-tool";
 import { createFileTools } from "./file-tools";
 import { ChatFiles } from "./files";
@@ -577,11 +578,22 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
         log,
       }),
       ...createFileTools(cwd, (relative) => written.add(relative)),
-      ...createScriptTool(cwd, (relative) => written.add(relative)),
+      ...createScriptTool(cwd, (relative, inputs) => {
+        written.add(relative);
+        // Made from the store's data: it stays Store data when it is opened, unless the agent says otherwise.
+        if (inputs.some((input) => files.isFromStore(input))) files.markFromStore(relative);
+      }),
       // An Excel file is made for the user to download: a result, though the panel cannot open it.
-      ...createExcelTool(cwd, (relative) => {
+      ...createExcelTool(cwd, (relative, sources, folder) => {
         written.add(relative);
         files.markShown(relative);
+        if (sources.some((source) => files.isFromStore(source))) files.markFromStore(relative);
+        if (folder) files.setFolderHint(relative, folder);
+      }),
+      ...createDocumentTool(cwd, (relative, folder) => {
+        written.add(relative);
+        files.markShown(relative);
+        if (folder) files.setFolderHint(relative, folder);
       }),
     }, run));
     const emitProgress = (force = false) => {

@@ -36,7 +36,7 @@ describe("Files panel folders", () => {
       ["u1", "v1"],
     ]);
     expect(sections.get("reports")!.map((e) => e.detail)).toEqual(["20 minutes ago · SEO audit"]);
-    expect(sections.get("tables")!.map((e) => e.key)).toEqual(["t1"]);
+    expect(sections.get("store_data")!.map((e) => e.key)).toEqual(["t1"]);
     expect(sections.get("working")!.map((e) => e.key)).toEqual(["w1"]);
     expect(sections.get("plans")!.map((e) => [e.openId, e.detail])).toEqual([["plan:p1", "1 minute ago · Draft · version 2"]]);
     // Made from an upload: opened from the upload, not listed on its own.

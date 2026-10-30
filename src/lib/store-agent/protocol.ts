@@ -9,6 +9,7 @@ export const STORE_AGENT_LIMITS = {
   maxAttachments: 10,
   maxImageBytes: 10 * 1024 * 1024,
   maxFileBytes: 20 * 1024 * 1024,
+  maxMediaBytes: 50 * 1024 * 1024,
   /** A run that is still going after this is stopped. */
   maxRunMs: 60 * 60 * 1000,
   /** An approval or question nobody answers expires after this. */
@@ -150,7 +151,7 @@ export type StoreAgentEvent =
   /** A plan written in Plan mode, or a new version of it, or its build status changing. */
   | { type: "plan"; planId: string; title: string; content: string; version: number; status: PlanStatus; seq: number }
   /** `shown`: a result for the user (opened, or made for them), not one of the agent's working files. */
-  | { type: "file"; fileId: string; name: string; kind: string; mime: string; open: boolean; shown?: boolean; seq: number }
+  | { type: "file"; fileId: string; name: string; kind: string; mime: string; open: boolean; shown?: boolean; folder?: string | null; seq: number }
   | { type: "summary"; status: "started" | "completed"; seq: number }
   | { type: "context"; usedTokens: number; windowTokens: number; seq: number }
   | { type: "usage"; credits: number; usd: number; seq: number }

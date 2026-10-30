@@ -629,6 +629,7 @@ export function StoreAgentWorkspace({
               activeFileId={panel.activeFileId}
               working={running}
               onOpen={(fileId) => openFile(chatId, fileId)}
+              onAskVera={canEdit ? (file) => pick(`@[${file.name}](file://${file.id}) Convert this file to a format I can open here. `) : undefined}
               onClose={(fileId) => closeFile(chatId, fileId)}
             />
           )}

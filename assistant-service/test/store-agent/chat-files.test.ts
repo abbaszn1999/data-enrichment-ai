@@ -110,7 +110,7 @@ describe("ChatFiles", () => {
 
     // Opening the CSV later makes it a result, without uploading it again.
     await files.sync(r, new Set(["exports/p.csv"]));
-    expect(updates).toEqual([{ values: { shown: true }, id: events()[0]!.fileId }]);
+    expect(updates).toEqual([{ values: { shown: true, folder: "store_data" }, id: events()[0]!.fileId }]);
     expect(events().at(-1)).toMatchObject({ name: "exports/p.csv", shown: true, open: true });
 
     // Written again later: uploaded again, still the run it was made in.

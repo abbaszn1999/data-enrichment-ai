@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyReply, reduceReply } from "./blocks";
-import { fileSection } from "./file-kinds";
+import { classifyAgentFile, fileSection } from "./file-kinds";
 import {
   afterChip,
   chipBefore,
@@ -86,15 +86,36 @@ describe("panel folders", () => {
     ...extra,
   });
 
-  it("files each result by what it is, and the rest as working files", () => {
-    expect(fileSection(file("reports/seo.md", { shown: true }))).toBe("reports");
-    expect(fileSection(file("outputs/report.html", { shown: true }))).toBe("reports");
-    expect(fileSection(file("exports/products.csv", { shown: true }))).toBe("tables");
-    expect(fileSection(file("outputs/gallery.json", { shown: true }))).toBe("tables");
-    expect(fileSection(file("reports/products.xlsx", { shown: true }))).toBe("excel");
-    expect(fileSection(file("images/banner.png", { shown: true }))).toBe("images");
-    expect(fileSection(file("exports/products.jsonl", { shown: false }))).toBe("working");
-    expect(fileSection(file("exports/products.csv", { shown: false }))).toBe("working");
+  it("files by where a file came from, not by its format", () => {
+    const place = (path: string, extra: Parameters<typeof classifyAgentFile>[0] extends infer T ? Omit<T, "path"> : never = {}) => classifyAgentFile({ path, ...extra });
+    // From the store: whether or not it was opened.
+    expect(place("exports/products.csv")).toBe("store_data");
+    expect(place("exports/products.csv", { shown: true })).toBe("store_data");
+    // Vera's own data: never shown as a result, even when opened.
+    expect(place("exports/products.jsonl", { shown: true })).toBe("working");
+    expect(place("shopify-results/1.json", { shown: true })).toBe("working");
+    expect(place("previews/changes.csv", { shown: true })).toBe("working");
+    // Made from the store's data.
+    expect(place("reports/products.xlsx", { shown: true, fromStore: true })).toBe("store_data");
+    expect(place("outputs/no-images.json", { shown: true, fromStore: true })).toBe("store_data");
+    // Her own work, in any format.
+    expect(place("reports/seo.md", { shown: true, fromStore: true })).toBe("reports");
+    expect(place("outputs/report.html", { shown: true })).toBe("reports");
+    expect(place("reports/compare.xlsx", { shown: true })).toBe("reports");
+    expect(place("reports/audit.pdf", { shown: true })).toBe("reports");
+    expect(place("reports/compare.xlsx", { shown: true, fromStore: true, hint: "reports" })).toBe("reports");
+    // Images, and what only she can say is one.
+    expect(place("images/banner.png", { shown: true })).toBe("images");
+    expect(place("outputs/found.json", { shown: true, hint: "images" })).toBe("images");
+    // What was not opened; a hint that does not fit.
+    expect(place("outputs/step.csv")).toBe("working");
+    expect(place("reports/seo.md", { shown: true, hint: "images" })).toBe("reports");
+    expect(place("banner.png", { shown: true, hint: "reports" })).toBe("images");
+  });
+
+  it("uses the folder saved with a file", () => {
+    expect(fileSection({ ...file("outputs/a.csv"), folder: "store_data" })).toBe("store_data");
+    expect(fileSection({ ...file("outputs/a.csv"), folder: "nonsense", shown: false })).toBe("working");
   });
 
   it("keeps uploads together, and backups and what was made from an upload out of the list", () => {
@@ -102,12 +123,14 @@ describe("panel folders", () => {
     expect(fileSection(file("attachments/list.csv", { shown: true }))).toBeNull();
     expect(fileSection(file("attachments/list-images/0.jpg", { shown: true }))).toBeNull();
     expect(fileSection(file("backups/a1.json", { shown: true }))).toBeNull();
+    expect(fileSection(file("file-views/reports/p.csv", { shown: true }))).toBeNull();
   });
 
   it("sorts files from before results were recorded by where they are", () => {
     expect(fileSection(file("reports/seo.md"))).toBe("reports");
     expect(fileSection(file("shopify-results/2026.json"))).toBe("working");
     expect(fileSection(file("exports/products.jsonl"))).toBe("working");
+    expect(fileSection(file("exports/products.csv"))).toBe("store_data");
     expect(fileSection(file("previews/changes.csv"))).toBe("working");
   });
 });

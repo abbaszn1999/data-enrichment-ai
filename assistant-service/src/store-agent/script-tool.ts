@@ -115,7 +115,7 @@ export function runIsolatedScript(body: string, inputs: Record<string, string>, 
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
 const failure = (value: string) => ({ content: [{ type: "text" as const, text: value }], isError: true as const });
 
-export function createScriptTool(root: string, onWrite: (relative: string) => void): Record<string, SDKCustomTool> {
+export function createScriptTool(root: string, onWrite: (relative: string, inputs: string[]) => void): Record<string, SDKCustomTool> {
   return {
     run_script: {
       description:
@@ -165,7 +165,7 @@ export function createScriptTool(root: string, onWrite: (relative: string) => vo
             await fs.mkdir(path.dirname(target), { recursive: true });
             await fs.writeFile(target, body, "utf8");
             written.push(`outputs/${safe}`);
-            onWrite(`outputs/${safe}`);
+            onWrite(`outputs/${safe}`, Array.isArray(args.inputs) ? args.inputs.map(String) : []);
           }
         }
         const result = value && typeof value === "object" && "result" in value ? value.result : value;

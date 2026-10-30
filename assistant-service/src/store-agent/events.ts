@@ -69,6 +69,8 @@ export function describeTool(name: string, args: Args): Described {
       return { kind: "other", title: "Remembering for this store", detail: clip(str(args.note), 120) || undefined };
     case "run_script":
       return { kind: "file", title: "Analysing the data", detail: Array.isArray(args.inputs) ? clip(args.inputs.map(base).join(", "), 100) : undefined };
+    case "make_document":
+      return { kind: "file", title: "Making a document", detail: base(args.output) || undefined };
     case "make_excel":
       return { kind: "file", title: "Making an Excel file", detail: base(args.output) || undefined };
     case "ask_user": {

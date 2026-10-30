@@ -34,7 +34,7 @@ export async function GET(request: NextRequest, { params }: Params) {
     messageQuery,
     access.admin
       .from("store_agent_files")
-      .select("id, name, kind, mime, size, created_by, created_at, storage_path, shown, run_id")
+      .select("id, name, kind, mime, size, created_by, created_at, storage_path, shown, folder, run_id")
       .eq("chat_id", chatId)
       .order("created_at", { ascending: true }),
     callStoreAgentService({ path: `/store-agent/chats/${chatId}/live`, userId: access.userId, method: "GET" })

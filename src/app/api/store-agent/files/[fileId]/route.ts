@@ -7,6 +7,8 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ fileId: string }> };
 
+const MAX_INLINE_TEXT_BYTES = 5 * 1024 * 1024;
+
 /**
  * A chat file the user owns. Text comes back inline (`?format=json`) for the
  * panel; anything else redirects to a short-lived signed URL.
@@ -28,10 +30,14 @@ export async function GET(request: NextRequest, { params }: Params) {
   if (!file || chat?.user_id !== access.userId) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const download = request.nextUrl.searchParams.get("download") === "1";
-  if (request.nextUrl.searchParams.get("format") === "json" && isTextFile(String(file.name), String(file.mime)) && Number(file.size) <= 5 * 1024 * 1024) {
+  if (request.nextUrl.searchParams.get("format") === "json" && isTextFile(String(file.name), String(file.mime))) {
     const { data, error } = await access.admin.storage.from(STORE_AGENT_FILES_BUCKET).download(String(file.storage_path));
     if (error || !data) return NextResponse.json({ error: "Could not open the file" }, { status: 500 });
-    return NextResponse.json({ name: file.name, mime: file.mime, size: file.size, text: await data.text() });
+    // A large file shows its first part, ending on a whole line.
+    const truncated = data.size > MAX_INLINE_TEXT_BYTES;
+    let text = await (truncated ? data.slice(0, MAX_INLINE_TEXT_BYTES) : data).text();
+    if (truncated) text = text.slice(0, Math.max(0, text.lastIndexOf("\n")));
+    return NextResponse.json({ name: file.name, mime: file.mime, size: file.size, text, truncated });
   }
 
   const { data, error } = await access.admin.storage

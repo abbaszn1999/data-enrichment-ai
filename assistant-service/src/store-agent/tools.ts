@@ -32,7 +32,7 @@ export { BULK_MIN_RECORDS, type ToolContext } from "./tool-helpers";
 /** Changes up to this many rows run one by one; larger ones use a Shopify bulk operation. */
 const DIRECT_ROWS_MAX = 25;
 /** Files the panel can show; anything else only gets a download link there. */
-const PREVIEWABLE = /\.(md|txt|csv|tsv|json|jsonl|html?|png|jpe?g|webp|gif|svg|pdf)$/i;
+const PREVIEWABLE = /\.(md|txt|csv|tsv|json|jsonl|html?|xml|ya?ml|log|js|mjs|ts|css|png|jpe?g|webp|gif|svg|pdf|xlsx|docx|mp4|webm|mp3|wav)$/i;
 
 async function checkScopes(ctx: ToolContext, required: StoreAgentScope[]): Promise<{ conn: ShopifyConnection } | { error: string }> {
   let conn: ShopifyConnection;
@@ -537,7 +537,14 @@ function createSharedTools(ctx: ToolContext): Record<string, SDKCustomTool> {
         "a product gallery (.json array of objects with image/title/price), an image or a plan. Write the file first (write_file), then call this.",
       inputSchema: {
         type: "object",
-        properties: { path: { type: "string", description: "Path inside your folder." } },
+        properties: {
+          path: { type: "string", description: "Path inside your folder." },
+          folder: {
+            type: "string",
+            enum: ["store_data", "reports", "images"],
+            description: "Optional: where it belongs when it is not obvious. A gallery of web images: images. A table of your analysis or comparison: reports. A table of store records you wrote yourself: store_data.",
+          },
+        },
         required: ["path"],
       },
       execute: async (args) => {
@@ -550,15 +557,11 @@ function createSharedTools(ctx: ToolContext): Record<string, SDKCustomTool> {
           return failure((error as Error).message || `There is no file at ${args.path}.`);
         }
         try {
+          if (typeof args.folder === "string") ctx.files.setFolderHint(relative, args.folder);
           await ctx.files.sync(ctx.run, new Set([relative]));
-          if (!PREVIEWABLE.test(relative)) {
-            return text(
-              `${relative} is open in the panel, but the panel cannot preview this kind of file: the user only sees a download link. ` +
-                "Do not tell them it is shown. Show a file the panel can display instead (.csv, .json, .md, .html, an image or a PDF), " +
-                "for example the .csv made from an Excel attachment."
-            );
-          }
-          return text(`Shown to the user: ${relative}`);
+          return text(
+            PREVIEWABLE.test(relative) ? `Shown to the user: ${relative}` : `${relative} is open in the panel with its name, type and a download button: this format has no preview.`
+          );
         } catch (error) {
           // The file is safe in the folder; only the upload to the panel failed.
           ctx.files.openWhenSynced(relative);

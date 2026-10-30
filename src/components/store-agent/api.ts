@@ -38,6 +38,8 @@ export type ChatFile = {
   path: string;
   /** A result Vera put in front of the user; otherwise one of her working files. */
   shown?: boolean;
+  /** The folder the platform filed it in. */
+  folder?: string | null;
   /** The request it came from, in one line. */
   request?: string | null;
 };
@@ -190,7 +192,7 @@ export const storeAgentApi = {
     `/api/store-agent/files/${fileId}?${q({ workspaceId, ...(download ? { download: "1" } : {}) })}`,
 
   fileText: (workspaceId: string, fileId: string) =>
-    fetch(`/api/store-agent/files/${fileId}?${q({ workspaceId, format: "json" })}`).then((r) => json<{ text: string; name: string; mime: string }>(r)),
+    fetch(`/api/store-agent/files/${fileId}?${q({ workspaceId, format: "json" })}`).then((r) => json<{ text: string; name: string; mime: string; truncated?: boolean }>(r)),
 
   runAction: (workspaceId: string, runId: string, action: "cancel" | "steer" | "approve" | "answer", body: Record<string, unknown> = {}) =>
     fetch(`/api/store-agent/runs/${runId}/${action}`, {
