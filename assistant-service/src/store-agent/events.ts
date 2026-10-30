@@ -205,6 +205,8 @@ export function unwrapToolCall(toolCall: { type?: string; args?: unknown; result
 export type ToolStart = Extract<StoreAgentEventInput, { type: "tool_start" }>;
 
 const MAX_LINKS = 10;
+/** Summary of a web search that found no pages. */
+export const NO_RESULTS = "No results";
 
 /** An http(s) link fit to show, or null. */
 function safeLink(url: unknown, title: unknown): ToolLink | null {
@@ -250,16 +252,21 @@ export function webCallsInMessages(messages: readonly unknown[]): WebCall[] {
       const args = call.args ?? {};
       const success = call.result.success;
       const failure = call.result.error?.error ?? call.result.rejected?.reason;
-      const links = search
+      const found = search
         ? ((success?.references as Array<{ url?: unknown; title?: unknown }> | undefined) ?? []).flatMap((r) => safeLink(r.url, r.title) ?? [])
         : [safeLink(success?.url ?? args.url, "")].flatMap((l) => l ?? []);
+      const links = found.filter((l, i) => found.findIndex((o) => o.url === l.url) === i).slice(0, MAX_LINKS);
       calls.push({
         callId,
         tool: search ? "webSearch" : "webFetch",
         args,
         ok: !!success,
-        summary: success ? undefined : clip(scrub(str(failure) || "failed").replace(/\s+/g, " "), 200),
-        links: links.filter((l, i) => links.findIndex((o) => o.url === l.url) === i).slice(0, MAX_LINKS),
+        summary: !success
+          ? clip(scrub(str(failure) || "failed").replace(/\s+/g, " "), 200)
+          : search && !links.length
+            ? NO_RESULTS
+            : undefined,
+        links,
       });
     }
   }

@@ -155,6 +155,8 @@ export function mountStoreAgentRoutes(app: Hono, deps: StoreAgentRouteDeps) {
     // Queued first, so it reaches the agent even if the SDK hands it back;
     // the SDK's answer can wait for the end of the turn, so it is not awaited.
     const id = run.addGuidance(body.text);
+    // Part of the reply, so it is shown where it arrived and saved with it.
+    run.emit({ type: "guidance", text: body.text });
     void run
       .steer?.(body.text)
       .then((outcome) => {

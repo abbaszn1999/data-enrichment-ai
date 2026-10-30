@@ -9,6 +9,8 @@ const PLAIN_SEGMENT = /^[\w.\- ()]+$/;
 const MARKER = "u8.";
 
 export function encodeStorageSegment(segment: string): string {
+  // Empty stays empty: "a/b/" is a folder prefix, not a file named "".
+  if (!segment) return segment;
   if (PLAIN_SEGMENT.test(segment) && !segment.startsWith(MARKER)) return segment;
   return MARKER + Buffer.from(segment, "utf8").toString("base64url");
 }

@@ -26,8 +26,8 @@ export function withGuidance(tools: Record<string, SDKCustomTool>, run: StoreAge
                 type: "text" as const,
                 text:
                   `This ${name} call was NOT run: the user sent you a message while you were working.\n${guidanceText(pending)}\n` +
-                  "Read it before doing anything else. If it changes or cancels the task, follow it and do not repeat the call; " +
-                  "if it does not affect this step, you may call the tool again.",
+                  "Read it before doing anything else. If it stops or replaces the task, follow it and do not repeat the call. " +
+                  "Otherwise it adds to the task: keep going with the original request (you may call the tool again), do what the message asks too, and answer both.",
               },
             ],
             isError: true,

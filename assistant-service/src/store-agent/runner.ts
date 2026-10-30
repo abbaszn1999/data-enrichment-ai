@@ -628,8 +628,15 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
       webScan = listMessages()
         .then((messages) => {
           for (const call of webCallsInMessages(messages)) {
-            if (webSeen.has(call.callId) || started.has(call.callId)) continue;
+            if (webSeen.has(call.callId)) continue;
             webSeen.add(call.callId);
+            if (started.has(call.callId)) {
+              // Some models' web calls do come through onDelta, but without their links: add them.
+              if (call.links.length || call.summary) {
+                run.emit({ type: "tool_end", callId: call.callId, ok: call.ok, summary: call.summary, links: call.links });
+              }
+              continue;
+            }
             toolCalls += 1;
             run.emit({ type: "tool_start", callId: call.callId, tool: call.tool, ...describeTool(call.tool, call.args) });
             run.emit({ type: "tool_end", callId: call.callId, ok: call.ok, summary: call.summary, links: call.links });
@@ -810,7 +817,10 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
     // Messages the user sent that the turn never picked up go in as a follow-up,
     // in this same run, so nothing they wrote is dropped.
     for (let pending = run.takeGuidance(); pending.length && result.status === "finished" && !run.cancelled; pending = run.takeGuidance()) {
-      sdkRun = await agent.send(`While you were working I wrote:\n${guidanceText(pending)}`, sendOptions);
+      sdkRun = await agent.send(
+        `While you were working I wrote:\n${guidanceText(pending)}\nUnless it says to stop or replace my earlier request, it adds to it: make sure both are answered.`,
+        sendOptions
+      );
       result = await sdkRun.wait();
       addUsage(result.usage);
     }

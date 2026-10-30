@@ -8,6 +8,12 @@ describe("storage keys", () => {
     expect(encodeStoragePath("outputs/audit-products.csv")).toBe("outputs/audit-products.csv");
   });
 
+  it("keeps a folder prefix a prefix", () => {
+    // ChatFiles matches a chat's stored files by `${ws}/${chat}/${encodeStoragePath("")}`.
+    expect(encodeStoragePath("")).toBe("");
+    expect(encodeStoragePath("reports/")).toBe("reports/");
+  });
+
   it("stores names in any language as valid keys and reads them back exactly", () => {
     for (const name of ["تقرير-تدقيق-المتجر.md", "reports/خطة 2026.md", "uploads/abc-منتجات (1).csv", "café.png", "u8.trick"]) {
       const key = encodeStoragePath(name);

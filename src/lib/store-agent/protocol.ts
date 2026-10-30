@@ -101,6 +101,8 @@ export type ApprovalPreview = {
 export type StoreAgentEvent =
   | { type: "run"; runId: string; chatId: string; seq: number }
   | { type: "text"; delta: string; seq: number }
+  /** A message the user sent while the run was working. */
+  | { type: "guidance"; text: string; seq: number }
   | { type: "thinking"; delta: string; seq: number }
   | { type: "thinking_done"; ms: number; seq: number }
   | { type: "tool_start"; callId: string; tool: string; kind: ToolKind; title: string; detail?: string; seq: number }

@@ -4,6 +4,18 @@ import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
+import { MermaidDiagram } from "./mermaid-diagram";
+
+type HastNode = { type: string; tagName?: string; value?: string; properties?: { className?: unknown }; children?: HastNode[] };
+
+const textOf = (node: HastNode): string => (node.type === "text" ? (node.value ?? "") : (node.children ?? []).map(textOf).join(""));
+
+/** The source of a ```mermaid fence, or null for any other block. */
+function mermaidSource(pre: HastNode | undefined): string | null {
+  const code = pre?.children?.find((c) => c.tagName === "code");
+  const classes = code?.properties?.className;
+  return code && Array.isArray(classes) && classes.includes("language-mermaid") ? textOf(code) : null;
+}
 
 /** Agent text and reports: GitHub-flavoured Markdown, safe links, readable tables, RTL-aware. */
 export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }) {
@@ -28,6 +40,16 @@ export const Markdown = memo(function Markdown({ text, className }: { text: stri
               {children}
             </a>
           ),
+          // Code reads left to right even inside an Arabic reply; mermaid fences become diagrams.
+          pre: ({ node, children }) => {
+            const diagram = mermaidSource(node as HastNode | undefined);
+            if (diagram !== null) return <MermaidDiagram code={diagram} />;
+            return (
+              <pre dir="ltr" className="text-start">
+                {children}
+              </pre>
+            );
+          },
           table: ({ children }) => (
             <div className="not-prose my-3 overflow-x-auto rounded-lg border">
               <table className="w-full border-collapse text-[13px] [&_td]:border-t [&_td]:px-3 [&_td]:py-1.5 [&_th]:bg-muted/60 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-start [&_th]:font-semibold">

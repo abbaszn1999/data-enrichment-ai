@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyReply, reduceReply } from "../../../src/lib/store-agent/blocks";
-import { webCallsInMessages } from "../../src/store-agent/events";
+import { NO_RESULTS, webCallsInMessages } from "../../src/store-agent/events";
 import { themedReport } from "../../../src/lib/store-agent/report-theme";
 
 /** A saved turn as Agent.messages.list returns it (its JSON form). */
@@ -54,10 +54,40 @@ describe("webCallsInMessages", () => {
     expect(webCallsInMessages([null, {}, { message: "x" }, { type: "assistant", message: { agentConversationTurn: {} } }])).toEqual([]);
   });
 
+  it("says when a search found nothing", () => {
+    const [call] = webCallsInMessages([
+      turn([{ toolCallId: "s3", toolCall: { webSearchToolCall: { args: { searchTerm: "x" }, result: { success: { references: [{ title: "Web search results", url: "" }] } } } } }]),
+    ]);
+    expect(call).toMatchObject({ ok: true, summary: NO_RESULTS, links: [] });
+  });
+
   it("keeps the links on the saved tool block", () => {
     let state = reduceReply(emptyReply(), { type: "tool_start", callId: "s1", tool: "webSearch", kind: "web", title: "Searching the web", seq: 1 });
     state = reduceReply(state, { type: "tool_end", callId: "s1", ok: true, links: [{ title: "A", url: "https://a.example/" }], seq: 2 });
     expect(state.blocks[0]).toMatchObject({ status: "ok", links: [{ title: "A", url: "https://a.example/" }] });
+  });
+
+  it("keeps links and summary when a web call ends a second time without them", () => {
+    let state = reduceReply(emptyReply(), { type: "tool_start", callId: "s1", tool: "webSearch", kind: "web", title: "Searching the web", seq: 1 });
+    state = reduceReply(state, { type: "tool_end", callId: "s1", ok: true, summary: NO_RESULTS, seq: 2 });
+    state = reduceReply(state, { type: "tool_end", callId: "s1", ok: true, seq: 3 });
+    expect(state.blocks[0]).toMatchObject({ status: "ok", summary: NO_RESULTS });
+
+    state = reduceReply(state, { type: "tool_start", callId: "s2", tool: "webSearch", kind: "web", title: "Searching the web", seq: 4 });
+    state = reduceReply(state, { type: "tool_end", callId: "s2", ok: true, links: [{ title: "A", url: "https://a.example/" }], seq: 5 });
+    state = reduceReply(state, { type: "tool_end", callId: "s2", ok: true, seq: 6 });
+    expect(state.blocks[1]).toMatchObject({ links: [{ title: "A", url: "https://a.example/" }] });
+  });
+
+  it("keeps a message sent mid-run in the reply, where it arrived", () => {
+    let state = reduceReply(emptyReply(), { type: "text", delta: "Searching…", seq: 1 });
+    state = reduceReply(state, { type: "guidance", text: "also count the free products", seq: 2 });
+    state = reduceReply(state, { type: "text", delta: "Done.", seq: 3 });
+    expect(state.blocks).toEqual([
+      { type: "text", text: "Searching…" },
+      { type: "guidance", text: "also count the free products" },
+      { type: "text", text: "Done." },
+    ]);
   });
 });
 

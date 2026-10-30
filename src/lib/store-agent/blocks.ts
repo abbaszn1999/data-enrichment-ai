@@ -6,6 +6,8 @@ import type { ApprovalPreview, QuestionItem, StoreAgentEvent, TodoItem, ToolKind
 
 export type MessageBlock =
   | { type: "text"; text: string }
+  /** What the user wrote while the reply was being worked on, where it arrived. */
+  | { type: "guidance"; text: string }
   | { type: "thinking"; text: string; ms?: number; done: boolean }
   | {
       type: "tool";
@@ -62,6 +64,9 @@ export function reduceReply(state: ReplyState, event: StoreAgentEvent): ReplySta
       if (last?.type === "text") blocks[blocks.length - 1] = { ...last, text: last.text + event.delta };
       else blocks.push({ type: "text", text: event.delta });
       break;
+    case "guidance":
+      blocks.push({ type: "guidance", text: event.text });
+      break;
     case "thinking":
       if (last?.type === "thinking" && !last.done) blocks[blocks.length - 1] = { ...last, text: last.text + event.delta };
       else blocks.push({ type: "thinking", text: event.delta, done: false });
@@ -91,7 +96,13 @@ export function reduceReply(state: ReplyState, event: StoreAgentEvent): ReplySta
       const i = blocks.findIndex((b) => b.type === "tool" && b.callId === event.callId);
       if (i >= 0) {
         const b = blocks[i] as Extract<MessageBlock, { type: "tool" }>;
-        blocks[i] = { ...b, status: event.ok ? "ok" : "error", summary: event.summary, ...(event.links?.length ? { links: event.links } : {}) };
+        // A web call can end twice (onDelta, then its links read back): keep what the first one said.
+        blocks[i] = {
+          ...b,
+          status: event.ok ? "ok" : "error",
+          summary: event.summary ?? b.summary,
+          ...(event.links?.length ? { links: event.links } : {}),
+        };
       }
       break;
     }

@@ -9,6 +9,7 @@ import {
   Circle,
   ClipboardList,
   CircleDot,
+  CornerDownLeft,
   Database,
   FileSpreadsheet,
   FileText,
@@ -97,7 +98,9 @@ function ToolBlock({ block }: { block: Extract<MessageBlock, { type: "tool" }> }
   const Icon = TOOL_ICON[block.kind] ?? Wrench;
   const failed = block.status === "error";
   const links = block.links ?? [];
-  const expandable = !!block.summary || links.length > 0;
+  // "No results" is said in the row itself; there is nothing more to open.
+  const noResults = block.tool === "webSearch" && !failed && !links.length && !!block.summary;
+  const expandable = (!!block.summary && !noResults) || links.length > 0;
   return (
     <div className="text-[13px]">
       <button
@@ -128,6 +131,7 @@ function ToolBlock({ block }: { block: Extract<MessageBlock, { type: "tool" }> }
             {links.length} {links.length === 1 ? "result" : "results"}
           </span>
         )}
+        {noResults && <span className="shrink-0 text-[11.5px] text-muted-foreground/80">{block.summary}</span>}
         <span className="ms-auto shrink-0">
           {block.status === "running" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -138,7 +142,7 @@ function ToolBlock({ block }: { block: Extract<MessageBlock, { type: "tool" }> }
           )}
         </span>
       </button>
-      {open && block.summary && (
+      {open && block.summary && !noResults && (
         <div dir="auto" className={cn("ms-8 mt-0.5 rounded-md px-2 py-1 text-[12px]", failed ? "bg-destructive/5 text-destructive" : "bg-muted/50 text-muted-foreground")}>
           {block.summary}
         </div>
@@ -627,6 +631,20 @@ export function ReplyBlocks({ blocks, ...handlers }: { blocks: MessageBlock[] } 
         switch (block.type) {
           case "text":
             return block.text.trim() ? <Markdown key={i} text={block.text} /> : null;
+          case "guidance":
+            return (
+              <div key={i} className="flex flex-col items-end gap-1 py-1">
+                <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <CornerDownLeft className="h-3 w-3" /> Sent while Vera was working
+                </span>
+                <div
+                  dir="auto"
+                  className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-ee-md bg-[#400095]/[0.07] px-3.5 py-2 text-[13.5px] leading-relaxed dark:bg-[#F76D01]/10"
+                >
+                  {block.text}
+                </div>
+              </div>
+            );
           case "thinking":
             return <ThinkingBlock key={i} block={block} live={handlers.live} />;
           case "tool":
