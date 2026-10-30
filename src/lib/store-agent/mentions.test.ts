@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptyReply, reduceReply } from "./blocks";
 import { fileSection } from "./file-kinds";
 import {
+  afterChip,
   chipBefore,
   encodeMentions,
   fileRef,
@@ -61,6 +62,14 @@ describe("mentions", () => {
     expect(chipBefore(text, 14, mentions)).toEqual({ start: 4, end: 14 });
     expect(chipBefore(text, 15, mentions)).toBeNull();
     expect(chipBefore(text, 10, mentions)).toBeNull();
+  });
+
+  it("does not search again after a chosen chip", () => {
+    const mentions = [{ label: "report.md", title: "report.md", id: fileRef(FILE) }];
+    expect(afterChip("see @report.md please", 21, mentions)).toBe(true);
+    expect(afterChip("see @report.md and @pul", 23, mentions)).toBe(false);
+    expect(afterChip("see @rep", 8, mentions)).toBe(false);
+    expect(afterChip("no mention", 10, mentions)).toBe(false);
   });
 
   it("says in one short line what a file came from", () => {

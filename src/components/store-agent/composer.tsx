@@ -9,6 +9,7 @@ import { STORE_AGENT_LIMITS } from "@/lib/store-agent/protocol";
 import { cn } from "@/lib/utils";
 import { FILE_SECTIONS, fileSection } from "@/lib/store-agent/file-kinds";
 import {
+  afterChip,
   chipBefore,
   encodeMentions,
   fileRef,
@@ -186,6 +187,8 @@ export function Composer({
   }, [picker, files, plans, results, workspaceId]);
 
   const updatePicker = (value: string, caret: number) => {
+    // Text typed after a chosen chip is not a new search.
+    if (afterChip(value, caret, mentions)) return setPicker(null);
     const before = value.slice(0, caret);
     const match = /(^|\s)@([^\s@][^@\n]{0,40})?$/.exec(before);
     if (!match) return setPicker(null);

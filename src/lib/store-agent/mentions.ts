@@ -76,6 +76,12 @@ export function encodeMentions(text: string, mentions: readonly ComposerMention[
     .join("");
 }
 
+/** The last "@" before the caret belongs to a chip already chosen: what follows is ordinary text, not a search. */
+export function afterChip(text: string, caret: number, mentions: readonly ComposerMention[]): boolean {
+  const at = text.slice(0, caret).lastIndexOf("@");
+  return at >= 0 && mentions.some((m) => text.startsWith(`@${m.label}`, at));
+}
+
 /** The chip that ends exactly at `caret`, if any: Backspace removes it whole. */
 export function chipBefore(text: string, caret: number, mentions: readonly ComposerMention[]): { start: number; end: number } | null {
   let pos = 0;
