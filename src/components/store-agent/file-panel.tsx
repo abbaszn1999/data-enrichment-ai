@@ -5,7 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
 import { ClipboardList, Download, FolderOpen, Loader2, Search, X } from "lucide-react";
 import { parseCsv } from "@/lib/store-agent/csv";
-import { attachmentPath, cellImages, fileSection, isTextFile, isWorkbook, looksLikeImage } from "@/lib/store-agent/file-kinds";
+import { attachmentPath, cellImages, fileSection, isTextFile, isWorkbook, looksLikeImage, type FileSectionId } from "@/lib/store-agent/file-kinds";
 import { themedReport } from "@/lib/store-agent/report-theme";
 import { cn } from "@/lib/utils";
 import { PLAN_TAB_PREFIX, storeAgentApi, type ChatFile, type Plan } from "./api";
@@ -433,6 +433,8 @@ export function FilePanel({
   const activeTab = activeFileId ? tabs.get(activeFileId) : undefined;
   const active = activeTab?.file;
   const [showList, setShowList] = useState(false);
+  // The folder the Files view is in: kept here, so a file opened from it comes back to it.
+  const [folder, setFolder] = useState<FileSectionId | null>(null);
   // A file opened from the chat (or by the agent) takes over from the list.
   const [seenActive, setSeenActive] = useState(activeFileId);
   if (seenActive !== activeFileId) {
@@ -501,8 +503,8 @@ export function FilePanel({
 
       <div className="min-h-0 flex-1">
         {listing ? (
-          <div className="h-full overflow-auto p-4">
-            {files.length === 0 && plans.length === 0 ? (
+          files.length === 0 && plans.length === 0 ? (
+            <div className="h-full overflow-auto p-4">
               <div className="flex h-full flex-col items-center justify-center text-center">
                 <div className="relative mb-5 h-28 w-44">
                   <div className="absolute inset-0 rotate-[-6deg] rounded-xl border bg-background shadow-sm" />
@@ -527,18 +529,20 @@ export function FilePanel({
                     : "Reports, plans, product tables and images the agent creates open here."}
                 </p>
               </div>
-            ) : (
-              <FileBrowser
-                workspaceId={workspaceId}
-                files={files}
-                plans={plans}
-                onOpen={(id) => {
-                  setShowList(false);
-                  onOpen(id);
-                }}
-              />
-            )}
-          </div>
+            </div>
+          ) : (
+            <FileBrowser
+              workspaceId={workspaceId}
+              files={files}
+              plans={plans}
+              folder={folder}
+              onFolder={setFolder}
+              onOpen={(id) => {
+                setShowList(false);
+                onOpen(id);
+              }}
+            />
+          )
         ) : activeTab?.plan ? (
           renderPlan(activeTab.plan)
         ) : (

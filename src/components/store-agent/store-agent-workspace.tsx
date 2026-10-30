@@ -605,6 +605,7 @@ export function StoreAgentWorkspace({
         <aside className="hidden min-w-0 flex-1 md:block">
           {chatId && (
             <FilePanel
+              key={chatId ?? "none"}
               workspaceId={workspaceId}
               files={files}
               plans={plans}
