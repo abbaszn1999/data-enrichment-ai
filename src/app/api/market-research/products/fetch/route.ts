@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { storeToolBlock } from "@/lib/integrations/store-scopes";
 import {
   productsFetchBodySchema,
   jsonError,
@@ -33,6 +34,8 @@ export async function POST(request: NextRequest) {
 
   const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
+  const noAccess = await storeToolBlock(auth.admin, parsed.data.workspaceId, "market-research");
+  if (noAccess) return noAccess;
 
   try {
     const cursor = parsed.data.cursor ?? initProductFetchCursor();

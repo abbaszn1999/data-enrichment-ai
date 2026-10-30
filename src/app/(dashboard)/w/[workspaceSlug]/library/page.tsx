@@ -13,6 +13,7 @@ import {
   Megaphone,
   type LucideIcon,
 } from "lucide-react";
+import type { StoreToolId } from "@/lib/integrations/shopify-access";
 import { useWorkspaceContext } from "../workspace-context";
 
 type LibraryAgent = {
@@ -24,9 +25,8 @@ type LibraryAgent = {
   /** Literal classes so Tailwind keeps them. */
   tone: { icon: string; glow: string };
   points: string[];
-  needsIntegration?: boolean;
-  /** Needs a Shopify or WooCommerce store, not just any connection. */
-  needsStoreAgentStore?: boolean;
+  /** The store tool it is: locked until the store gives it what it needs. */
+  tool?: StoreToolId;
 };
 
 const AGENTS: LibraryAgent[] = [
@@ -37,7 +37,7 @@ const AGENTS: LibraryAgent[] = [
     icon: LayoutTemplate,
     tone: { icon: "bg-violet-500/10 text-violet-500 ring-violet-500/20", glow: "from-violet-500/15" },
     points: ["Header and menu builder", "Live preview", "Version history"],
-    needsIntegration: true,
+    tool: "website-restructure",
   },
   {
     path: "/store-assistant",
@@ -46,8 +46,7 @@ const AGENTS: LibraryAgent[] = [
     icon: Bot,
     tone: { icon: "bg-sky-500/10 text-sky-500 ring-sky-500/20", glow: "from-sky-500/15" },
     points: ["Edits products in chat", "Works on your live store", "Asks before it changes"],
-    needsIntegration: true,
-    needsStoreAgentStore: true,
+    tool: "store-assistant",
   },
   {
     path: "/google-ads",
@@ -154,7 +153,7 @@ function AgentCard({
 export default function LibraryPage() {
   const params = useParams();
   const slug = params.workspaceSlug as string;
-  const { workspace, hasIntegration, hasStoreAgentStore } = useWorkspaceContext();
+  const { workspace, toolLocks } = useWorkspaceContext();
   const basePath = `/w/${slug}`;
 
   return (
@@ -189,7 +188,7 @@ export default function LibraryPage() {
       <div className="mx-auto max-w-7xl px-6 py-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {AGENTS.map((agent, index) => {
-            const blocked = (agent.needsIntegration && !hasIntegration) || (agent.needsStoreAgentStore && !hasStoreAgentStore);
+            const blocked = !!agent.tool && !!toolLocks[agent.tool];
             const state = !agent.path ? "soon" : blocked ? "locked" : "ready";
             // Agents that need a store send you to Settings to connect one first.
             const href =

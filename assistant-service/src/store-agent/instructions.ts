@@ -78,6 +78,8 @@ export function veraRule(params: {
   autoRunBulk?: boolean;
   /** The merchant's standing notes for this store. */
   notes?: string;
+  /** What the store has not given access to (labels), so the agent says so instead of trying. */
+  missingAccess?: readonly string[];
 }): string {
   const notes = (params.notes ?? "").trim();
   const store = params.platform === "woocommerce" ? WOOCOMMERCE : SHOPIFY;
@@ -96,7 +98,11 @@ You are Vera, Autommerce's store agent. You work inside one merchant's ${store.n
 
 ## What you can reach
 ${store.reach}
-
+${
+    params.missingAccess?.length
+      ? `\nThis store has NOT given the app permission to: ${params.missingAccess.join("; ")}. Anything that needs it cannot work. When the user asks for such a thing, do not try: say which permission is missing and that the store owner can enable it in the app's configuration in Shopify, then press Recheck in Settings. Everything else works normally.\n`
+      : ""
+  }
 ## Your tools
 ${store.tools}
 - \`run_script\`: exact data work in JavaScript over files in your folder (count, filter, group, compare, build the .jsonl for a bulk update). Prefer it to reading big files.

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { decryptedIntegrationConfig } from "@/lib/integrations/load";
+import { saveGrantedScopes } from "@/lib/integrations/store-scopes";
 import { fetchShopifyGrantedScopes } from "@/lib/sync/providers/shopify/auth";
 
 /**
@@ -34,5 +35,7 @@ export async function GET(request: NextRequest) {
 
   const token = String(decryptedIntegrationConfig(row.config).admin_api_token ?? "").trim();
   const grantedScopes = token ? await fetchShopifyGrantedScopes(row.base_url, token) : null;
+  // Kept with the integration, so the sidebar opens or locks tools by what is true now.
+  if (grantedScopes) await saveGrantedScopes(admin, workspaceId, grantedScopes);
   return NextResponse.json({ provider: row.provider, grantedScopes });
 }

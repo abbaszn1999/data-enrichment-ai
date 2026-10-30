@@ -39,6 +39,7 @@ import {
   BarChart3,
   Library,
   Megaphone,
+  Lock,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useTheme } from "next-themes";
@@ -65,6 +66,9 @@ import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { WelcomeGiftTicker } from "@/components/billing/welcome-gift-ticker";
 import { FeaturebaseMessenger } from "@/components/featurebase-messenger";
 import { isStoreAgentPlatform } from "@/lib/store-agent/platforms";
+import { ToolLockDetails } from "@/components/integrations/tool-lock";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { storeToolLocks, type StoreToolId } from "@/lib/integrations/shopify-access";
 
 /**
  * The floating agent is hidden for now, whatever NEXT_PUBLIC_ASSISTANT_ENABLED
@@ -85,7 +89,8 @@ export default function WorkspaceLayout({
   const slug = params.workspaceSlug as string;
 
   const { user, profile, sessionReady } = useAuth();
-  const { workspace, role, hasIntegration, storeProvider, isLoading: wsLoading, error } = useWorkspace(slug, user);
+  const { workspace, role, hasIntegration, storeProvider, storeScopes, isLoading: wsLoading, error } = useWorkspace(slug, user);
+  const toolLocks = storeToolLocks(storeProvider, storeScopes);
   const hasStoreAgentStore = isStoreAgentPlatform(storeProvider);
   const permissions = useRole(role);
 
@@ -182,10 +187,11 @@ export default function WorkspaceLayout({
   // top-level items, not nested here.
   const growthEngineChildren = [
     {
-      href: hasIntegration ? `${basePath}/market-research` : "",
+      href: toolLocks["market-research"] ? "" : `${basePath}/market-research`,
       label: "Market research",
       icon: Search,
-      disabled: !hasIntegration,
+      disabled: !!toolLocks["market-research"],
+      tool: "market-research" as const,
     },
     {
       href: hasIntegration ? `${basePath}/customize` : "",
@@ -194,10 +200,11 @@ export default function WorkspaceLayout({
       disabled: !hasIntegration,
     },
     {
-      href: hasIntegration ? `${basePath}/growth-sync` : "",
+      href: toolLocks["growth-sync"] ? "" : `${basePath}/growth-sync`,
       label: "Growth Sync",
       icon: RefreshCw,
-      disabled: !hasIntegration,
+      disabled: !!toolLocks["growth-sync"],
+      tool: "growth-sync" as const,
     },
     { href: `${basePath}/wallet`, label: "Wallet", icon: Wallet },
   ];
@@ -262,16 +269,18 @@ export default function WorkspaceLayout({
 
   const agentLinks = [
     {
-      href: hasIntegration ? `${basePath}/website-restructure` : "",
+      href: toolLocks["website-restructure"] ? "" : `${basePath}/website-restructure`,
       label: "Website restructure",
       icon: LayoutTemplate,
-      disabled: !hasIntegration,
+      disabled: !!toolLocks["website-restructure"],
+      tool: "website-restructure" as const,
     },
     {
-      href: hasStoreAgentStore ? `${basePath}/store-assistant` : "",
+      href: toolLocks["store-assistant"] ? "" : `${basePath}/store-assistant`,
       label: "Store assistant",
       icon: Bot,
-      disabled: !hasStoreAgentStore,
+      disabled: !!toolLocks["store-assistant"],
+      tool: "store-assistant" as const,
     },
     // Front-end prototype on demo data until the Google Ads API is connected.
     { href: `${basePath}/google-ads`, label: "Google Ads", icon: Megaphone },
@@ -325,7 +334,36 @@ export default function WorkspaceLayout({
     icon: ComponentType<{ className?: string }>;
     disabled?: boolean;
     badge?: string;
+    tool?: StoreToolId;
   }, opts?: { nested?: boolean }) => {
+    const lock = link.tool ? toolLocks[link.tool] : null;
+    if (link.tool && lock) {
+      // A locked tool says why, and where to fix it.
+      return (
+        <Popover key={link.label}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              title={sidebarCollapsed ? link.label : undefined}
+              className={`relative flex w-full items-center gap-2.5 rounded-lg text-start text-xs font-medium text-muted-foreground/45 transition-colors hover:bg-muted/50 hover:text-muted-foreground ${
+                opts?.nested ? "px-2.5 py-1.5 pl-8" : "px-2.5 py-2"
+              }`}
+            >
+              <link.icon className="h-4 w-4 shrink-0" />
+              {!sidebarCollapsed && (
+                <>
+                  <span className="flex-1 truncate">{link.label}</span>
+                  <Lock className="h-3 w-3 shrink-0" />
+                </>
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="right" align="start">
+            <ToolLockDetails tool={link.tool} lock={lock} canAdmin={permissions.canAdmin} settingsHref={`${basePath}/settings`} />
+          </PopoverContent>
+        </Popover>
+      );
+    }
     if (link.disabled) {
       return (
         <div
@@ -521,7 +559,7 @@ export default function WorkspaceLayout({
     : "??";
 
   return (
-    <WorkspaceContext.Provider value={{ workspace, role, wsLoading, hasIntegration: !!hasIntegration, hasStoreAgentStore }}>
+    <WorkspaceContext.Provider value={{ workspace, role, wsLoading, hasIntegration: !!hasIntegration, hasStoreAgentStore, toolLocks }}>
       <FeaturebaseMessenger userId={user?.id} />
       <div className="h-screen flex flex-col bg-background overflow-hidden">
         {/* Top Header — hidden in immersive mode */}

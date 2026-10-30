@@ -3,6 +3,7 @@
 import { createContext, useContext } from "react";
 import type { Workspace } from "@/lib/supabase";
 import type { Role } from "@/lib/permissions";
+import { storeToolLocks, type StoreToolId, type ToolLock } from "@/lib/integrations/shopify-access";
 
 /**
  * Lives outside layout.tsx because Next.js only allows a layout file to export
@@ -16,6 +17,8 @@ export interface WorkspaceContextType {
   hasIntegration: boolean;
   /** A Shopify or WooCommerce store is connected (what the Store Assistant needs). */
   hasStoreAgentStore: boolean;
+  /** Which store tools are locked, and why (null: open). */
+  toolLocks: Record<StoreToolId, ToolLock>;
 }
 
 export const WorkspaceContext = createContext<WorkspaceContextType>({
@@ -24,6 +27,7 @@ export const WorkspaceContext = createContext<WorkspaceContextType>({
   wsLoading: true,
   hasIntegration: false,
   hasStoreAgentStore: false,
+  toolLocks: storeToolLocks(null, null),
 });
 
 export const useWorkspaceContext = () => useContext(WorkspaceContext);

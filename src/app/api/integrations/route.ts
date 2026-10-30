@@ -12,6 +12,7 @@ import {
   primaryCredentialFingerprint,
 } from "@/lib/integrations/crypto";
 import { toClientIntegration } from "@/lib/integrations/load";
+import { grantedScopesFromTest } from "@/lib/integrations/store-scopes";
 import { writeSecurityAuditLog } from "@/lib/security/audit-log";
 import { clearWorkspaceContextCache } from "@/lib/workspace-context";
 
@@ -149,6 +150,8 @@ export async function POST(request: NextRequest) {
           credential_fingerprint: fingerprint || null,
           status: "connected",
           updated_at: new Date().toISOString(),
+          // What the token may do, from the connection test (Shopify); the sidebar locks tools by it.
+          ...grantedScopesFromTest(provider, testResult.metadata),
         },
         { onConflict: "workspace_id" }
       )

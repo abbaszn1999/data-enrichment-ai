@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { storeToolBlock } from "@/lib/integrations/store-scopes";
 import { requireWrAuth } from "@/lib/website-restructure/auth";
 import { jsonError, projectIdSchema, workspaceIdSchema } from "@/lib/website-restructure/api-schema";
 import { loadIntegration } from "@/lib/growth-sync/repo";
@@ -66,6 +67,8 @@ export async function GET(request: NextRequest) {
 
   const auth = await requireWrAuth({ workspaceId: wsParsed.data, requireWrite: true });
   if (!auth.ok) return auth.response;
+  const noAccess = await storeToolBlock(auth.admin, wsParsed.data, "website-restructure");
+  if (noAccess) return noAccess;
 
   try {
     const project = await getWrProjectRow(auth.admin, wsParsed.data, pidParsed.data);

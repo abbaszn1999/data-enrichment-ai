@@ -14,6 +14,9 @@ import { oncePerToolCall } from "./call-once";
 import { guidanceText, withGuidance } from "./guidance";
 import { buildMessage, finishBuild, savePlan, startBuild } from "./plans";
 import { convertAttachment } from "./attachments";
+import { grantedScopes } from "./shopify/client";
+import { missingScopes } from "./shopify/guard";
+import { SCOPE_LABELS, STORE_AGENT_SCOPES } from "./shopify/scopes";
 import { plainMentions } from "../../../src/lib/store-agent/mentions";
 import { mentionContext, type MentionContext } from "./mentions";
 import { createExcelTool } from "./excel-tool";
@@ -472,6 +475,22 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
         ? await getWoo().then((c) => ({ name: c.storeName, domain: c.domain }))
         : await getConnection().then((c) => ({ name: c.storeName || c.shopDomain, domain: c.shopDomain }));
 
+    // What this store's token may do: told to the agent up front, and kept for the sidebar's locks.
+    let missingAccess: string[] = [];
+    if (platform === "shopify") {
+      try {
+        const granted = await grantedScopes(await getConnection());
+        missingAccess = missingScopes(STORE_AGENT_SCOPES, granted).map((scope) => SCOPE_LABELS[scope]);
+        const { error } = await db
+          .from("workspace_integrations")
+          .update({ granted_scopes: [...granted], scopes_checked_at: new Date().toISOString() })
+          .eq("workspace_id", req.workspaceId);
+        if (error) log("saving the store's scopes failed", error.message);
+      } catch (error) {
+        log("reading the store's scopes failed", error);
+      }
+    }
+
     await fs.mkdir(path.join(cwd, ".cursor", "rules"), { recursive: true });
     await fs.writeFile(
       path.join(cwd, ".cursor", "rules", "vera.mdc"),
@@ -483,6 +502,7 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
         autoRun: req.autoRun,
         autoRunBulk: req.autoRunBulk,
         notes: await loadStoreNotes(db, req.workspaceId),
+        missingAccess,
       })
     );
 

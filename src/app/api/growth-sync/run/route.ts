@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { storeToolBlock } from "@/lib/integrations/store-scopes";
 import { jsonError, requireMrWrite } from "@/lib/market-research/api-schema";
 import { runRuleBodySchema } from "@/lib/growth-sync/api-schema";
 import { runRule } from "@/lib/growth-sync/engine";
@@ -24,6 +25,8 @@ export async function POST(request: NextRequest) {
 
   const auth = await requireMrWrite(parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
+  const noAccess = await storeToolBlock(auth.admin, parsed.data.workspaceId, "growth-sync");
+  if (noAccess) return noAccess;
 
   try {
     // Ownership is checked before the lease so a caller cannot probe another

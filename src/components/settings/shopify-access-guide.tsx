@@ -4,7 +4,7 @@ import { useState } from "react";
 import { AlertTriangle, Check, CheckCircle2, Copy, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { ALL_SHOPIFY_SCOPES, SHOPIFY_TOOL_ACCESS, hasShopifyScope, missingShopifyScopes } from "@/lib/integrations/shopify-access";
+import { ALL_SHOPIFY_SCOPES, SHOPIFY_TOOL_ACCESS, hasShopifyScope, missingShopifyScopes, requiredShopifyScopes } from "@/lib/integrations/shopify-access";
 
 /**
  * What each tool needs from the Shopify token. Before a test it is a guide
@@ -26,8 +26,13 @@ export function ShopifyAccessGuide({
   const [copied, setCopied] = useState(false);
   const checked = Array.isArray(grantedScopes);
   const granted = new Set(grantedScopes ?? []);
-  const tools = SHOPIFY_TOOL_ACCESS.map((tool) => ({ tool, missing: checked ? missingShopifyScopes([...granted], tool.scopes) : [] }));
-  const ready = tools.filter((t) => t.missing.length === 0).length;
+  const tools = SHOPIFY_TOOL_ACCESS.map((tool) => ({
+    tool,
+    missing: checked ? missingShopifyScopes([...granted], tool.scopes) : [],
+    // Without these the tool stays locked; other missing scopes only limit what it can do.
+    blocking: checked ? missingShopifyScopes([...granted], requiredShopifyScopes(tool)) : [],
+  }));
+  const ready = tools.filter((t) => t.blocking.length === 0).length;
   const allMissing = checked ? missingShopifyScopes([...granted], ALL_SHOPIFY_SCOPES) : [];
 
   const copy = async (scopes: readonly string[]) => {
@@ -52,7 +57,7 @@ export function ShopifyAccessGuide({
             <p className="text-[11px] text-muted-foreground">
               {checked
                 ? allMissing.length
-                  ? `${ready} of ${tools.length} tools ready`
+                  ? `${ready} of ${tools.length} tools open`
                   : "Every tool has the access it needs"
                 : grantedScopes === null
                   ? "Shopify did not report this token's scopes"
@@ -81,8 +86,9 @@ export function ShopifyAccessGuide({
       </div>
 
       <ul className="divide-y">
-        {tools.map(({ tool, missing }) => {
+        {tools.map(({ tool, missing, blocking }) => {
           const ok = checked && missing.length === 0;
+          const limited = checked && !ok && blocking.length === 0;
           return (
             <li key={tool.id} className="flex gap-3 px-4 py-3">
               <span
@@ -103,11 +109,14 @@ export function ShopifyAccessGuide({
                         ok ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" : "bg-amber-500/10 text-amber-700 dark:text-amber-400"
                       )}
                     >
-                      {ok ? "Ready" : `Missing ${missing.length}`}
+                      {ok ? "Ready" : limited ? "Open, limited" : `Locked: missing ${blocking.length}`}
                     </span>
                   )}
                 </div>
-                <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">{tool.summary}</p>
+                <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                  {tool.summary}
+                  {limited && " Open: each missing scope below turns off what depends on it."}
+                </p>
                 <div className="mt-2 flex flex-wrap gap-1">
                   {tool.scopes.map((scope) => {
                     const has = checked && hasShopifyScope(granted, scope);
@@ -145,7 +154,7 @@ export function ShopifyAccessGuide({
             In Shopify: <span className="font-medium text-foreground">Settings → Apps → Develop apps → your app → Configuration</span>, enable these
             Admin API scopes, save, then install or update the app.{" "}
             {checked ? "Recheck here when done; if Shopify gives a new token, reconnect with it." : "Use its Admin API access token above."}
-            {" "}Tools whose scopes are missing will say so when they run.
+            {" "}A tool stays locked until it has the scopes it needs.
           </>
         )}
       </div>

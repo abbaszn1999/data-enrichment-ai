@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { getWorkspaceContext, isContextSubscriptionActive, clearWorkspaceContextCache } from "@/lib/workspace-context";
 import { getActiveSubscriptionPlans, invalidateSubscriptionCache } from "@/lib/stripe";
 import { publicIntegrationConfig } from "@/lib/integrations/crypto";
+import { workspaceStoreScopes } from "@/lib/integrations/store-scopes";
 import { ensureOwnerTrial } from "@/lib/trial-server";
 import {
   welcomeGiftFromSubscription,
@@ -60,6 +61,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ workspace, role: null, error: "Not a member" }, { status: 200 });
     }
 
+    // Which store tools open: the scopes the store granted (kept with the integration, refreshed hourly).
+    const storeScopes = ctx.integration ? await workspaceStoreScopes(admin, workspace.id) : null;
+
     const bal = ctx.credits;
     const sub = ctx.subscription;
 
@@ -74,6 +78,7 @@ export async function GET(request: NextRequest) {
             integration_name: ctx.integration.integration_name,
             base_url: ctx.integration.base_url ?? null,
             config: publicIntegrationConfig(ctx.integration.config),
+            grantedScopes: storeScopes?.scopes ?? null,
           }
         : null,
       credits: {

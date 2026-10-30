@@ -1,4 +1,5 @@
 // First-time header generation: vision (brief) → competitor research → code
+import { storeToolBlock } from "@/lib/integrations/store-scopes";
 // generation, streamed as NDJSON so the progress trace is honest about which
 // of the three calls is running. Edits after this initial build go through
 // /api/website-restructure/chat instead.
@@ -69,6 +70,8 @@ export async function POST(request: NextRequest) {
 
   const auth = await requireWrAuth({ workspaceId, requireWrite: true });
   if (!auth.ok) return auth.response;
+  const noAccess = await storeToolBlock(auth.admin, workspaceId, "website-restructure");
+  if (noAccess) return noAccess;
 
   const project = await getWrProjectRow(auth.admin, workspaceId, projectId);
   if (!project) return jsonError("Project not found", 404);

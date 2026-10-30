@@ -1,5 +1,6 @@
 "use client";
 
+import { ToolGate } from "@/components/integrations/tool-lock";
 import { MarketResearchShell } from "@/components/market-research/market-research-shell";
 
 /**
@@ -7,5 +8,9 @@ import { MarketResearchShell } from "@/components/market-research/market-researc
  * Full logic and Wallet billing land in later iterations.
  */
 export default function MarketResearchPage() {
-  return <MarketResearchShell />;
+  return (
+    <ToolGate tool="market-research">
+      <MarketResearchShell />
+    </ToolGate>
+  );
 }

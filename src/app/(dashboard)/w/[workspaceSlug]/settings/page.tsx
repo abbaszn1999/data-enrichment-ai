@@ -31,6 +31,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useWorkspaceContext } from "../workspace-context";
+import { refreshWorkspace } from "@/hooks/use-workspace";
 import { useRole } from "@/hooks/use-role";
 import {
   updateWorkspace,
@@ -115,6 +116,7 @@ export default function SettingsPage() {
     setCheckingScopes(true);
     try {
       setGrantedScopes(await getWorkspaceIntegrationScopes(workspace.id));
+      refreshWorkspace();
     } catch {
       setGrantedScopes(null);
     } finally {

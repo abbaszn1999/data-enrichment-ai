@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { PageLoader } from "@/components/brand/page-loader";
+import { ToolGate } from "@/components/integrations/tool-lock";
 import { StoreAgentWorkspace } from "@/components/store-agent/store-agent-workspace";
 import { useRole } from "@/hooks/use-role";
 import { getWorkspaceIntegration } from "@/lib/supabase";
@@ -26,12 +27,14 @@ export default function StoreAgentPage() {
 
   if (!workspace?.id || storeName === null) return <PageLoader />;
   return (
-    <StoreAgentWorkspace
-      workspaceId={workspace.id}
-      basePath={`/w/${slug}`}
-      storeName={storeName}
-      canEdit={canEdit}
-      onCreditsChanged={invalidateCredits}
-    />
+    <ToolGate tool="store-assistant">
+      <StoreAgentWorkspace
+        workspaceId={workspace.id}
+        basePath={`/w/${slug}`}
+        storeName={storeName}
+        canEdit={canEdit}
+        onCreditsChanged={invalidateCredits}
+      />
+    </ToolGate>
   );
 }

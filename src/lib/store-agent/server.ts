@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase-server";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { hideProviderNames } from "@/lib/provider-names";
+import { storeToolBlock } from "@/lib/integrations/store-scopes";
 import { isStoreAgentPlatform } from "./platforms";
 import { signServiceRequest } from "@/lib/assistant/service-client";
 import { getWorkspaceContext, isContextSubscriptionActive, type WorkspaceContext } from "@/lib/workspace-context";
@@ -84,7 +85,13 @@ export async function authorizeStoreAgent(params: {
       return NextResponse.json({ error: "NO_CREDITS" }, { status: 402 });
     }
   }
-  return { userId: user.id, ctx, admin: createAdminClient() };
+  const admin = createAdminClient();
+  // A new run needs the store's products readable; the rest only limits what it can do.
+  if (params.requireCredits) {
+    const noAccess = await storeToolBlock(admin, params.workspaceId, "store-assistant");
+    if (noAccess) return noAccess;
+  }
+  return { userId: user.id, ctx, admin };
 }
 
 /** The chat if it belongs to this user in this workspace. */

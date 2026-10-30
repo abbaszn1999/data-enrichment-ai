@@ -1,4 +1,5 @@
 // Post-build edits: brief + current version's code + the instruction go back
+import { storeToolBlock } from "@/lib/integrations/store-scopes";
 // to the model, which returns the full updated html/css/js. Counts against
 // the 10-message edit budget only when generation actually succeeds.
 
@@ -95,6 +96,8 @@ export async function POST(request: NextRequest) {
 
   const auth = await requireWrAuth({ workspaceId, requireWrite: true });
   if (!auth.ok) return auth.response;
+  const noAccess = await storeToolBlock(auth.admin, workspaceId, "website-restructure");
+  if (noAccess) return noAccess;
 
   const project = await getWrProjectRow(auth.admin, workspaceId, projectId);
   if (!project) return jsonError("Project not found", 404);

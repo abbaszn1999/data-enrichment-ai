@@ -1,5 +1,6 @@
 "use client";
 
+import { ToolGate } from "@/components/integrations/tool-lock";
 import { WebsiteRestructureShell } from "@/components/website-restructure/wr-shell";
 
 /**
@@ -7,5 +8,9 @@ import { WebsiteRestructureShell } from "@/components/website-restructure/wr-she
  * agent on the left, live preview on the right.
  */
 export default function WebsiteRestructurePage() {
-  return <WebsiteRestructureShell />;
+  return (
+    <ToolGate tool="website-restructure">
+      <WebsiteRestructureShell />
+    </ToolGate>
+  );
 }
