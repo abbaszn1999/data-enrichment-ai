@@ -50,9 +50,15 @@ export function ChatTabs({
   onDelete,
   onSearch,
   actions,
+  className,
+  deleteNote,
 }: {
   /** Buttons shown next to History (store notes, change history). */
   actions?: React.ReactNode;
+  /** Extra classes for the bar (another agent reuses this bar on its own surface). */
+  className?: string;
+  /** Replaces the sentence under "Delete this chat?" when the agent has no store or files. */
+  deleteNote?: string;
   tabs: string[];
   activeId: string | null;
   chats: ChatSummary[];
@@ -142,7 +148,7 @@ export function ChatTabs({
   );
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-1 border-b bg-background px-2">
+    <div className={cn("flex h-10 shrink-0 items-center gap-1 border-b bg-background px-2", className)}>
       <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]">
         {tabs.map((id) => {
           const chat = byId.get(id);
@@ -230,7 +236,8 @@ export function ChatTabs({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this chat?</AlertDialogTitle>
             <AlertDialogDescription>
-              “{deleting?.title || "New chat"}” and its files will be deleted for good. Changes already made in your store stay as they are.
+              “{deleting?.title || "New chat"}”{" "}
+              {deleteNote ?? "and its files will be deleted for good. Changes already made in your store stay as they are."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

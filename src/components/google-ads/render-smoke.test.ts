@@ -1,7 +1,7 @@
 import React, { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { useGoogleAds } from "@/lib/google-ads/store";
+import { activeChatOf, useGoogleAds } from "@/lib/google-ads/store";
 import { planAgentTurn } from "@/lib/google-ads/agent-sim";
 import type { CampaignType, GaView } from "@/lib/google-ads/types";
 import { GoogleAdsShell } from "./ga-shell";
@@ -60,6 +60,77 @@ describe("render smoke", () => {
 
     useGoogleAds.getState().enterWorkspace();
     expect(renderToString(createElement(GoogleAdsShell))).toContain("Ads agent");
+  });
+
+  it("shows the agent as a fixed panel with chat tabs and the Store Agent message box", () => {
+    connect();
+    const html = renderToString(createElement(GoogleAdsShell));
+    expect(html).toContain("New chat");
+    expect(html).toContain("History");
+    expect(html).toContain("Plan");
+    expect(html).toContain("Ask anything about");
+    // There is no way to hide the agent.
+    expect(html).not.toContain("Hide agent");
+    expect(html).not.toContain("Open agent");
+  });
+
+  it("keeps several chats as tabs: new, switch, close, rename, pin, delete", () => {
+    connect();
+    const acc = () => {
+      const s = useGoogleAds.getState();
+      return s.accounts[s.customerId!]!;
+    };
+    const first = acc().activeChatId;
+    expect(acc().openChatIds).toEqual([first]);
+
+    // The first question names the chat.
+    useGoogleAds.getState().addMessage({ id: "m1", role: "user", text: "Where am I wasting budget?", at: "" });
+    expect(acc().chats.find((c) => c.id === first)!.title).toBe("Where am I wasting budget?");
+
+    // + opens a fresh chat; pressing + again reuses the empty one.
+    useGoogleAds.getState().newChat();
+    const second = acc().activeChatId;
+    expect(second).not.toBe(first);
+    expect(acc().openChatIds).toEqual([first, second]);
+    useGoogleAds.getState().newChat();
+    expect(acc().openChatIds).toHaveLength(2);
+
+    // Each chat keeps its own messages; patching finds a message in any chat.
+    useGoogleAds.getState().addMessage({ id: "m2", role: "user", text: "Write a monthly report", at: "" });
+    expect(acc().chats.find((c) => c.id === second)!.messages).toHaveLength(1);
+    expect(acc().chats.find((c) => c.id === first)!.messages).toHaveLength(1);
+    useGoogleAds.getState().patchMessage("m1", { text: "edited" });
+    expect(acc().chats.find((c) => c.id === first)!.messages[0]!.text).toBe("edited");
+
+    useGoogleAds.getState().selectChat(first);
+    expect(acc().activeChatId).toBe(first);
+    useGoogleAds.getState().renameChat(second, "Monthly report");
+    useGoogleAds.getState().pinChat(second);
+    expect(acc().chats.find((c) => c.id === second)).toMatchObject({ title: "Monthly report", pinned: true });
+    expect(renderToString(createElement(GoogleAdsShell))).toContain("Monthly report");
+
+    // Closing a tab keeps the chat in History; opening it from there brings it back.
+    useGoogleAds.getState().closeChat(second);
+    expect(acc().openChatIds).toEqual([first]);
+    expect(acc().chats.some((c) => c.id === second)).toBe(true);
+    useGoogleAds.getState().openChat(second);
+    expect(acc().activeChatId).toBe(second);
+
+    // Deleting removes it for good; the last chat is never left empty-handed.
+    useGoogleAds.getState().deleteChat(second);
+    expect(acc().chats.some((c) => c.id === second)).toBe(false);
+    useGoogleAds.getState().deleteChat(first);
+    expect(acc().chats).toHaveLength(1);
+    expect(acc().openChatIds).toEqual([acc().activeChatId]);
+  });
+
+  it("plan mode describes the work and prepares nothing to approve", () => {
+    connect();
+    useGoogleAds.getState().setChatMode("plan");
+    const s = useGoogleAds.getState();
+    expect(activeChatOf(s.accounts[s.customerId!]!).mode).toBe("plan");
+    const html = renderToString(createElement(GoogleAdsShell));
+    expect(html).toContain("Nothing in the account will change");
   });
 
   it("lets Google Ads connect without Merchant Center", () => {

@@ -5,11 +5,11 @@
 // React so closing the chat mid-turn is safe. The backend version streams the
 // same events (step, team, todo, text, change, doc) over NDJSON.
 
-import { planAgentTurn } from "./agent-sim";
+import { planAgentTurn, type AgentPlan } from "./agent-sim";
 import { replyToComment } from "./agent-docs";
 import { reviseDoc, type DocComment } from "./docs";
 import { gid } from "./mutations";
-import { useGoogleAds } from "./store";
+import { activeChatOf, useGoogleAds } from "./store";
 
 export function runAgentTurn(text: string): void {
   const message = text.trim();
@@ -17,9 +17,12 @@ export function runAgentTurn(text: string): void {
   const state = store.customerId ? store.accounts[store.customerId] : null;
   if (!message || store.agentBusy || !state) return;
 
-  store.setChatOpen(true);
-  store.addMessage({ id: gid("msg"), role: "user", text: message, at: new Date().toISOString() });
-  const plan = planAgentTurn(message, {
+  // The turn belongs to the chat that was open when it started, even if the user opens another tab meanwhile.
+  const chat = activeChatOf(state);
+  const chatId = chat.id;
+  const planMode = chat.mode === "plan";
+  store.addMessage({ id: gid("msg"), role: "user", text: message, at: new Date().toISOString() }, chatId);
+  const sim = planAgentTurn(message, {
     data: state.data,
     range: store.range,
     scope: store.scope,
@@ -29,17 +32,29 @@ export function runAgentTurn(text: string): void {
     activeDocId: state.activeTab !== "account" ? state.activeTab : undefined,
     merchantConnected: !!store.merchant.merchantId,
   });
+  // Plan mode: the agent explains what it would do and prepares nothing to approve.
+  const plan: AgentPlan = planMode
+    ? {
+        ...sim,
+        changes: [],
+        draftBundle: undefined,
+        reply: sim.changes.length || sim.draftBundle ? `${sim.reply}\n\n_Plan mode: I haven't prepared any change. Switch to **Agent** and ask again to get it ready for your approval._` : sim.reply,
+      }
+    : sim;
   const agentId = gid("msg");
-  store.addMessage({
-    id: agentId,
-    role: "agent",
-    text: "",
-    at: new Date().toISOString(),
-    steps: [],
-    team: plan.team?.map((t) => ({ ...t, status: "WAITING" as const })),
-    todo: plan.todo?.map((label) => ({ label, done: false })),
-  });
-  store.setAgentBusy(true);
+  store.addMessage(
+    {
+      id: agentId,
+      role: "agent",
+      text: "",
+      at: new Date().toISOString(),
+      steps: [],
+      team: plan.team?.map((t) => ({ ...t, status: "WAITING" as const })),
+      todo: plan.todo?.map((label) => ({ label, done: false })),
+    },
+    chatId
+  );
+  store.setAgentBusy(true, chatId);
 
   // The turn belongs to this account; drop it if the user switches away.
   const customerId = store.customerId;

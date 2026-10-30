@@ -8,7 +8,6 @@ import {
   ChevronRight,
   ClipboardCheck,
   Megaphone,
-  MessageSquare,
   Plug,
   Settings2,
 } from "lucide-react";
@@ -33,8 +32,6 @@ export function GaTopbar() {
   const range = useGoogleAds((s) => s.range);
   const setRange = useGoogleAds((s) => s.setRange);
   const setView = useGoogleAds((s) => s.setView);
-  const chatOpen = useGoogleAds((s) => s.chatOpen);
-  const setChatOpen = useGoogleAds((s) => s.setChatOpen);
   const email = useGoogleAds((s) => s.googleEmail);
   const merchantConnected = useGoogleAds((s) => !!s.merchant.merchantId);
   if (!acc) return null;
@@ -46,16 +43,6 @@ export function GaTopbar() {
   const unread = data.alerts.filter((a) => !a.read).length;
   return (
     <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-3">
-      {!chatOpen && (
-        <button
-          type="button"
-          onClick={() => setChatOpen(true)}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 px-2.5 text-xs font-medium hover:bg-muted"
-        >
-          <MessageSquare className="h-3.5 w-3.5" /> Agent
-        </button>
-      )}
-
       <DropdownMenu>
         <DropdownMenuTrigger className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1 hover:bg-muted">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#400095]/10 text-[#400095] dark:bg-violet-500/15 dark:text-violet-300">
