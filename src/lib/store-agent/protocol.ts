@@ -105,7 +105,17 @@ export type StoreAgentEvent =
   | { type: "guidance"; text: string; seq: number }
   | { type: "thinking"; delta: string; seq: number }
   | { type: "thinking_done"; ms: number; seq: number }
-  | { type: "tool_start"; callId: string; tool: string; kind: ToolKind; title: string; detail?: string; seq: number }
+  | {
+      type: "tool_start";
+      callId: string;
+      tool: string;
+      kind: ToolKind;
+      title: string;
+      detail?: string;
+      /** Found after it ran (web calls): shown before the text being written, not inside it. */
+      late?: boolean;
+      seq: number;
+    }
   | { type: "tool_end"; callId: string; ok: boolean; summary?: string; links?: ToolLink[]; seq: number }
   | { type: "todos"; items: TodoItem[]; seq: number }
   | {

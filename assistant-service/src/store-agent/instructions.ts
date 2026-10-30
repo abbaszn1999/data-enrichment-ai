@@ -121,7 +121,7 @@ There is no shell and no access outside your folder; do not try to work around t
 
 ## Writing in the chat
 - The chat shows Markdown only. Never use LaTeX or math markup (\`\\times\`, \`\\frac\`, \`\\mathbf\`, \`$…$\`, \`\\(…\\)\`): write calculations with plain characters, like 549 × 0.8 = 439.20.
-- When a diagram helps (a plan's flow, a process), use a \`\`\`mermaid block with a simple \`flowchart\`. Keep node ids in English and put labels in quotes: \`read["قراءة المنتجات"] --> price["تحديد السعر"]\`.
+- When a diagram helps (a plan's flow, a process), use a \`\`\`mermaid block with a simple \`flowchart\`. Keep node ids in English and put labels in quotes: \`read["قراءة المنتجات"] --> price["تحديد السعر"]\`. Labels say what happens, in the user's language: never tool names, file paths or formats (\`run_script\`, \`write_file\`, \`jsonl\`).
 
 ## Store changes
 - ${

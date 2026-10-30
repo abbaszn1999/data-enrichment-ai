@@ -79,6 +79,19 @@ describe("webCallsInMessages", () => {
     expect(state.blocks[1]).toMatchObject({ links: [{ title: "A", url: "https://a.example/" }] });
   });
 
+  it("puts a web call found late before the answer being written, not inside it", () => {
+    let state = reduceReply(emptyReply(), { type: "text", delta: "الطراز المعتاد: ", seq: 1 });
+    state = reduceReply(state, { type: "tool_start", callId: "s9", tool: "webSearch", kind: "web", title: "Searching the web", late: true, seq: 2 });
+    state = reduceReply(state, { type: "tool_end", callId: "s9", ok: true, links: [{ title: "A", url: "https://a.example/" }], seq: 3 });
+    state = reduceReply(state, { type: "text", delta: "مع MagSafe.", seq: 4 });
+    expect(state.blocks.map((b) => b.type)).toEqual(["tool", "text"]);
+    expect(state.blocks[1]).toEqual({ type: "text", text: "الطراز المعتاد: مع MagSafe." });
+
+    // A call that is not late stays where it happened.
+    state = reduceReply(state, { type: "tool_start", callId: "t1", tool: "shopify_api", kind: "store_read", title: "Reading the store", seq: 5 });
+    expect(state.blocks.map((b) => b.type)).toEqual(["tool", "text", "tool"]);
+  });
+
   it("keeps a message sent mid-run in the reply, where it arrived", () => {
     let state = reduceReply(emptyReply(), { type: "text", delta: "Searching…", seq: 1 });
     state = reduceReply(state, { type: "guidance", text: "also count the free products", seq: 2 });

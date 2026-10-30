@@ -81,8 +81,8 @@ export function reduceReply(state: ReplyState, event: StoreAgentEvent): ReplySta
       }
       break;
     }
-    case "tool_start":
-      blocks.push({
+    case "tool_start": {
+      const block: MessageBlock = {
         type: "tool",
         callId: event.callId,
         tool: event.tool,
@@ -90,8 +90,12 @@ export function reduceReply(state: ReplyState, event: StoreAgentEvent): ReplySta
         title: event.title,
         detail: event.detail,
         status: "running",
-      });
+      };
+      // A call found late ran before the text now being written: keep that text in one piece.
+      if (event.late && last?.type === "text") blocks.splice(blocks.length - 1, 0, block);
+      else blocks.push(block);
       break;
+    }
     case "tool_end": {
       const i = blocks.findIndex((b) => b.type === "tool" && b.callId === event.callId);
       if (i >= 0) {

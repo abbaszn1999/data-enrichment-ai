@@ -638,7 +638,7 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
               continue;
             }
             toolCalls += 1;
-            run.emit({ type: "tool_start", callId: call.callId, tool: call.tool, ...describeTool(call.tool, call.args) });
+            run.emit({ type: "tool_start", callId: call.callId, tool: call.tool, ...describeTool(call.tool, call.args), late: true });
             run.emit({ type: "tool_end", callId: call.callId, ok: call.ok, summary: call.summary, links: call.links });
           }
         })
