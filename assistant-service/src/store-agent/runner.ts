@@ -13,6 +13,8 @@ import { describeTool, mapTodos, mergeTodos, scrub, summarizeResult, unwrapToolC
 import { oncePerToolCall } from "./call-once";
 import { guidanceText, withGuidance } from "./guidance";
 import { buildMessage, finishBuild, savePlan, startBuild } from "./plans";
+import { convertAttachment } from "./attachments";
+import { createExcelTool } from "./excel-tool";
 import { createFileTools } from "./file-tools";
 import { ChatFiles } from "./files";
 import { veraRule } from "./instructions";
@@ -483,13 +485,18 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
 
     const images: NonNullable<SDKUserMessage["images"]> = [];
     const placed: string[] = [];
+    const converted: string[] = [];
     for (const attachment of req.attachments) {
       const relative = await files.placeAttachment(attachment.fileId, attachment.storagePath, attachment.name);
       placed.push(relative);
       if (attachment.mime.startsWith("image/") && attachment.size <= STORE_AGENT_LIMITS.maxImageBytes) {
         const bytes = await fs.readFile(path.join(cwd, ...relative.split("/")));
         images.push({ data: bytes.toString("base64"), mimeType: attachment.mime });
+        continue;
       }
+      // Excel and PDF become files the agent can read (and the panel can show).
+      const conversion = await convertAttachment(cwd, relative);
+      if (conversion) converted.push(conversion.note);
     }
     const undone = await undoneSinceLastRun(db, req.chatId, req.runId).catch((error) => {
       log("reading undone changes failed", error);
@@ -508,6 +515,7 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
     });
     const notes = [
       placed.length ? `[Attached files, in your folder: ${placed.join(", ")}]` : "",
+      ...converted.map((note) => `[${note}]`),
       undone.length
         ? `[Since your last reply the user undid these changes from their cards, so the store has the earlier values again: ${undone.map((s) => `"${s}"`).join("; ")}. Read the store again before relying on those values.]`
         : "",
@@ -540,6 +548,7 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
       }),
       ...createFileTools(cwd, (relative) => written.add(relative)),
       ...createScriptTool(cwd, (relative) => written.add(relative)),
+      ...createExcelTool(cwd, (relative) => written.add(relative)),
     }, run));
     const emitProgress = (force = false) => {
       const now = Date.now();

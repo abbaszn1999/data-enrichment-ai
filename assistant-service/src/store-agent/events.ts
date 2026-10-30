@@ -69,8 +69,12 @@ export function describeTool(name: string, args: Args): Described {
       return { kind: "other", title: "Remembering for this store", detail: clip(str(args.note), 120) || undefined };
     case "run_script":
       return { kind: "file", title: "Analysing the data", detail: Array.isArray(args.inputs) ? clip(args.inputs.map(base).join(", "), 100) : undefined };
-    case "ask_user":
-      return { kind: "other", title: "Asking you", detail: clip(str(args.question), 120) };
+    case "make_excel":
+      return { kind: "file", title: "Making an Excel file", detail: base(args.output) || undefined };
+    case "ask_user": {
+      const first = Array.isArray(args.questions) ? (args.questions[0] as Args | undefined)?.question : args.question;
+      return { kind: "other", title: "Asking you", detail: clip(str(first), 120) || undefined };
+    }
     case "show_file":
       return { kind: "file", title: "Opening", detail: base(args.path) };
     case "list_files":

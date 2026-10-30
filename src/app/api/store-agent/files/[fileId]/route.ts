@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isTextFile } from "@/lib/store-agent/file-kinds";
 import { STORE_AGENT_FILES_BUCKET, authorizeStoreAgent } from "@/lib/store-agent/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ fileId: string }> };
-
-const TEXT = /^(text\/|application\/json)/;
 
 /**
  * A chat file the user owns. Text comes back inline (`?format=json`) for the
@@ -29,7 +28,7 @@ export async function GET(request: NextRequest, { params }: Params) {
   if (!file || chat?.user_id !== access.userId) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const download = request.nextUrl.searchParams.get("download") === "1";
-  if (request.nextUrl.searchParams.get("format") === "json" && TEXT.test(String(file.mime)) && Number(file.size) <= 5 * 1024 * 1024) {
+  if (request.nextUrl.searchParams.get("format") === "json" && isTextFile(String(file.name), String(file.mime)) && Number(file.size) <= 5 * 1024 * 1024) {
     const { data, error } = await access.admin.storage.from(STORE_AGENT_FILES_BUCKET).download(String(file.storage_path));
     if (error || !data) return NextResponse.json({ error: "Could not open the file" }, { status: 500 });
     return NextResponse.json({ name: file.name, mime: file.mime, size: file.size, text: await data.text() });

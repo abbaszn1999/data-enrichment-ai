@@ -21,9 +21,11 @@
     "@cursor/sdk": "1.2.0",
     "@hono/node-server": "^2.1.5",
     "@supabase/supabase-js": "^2.99.3",
+    "exceljs": "4.4.0",
     "graphql": "^16.13.0",
     "hono": "^4.13.13",
     "undici": "^7.16.0",
+    "unpdf": "1.8.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

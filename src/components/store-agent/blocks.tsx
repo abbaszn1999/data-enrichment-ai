@@ -35,6 +35,7 @@ import type { ToolKind } from "@/lib/store-agent/protocol";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ApprovalState } from "./api";
+import { isExtractedImage } from "@/lib/store-agent/file-kinds";
 import { Markdown } from "./markdown";
 
 type Handlers = {
@@ -622,10 +623,19 @@ function groupActivity(blocks: MessageBlock[], live: boolean): RenderItem[] {
   return items;
 }
 
+/** File chips one reply lists before the rest are left to the Files list. */
+const MAX_FILE_CHIPS = 8;
+
 export function ReplyBlocks({ blocks, ...handlers }: { blocks: MessageBlock[] } & Handlers) {
+  // Pictures pulled out of an Excel attachment show in its table, not as chips.
+  const shown = blocks.filter((b) => !(b.type === "file" && isExtractedImage(b.name)));
+  const fileIds = shown.flatMap((b) => (b.type === "file" ? [b.fileId] : []));
+  const chipped = new Set(fileIds.slice(0, MAX_FILE_CHIPS));
+  const lastChip = fileIds.slice(0, MAX_FILE_CHIPS).at(-1);
+  const moreFiles = fileIds.length - chipped.size;
   return (
     <div className="space-y-2">
-      {groupActivity(blocks, handlers.live).map((item) => {
+      {groupActivity(shown, handlers.live).map((item) => {
         if (item.kind === "group") return <ActivityGroup key={item.key} blocks={item.blocks} live={handlers.live} />;
         const { block, index: i } = item;
         switch (block.type) {
@@ -668,7 +678,17 @@ export function ReplyBlocks({ blocks, ...handlers }: { blocks: MessageBlock[] } 
           case "plan":
             return <PlanBlock key={block.planId} block={block} onOpenPlan={handlers.onOpenPlan} />;
           case "file":
-            return <FileBlock key={block.fileId} block={block} onOpenFile={handlers.onOpenFile} />;
+            if (!chipped.has(block.fileId)) return null;
+            return (
+              <div key={block.fileId}>
+                <FileBlock block={block} onOpenFile={handlers.onOpenFile} />
+                {block.fileId === lastChip && moreFiles > 0 && (
+                  <div className="mt-1.5 text-[11.5px] text-muted-foreground">
+                    +{moreFiles} more {moreFiles === 1 ? "file" : "files"} in the Files list
+                  </div>
+                )}
+              </div>
+            );
           case "summary":
             return (
               <div key={i} className="flex items-center gap-2 py-1 text-[11.5px] text-muted-foreground">

@@ -4,45 +4,13 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
 import { ClipboardList, Download, FolderOpen, Loader2, Search, X } from "lucide-react";
+import { parseCsv } from "@/lib/store-agent/csv";
+import { attachmentPath, cellImages, isExtractedImage, isTextFile, isWorkbook, looksLikeImage } from "@/lib/store-agent/file-kinds";
 import { themedReport } from "@/lib/store-agent/report-theme";
 import { cn } from "@/lib/utils";
 import { PLAN_TAB_PREFIX, storeAgentApi, type ChatFile, type Plan } from "./api";
 import { FileKindIcon } from "./blocks";
 import { Markdown } from "./markdown";
-
-/** Minimal RFC 4180 CSV parser: quotes, escaped quotes, newlines inside quotes. */
-export function parseCsv(text: string, delimiter = ","): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = "";
-  let quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (quoted) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
-          cell += '"';
-          i++;
-        } else quoted = false;
-      } else cell += ch;
-    } else if (ch === '"') quoted = true;
-    else if (ch === delimiter) {
-      row.push(cell);
-      cell = "";
-    } else if (ch === "\n" || ch === "\r") {
-      if (ch === "\r" && text[i + 1] === "\n") i++;
-      row.push(cell);
-      rows.push(row);
-      row = [];
-      cell = "";
-    } else cell += ch;
-  }
-  if (cell || row.length) {
-    row.push(cell);
-    rows.push(row);
-  }
-  return rows.filter((r) => r.some((c) => c.trim()));
-}
 
 function toTable(file: ChatFile, text: string): { columns: string[]; rows: string[][] } | null {
   const isCsv = /csv|tab-separated/.test(file.mime) || /\.(csv|tsv)$/i.test(file.name);
@@ -70,14 +38,26 @@ function toTable(file: ChatFile, text: string): { columns: string[]; rows: strin
   }
 }
 
-function TableView({ columns, rows }: { columns: string[]; rows: string[][] }) {
+/** Columns whose filled cells are all pictures (links to images, or image files in the chat). */
+function imageColumns(columns: string[], rows: string[][]): Set<number> {
+  const found = new Set<number>();
+  columns.forEach((_, ci) => {
+    const values = rows.slice(0, 50).map((r) => (r[ci] ?? "").trim()).filter(Boolean);
+    if (values.length && values.every(looksLikeImage)) found.add(ci);
+  });
+  return found;
+}
+
+function TableView({ columns, rows, imageSrc }: { columns: string[]; rows: string[][]; imageSrc?: (value: string) => string | null }) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? rows.filter((r) => r.some((c) => c.toLowerCase().includes(q))) : rows;
   }, [rows, query]);
+  const pictures = useMemo(() => (imageSrc ? imageColumns(columns, rows) : new Set<number>()), [columns, rows, imageSrc]);
+  const rowHeight = pictures.size ? 60 : 34;
   const scrollRef = useRef<HTMLDivElement>(null);
-  const virtual = useVirtualizer({ count: filtered.length, getScrollElement: () => scrollRef.current, estimateSize: () => 34, overscan: 12 });
+  const virtual = useVirtualizer({ count: filtered.length, getScrollElement: () => scrollRef.current, estimateSize: () => rowHeight, overscan: 12 });
   const template = `48px repeat(${columns.length}, minmax(140px, 1fr))`;
 
   return (
@@ -116,11 +96,32 @@ function TableView({ columns, rows }: { columns: string[]; rows: string[][] }) {
                   style={{ gridTemplateColumns: template, transform: `translateY(${item.start}px)`, height: item.size }}
                 >
                   <div className="px-2 py-2 text-end tabular-nums text-muted-foreground">{item.index + 1}</div>
-                  {columns.map((_, ci) => (
-                    <div key={ci} dir="auto" title={row[ci]} className="truncate px-2 py-2">
-                      {row[ci] ?? ""}
-                    </div>
-                  ))}
+                  {columns.map((_, ci) => {
+                    const value = row[ci] ?? "";
+                    const images = pictures.has(ci) ? cellImages(value) : [];
+                    const src = images.length ? imageSrc?.(images[0]!) : null;
+                    if (src) {
+                      return (
+                        <div key={ci} className="flex items-center gap-1.5 px-2 py-1.5">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={src}
+                            alt=""
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                            className="h-12 w-12 rounded-md border bg-background object-contain"
+                            onError={(e) => ((e.target as HTMLImageElement).style.opacity = "0.15")}
+                          />
+                          {images.length > 1 && <span className="text-[11px] text-muted-foreground">+{images.length - 1}</span>}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={ci} dir="auto" title={value} className="truncate px-2 py-2">
+                        {value}
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
@@ -203,12 +204,69 @@ function GalleryView({ items }: { items: GalleryItem[] }) {
   );
 }
 
-function FileViewer({ workspaceId, file }: { workspaceId: string; file: ChatFile }) {
+/**
+ * An Excel workbook, shown through the tables made from it when it was
+ * attached (one .csv per sheet, pictures in their rows). Workbooks Vera
+ * made are for download.
+ */
+function WorkbookView({ workspaceId, file, files }: { workspaceId: string; file: ChatFile; files: ChatFile[] }) {
+  // An upload is stored apart; its copy in Vera's folder, and the tables made from it, are under attachments/.
+  const base = (file.created_by === "user" ? attachmentPath(file.name) : file.path).replace(/\.[^./]+$/, "");
+  const sheets = files.filter((f) => /\.csv$/i.test(f.path) && (f.path === `${base}.csv` || f.path.startsWith(`${base} - `)));
+  const [sheetId, setSheetId] = useState<string | null>(null);
+  const sheet = sheets.find((s) => s.id === sheetId) ?? sheets[0];
+  const download = (
+    <a href={storeAgentApi.fileUrl(workspaceId, file.id, true)} className="inline-flex items-center gap-1.5 font-medium text-[#6B358D] hover:underline dark:text-[#F76D01]">
+      <Download className="h-3.5 w-3.5" />
+      Download {file.name}
+    </a>
+  );
+  if (!sheet) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+        <span>Excel files cannot be shown here. Download it to open it in Excel.</span>
+        {download}
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5 text-[11.5px] text-muted-foreground">
+        {sheets.length > 1 &&
+          sheets.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setSheetId(s.id)}
+              className={cn("rounded-md px-2 py-0.5", s.id === sheet.id ? "bg-muted font-medium text-foreground" : "hover:bg-muted/60")}
+            >
+              {s.path.slice(base.length).replace(/^ - /, "").replace(/\.csv$/i, "") || "Sheet"}
+            </button>
+          ))}
+        <span className="ms-auto">{download}</span>
+      </div>
+      <div className="min-h-0 flex-1">
+        <FileViewer key={sheet.id} workspaceId={workspaceId} file={sheet} files={files} />
+      </div>
+    </div>
+  );
+}
+
+function FileViewer({ workspaceId, file, files }: { workspaceId: string; file: ChatFile; files: ChatFile[] }) {
   const [asTable, setAsTable] = useState(false);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const isText = /^(text\/|application\/json)/.test(file.mime);
+  const isText = isTextFile(file.name, file.mime);
   const url = storeAgentApi.fileUrl(workspaceId, file.id);
+  // Table cells naming an image: a link as it is, or a file in this chat.
+  const imageSrc = useMemo(() => {
+    const byPath = new Map(files.map((f) => [f.path, f.id]));
+    return (value: string) => {
+      if (/^https?:\/\//i.test(value)) return value;
+      const id = byPath.get(value.replace(/^\.\//, ""));
+      return id ? storeAgentApi.fileUrl(workspaceId, id) : null;
+    };
+  }, [files, workspaceId]);
 
   useEffect(() => {
     if (!isText) return;
@@ -231,6 +289,7 @@ function FileViewer({ workspaceId, file }: { workspaceId: string; file: ChatFile
     );
   }
   if (file.mime === "application/pdf") return <iframe src={url} title={file.name} className="h-full w-full border-0" />;
+  if (isWorkbook(file.name) && !isText) return <WorkbookView workspaceId={workspaceId} file={file} files={files} />;
   if (!isText) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
@@ -268,7 +327,7 @@ function FileViewer({ workspaceId, file }: { workspaceId: string; file: ChatFile
       </div>
     );
   }
-  if (table) return <TableView {...table} />;
+  if (table) return <TableView {...table} imageSrc={imageSrc} />;
   if (file.mime === "text/html" || /\.html?$/i.test(file.name)) return <HtmlView html={text} name={file.name} />;
   if (file.mime === "text/markdown" || /\.md$/i.test(file.name)) {
     return (
@@ -381,8 +440,10 @@ export function FilePanel({
   }
   const listing = showList || !activeTab;
   const isStoreData = (f: ChatFile) => /^(shopify-results|woo-results|exports|previews|backups|results)\//.test(f.path);
-  const agentFiles = files.filter((f) => f.created_by === "agent" && !isStoreData(f));
-  const uploads = files.filter((f) => f.created_by === "user");
+  // Tables made from an attachment sit with it; the pictures pulled out of it show inside those tables.
+  const fromAttachment = (f: ChatFile) => f.path.startsWith("attachments/");
+  const agentFiles = files.filter((f) => f.created_by === "agent" && !isStoreData(f) && !fromAttachment(f));
+  const uploads = files.filter((f) => (f.created_by === "user" || fromAttachment(f)) && !isExtractedImage(f.path));
   const results = files.filter((f) => f.created_by === "agent" && isStoreData(f) && !f.path.startsWith("backups/"));
 
   return (
@@ -538,7 +599,7 @@ export function FilePanel({
         ) : activeTab?.plan ? (
           renderPlan(activeTab.plan)
         ) : (
-          active && <FileViewer key={active.id} workspaceId={workspaceId} file={active} />
+          active && <FileViewer key={active.id} workspaceId={workspaceId} file={active} files={files} />
         )}
       </div>
     </div>

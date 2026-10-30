@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { attachmentPath } from "../../../src/lib/store-agent/file-kinds";
 import { decodeStoragePath, encodeStoragePath } from "../../../src/lib/store-agent/storage-key";
 import type { StoreAgentRun } from "./run";
 
@@ -14,6 +15,7 @@ const KIND_BY_EXT: Record<string, string> = {
   ".htm": "report",
   ".csv": "csv",
   ".tsv": "csv",
+  ".xlsx": "csv",
   ".json": "table",
   ".jsonl": "table",
   ".png": "image",
@@ -41,6 +43,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
   ".pdf": "application/pdf",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 };
 
 export function mimeFor(name: string): string {
@@ -179,9 +182,8 @@ export class ChatFiles {
   async placeAttachment(fileId: string, storagePath: string, name: string): Promise<string> {
     const { data, error } = await this.db.storage.from(FILES_BUCKET).download(storagePath);
     if (error || !data) throw new Error(`Could not open the attachment ${name}`);
-    const safe = name.replace(/[^\w.\- ()؀-ۿ]+/g, "_").slice(0, 120) || "attachment";
-    const relative = `attachments/${safe}`;
-    const local = path.join(this.cwd, "attachments", safe);
+    const relative = attachmentPath(name);
+    const local = path.join(this.cwd, ...relative.split("/"));
     await fs.mkdir(path.dirname(local), { recursive: true });
     const bytes = Buffer.from(await data.arrayBuffer());
     await fs.writeFile(local, bytes);

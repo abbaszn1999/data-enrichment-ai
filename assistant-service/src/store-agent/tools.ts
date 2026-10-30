@@ -31,6 +31,8 @@ export { BULK_MIN_RECORDS, type ToolContext } from "./tool-helpers";
 
 /** Changes up to this many rows run one by one; larger ones use a Shopify bulk operation. */
 const DIRECT_ROWS_MAX = 25;
+/** Files the panel can show; anything else only gets a download link there. */
+const PREVIEWABLE = /\.(md|txt|csv|tsv|json|jsonl|html?|png|jpe?g|webp|gif|svg|pdf)$/i;
 
 async function checkScopes(ctx: ToolContext, required: StoreAgentScope[]): Promise<{ conn: ShopifyConnection } | { error: string }> {
   let conn: ShopifyConnection;
@@ -549,6 +551,13 @@ function createSharedTools(ctx: ToolContext): Record<string, SDKCustomTool> {
         }
         try {
           await ctx.files.sync(ctx.run, new Set([relative]));
+          if (!PREVIEWABLE.test(relative)) {
+            return text(
+              `${relative} is open in the panel, but the panel cannot preview this kind of file: the user only sees a download link. ` +
+                "Do not tell them it is shown. Show a file the panel can display instead (.csv, .json, .md, .html, an image or a PDF), " +
+                "for example the .csv made from an Excel attachment."
+            );
+          }
           return text(`Shown to the user: ${relative}`);
         } catch (error) {
           // The file is safe in the folder; only the upload to the panel failed.
