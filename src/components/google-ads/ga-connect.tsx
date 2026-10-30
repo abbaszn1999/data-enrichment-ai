@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion } from "motion/react";
 import {
+  ArrowRight,
   BarChart3,
   Bot,
   Building2,
@@ -15,13 +16,14 @@ import {
   Megaphone,
   PenLine,
   ShieldCheck,
+  ShoppingBag,
   Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCustomerId } from "@/lib/google-ads/metrics";
 import { useGoogleAds } from "@/lib/google-ads/store";
 
-function GoogleMark({ className }: { className?: string }) {
+export function GoogleMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 48 48" className={className} aria-hidden>
       <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.2-.1-2.3-.4-3.5z" />
@@ -65,12 +67,10 @@ export function GaConnect() {
               Connect your account and manage everything in one place: campaigns, ad groups, keywords, ads, assets, audiences and
               conversions. Ask the agent to analyse, fix or build. It prepares the change, you approve it.
             </p>
-            <div className="mt-6 flex flex-wrap items-center gap-3">
-              <ConnectButton />
-              <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Lock className="h-3.5 w-3.5" /> Secure Google sign-in (OAuth). We never see your password.
-              </span>
-            </div>
+            <ConnectionTiles />
+            <span className="mt-4 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Lock className="h-3.5 w-3.5" /> Secure Google sign-in (OAuth). We never see your password.
+            </span>
           </motion.div>
 
           <motion.div
@@ -105,11 +105,12 @@ export function GaConnect() {
         </div>
       </section>
 
-      <div className="mx-auto grid max-w-6xl gap-4 px-6 py-8 sm:grid-cols-3">
+      <div className="mx-auto grid max-w-6xl gap-4 px-6 py-8 sm:grid-cols-2 lg:grid-cols-4">
         {[
           { n: "1", icon: KeyRound, title: "Sign in with Google", body: "Pick the Google account that has access to your Ads account and allow access." },
           { n: "2", icon: Building2, title: "Choose the ad account", body: "We list every account you can reach, including the ones under a manager (MCC)." },
-          { n: "3", icon: Bot, title: "Work with the agent", body: "Ask in chat, review proposed changes on the right, approve to apply." },
+          { n: "3", icon: ShoppingBag, title: "Merchant Center (optional)", body: "Connect your product feed so the agent can fix product issues. You can add it later." },
+          { n: "4", icon: Bot, title: "Work with the agent", body: "Ask in chat, review proposed changes on the right, approve to apply." },
         ].map((s) => (
           <div key={s.n} className="rounded-2xl border border-border/60 bg-card p-5">
             <div className="mb-3 flex items-center gap-2">
@@ -127,17 +128,123 @@ export function GaConnect() {
   );
 }
 
-function ConnectButton() {
-  const startConnect = useGoogleAds((s) => s.startConnect);
+const CONNECT_BTN =
+  "inline-flex h-11 items-center gap-2.5 rounded-xl border border-border bg-background px-5 text-sm font-semibold shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md";
+
+function TileLink({ onClick, children, danger }: { onClick: () => void; children: React.ReactNode; danger?: boolean }) {
   return (
-    <button
-      type="button"
-      onClick={startConnect}
-      className="inline-flex h-11 items-center gap-2.5 rounded-xl border border-border bg-background px-5 text-sm font-semibold shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
-    >
-      <GoogleMark className="h-5 w-5" />
-      Connect Google Ads
+    <button type="button" onClick={onClick} className={cn("text-[11px] font-medium hover:underline", danger ? "text-red-600" : "text-muted-foreground hover:text-foreground")}>
+      {children}
     </button>
+  );
+}
+
+/**
+ * Two separate connections. Google Ads is required: "Go to agent" appears once it
+ * is connected. Merchant Center is optional and can be connected or changed
+ * later from Connections inside the workspace.
+ */
+function ConnectionTiles() {
+  const status = useGoogleAds((s) => s.status);
+  const customerId = useGoogleAds((s) => s.customerId);
+  const accessible = useGoogleAds((s) => s.accessible);
+  const merchant = useGoogleAds((s) => s.merchant);
+  const startConnect = useGoogleAds((s) => s.startConnect);
+  const changeAccount = useGoogleAds((s) => s.changeAccount);
+  const disconnect = useGoogleAds((s) => s.disconnect);
+  const enterWorkspace = useGoogleAds((s) => s.enterWorkspace);
+  const startMerchantConnect = useGoogleAds((s) => s.startMerchantConnect);
+  const changeMerchantAccount = useGoogleAds((s) => s.changeMerchantAccount);
+  const disconnectMerchant = useGoogleAds((s) => s.disconnectMerchant);
+
+  const adsAccount = status === "connected" ? accessible.find((a) => a.customerId === customerId) : undefined;
+  const merchantAccount = merchant.accounts.find((a) => a.merchantId === merchant.merchantId);
+
+  const tile = "flex flex-wrap items-center gap-3 rounded-2xl border bg-background/80 p-3 pr-4 shadow-sm";
+  const iconBox = (done: boolean, children: React.ReactNode) => (
+    <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", done ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground")}>
+      {done ? <Check className="h-5 w-5" /> : children}
+    </span>
+  );
+
+  return (
+    <div className="mt-6 max-w-lg space-y-2.5">
+      <div className={cn(tile, adsAccount ? "border-emerald-500/40" : "border-border/70")} data-testid="connect-ads">
+        {iconBox(!!adsAccount, <Megaphone className="h-5 w-5" />)}
+        {adsAccount ? (
+          <>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">Google Ads connected</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {adsAccount.name} · {formatCustomerId(adsAccount.customerId)}
+              </p>
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <TileLink onClick={changeAccount}>Change account</TileLink>
+              <TileLink onClick={disconnect} danger>Disconnect</TileLink>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">Google Ads</p>
+              <p className="text-xs text-muted-foreground">Required. Campaigns, keywords, ads and reports.</p>
+            </div>
+            <button type="button" onClick={startConnect} className={CONNECT_BTN}>
+              <GoogleMark className="h-5 w-5" />
+              Connect Google Ads
+            </button>
+          </>
+        )}
+      </div>
+
+      <div className={cn(tile, merchantAccount ? "border-emerald-500/40" : "border-border/70")} data-testid="connect-merchant">
+        {iconBox(!!merchantAccount, <ShoppingBag className="h-5 w-5" />)}
+        {merchantAccount ? (
+          <>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">Merchant Center connected</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {merchantAccount.name} · {merchantAccount.merchantId}
+              </p>
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <TileLink onClick={changeMerchantAccount}>Change account</TileLink>
+              <TileLink onClick={disconnectMerchant} danger>Disconnect</TileLink>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="min-w-0 flex-1">
+              <p className="flex items-center gap-1.5 text-sm font-semibold">
+                Merchant Center
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">Optional</span>
+              </p>
+              <p className="text-xs text-muted-foreground">Product feed. Lets the agent fix product issues.</p>
+            </div>
+            <button type="button" onClick={startMerchantConnect} className={CONNECT_BTN}>
+              <GoogleMark className="h-5 w-5" />
+              Connect Merchant Center
+            </button>
+          </>
+        )}
+      </div>
+
+      {adsAccount && (
+        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="pt-1.5">
+          <button
+            type="button"
+            onClick={enterWorkspace}
+            className="inline-flex h-12 items-center gap-2.5 rounded-xl bg-[#400095] px-6 text-sm font-bold text-white shadow-[0_10px_30px_rgba(64,0,149,.28)] transition-all hover:-translate-y-0.5 hover:bg-[#340079] dark:bg-[#F76D01] dark:hover:bg-[#d85f00]"
+          >
+            Go to agent <ArrowRight className="h-4 w-4" />
+          </button>
+          {!merchantAccount && (
+            <p className="mt-2 text-[11px] text-muted-foreground">You can start now. Connect Merchant Center any time from Connections inside the agent.</p>
+          )}
+        </motion.div>
+      )}
+    </div>
   );
 }
 
@@ -225,8 +332,9 @@ function AccountPicker() {
   const accessible = useGoogleAds((s) => s.accessible);
   const accounts = useGoogleAds((s) => s.accounts);
   const email = useGoogleAds((s) => s.googleEmail);
-  const selectAccount = useGoogleAds((s) => s.selectAccount);
+  const chooseAccount = useGoogleAds((s) => s.chooseAccount);
   const disconnect = useGoogleAds((s) => s.disconnect);
+  const current = useGoogleAds((s) => s.customerId);
   const manager = accessible.find((a) => a.isManager);
   const clients = accessible.filter((a) => !a.isManager);
 
@@ -261,7 +369,7 @@ function AccountPicker() {
               <button
                 key={acc.customerId}
                 type="button"
-                onClick={() => selectAccount(acc.customerId)}
+                onClick={() => chooseAccount(acc.customerId)}
                 className={cn("flex w-full items-center gap-3 border-b border-border/40 px-4 py-4 text-left transition-colors last:border-b-0 hover:bg-muted/40", manager && "pl-9")}
               >
                 <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#400095]/10 text-[#400095] dark:bg-violet-500/15 dark:text-violet-300">
@@ -281,7 +389,12 @@ function AccountPicker() {
             );
           })}
         </div>
-        <div className="mt-4 text-center">
+        <div className="mt-4 flex items-center justify-center gap-4">
+          {current && (
+            <button type="button" onClick={() => chooseAccount(current)} className="text-xs text-muted-foreground hover:text-foreground">
+              Back
+            </button>
+          )}
           <button type="button" onClick={disconnect} className="text-xs text-muted-foreground hover:text-foreground">
             Use a different Google account
           </button>

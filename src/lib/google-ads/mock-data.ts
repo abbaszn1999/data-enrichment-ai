@@ -18,6 +18,7 @@ import type {
   ConversionAction,
   DailyPoint,
   GoogleAccount,
+  MerchantAccount,
   Keyword,
   MatchType,
   NegativeKeyword,
@@ -27,6 +28,12 @@ import type {
 
 export const DEMO_GOOGLE_EMAIL = "marketing@stride-demo.com";
 export const DEMO_DOMAIN = "stride-demo.com";
+
+/** Merchant Center accounts the demo Google user can reach. The first one is linked to the main demo ad account. */
+export const MERCHANT_ACCOUNTS: MerchantAccount[] = [
+  { merchantId: "512889034", name: "Stride Store Feed", website: "stride-demo.com", country: "SA" },
+  { merchantId: "512889077", name: "Stride Egypt Store", website: "eg.stride-demo.com", country: "EG" },
+];
 
 export const MANAGER_ACCOUNT: GoogleAccount = {
   customerId: "4410097721",

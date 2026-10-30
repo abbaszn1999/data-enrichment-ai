@@ -64,6 +64,8 @@ export type Ctx = {
   docs?: AgentDoc[];
   /** Document tab the user is looking at, if any. */
   activeDocId?: string;
+  /** Merchant Center connection. `false` means not connected; unset means "assume connected". */
+  merchantConnected?: boolean;
 };
 
 export const STARTER_PROMPTS = [

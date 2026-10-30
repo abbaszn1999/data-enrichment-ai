@@ -27,6 +27,7 @@ export function ProductsView() {
   const { data, range, currency } = useGa();
   const applyDirect = useGoogleAds((s) => s.applyDirect);
   const setView = useGoogleAds((s) => s.setView);
+  const merchantConnected = useGoogleAds((s) => !!s.merchant.merchantId);
   const [filter, setFilter] = useState<"ALL" | "ISSUES" | "OUT" | "TOP">("ALL");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -65,6 +66,10 @@ export function ProductsView() {
   const open = data.products.find((p) => p.id === openId);
 
   const fix = (ids: string[]) => {
+    if (!merchantConnected) {
+      toast.error("Connect Merchant Center to send fixes to your feed", { action: { label: "Open Connections", onClick: () => setView("connections") } });
+      return;
+    }
     const items = data.products.filter((p) => ids.includes(p.id) && p.issues.some((i) => i.fixable)).map(catalogFix);
     if (!items.length) return toast.info("Nothing the catalog can fix in this selection");
     const res = applyDirect(`Fix ${items.length} product${items.length > 1 ? "s" : ""} from catalog`, [{ kind: "collection.upsert", collection: "products", items }]);
@@ -192,10 +197,17 @@ export function ProductsView() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold">{fixable.length} products can be fixed from your catalog</p>
             <p className="text-xs text-muted-foreground">Missing GTINs, long titles and price mismatches are corrected with Catalog Intelligence data and resubmitted to Merchant Center.</p>
+            {!merchantConnected && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">Merchant Center isn&apos;t connected, so fixes can&apos;t be sent yet.</p>}
           </div>
-          <button type="button" onClick={() => fix(fixable.map((p) => p.id))} className="rounded-lg bg-[#400095] px-3 py-2 text-xs font-semibold text-white hover:bg-[#33007a] dark:bg-violet-600">
-            Fix {fixable.length} products
-          </button>
+          {merchantConnected ? (
+            <button type="button" onClick={() => fix(fixable.map((p) => p.id))} className="rounded-lg bg-[#400095] px-3 py-2 text-xs font-semibold text-white hover:bg-[#33007a] dark:bg-violet-600">
+              Fix {fixable.length} products
+            </button>
+          ) : (
+            <button type="button" onClick={() => setView("connections")} className="rounded-lg bg-[#400095] px-3 py-2 text-xs font-semibold text-white hover:bg-[#33007a] dark:bg-violet-600">
+              Connect Merchant Center
+            </button>
+          )}
         </Card>
       )}
       <Segmented

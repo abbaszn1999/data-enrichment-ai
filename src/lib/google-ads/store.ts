@@ -6,7 +6,7 @@
 
 import { create } from "zustand";
 import { rangeFor } from "./metrics";
-import { MANAGER_ACCOUNT, buildDemoAccount, buildEmptyAccount, buildSecondAccount, DEMO_GOOGLE_EMAIL } from "./mock-data";
+import { MANAGER_ACCOUNT, MERCHANT_ACCOUNTS, buildDemoAccount, buildEmptyAccount, buildSecondAccount, DEMO_GOOGLE_EMAIL } from "./mock-data";
 import { applyOps, describeOps, gid } from "./mutations";
 import { validateOps } from "./validation";
 import { DEFAULT_PROFILE, seedMemories, type AgentDoc, type AgentMemory, type BusinessProfile } from "./docs";
@@ -22,11 +22,24 @@ import type {
   GaScope,
   GaView,
   GoogleAccount,
+  MerchantAccount,
   MutateOp,
   ProposedChange,
 } from "./types";
 
 export type ConnectionStatus = "disconnected" | "authorizing" | "selecting" | "connected";
+
+/** Merchant Center is its own connection (own consent, own account), separate from Google Ads. */
+export type MerchantConnection = {
+  status: ConnectionStatus;
+  email: string | null;
+  /** Accounts the signed-in user can reach; filled after consent. */
+  accounts: MerchantAccount[];
+  /** The chosen account. Kept while reconnecting so Cancel can fall back to it. */
+  merchantId: string | null;
+};
+
+const NO_MERCHANT: MerchantConnection = { status: "disconnected", email: null, accounts: [], merchantId: null };
 
 export type GaDialog =
   | { kind: "adGroup"; campaignId?: string }
@@ -61,6 +74,9 @@ type GaStore = {
   accessible: GoogleAccount[];
   accounts: Record<string, AccountState>;
   customerId: string | null;
+  /** The user pressed "Go to agent". Connecting Google Ads alone doesn't open the workspace. */
+  entered: boolean;
+  merchant: MerchantConnection;
 
   view: GaView;
   scope: GaScope;
@@ -73,8 +89,23 @@ type GaStore = {
 
   startConnect: () => void;
   completeAuth: () => void;
+  /** First pick on the connect screen: connects the account but stays there until "Go to agent". */
+  chooseAccount: (customerId: string) => void;
+  /** Open (or switch to) an account inside the workspace. */
   selectAccount: (customerId: string) => void;
+  /** Choose a different ad account from the connect screen. */
+  changeAccount: () => void;
+  enterWorkspace: () => void;
   disconnect: () => void;
+
+  startMerchantConnect: () => void;
+  completeMerchantAuth: () => void;
+  selectMerchantAccount: (merchantId: string) => void;
+  /** Pick another Merchant Center account without signing in again. */
+  changeMerchantAccount: () => void;
+  /** Leave the consent or picker step; keeps the previous account when there was one. */
+  cancelMerchantConnect: () => void;
+  disconnectMerchant: () => void;
 
   setView: (view: GaView) => void;
   setScope: (scope: GaScope, view?: GaView) => void;
@@ -116,7 +147,7 @@ const ACTOR = "You";
 
 /** Views that make no sense at a scope fall back to the closest one that does. */
 function viewForScope(view: GaView, scope: GaScope, isPmax: boolean): GaView {
-  const accountOnly: GaView[] = ["campaigns", "conversions", "library", "products", "rules", "keywordPlanner", "experiments", "links", "accountSettings", "allAccounts", "documents", "profile"];
+  const accountOnly: GaView[] = ["campaigns", "conversions", "library", "products", "rules", "keywordPlanner", "experiments", "links", "accountSettings", "allAccounts", "documents", "profile", "connections"];
   if (scope.adGroupId && (accountOnly.includes(view) || view === "adGroups" || view === "recommendations" || view === "locations" || view === "settings" || view === "planner" || view === "productGroups" || view === "content" || view === "demographics"))
     return "keywords";
   if (scope.campaignId && accountOnly.includes(view)) return "adGroups";
@@ -142,6 +173,8 @@ export const useGoogleAds = create<GaStore>((set, get) => ({
   accessible: [],
   accounts: {},
   customerId: null,
+  entered: false,
+  merchant: NO_MERCHANT,
 
   view: "overview",
   scope: {},
@@ -181,11 +214,33 @@ export const useGoogleAds = create<GaStore>((set, get) => ({
     });
   },
 
+  chooseAccount: (customerId) =>
+    set({ status: "connected", entered: false, customerId, view: "overview", scope: {}, editor: { open: false }, dialog: null }),
+
   selectAccount: (customerId) =>
-    set({ status: "connected", customerId, view: "overview", scope: {}, editor: { open: false }, dialog: null }),
+    set({ status: "connected", entered: true, customerId, view: "overview", scope: {}, editor: { open: false }, dialog: null }),
+
+  changeAccount: () => set((s) => (s.status === "connected" ? { status: "selecting", entered: false } : {})),
+
+  enterWorkspace: () => set((s) => (s.status === "connected" && s.customerId ? { entered: true, view: "overview", scope: {} } : {})),
 
   disconnect: () =>
-    set({ status: "disconnected", googleEmail: null, accessible: [], accounts: {}, customerId: null, view: "overview", scope: {} }),
+    set({ status: "disconnected", entered: false, googleEmail: null, accessible: [], accounts: {}, customerId: null, view: "overview", scope: {} }),
+
+  startMerchantConnect: () => set((s) => ({ merchant: { ...s.merchant, status: "authorizing" } })),
+
+  completeMerchantAuth: () =>
+    set((s) => ({ merchant: { ...s.merchant, status: "selecting", email: DEMO_GOOGLE_EMAIL, accounts: MERCHANT_ACCOUNTS } })),
+
+  selectMerchantAccount: (merchantId) =>
+    set((s) => (s.merchant.accounts.some((a) => a.merchantId === merchantId) ? { merchant: { ...s.merchant, status: "connected", merchantId } } : {})),
+
+  changeMerchantAccount: () => set((s) => (s.merchant.email ? { merchant: { ...s.merchant, status: "selecting", accounts: MERCHANT_ACCOUNTS } } : {})),
+
+  cancelMerchantConnect: () =>
+    set((s) => ({ merchant: s.merchant.merchantId ? { ...s.merchant, status: "connected" } : NO_MERCHANT })),
+
+  disconnectMerchant: () => set({ merchant: NO_MERCHANT }),
 
   setView: (view) => set({ view }),
 

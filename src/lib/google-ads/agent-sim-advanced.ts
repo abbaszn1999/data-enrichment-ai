@@ -9,12 +9,28 @@ import { gid } from "./mutations";
 import type { AgentPlan } from "./agent-sim";
 import type { AccountData, AdScheduleSlot, AutomatedRule, DateRange, GaScope, ListingGroup } from "./types";
 
-type Ctx = { data: AccountData; range: DateRange; scope: GaScope };
+type Ctx = { data: AccountData; range: DateRange; scope: GaScope; merchantConnected?: boolean };
 
-export function fixProducts({ data }: Ctx): AgentPlan {
+export function fixProducts({ data, merchantConnected }: Ctx): AgentPlan {
   const broken = data.products.filter((p) => p.issues.length);
   const fixable = broken.filter((p) => p.issues.some((i) => i.fixable));
   const manual = broken.filter((p) => p.issues.some((i) => !i.fixable));
+  // Without its own Merchant Center connection the agent can read what Google Ads
+  // reports about products, but it can't send corrections to the feed.
+  if (merchantConnected === false)
+    return {
+      steps: [{ tool: "ads_report", label: "Read product status from Google Ads", detail: `${broken.length} products with issues` }],
+      reply: [
+        broken.length
+          ? `Google Ads shows **${broken.length} products with issues** (${broken.filter((p) => p.status === "DISAPPROVED").length} disapproved).`
+          : "Google Ads shows no product issues right now.",
+        "",
+        "**Merchant Center isn't connected**, so I can't read the full feed or send fixes back. Connect it in **Connections** and ask me again. Fixes will still wait for your approval.",
+      ].join("\n"),
+      changes: [],
+      followUps: ["Which products should I stop advertising?"],
+      viewHint: "connections",
+    };
   if (!broken.length)
     return { steps: [{ tool: "merchant_products", label: "Checked Merchant Center product statuses" }], reply: "Every product in Merchant Center is approved. Nothing to fix.", changes: [], followUps: ["Which products should I stop advertising?"], viewHint: "products" };
   return {

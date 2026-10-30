@@ -27,6 +27,7 @@ export function runAgentTurn(text: string): void {
     memories: state.memories,
     docs: state.docs,
     activeDocId: state.activeTab !== "account" ? state.activeTab : undefined,
+    merchantConnected: !!store.merchant.merchantId,
   });
   const agentId = gid("msg");
   store.addMessage({

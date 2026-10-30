@@ -16,6 +16,16 @@ without reshaping the UI.
    can reach, including accounts under a manager (MCC).
 2. **Choose an account.** The workspace works on one Google Ads customer at a
    time and can switch.
+2b. **Merchant Center (optional, separate connection).** Its own Google consent
+   (`content` scope) and its own account picker. The connect screen has two
+   buttons, **Connect Google Ads** and **Connect Merchant Center**; **Go to agent**
+   appears as soon as Google Ads is connected, so Merchant Center can wait.
+   Inside the workspace, **Connections** (nav, and the account menu) shows both
+   connections and lets the user change account, reconnect or disconnect either
+   at any time, and checks that the chosen Merchant Center account is the one
+   linked to the open ad account. Without it the agent keeps its Google Ads tools,
+   reports product status from Google Ads and says what to connect; with it, the
+   `merchant_*` tools (read statuses, propose feed fixes) unlock.
 3. **Read.** Reports come from the Google Ads API (GAQL) into a short-lived
    cache in Supabase, so screens and the agent don't spend API quota twice.
 4. **Ask the agent.** The agent reads through tools, never through raw
