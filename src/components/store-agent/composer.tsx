@@ -8,7 +8,16 @@ import type { ModelParam } from "@/lib/store-agent/protocol";
 import { STORE_AGENT_LIMITS } from "@/lib/store-agent/protocol";
 import { cn } from "@/lib/utils";
 import { FILE_SECTIONS, fileSection } from "@/lib/store-agent/file-kinds";
-import { fileRef, planRef, splitMentions } from "@/lib/store-agent/mentions";
+import {
+  chipBefore,
+  encodeMentions,
+  fileRef,
+  mentionLabel,
+  mentionSegments,
+  planRef,
+  splitMentions,
+  type ComposerMention,
+} from "@/lib/store-agent/mentions";
 import { storeAgentApi, type ChatFile, type Mention, type ModelOption, type Plan } from "./api";
 import { FileKindIcon } from "./blocks";
 import { ModelPicker } from "./model-picker";
@@ -113,8 +122,9 @@ export function Composer({
   const [steering, setSteering] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // @-mentions: the box shows "@Title"; the message carries "@[Title](gid)".
-  const [mentions, setMentions] = useState<Array<{ title: string; id: string }>>([]);
+  // @-mentions: the box shows a short "@label" chip; the message carries "@[Full title](ref)".
+  const [mentions, setMentions] = useState<ComposerMention[]>([]);
+  const backdropRef = useRef<HTMLDivElement>(null);
   const [picker, setPicker] = useState<{ query: string; start: number; index: number } | null>(null);
   const [results, setResults] = useState<Mention[]>([]);
   const [searching, setSearching] = useState(false);
@@ -124,8 +134,8 @@ export function Composer({
   if (seed && seed.nonce !== seedNonce) {
     setSeedNonce(seed.nonce);
     const parts = splitMentions(seed.text);
-    setText(parts.map((p) => (p.kind === "text" ? p.text : `@${p.title}`)).join(""));
-    setMentions(parts.flatMap((p) => (p.kind === "mention" ? [{ title: p.title, id: p.id }] : [])));
+    setText(parts.map((p) => (p.kind === "text" ? p.text : `@${mentionLabel(p.title)}`)).join(""));
+    setMentions(parts.flatMap((p) => (p.kind === "mention" ? [{ label: mentionLabel(p.title), title: p.title, id: p.id }] : [])));
   }
 
   // Search the store for the word after "@", a moment after typing stops.
@@ -187,10 +197,14 @@ export function Composer({
   const choose = (item: PickItem) => {
     if (!picker) return;
     const end = picker.start + 1 + picker.query.length;
-    const insert = `@${item.title} `;
+    // A short label in the box; two different things never share one.
+    const known = mentions.find((m) => m.id === item.ref);
+    let label = known?.label ?? mentionLabel(item.title);
+    for (let n = 2; !known && mentions.some((m) => m.label === label); n++) label = `${mentionLabel(item.title, 22)} ${n}`;
+    const insert = `@${label} `;
     const next = text.slice(0, picker.start) + insert + text.slice(end);
     setText(next);
-    setMentions((m) => (m.some((x) => x.id === item.ref) ? m : [...m, { title: item.title, id: item.ref }]));
+    setMentions((m) => (known ? m : [...m, { label, title: item.title, id: item.ref }]));
     setPicker(null);
     setResults([]);
     requestAnimationFrame(() => {
@@ -202,9 +216,11 @@ export function Composer({
     });
   };
 
-  /** The text with each chosen "@Title" turned into "@[Title](gid)" for the agent. */
-  const encode = (value: string) =>
-    mentions.reduce((acc, m) => acc.split(`@${m.title}`).join(`@[${m.title}](${m.id})`), value);
+  /** The text with each "@label" chip turned into "@[Full title](ref)" for the agent. */
+  const encode = (value: string) => encodeMentions(value, mentions);
+  // Chips are drawn on a layer under the text box (same font and wrapping, text see-through on top).
+  const segments = mentionSegments(text, mentions);
+  const hasChips = segments.some((s) => s.mention);
   useEffect(() => {
     if (seedNonce === null) return;
     const el = textareaRef.current;
@@ -364,12 +380,37 @@ export function Composer({
         </div>
       )}
 
+      <div className="relative">
+      {hasChips && (
+        // The same text, wrapped the same way, with each mention drawn as a chip; the box above shows only its caret.
+        <div
+          ref={backdropRef}
+          aria-hidden
+          dir="auto"
+          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 pb-1 pt-3.5 text-[14px] leading-relaxed text-foreground [scrollbar-gutter:stable]"
+        >
+          {segments.map((s, i) =>
+            s.mention ? (
+              <span key={i} className="rounded-md bg-[#400095]/12 text-[#400095] [box-decoration-break:clone] [box-shadow:0_0_0_2px_rgba(64,0,149,0.12)] dark:bg-[#F76D01]/15 dark:text-[#F76D01] dark:[box-shadow:0_0_0_2px_rgba(247,109,1,0.15)]">
+                {s.text}
+              </span>
+            ) : (
+              <span key={i}>{s.text}</span>
+            )
+          )}
+          {/* A last line break needs something after it to take up its line. */}
+          {"​"}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={text}
         dir="auto"
         rows={1}
         disabled={disabled}
+        onScroll={(e) => {
+          if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop;
+        }}
         onChange={(e) => {
           setText(e.target.value);
           updatePicker(e.target.value, e.target.selectionStart ?? e.target.value.length);
@@ -401,6 +442,18 @@ export function Composer({
             setPicker(null);
             return;
           }
+          // A chip goes in one Backspace, like a single character.
+          if (e.key === "Backspace" && !e.nativeEvent.isComposing) {
+            const el = e.currentTarget;
+            const chip = el.selectionStart === el.selectionEnd ? chipBefore(text, el.selectionStart, mentions) : null;
+            if (chip) {
+              e.preventDefault();
+              setText(text.slice(0, chip.start) + text.slice(chip.end));
+              setPicker(null);
+              requestAnimationFrame(() => el.setSelectionRange(chip.start, chip.start));
+              return;
+            }
+          }
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             void submit();
@@ -413,8 +466,13 @@ export function Composer({
               ? "Describe what you want planned — nothing in the store will change…"
               : `Ask anything about ${storeName || "your store"}, or tell the agent what to do…`
         }
-        className="block max-h-[240px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[14px] leading-relaxed outline-none placeholder:text-muted-foreground/60 disabled:opacity-50"
+        className={cn(
+          "relative block max-h-[240px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[14px] leading-relaxed outline-none placeholder:text-muted-foreground/60 disabled:opacity-50",
+          // With chips the layer underneath shows the text; this box keeps the caret and selection.
+          hasChips && "text-transparent caret-foreground [scrollbar-gutter:stable] selection:bg-[#400095]/20 dark:selection:bg-[#F76D01]/25"
+        )}
       />
+      </div>
 
       <div className="flex items-center gap-1 px-2 pb-2 pt-1">
         <input

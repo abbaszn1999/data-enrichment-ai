@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { emptyReply, reduceReply } from "./blocks";
 import { fileSection } from "./file-kinds";
-import { fileRef, mentionKind, mentionedIds, plainMentions, planRef, refId, requestLabel, splitMentions } from "./mentions";
+import {
+  chipBefore,
+  encodeMentions,
+  fileRef,
+  mentionKind,
+  mentionLabel,
+  mentionSegments,
+  mentionedIds,
+  plainMentions,
+  planRef,
+  refId,
+  requestLabel,
+  splitMentions,
+} from "./mentions";
 
 const FILE = "11111111-2222-4333-8444-555555555555";
 const PLAN = "66666666-7777-4888-9999-000000000000";
@@ -23,6 +36,31 @@ describe("mentions", () => {
   it("ignores lookalikes and counts each file once", () => {
     expect(mentionedIds(`@[x](file://not-an-id) @[a](${fileRef(FILE)}) @[b](${fileRef(FILE)})`)).toEqual({ files: [FILE], plans: [] });
     expect(splitMentions("email me @ home")).toEqual([{ kind: "text", text: "email me @ home" }]);
+  });
+
+  it("shows a short chip in the box and gives the agent the full title and ref", () => {
+    const title = "تعديل سعر PulseWatch Series 7 مع عرض خصم";
+    const label = mentionLabel(title);
+    expect(label.length).toBeLessThanOrEqual(26);
+    expect(label.endsWith("…")).toBe(true);
+    expect(mentionLabel("report.md")).toBe("report.md");
+
+    const mentions = [
+      { label, title, id: planRef(PLAN) },
+      { label: "Pulse", title: "Pulse", id: "gid://shopify/Product/1" },
+    ];
+    const text = `@${label} please, and @Pulse too`;
+    expect(encodeMentions(text, mentions)).toBe(`@[${title}](${planRef(PLAN)}) please, and @[Pulse](gid://shopify/Product/1) too`);
+    expect(mentionSegments(text, mentions).filter((s) => s.mention).map((s) => s.text)).toEqual([`@${label}`, "@Pulse"]);
+    expect(encodeMentions("no chips here", [])).toBe("no chips here");
+  });
+
+  it("finds the chip just before the caret, so Backspace removes it whole", () => {
+    const mentions = [{ label: "report.md", title: "report.md", id: fileRef(FILE) }];
+    const text = "see @report.md now";
+    expect(chipBefore(text, 14, mentions)).toEqual({ start: 4, end: 14 });
+    expect(chipBefore(text, 15, mentions)).toBeNull();
+    expect(chipBefore(text, 10, mentions)).toBeNull();
   });
 
   it("says in one short line what a file came from", () => {

@@ -39,7 +39,7 @@ import type { ApprovalState, ChatMessage, Insight, Plan } from "./api";
 import { ReplyBlocks } from "./blocks";
 import { ChatTabs } from "./chat-tabs";
 import { Composer } from "./composer";
-import { mentionKind, refId, splitMentions } from "@/lib/store-agent/mentions";
+import { mentionKind, mentionLabel, refId, splitMentions } from "@/lib/store-agent/mentions";
 import { ChangeHistoryDialog, IconAction, LiveStatus, StoreNotesDialog } from "./extras";
 import { FilePanel } from "./file-panel";
 import { PlanView } from "./plan-view";
@@ -97,16 +97,16 @@ function MessageText({ text, onOpenMention }: { text: string; onOpenMention?: Op
         const chip = "mx-0.5 inline-flex items-center gap-1 rounded-md bg-[#400095]/10 px-1.5 py-px text-[13px] font-medium text-[#400095] dark:bg-[#F76D01]/15 dark:text-[#F76D01]";
         if (kind !== "store" && onOpenMention) {
           return (
-            <button key={i} type="button" onClick={() => onOpenMention(kind, refId(part.id))} className={cn(chip, "align-baseline hover:underline")}>
+            <button key={i} type="button" title={part.title} onClick={() => onOpenMention(kind, refId(part.id))} className={cn(chip, "align-baseline hover:underline")}>
               {Icon && <Icon className="h-3 w-3" />}
-              {part.title}
+              {mentionLabel(part.title)}
             </button>
           );
         }
         return (
-          <span key={i} title={kind === "store" ? part.id : undefined} className={chip}>
+          <span key={i} title={part.title} className={chip}>
             {Icon && <Icon className="h-3 w-3" />}
-            {kind === "store" ? `@${part.title}` : part.title}
+            {kind === "store" ? `@${mentionLabel(part.title)}` : mentionLabel(part.title)}
           </span>
         );
       })}
