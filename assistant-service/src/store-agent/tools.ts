@@ -516,6 +516,12 @@ function createSharedTools(ctx: ToolContext): Record<string, SDKCustomTool> {
           return failure(ctx.run.cancelled ? "The run was stopped." : "The user did not answer in time. Stop and say what you need from them.");
         }
         (ctx.consent ??= { declinedAt: null, answeredAt: null }).answeredAt = Date.now();
+        if (!Array.isArray(answers)) {
+          return text(
+            `The user did not use the card; they wrote in the chat instead:\n"${answers.message}"\n` +
+              "Take it as their answer, or as a new instruction if it is one, and carry on."
+          );
+        }
         return text(
           "The user answered:\n" +
             questions.map((q, i) => `${i + 1}. ${q.text}\n   → ${(answers[i] ?? []).join(" | ") || "(no answer)"}`).join("\n")

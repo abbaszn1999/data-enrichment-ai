@@ -145,7 +145,8 @@ export type StoreAgentEvent =
   | { type: "progress"; outputTokens: number; toolCalls: number; seq: number }
   /** One card with one or more questions, each with options (and a free answer). */
   | { type: "question"; questionId: string; questions: QuestionItem[]; seq: number }
-  | { type: "question_resolved"; questionId: string; answers: string[][]; seq: number }
+  /** `inChat`: the user wrote in the chat instead of using the card. */
+  | { type: "question_resolved"; questionId: string; answers: string[][]; inChat?: boolean; seq: number }
   /** A plan written in Plan mode, or a new version of it, or its build status changing. */
   | { type: "plan"; planId: string; title: string; content: string; version: number; status: PlanStatus; seq: number }
   | { type: "file"; fileId: string; name: string; kind: string; mime: string; open: boolean; seq: number }

@@ -508,7 +508,7 @@ function QuestionCard({ block, live, onAnswer }: { block: Extract<MessageBlock, 
           </Button>
         </div>
       )}
-      {answered && <div className="mt-2 text-[11.5px] text-muted-foreground">Answered</div>}
+      {answered && <div className="mt-2 text-[11.5px] text-muted-foreground">{block.inChat ? "Answered in the chat" : "Answered"}</div>}
       {!answered && !live && <div className="mt-2 text-[11.5px] text-muted-foreground">Not answered</div>}
     </div>
   );

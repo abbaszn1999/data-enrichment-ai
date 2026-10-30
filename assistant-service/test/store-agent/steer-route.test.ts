@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { emptyReply, reduceReply } from "../../../src/lib/store-agent/blocks";
 import { signRequest, SIGNATURE_HEADER, TIMESTAMP_HEADER, USER_HEADER } from "../../src/auth";
 import { StoreAgentRegistry } from "../../src/store-agent/run";
 import { mountStoreAgentRoutes, type StoreAgentRouteDeps } from "../../src/store-agent/routes";
@@ -51,5 +52,32 @@ describe("steering a run", () => {
     expect(res.status).toBe(200);
     expect(run.history.filter((e) => e.type === "guidance")).toMatchObject([{ type: "guidance", text: "also count the free products" }]);
     expect(run.takeGuidance()).toEqual(["also count the free products"]);
+  });
+
+  it("answers a waiting question card with the message, so the agent is not left waiting", async () => {
+    const { app, run } = setup();
+    const { questionId, answer } = run.ask([{ id: "q1", text: "Which watch?", options: ["A", "B"], multiple: false }]);
+    expect(run.waitingOnUser).toBe("question");
+
+    await steer(app, "the cheapest one");
+    await expect(answer).resolves.toEqual({ message: "the cheapest one" });
+    expect(run.waitingOnUser).toBeNull();
+    expect(run.history.filter((e) => e.type === "question_resolved")).toMatchObject([{ questionId, answers: [], inChat: true }]);
+    expect(run.history.some((e) => e.type === "guidance")).toBe(true);
+    // Delivered through the card, not repeated at the next tool call.
+    expect(run.takeGuidance()).toEqual([]);
+
+    let state = emptyReply();
+    for (const event of run.history) state = reduceReply(state, event);
+    expect(state.blocks.find((b) => b.type === "question")).toMatchObject({ answers: [], inChat: true });
+  });
+
+  it("sets a waiting approval aside when the user writes instead of deciding", async () => {
+    const { app, run } = setup();
+    const outcome = run.waitForApproval("a1");
+    await steer(app, "wait, only the black ones");
+    await expect(outcome).resolves.toBe("superseded");
+    expect(run.takeChatReply("a1")).toBe("wait, only the black ones");
+    expect(run.takeChatReply("a1")).toBeUndefined();
   });
 });

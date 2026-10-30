@@ -138,10 +138,16 @@ export async function approveWrite(
 
   const auto = ctx.autoRun && (plan.risk === "write" || (plan.risk === "bulk" && ctx.autoRunBulk));
   let outcome: "approved" | "rejected" | "expired" = "approved";
+  let wroteInstead: string | undefined;
   if (!auto) {
     await setChatStatus(ctx, "awaiting_approval");
-    outcome = await ctx.run.waitForApproval(approvalId);
+    const decision = await ctx.run.waitForApproval(approvalId);
     await setChatStatus(ctx, "running");
+    // Writing in the chat instead of deciding: the change is not made, nor counted as declined.
+    if (decision === "superseded") {
+      wroteInstead = ctx.run.takeChatReply(approvalId) ?? "";
+      outcome = "rejected";
+    } else outcome = decision;
   }
   const undoable = outcome === "approved" && isUndoable(records);
   let backupPath: string | null = null;
@@ -168,8 +174,16 @@ export async function approveWrite(
   ctx.run.emit({ type: "approval_resolved", approvalId, status: outcome, auto, undoable: !!backupPath });
 
   if (outcome === "approved") return { ok: true, approvalId, records, undo: backupPath ? UNDO_AVAILABLE : UNDO_UNAVAILABLE };
-  if (outcome === "rejected") consent.declinedAt = Date.now();
   if (ctx.run.cancelled) return { ok: false, message: "The run was stopped." };
+  if (wroteInstead !== undefined) {
+    return {
+      ok: false,
+      message:
+        `The user did not decide on this change; they wrote in the chat instead:\n"${wroteInstead}"\n` +
+        "The change was not made. Follow their message; if they still want the change, propose it again.",
+    };
+  }
+  if (outcome === "rejected") consent.declinedAt = Date.now();
   return {
     ok: false,
     message:

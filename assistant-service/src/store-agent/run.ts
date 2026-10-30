@@ -14,7 +14,11 @@ interface Waiter<T> {
   timer: NodeJS.Timeout;
 }
 
-export type ApprovalOutcome = "approved" | "rejected" | "expired";
+/** "superseded": the user wrote in the chat instead of deciding. */
+export type ApprovalOutcome = "approved" | "rejected" | "expired" | "superseded";
+
+/** The answers from the card, what the user wrote in the chat instead, or null when nobody answered. */
+export type QuestionReply = string[][] | { message: string } | null;
 
 /**
  * One live Store Agent run. It outlives the browser connection: events are
@@ -34,7 +38,9 @@ export class StoreAgentRun {
   private readonly events: StoreAgentEvent[] = [];
   private readonly listeners = new Set<Listener>();
   private readonly approvals = new Map<string, Waiter<ApprovalOutcome>>();
-  private readonly questions = new Map<string, Waiter<string[][] | null>>();
+  private readonly questions = new Map<string, Waiter<QuestionReply>>();
+  /** What the user wrote instead of deciding, per approval set aside. */
+  private readonly chatReplies = new Map<string, string>();
   private readonly abortHandlers: Array<() => void> = [];
   private readonly controller = new AbortController();
 
@@ -134,9 +140,9 @@ export class StoreAgentRun {
   }
 
   /** Ask the user one card of questions and wait. Resolves null when nobody answers in time. */
-  ask(questions: QuestionItem[]): { questionId: string; answer: Promise<string[][] | null> } {
+  ask(questions: QuestionItem[]): { questionId: string; answer: Promise<QuestionReply> } {
     const questionId = randomUUID();
-    const answer = new Promise<string[][] | null>((resolve) => {
+    const answer = new Promise<QuestionReply>((resolve) => {
       if (this.cancelled) return resolve(null);
       const timer = setTimeout(() => {
         this.questions.delete(questionId);
@@ -157,6 +163,36 @@ export class StoreAgentRun {
     waiter.resolve(answers);
     this.emit({ type: "question_resolved", questionId, answers });
     return true;
+  }
+
+  /**
+   * The user wrote in the chat while a question or approval card waited. The
+   * agent is blocked on that card, so a queued message would never reach it:
+   * the message answers the card instead (an approval is set aside, not made).
+   * Returns false when no card was waiting.
+   */
+  replyInChat(text: string): boolean {
+    if (!this.questions.size && !this.approvals.size) return false;
+    for (const [questionId, waiter] of this.questions) {
+      clearTimeout(waiter.timer);
+      waiter.resolve({ message: text });
+      this.emit({ type: "question_resolved", questionId, answers: [], inChat: true });
+    }
+    this.questions.clear();
+    for (const [approvalId, waiter] of this.approvals) {
+      clearTimeout(waiter.timer);
+      this.chatReplies.set(approvalId, text);
+      waiter.resolve("superseded");
+    }
+    this.approvals.clear();
+    return true;
+  }
+
+  /** What the user wrote instead of deciding on this approval. */
+  takeChatReply(approvalId: string): string | undefined {
+    const text = this.chatReplies.get(approvalId);
+    this.chatReplies.delete(approvalId);
+    return text;
   }
 
   /** True while the run is paused on the user. */

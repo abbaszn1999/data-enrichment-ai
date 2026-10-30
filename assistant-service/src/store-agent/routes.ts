@@ -152,11 +152,13 @@ export function mountStoreAgentRoutes(app: Hono, deps: StoreAgentRouteDeps) {
     const body = parse(steerSchema, auth.body);
     const run = body && owned(body.runId, auth.userId);
     if (!run || run.finished) return c.json({ error: "not found" }, 404);
+    // Part of the reply, so it is shown where it arrived and saved with it.
+    run.emit({ type: "guidance", text: body.text });
+    // A card is waiting and the agent with it: the message answers the card.
+    if (run.replyInChat(body.text)) return c.json({ ok: true, delivered: true });
     // Queued first, so it reaches the agent even if the SDK hands it back;
     // the SDK's answer can wait for the end of the turn, so it is not awaited.
     const id = run.addGuidance(body.text);
-    // Part of the reply, so it is shown where it arrived and saved with it.
-    run.emit({ type: "guidance", text: body.text });
     void run
       .steer?.(body.text)
       .then((outcome) => {

@@ -34,7 +34,7 @@ export type MessageBlock =
       auto?: boolean;
       undoable?: boolean;
     }
-  | { type: "question"; questionId: string; questions: QuestionItem[]; answers?: string[][] }
+  | { type: "question"; questionId: string; questions: QuestionItem[]; answers?: string[][]; inChat?: boolean }
   /** The plan this reply wrote or revised; its text lives with the plan, shown in the panel. */
   | { type: "plan"; planId: string; title: string; version: number }
   | { type: "file"; fileId: string; name: string; kind: string; mime: string }
@@ -150,7 +150,9 @@ export function reduceReply(state: ReplyState, event: StoreAgentEvent): ReplySta
       break;
     case "question_resolved": {
       const i = blocks.findIndex((b) => b.type === "question" && b.questionId === event.questionId);
-      if (i >= 0) blocks[i] = { ...(blocks[i] as Extract<MessageBlock, { type: "question" }>), answers: event.answers };
+      if (i >= 0) {
+        blocks[i] = { ...(blocks[i] as Extract<MessageBlock, { type: "question" }>), answers: event.answers, ...(event.inChat ? { inChat: true } : {}) };
+      }
       break;
     }
     case "plan": {
