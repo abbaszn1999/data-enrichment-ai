@@ -26,6 +26,8 @@ import { SearchTermsView } from "./views/search-terms";
 import { SettingsView } from "./views/settings";
 import { AccountSettingsView, AllAccountsView, LinksView } from "./views/account";
 import { ProductGroupsView, ProductsView } from "./views/products";
+import { ConnectionsView } from "./views/connections";
+import { MerchantConnectDialog } from "./ga-merchant";
 import { ReportsView } from "./views/reports";
 import { RulesView } from "./views/rules";
 import { ContentView, DemographicsView } from "./views/targeting";
@@ -66,6 +68,7 @@ const VIEWS: Record<GaView, () => React.ReactNode> = {
   allAccounts: AllAccountsView,
   documents: DocumentsView,
   profile: ProfileView,
+  connections: ConnectionsView,
 };
 
 const CHAT_DEFAULT = 400;
@@ -78,11 +81,20 @@ const CHAT_MAX = 560;
  */
 export function GoogleAdsShell() {
   const status = useGoogleAds((s) => s.status);
-  if (status !== "connected") return <GaConnect />;
+  const entered = useGoogleAds((s) => s.entered);
+  // Connecting Google Ads alone stays on the connect screen until "Go to agent".
+  const inWorkspace = status === "connected" && entered;
   return (
-    <TooltipProvider delayDuration={200}>
-      <Workspace />
-    </TooltipProvider>
+    <>
+      {inWorkspace ? (
+        <TooltipProvider delayDuration={200}>
+          <Workspace />
+        </TooltipProvider>
+      ) : (
+        <GaConnect />
+      )}
+      <MerchantConnectDialog />
+    </>
   );
 }
 

@@ -757,6 +757,15 @@ export type GaView =
   | "accountSettings"
   | "allAccounts"
   | "documents"
-  | "profile";
+  | "profile"
+  | "connections";
+
+/** A Merchant Center account the signed-in Google user can reach (own connection, separate from Google Ads). */
+export type MerchantAccount = {
+  merchantId: string;
+  name: string;
+  website: string;
+  country: string;
+};
 
 export type GaScope = { campaignId?: string; adGroupId?: string };

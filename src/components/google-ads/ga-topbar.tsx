@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Megaphone,
   MessageSquare,
+  Plug,
   Plus,
   Settings,
   Unplug,
@@ -47,6 +48,7 @@ export function GaTopbar() {
   const openEditor = useGoogleAds((s) => s.openEditor);
   const openDialog = useGoogleAds((s) => s.openDialog);
   const email = useGoogleAds((s) => s.googleEmail);
+  const merchantConnected = useGoogleAds((s) => !!s.merchant.merchantId);
   if (!acc) return null;
   const { data } = acc;
 
@@ -97,6 +99,13 @@ export function GaTopbar() {
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => { setScope({}); setView("allAccounts"); }} className="gap-2 text-xs">
             <Building2 className="h-3.5 w-3.5" /> All accounts (manager view)
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => { setScope({}); setView("connections"); }} className="gap-2 text-xs">
+            <Plug className="h-3.5 w-3.5" />
+            <span className="flex-1">Connections</span>
+            <span className={cn("text-[10px]", merchantConnected ? "text-emerald-600" : "text-muted-foreground")}>
+              {merchantConnected ? "Merchant Center on" : "Merchant Center off"}
+            </span>
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={disconnect} className="gap-2 text-xs text-red-600">
             <Unplug className="h-3.5 w-3.5" /> Disconnect Google Ads
