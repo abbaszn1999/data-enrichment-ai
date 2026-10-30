@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Image as ImageIcon, Link2, Megaphone, Phone, Plus, Quote, Store, Tag, BadgePercent, List, MapPin, ClipboardList, type LucideIcon } from "lucide-react";
+import { Image as ImageIcon, Link2, Megaphone, Phone, Quote, Store, Tag, BadgePercent, List, MapPin, ClipboardList, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ASSET_TYPES } from "@/lib/google-ads/constants";
 import { useGoogleAds } from "@/lib/google-ads/store";
 import type { Asset, AssetType } from "@/lib/google-ads/types";
-import { ACCENT_BTN, Card, EmptyState, ImageTile, Pill, PolicyPill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
+import { Card, EmptyState, ImageTile, Pill, PolicyPill, Segmented, StatusMenu, ViewHeader } from "../ga-ui";
 import { useGa } from "../use-ga";
 
 const ICONS: Record<AssetType, LucideIcon> = {
@@ -27,7 +27,6 @@ type Filter = "ALL" | AssetType;
 
 export function AssetsView() {
   const { data, scope, campaign, adGroup } = useGa();
-  const openDialog = useGoogleAds((s) => s.openDialog);
   const applyDirect = useGoogleAds((s) => s.applyDirect);
   const [filter, setFilter] = useState<Filter>("ALL");
 
@@ -50,11 +49,6 @@ export function AssetsView() {
       <ViewHeader
         title="Assets"
         subtitle={`Extra details that make ads bigger and more useful. ${adGroup ? `Showing account, campaign and ${adGroup.name} assets.` : campaign ? `Showing account and ${campaign.name} assets.` : "Showing assets at every level."}`}
-        actions={
-          <button type="button" onClick={() => openDialog({ kind: "asset", campaignId: campaign?.id })} className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold", ACCENT_BTN)}>
-            <Plus className="h-3.5 w-3.5" /> Asset
-          </button>
-        }
       >
         <Segmented
           value={filter}
@@ -63,7 +57,7 @@ export function AssetsView() {
           options={[{ value: "ALL" as Filter, label: "All", count: visible.length }, ...types.map((t) => ({ value: t as Filter, label: ASSET_TYPES[t].label, count: visible.filter((a) => a.type === t).length }))]}
         />
       </ViewHeader>
-      {grouped.length === 0 && <EmptyState icon={Link2} title="No assets yet" body="Add sitelinks, callouts and a phone number. Ads with assets typically get more clicks." />}
+      {grouped.length === 0 && <EmptyState icon={Link2} title="No assets yet" body="Ask the agent to add sitelinks, callouts and a phone number. Ads with assets typically get more clicks." />}
       <div className="space-y-5">
         {grouped.map(({ type, items }) => {
           const Icon = ICONS[type];

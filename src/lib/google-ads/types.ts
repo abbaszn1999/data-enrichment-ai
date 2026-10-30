@@ -64,6 +64,17 @@ export type Bidding = {
   portfolioId?: string;
 };
 
+/** A portfolio bid strategy: one named strategy shared by several campaigns (campaigns point at it with Bidding.portfolioId). */
+export type PortfolioBidStrategy = {
+  id: string;
+  name: string;
+  type: BiddingStrategyType;
+  targetCpa?: number;
+  /** Ratio, e.g. 4 = 400%. */
+  targetRoas?: number;
+  maxCpcLimit?: number;
+};
+
 export type CampaignBudget = {
   id: string;
   name: string;
@@ -141,6 +152,7 @@ export type AdGroup = {
   type: AdGroupType;
   defaultCpcBid?: number;
   targetCpa?: number;
+  labels?: string[];
 };
 
 // ─── Keywords ───────────────────────────────────────────────────────────────
@@ -165,6 +177,7 @@ export type Keyword = {
   };
   policy: KeywordPolicy;
   finalUrl?: string;
+  labels?: string[];
 };
 
 export type NegativeKeyword = {
@@ -180,6 +193,22 @@ export type NegativeKeywordList = {
   id: string;
   name: string;
   campaignIds: string[];
+};
+
+/** A named list of sites, apps and channels that is blocked on every campaign it is attached to. */
+export type PlacementExclusionList = {
+  id: string;
+  name: string;
+  campaignIds: string[];
+  placements: string[];
+};
+
+/** A label: a named colour tag that can be put on campaigns, ad groups, ads and keywords. */
+export type LabelDef = {
+  id: string;
+  name: string;
+  /** Hex colour. */
+  color: string;
 };
 
 // ─── Ads ────────────────────────────────────────────────────────────────────
@@ -211,6 +240,7 @@ export type Ad = {
   adStrength: AdStrength;
   policy: AdPolicyStatus;
   policyTopics?: { topic: string; detail: string }[];
+  labels?: string[];
 };
 
 // ─── Assets ─────────────────────────────────────────────────────────────────
@@ -662,6 +692,10 @@ export type AccountData = {
   keywords: Keyword[];
   negatives: NegativeKeyword[];
   negativeLists: NegativeKeywordList[];
+  /** Shared library: portfolio strategies, placement exclusion lists and label definitions. */
+  bidStrategies: PortfolioBidStrategy[];
+  placementLists: PlacementExclusionList[];
+  labelDefs: LabelDef[];
   ads: Ad[];
   assets: Asset[];
   assetGroups: AssetGroup[];
@@ -750,6 +784,8 @@ export type GaView =
   | "searchTerms"
   | "audiences"
   | "locations"
+  | "schedule"
+  | "devices"
   | "recommendations"
   | "conversions"
   | "library"
