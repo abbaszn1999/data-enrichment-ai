@@ -1,15 +1,19 @@
 "use client";
 
-import { Tags, Wallet, Gavel, ListX } from "lucide-react";
+import { useState } from "react";
+import { Ban, Tags, Wallet, Gavel, ListX } from "lucide-react";
 import { BIDDING } from "@/lib/google-ads/constants";
 import { money } from "@/lib/google-ads/metrics";
 import { useGoogleAds } from "@/lib/google-ads/store";
 import type { CampaignBudget } from "@/lib/google-ads/types";
 import { GaTable, type GaColumn } from "../ga-table";
-import { Card, Pill, ViewHeader } from "../ga-ui";
+import { Card, Pill, Segmented, ViewHeader } from "../ga-ui";
 import { useGa } from "../use-ga";
 
+type LibraryTab = "budgets" | "strategies" | "negatives" | "placements" | "labels";
+
 export function LibraryView() {
+  const [tab, setTab] = useState<LibraryTab>("budgets");
   const { data, currency } = useGa();
   const openDialog = useGoogleAds((s) => s.openDialog);
   const setView = useGoogleAds((s) => s.setView);
@@ -47,62 +51,101 @@ export function LibraryView() {
   const strategies = [...new Set(live.map((c) => c.bidding.type))].map((type) => ({ type, campaigns: live.filter((c) => c.bidding.type === type) }));
   const labels = [...new Set(live.flatMap((c) => c.labels))];
 
+  const exclusions = data.contentTargets.filter((t) => t.excluded);
+
+  const TABS: { value: LibraryTab; label: string; count: number }[] = [
+    { value: "budgets", label: "Budgets", count: data.budgets.filter((b) => live.some((c) => c.budgetId === b.id)).length },
+    { value: "strategies", label: "Bid strategies", count: strategies.length },
+    { value: "negatives", label: "Negative lists", count: data.negativeLists.length },
+    { value: "placements", label: "Placement exclusions", count: exclusions.length },
+    { value: "labels", label: "Labels", count: labels.length },
+  ];
+
   return (
     <div className="space-y-5">
-      <ViewHeader title="Shared library" subtitle="Things reused across campaigns: budgets, bid strategies, negative keyword lists and labels." />
+      <ViewHeader title="Shared library" subtitle="Things reused across campaigns: budgets, bid strategies, exclusion lists and labels.">
+        <Segmented value={tab} onChange={setTab} size="xs" options={TABS} />
+      </ViewHeader>
 
-      <section>
-        <p className="mb-2 flex items-center gap-2 text-sm font-bold"><Wallet className="h-4 w-4 text-muted-foreground" /> Budgets</p>
-        <GaTable rows={data.budgets.filter((b) => live.some((c) => c.budgetId === b.id))} columns={budgetCols} rowKey={(b) => b.id} defaultSort={{ id: "amount", dir: "desc" }} />
-      </section>
+      {tab === "budgets" && (
+        <section>
+          <p className="mb-2 flex items-center gap-2 text-sm font-bold"><Wallet className="h-4 w-4 text-muted-foreground" /> Budgets</p>
+          <GaTable rows={data.budgets.filter((b) => live.some((c) => c.budgetId === b.id))} columns={budgetCols} rowKey={(b) => b.id} defaultSort={{ id: "amount", dir: "desc" }} />
+        </section>
+      )}
 
-      <section>
-        <p className="mb-2 flex items-center gap-2 text-sm font-bold"><Gavel className="h-4 w-4 text-muted-foreground" /> Bid strategies</p>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {strategies.map((s) => (
-            <Card key={s.type} className="p-3.5">
-              <p className="text-xs font-bold">{BIDDING[s.type].label}</p>
-              <p className="text-[11px] text-muted-foreground">Optimises for {BIDDING[s.type].focus.toLowerCase()}</p>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {s.campaigns.map((c) => (
-                  <Pill key={c.id}>
-                    {c.name}
-                    {c.bidding.targetCpa ? ` · ${money(c.bidding.targetCpa, currency)}` : ""}
-                    {c.bidding.targetRoas ? ` · ${Math.round(c.bidding.targetRoas * 100)}%` : ""}
-                  </Pill>
-                ))}
-              </div>
-            </Card>
-          ))}
-        </div>
-      </section>
+      {tab === "strategies" && (
+        <section>
+          <p className="mb-2 flex items-center gap-2 text-sm font-bold"><Gavel className="h-4 w-4 text-muted-foreground" /> Bid strategies</p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {strategies.map((s) => (
+              <Card key={s.type} className="p-3.5">
+                <p className="text-xs font-bold">{BIDDING[s.type].label}</p>
+                <p className="text-[11px] text-muted-foreground">Optimises for {BIDDING[s.type].focus.toLowerCase()}</p>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {s.campaigns.map((c) => (
+                    <Pill key={c.id}>
+                      {c.name}
+                      {c.bidding.targetCpa ? ` · ${money(c.bidding.targetCpa, currency)}` : ""}
+                      {c.bidding.targetRoas ? ` · ${Math.round(c.bidding.targetRoas * 100)}%` : ""}
+                    </Pill>
+                  ))}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
 
-      <section>
-        <p className="mb-2 flex items-center gap-2 text-sm font-bold"><ListX className="h-4 w-4 text-muted-foreground" /> Negative keyword lists</p>
-        <Card className="p-3.5">
-          {data.negativeLists.length ? (
-            data.negativeLists.map((l) => (
-              <div key={l.id} className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-semibold">{l.name}</span>
-                <span className="text-muted-foreground">{data.negatives.filter((n) => n.parentId === l.id).length} keywords · {l.campaignIds.length} campaigns</span>
-                <button type="button" onClick={() => setView("negatives")} className="ml-auto text-[11px] font-semibold text-[#400095] hover:underline dark:text-violet-300">Manage</button>
-              </div>
-            ))
-          ) : (
-            <p className="text-xs text-muted-foreground">No shared lists yet.</p>
-          )}
-        </Card>
-      </section>
+      {tab === "negatives" && (
+        <section>
+          <p className="mb-2 flex items-center gap-2 text-sm font-bold"><ListX className="h-4 w-4 text-muted-foreground" /> Negative keyword lists</p>
+          <Card className="space-y-2 p-3.5">
+            {data.negativeLists.length ? (
+              data.negativeLists.map((l) => (
+                <div key={l.id} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-semibold">{l.name}</span>
+                  <span className="text-muted-foreground">{data.negatives.filter((n) => n.parentId === l.id).length} keywords · {l.campaignIds.length} campaigns</span>
+                  <button type="button" onClick={() => setView("negatives")} className="ml-auto text-[11px] font-semibold text-[#400095] hover:underline dark:text-violet-300">See keywords</button>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground">No shared lists yet.</p>
+            )}
+          </Card>
+        </section>
+      )}
 
-      <section>
-        <p className="mb-2 flex items-center gap-2 text-sm font-bold"><Tags className="h-4 w-4 text-muted-foreground" /> Labels</p>
-        <div className="flex flex-wrap gap-1.5">
-          {labels.map((l) => (
-            <Pill key={l} tone="brand">{l} · {live.filter((c) => c.labels.includes(l)).length}</Pill>
-          ))}
-          {!labels.length && <p className="text-xs text-muted-foreground">No labels.</p>}
-        </div>
-      </section>
+      {tab === "placements" && (
+        <section>
+          <p className="mb-2 flex items-center gap-2 text-sm font-bold"><Ban className="h-4 w-4 text-muted-foreground" /> Placement exclusions</p>
+          <Card className="space-y-2 p-3.5">
+            {exclusions.length ? (
+              exclusions.map((t) => (
+                <div key={t.id} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-semibold">{t.value}</span>
+                  <span className="text-muted-foreground">{t.kind.toLowerCase().replace(/_/g, " ")}</span>
+                  <Pill tone="bad" className="ml-auto">Excluded</Pill>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground">No sites, apps or channels are excluded.</p>
+            )}
+          </Card>
+        </section>
+      )}
+
+      {tab === "labels" && (
+        <section>
+          <p className="mb-2 flex items-center gap-2 text-sm font-bold"><Tags className="h-4 w-4 text-muted-foreground" /> Labels</p>
+          <div className="flex flex-wrap gap-1.5">
+            {labels.map((l) => (
+              <Pill key={l} tone="brand">{l} · {live.filter((c) => c.labels.includes(l)).length}</Pill>
+            ))}
+            {!labels.length && <p className="text-xs text-muted-foreground">No labels.</p>}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

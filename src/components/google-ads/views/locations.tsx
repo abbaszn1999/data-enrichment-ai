@@ -15,7 +15,7 @@ export function LocationsView() {
   if (!campaign) {
     return (
       <div>
-        <ViewHeader title="Locations & schedule" subtitle="Where and when each campaign shows. Open a campaign to edit." />
+        <ViewHeader title="Locations" subtitle="Where each campaign shows. Open a campaign to see its targeting." />
         <Card className="divide-y divide-border/50">
           {data.campaigns.filter((c) => c.status !== "REMOVED").map((c) => (
             <button key={c.id} type="button" onClick={() => setScope({ campaignId: c.id }, "locations")} className="flex w-full flex-wrap items-center gap-2 px-4 py-3 text-left hover:bg-muted/30">
@@ -23,7 +23,7 @@ export function LocationsView() {
               {c.locations.map((l) => (
                 <Pill key={l.id} tone={l.excluded ? "bad" : "neutral"}>{l.excluded ? "Excl. " : ""}{l.name}</Pill>
               ))}
-              <span className="ml-auto text-[11px] text-muted-foreground">{c.languages.join(", ")} · {c.schedule.length ? `${c.schedule.length} schedule rules` : "All day"}</span>
+              <span className="ml-auto text-[11px] text-muted-foreground">{c.languages.join(", ")}</span>
             </button>
           ))}
         </Card>
@@ -43,7 +43,7 @@ function CampaignTargeting({ campaign }: { campaign: Campaign }) {
 
   return (
     <div className="space-y-4">
-      <ViewHeader title="Locations & schedule" subtitle={`Targeting for ${campaign.name}`} />
+      <ViewHeader title="Locations" subtitle={`Where ${campaign.name} shows`} />
 
       <Card className="p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -108,9 +108,65 @@ function CampaignTargeting({ campaign }: { campaign: Campaign }) {
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">Languages: {campaign.languages.join(", ")}</p>
       </Card>
+    </div>
+  );
+}
 
-      <SchedulePanel campaign={campaign} onChange={(schedule) => update("Ad schedule", { schedule })} />
-      <DevicesPanel campaign={campaign} onChange={(devices) => update("Device bid adjustments", { devices })} />
+/** Ad schedule tab: account level lists every campaign, inside a campaign shows its hour grid. */
+export function ScheduleView() {
+  const { data, campaign } = useGa();
+  const setScope = useGoogleAds((s) => s.setScope);
+  const applyDirect = useGoogleAds((s) => s.applyDirect);
+  if (!campaign) {
+    return (
+      <div>
+        <ViewHeader title="Ad schedule" subtitle="When each campaign shows. Open a campaign to see its hours." />
+        <Card className="divide-y divide-border/50">
+          {data.campaigns.filter((c) => c.status !== "REMOVED").map((c) => (
+            <button key={c.id} type="button" onClick={() => setScope({ campaignId: c.id }, "schedule")} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/30">
+              <span className="w-56 truncate text-xs font-semibold">{c.name}</span>
+              <Pill tone={c.schedule.length ? "brand" : "neutral"}>{c.schedule.length ? `${c.schedule.length} schedule rules` : "All day, every day"}</Pill>
+            </button>
+          ))}
+        </Card>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <ViewHeader title="Ad schedule" subtitle={`When ${campaign.name} shows`} />
+      <SchedulePanel campaign={campaign} onChange={(schedule) => applyDirect("Ad schedule", [{ kind: "campaign.update", campaignId: campaign.id, patch: { schedule } }])} />
+    </div>
+  );
+}
+
+/** Devices tab: account level lists every campaign's device adjustments, inside a campaign shows its controls. */
+export function DevicesView() {
+  const { data, campaign } = useGa();
+  const setScope = useGoogleAds((s) => s.setScope);
+  const applyDirect = useGoogleAds((s) => s.applyDirect);
+  const pct = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`;
+  if (!campaign) {
+    return (
+      <div>
+        <ViewHeader title="Devices" subtitle="Bid adjustments by device. Open a campaign to see them." />
+        <Card className="divide-y divide-border/50">
+          {data.campaigns.filter((c) => c.status !== "REMOVED").map((c) => (
+            <button key={c.id} type="button" onClick={() => setScope({ campaignId: c.id }, "devices")} className="flex w-full flex-wrap items-center gap-2 px-4 py-3 text-left hover:bg-muted/30">
+              <span className="w-56 truncate text-xs font-semibold">{c.name}</span>
+              <Pill>Mobile {pct(c.devices.mobile)}</Pill>
+              <Pill>Computers {pct(c.devices.desktop)}</Pill>
+              <Pill>Tablets {pct(c.devices.tablet)}</Pill>
+            </button>
+          ))}
+        </Card>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <ViewHeader title="Devices" subtitle={`Bid adjustments for ${campaign.name}`} />
+      <DevicesPanel campaign={campaign} onChange={(devices) => applyDirect("Device bid adjustments", [{ kind: "campaign.update", campaignId: campaign.id, patch: { devices } }])} />
     </div>
   );
 }

@@ -750,6 +750,8 @@ export type GaView =
   | "searchTerms"
   | "audiences"
   | "locations"
+  | "schedule"
+  | "devices"
   | "recommendations"
   | "conversions"
   | "library"

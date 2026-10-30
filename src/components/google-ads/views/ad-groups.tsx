@@ -23,9 +23,35 @@ const AG_TYPE: Record<AdGroup["type"], string> = {
 };
 
 export function AdGroupsView() {
-  const { campaign } = useGa();
+  const { data, campaign } = useGa();
+  const [tab, setTab] = useState<"adGroups" | "assetGroups">("adGroups");
   if (campaign?.type === "PERFORMANCE_MAX") return <AssetGroupsView />;
-  return <AdGroupsTable />;
+  if (campaign) return <AdGroupsTable />;
+  // Account level: ad groups and Performance Max asset groups share one page.
+  const live = <T extends { campaignId: string; status: EntityStatus }>(rows: T[]) => rows.filter((r) => r.status !== "REMOVED" && data.campaigns.find((c) => c.id === r.campaignId)?.status !== "REMOVED");
+  const adGroupCount = live(data.adGroups).length;
+  const assetGroups = live(data.assetGroups);
+  return (
+    <div className="space-y-4">
+      <Segmented
+        value={tab}
+        onChange={setTab}
+        size="xs"
+        options={[
+          { value: "adGroups", label: "Ad groups", count: adGroupCount },
+          { value: "assetGroups", label: "Asset groups", count: assetGroups.length },
+        ]}
+      />
+      {tab === "adGroups" ? (
+        <AdGroupsTable />
+      ) : (
+        <div>
+          <ViewHeader title="Asset groups" subtitle="Performance Max uses asset groups instead of ad groups, across all campaigns." />
+          {assetGroups.length ? <AssetGroupCards groups={assetGroups} /> : <p className="text-xs text-muted-foreground">No Performance Max campaigns yet.</p>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function AdGroupsTable() {
@@ -104,8 +130,6 @@ function AdGroupsTable() {
     ...metricColumns<AdGroup>((g) => metrics.get(g.id)!, currency, { totals }),
   ];
 
-  const assetGroups = !campaign ? data.assetGroups.filter((g) => g.status !== "REMOVED") : [];
-
   return (
     <div className="space-y-6">
       <div>
@@ -142,12 +166,6 @@ function AdGroupsTable() {
           empty={campaign?.type === "SHOPPING" ? "Shopping ad groups appear here." : "No ad groups yet."}
         />
       </div>
-      {assetGroups.length > 0 && (
-        <div>
-          <p className="mb-2 text-sm font-bold">Asset groups <span className="font-normal text-muted-foreground">· Performance Max</span></p>
-          <AssetGroupCards groups={assetGroups} />
-        </div>
-      )}
     </div>
   );
 }

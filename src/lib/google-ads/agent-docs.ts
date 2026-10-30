@@ -434,9 +434,9 @@ export function buildCompetitorDoc(ctx: Ctx): AgentDoc {
       { audience: "Noon", headlines: ["Running Shoes Deals", "Lowest Prices", "Express Delivery"], description: "Best deals on running shoes. Shop now and save.", url: "noon.com" },
     ] }),
     section("Actions", { kind: "checklist", items: [
-      step("Create a custom audience of people searching competitor brands", [{ kind: "collection.upsert", collection: "audiences", items: [{ id: gid("aud"), name: "Competitor shoppers (custom)", kind: "CUSTOM", description: `People searching ${p.competitors.join(", ")}` }] }]),
+      step("Create a custom audience of people searching competitor brands", [{ kind: "collection.upsert", collection: "audiences", items: [{ id: gid("aud"), name: "Competitor shoppers (custom)", kind: "CUSTOM", description: `People searching ${p.competitors.map((c) => c.name).join(", ")}` }] }]),
     ] }),
-  ], { subtitle: `${p.competitors.join(" · ")}`, team: ["Researcher", "Strategist", "Copywriter"] });
+  ], { subtitle: `${p.competitors.map((c) => c.name).join(" · ")}`, team: ["Researcher", "Strategist", "Copywriter"] });
 }
 
 // ─── Experiment plan ───────────────────────────────────────────────────────

@@ -163,19 +163,46 @@ export function docToMarkdown(doc: AgentDoc): string {
 
 // ─── Business profile & memory ─────────────────────────────────────────────
 
-/** What the agent must know about the business to give advice that fits it. */
+export type Competitor = { name: string; url: string };
+
+export type PaletteColor = { name: string; hex: string; role: string };
+
+/** Brand identity the agent follows when it writes ads, picks images and builds documents. */
+export type BrandGuidelines = {
+  /** Who the brand is: positioning, personality, what it stands for. */
+  identity: string;
+  logoUrl: string;
+  /** Photography and layout direction for every visual asset. */
+  visualDirection: string;
+  palette: PaletteColor[];
+};
+
+/**
+ * The business knowledge base. The agent fills it during onboarding and keeps
+ * it current; the dashboard only shows it. Every plan, report and
+ * recommendation reads from here, so advice fits the margins and the brand.
+ */
 export type BusinessProfile = {
   businessName: string;
+  website: string;
+  /** Markets the business sells to. */
+  markets: string[];
+  /** Product categories the website sells. */
+  categories: string[];
   /** Gross margin, 0–1. Break-even ROAS = 1 / margin. */
   margin: number;
   averageOrderValue: number;
   targetRoas: number;
   monthlyBudgetCap: number;
-  markets: string[];
+  keySellingPoints: string[];
+  competitiveAdvantages: string[];
+  competitors: Competitor[];
   peakSeasons: string[];
   neverAdvertise: string[];
   brandVoice: string;
-  competitors: string[];
+  brand: BrandGuidelines;
+  /** When the agent last updated the profile (ISO). */
+  updatedAt?: string;
 };
 
 export type AgentMemory = {
@@ -185,18 +212,80 @@ export type AgentMemory = {
   at: string;
 };
 
+const STRIDE_LOGO = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#400095"/><path d="M17 41 L29 23 L36 33 L47 18" stroke="#F76D01" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)}`;
+
 export const DEFAULT_PROFILE: BusinessProfile = {
   businessName: "Stride Sportswear",
+  website: "https://stride-store.com",
+  markets: ["Saudi Arabia", "United Arab Emirates"],
+  categories: ["Running shoes", "Gym wear", "Sports accessories", "Kids sportswear"],
   margin: 0.42,
   averageOrderValue: 104,
   targetRoas: 4,
   monthlyBudgetCap: 18000,
-  markets: ["Saudi Arabia", "United Arab Emirates"],
+  keySellingPoints: ["Heat-tested comfort for Gulf summers", "Free delivery in 2 days across KSA and UAE", "30-day free returns", "Own-brand shoes at mid-market prices"],
+  competitiveAdvantages: ["Only brand designing shoes for 40°C+ running", "Same-day delivery in Riyadh, Jeddah and Dubai", "Arabic-first support, 7 days a week"],
+  competitors: [
+    { name: "Nike", url: "https://www.nike.com" },
+    { name: "Adidas", url: "https://www.adidas.com" },
+    { name: "Namshi", url: "https://www.namshi.com" },
+    { name: "Noon", url: "https://www.noon.com" },
+  ],
   peakSeasons: ["Ramadan & Eid", "White Friday (November)", "Back to school (August)"],
-  neverAdvertise: ["Clearance items under $20"],
+  neverAdvertise: ["Clearance items under $20", "Discontinued sizes", "Competitor brand names in ad copy"],
   brandVoice: "Confident, energetic and practical. Mention heat-tested comfort and fast delivery. No discounts in headlines unless there is a sale.",
-  competitors: ["Nike", "Adidas", "Namshi", "Noon"],
+  brand: {
+    identity: "A Gulf-born sportswear brand for people who train in the heat. Practical and energetic, never showy: performance first, then style.",
+    logoUrl: STRIDE_LOGO,
+    visualDirection: "Real athletes outdoors at sunrise and sunset, warm natural light, motion and sweat over studio polish. Product on a clean background for shopping images. One bold colour accent per image.",
+    palette: [
+      { name: "Stride Violet", hex: "#400095", role: "Primary" },
+      { name: "Sunset Orange", hex: "#F76D01", role: "Accent" },
+      { name: "Heat Red", hex: "#C40000", role: "Sale and urgency" },
+      { name: "Sand", hex: "#F6F4FA", role: "Backgrounds" },
+      { name: "Ink", hex: "#16121C", role: "Text" },
+    ],
+  },
+  updatedAt: new Date(Date.now() - 2 * 86400000).toISOString(),
 };
+
+/** A profile the agent has not filled yet (before onboarding). */
+export function emptyProfile(businessName = ""): BusinessProfile {
+  return {
+    businessName,
+    website: "",
+    markets: [],
+    categories: [],
+    margin: 0,
+    averageOrderValue: 0,
+    targetRoas: 0,
+    monthlyBudgetCap: 0,
+    keySellingPoints: [],
+    competitiveAdvantages: [],
+    competitors: [],
+    peakSeasons: [],
+    neverAdvertise: [],
+    brandVoice: "",
+    brand: { identity: "", logoUrl: "", visualDirection: "", palette: [] },
+  };
+}
+
+/** The sections of the profile page, and what makes each one "filled". */
+export const PROFILE_SECTIONS: { id: string; label: string; filled: (p: BusinessProfile) => boolean }[] = [
+  { id: "business", label: "Business", filled: (p) => !!p.businessName && !!p.website },
+  { id: "markets", label: "Markets & catalog", filled: (p) => p.markets.length > 0 && p.categories.length > 0 },
+  { id: "economics", label: "Economics", filled: (p) => p.margin > 0 && p.averageOrderValue > 0 && p.targetRoas > 0 && p.monthlyBudgetCap > 0 },
+  { id: "positioning", label: "Positioning", filled: (p) => p.keySellingPoints.length > 0 && p.competitiveAdvantages.length > 0 && p.competitors.length > 0 },
+  { id: "guardrails", label: "Guardrails", filled: (p) => p.peakSeasons.length > 0 && p.neverAdvertise.length > 0 },
+  { id: "brand", label: "Brand guidelines", filled: (p) => !!p.brand.identity && !!p.brand.logoUrl && !!p.brand.visualDirection && p.brand.palette.length > 0 && !!p.brandVoice },
+];
+
+export function profileCompleteness(p: BusinessProfile) {
+  const sections = PROFILE_SECTIONS.map((s) => ({ id: s.id, label: s.label, filled: s.filled(p) }));
+  return { sections, done: sections.filter((s) => s.filled).length, total: sections.length };
+}
 
 export function seedMemories(): AgentMemory[] {
   const at = new Date(Date.now() - 6 * 86400000).toISOString();

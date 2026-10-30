@@ -3,6 +3,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { activeChatOf, useGoogleAds } from "@/lib/google-ads/store";
 import { planAgentTurn } from "@/lib/google-ads/agent-sim";
+import { DEFAULT_PROFILE, emptyProfile, profileCompleteness } from "@/lib/google-ads/docs";
 import type { CampaignType, GaView } from "@/lib/google-ads/types";
 import { GoogleAdsShell } from "./ga-shell";
 import { GaDialogs } from "./ga-dialogs";
@@ -14,7 +15,10 @@ const originalUseSyncExternalStore = React.useSyncExternalStore;
 (React as { useSyncExternalStore: typeof React.useSyncExternalStore }).useSyncExternalStore = (subscribe, getSnapshot) =>
   originalUseSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-const VIEWS: GaView[] = ["overview", "campaigns", "adGroups", "ads", "assets", "keywords", "negatives", "searchTerms", "audiences", "locations", "recommendations", "conversions", "library", "settings", "pending", "history", "products", "productGroups", "reports", "rules", "keywordPlanner", "experiments", "planner", "content", "demographics", "links", "accountSettings", "documents", "profile", "connections"];
+const VIEWS: GaView[] = ["overview", "campaigns", "adGroups", "ads", "assets", "keywords", "negatives", "searchTerms", "audiences", "locations", "schedule", "devices", "recommendations", "conversions", "library", "settings", "pending", "history", "products", "productGroups", "reports", "rules", "keywordPlanner", "experiments", "planner", "content", "demographics", "links", "accountSettings", "documents", "profile", "connections"];
+
+/** The HTML of one landmark (the sidebar or the page), so assertions ignore the chat panel and top bar. */
+const part = (html: string, tag: string) => html.slice(html.indexOf("<" + tag), html.indexOf("</" + tag + ">"));
 
 function connect(customer = "7316204458") {
   const s = useGoogleAds.getState();
@@ -131,6 +135,88 @@ describe("render smoke", () => {
     expect(activeChatOf(s.accounts[s.customerId!]!).mode).toBe("plan");
     const html = renderToString(createElement(GoogleAdsShell));
     expect(html).toContain("Nothing in the account will change");
+  });
+
+  it("shows the agreed account-level sidebar and nothing the agent should do", () => {
+    connect();
+    useGoogleAds.setState({ scope: {}, view: "overview" });
+    const html = part(renderToString(createElement(GoogleAdsShell)), "nav");
+    for (const label of ["Recommendations", "Reports", "Campaigns", "Ad groups", "Ads", "Experiments", "Assets", "Keywords", "Audiences", "Placements &amp; content", "Locations &amp; schedule", "Shared library", "Conversions", "Linked accounts", "Connections", "Account settings", "Documents", "Business profile", "Rules &amp; alerts"]) {
+      expect(html, label).toContain(label);
+    }
+    // Moved into tabs, or left to the agent and the chat.
+    for (const label of ["Negative keywords", "Demographics", "Keyword Planner", "Performance Planner", "Pending changes", "Change history", ">Products<"]) {
+      expect(html, label).not.toContain(label);
+    }
+  });
+
+  it("groups related pages into tabs: Keywords, Audiences, Locations & schedule", () => {
+    connect();
+    const tabsOf = (view: GaView, scope = {}) => {
+      useGoogleAds.setState({ scope, view });
+      return renderToString(createElement(GoogleAdsShell));
+    };
+    let html = tabsOf("searchTerms");
+    expect(html).toContain('role="tablist"');
+    for (const t of ["Search keywords", "Negative keywords", "Search terms"]) expect(html).toContain(t);
+    html = tabsOf("demographics");
+    for (const t of ["Audiences", "Demographics"]) expect(html).toContain(t);
+    html = tabsOf("schedule");
+    for (const t of ["Locations", "Ad schedule", "Devices"]) expect(html).toContain(t);
+    // Overview has no tab strip.
+    expect(tabsOf("overview")).not.toContain('role="tablist"');
+    // Performance Max has no positive keywords, so Search keywords disappears from the tabs.
+    const pmax = useGoogleAds.getState().accounts["7316204458"]!.data.campaigns.find((c) => c.type === "PERFORMANCE_MAX")!;
+    html = tabsOf("negatives", { campaignId: pmax.id });
+    expect(html).toContain("Negative keywords");
+    expect(html).not.toContain("Search keywords");
+  });
+
+  it("splits Shared library and account ad groups into tabs", () => {
+    connect();
+    useGoogleAds.setState({ scope: {}, view: "library" });
+    let html = renderToString(createElement(GoogleAdsShell));
+    for (const t of ["Budgets", "Bid strategies", "Negative lists", "Placement exclusions", "Labels"]) expect(html).toContain(t);
+    useGoogleAds.setState({ scope: {}, view: "adGroups" });
+    html = renderToString(createElement(GoogleAdsShell));
+    expect(html).toContain("Asset groups");
+  });
+
+  it("recommendations are asked of the agent, not applied from the dashboard", () => {
+    connect();
+    useGoogleAds.setState({ scope: {}, view: "recommendations" });
+    const html = renderToString(createElement(GoogleAdsShell));
+    expect(html).toContain("Ask agent to apply");
+    expect(html).toContain("Ask agent to explain");
+    expect(html).not.toContain("Dismiss");
+  });
+
+  it("business profile is a read-only knowledge base the agent fills", () => {
+    connect();
+    useGoogleAds.setState({ scope: {}, view: "profile" });
+    let html = renderToString(createElement(GoogleAdsShell));
+    for (const t of ["Read-only", "Knowledge base", "Markets &amp; catalog", "Economics", "Positioning", "Guardrails", "Brand guidelines", "Competitors", "Never advertise", "Peak seasons", "Key selling points", "Stride Violet", "Break-even"]) {
+      expect(html, t).toContain(t);
+    }
+    expect(html).toMatch(/6(<!-- -->)? of (<!-- -->)?6(<!-- -->)? sections filled/);
+    const page = part(html, "main");
+    expect(page).not.toContain("Save profile");
+    expect(page).not.toContain("<input");
+    expect(page).not.toContain("<textarea");
+
+    // Before onboarding the agent has filled nothing yet.
+    useGoogleAds.getState().setProfile(emptyProfile("Stride"));
+    html = renderToString(createElement(GoogleAdsShell));
+    expect(html).toContain("Not filled yet");
+    expect(html).toMatch(/0(<!-- -->)? of (<!-- -->)?6(<!-- -->)? sections filled/);
+  });
+
+  it("measures how complete the business profile is", () => {
+    expect(profileCompleteness(DEFAULT_PROFILE)).toMatchObject({ done: 6, total: 6 });
+    const none = profileCompleteness(emptyProfile());
+    expect(none.done).toBe(0);
+    const partial = profileCompleteness({ ...emptyProfile("Shop"), website: "https://shop.example", markets: ["UAE"], categories: ["Shoes"] });
+    expect(partial.sections.filter((s) => s.filled).map((s) => s.id)).toEqual(["business", "markets"]);
   });
 
   it("lets Google Ads connect without Merchant Center", () => {

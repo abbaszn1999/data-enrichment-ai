@@ -19,7 +19,8 @@ import { HistoryView, PendingView } from "./views/changes";
 import { ConversionsView } from "./views/conversions";
 import { KeywordsView, NegativesView } from "./views/keywords";
 import { LibraryView } from "./views/library";
-import { LocationsView } from "./views/locations";
+import { DevicesView, LocationsView, ScheduleView } from "./views/locations";
+import { GaViewTabs } from "./ga-view-tabs";
 import { OverviewView } from "./views/overview";
 import { RecommendationsView } from "./views/recommendations";
 import { SearchTermsView } from "./views/search-terms";
@@ -32,7 +33,8 @@ import { ReportsView } from "./views/reports";
 import { RulesView } from "./views/rules";
 import { ContentView, DemographicsView } from "./views/targeting";
 import { ExperimentsView, KeywordPlannerView, PlannerView } from "./views/tools";
-import { DocumentsView, ProfileView } from "./views/documents";
+import { DocumentsView } from "./views/documents";
+import { ProfileView } from "./views/profile";
 import { DocTabs } from "./docs/doc-tabs";
 import { DocView } from "./docs/doc-view";
 import { useAccountState } from "@/lib/google-ads/store";
@@ -48,6 +50,8 @@ const VIEWS: Record<GaView, () => React.ReactNode> = {
   searchTerms: SearchTermsView,
   audiences: AudiencesView,
   locations: LocationsView,
+  schedule: ScheduleView,
+  devices: DevicesView,
   recommendations: RecommendationsView,
   conversions: ConversionsView,
   library: LibraryView,
@@ -149,6 +153,7 @@ function Workspace() {
               <main className="min-w-0 flex-1 overflow-y-auto">
                 {/* Keyed so local view state (filters, selection) resets with the account or scope. */}
                 <div key={`${customerId}:${scope.campaignId ?? ""}:${scope.adGroupId ?? ""}:${view}`} className="mx-auto max-w-[1400px] px-5 py-5">
+                  <GaViewTabs />
                   <View />
                 </div>
               </main>
