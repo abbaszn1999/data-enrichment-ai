@@ -24,7 +24,7 @@ import { OverviewView } from "./views/overview";
 import { RecommendationsView } from "./views/recommendations";
 import { SearchTermsView } from "./views/search-terms";
 import { SettingsView } from "./views/settings";
-import { AccountSettingsView, AllAccountsView, LinksView } from "./views/account";
+import { AccountSettingsView, LinksView } from "./views/account";
 import { ProductGroupsView, ProductsView } from "./views/products";
 import { ConnectionsView } from "./views/connections";
 import { MerchantConnectDialog } from "./ga-merchant";
@@ -65,15 +65,15 @@ const VIEWS: Record<GaView, () => React.ReactNode> = {
   demographics: DemographicsView,
   links: LinksView,
   accountSettings: AccountSettingsView,
-  allAccounts: AllAccountsView,
   documents: DocumentsView,
   profile: ProfileView,
   connections: ConnectionsView,
 };
 
-const CHAT_DEFAULT = 400;
-const CHAT_MIN = 320;
-const CHAT_MAX = 560;
+// Like the Store Agent: the agent panel is always there and is resized by dragging the divider.
+const CHAT_DEFAULT = 440;
+const CHAT_MIN = 360;
+const chatMax = () => Math.max(CHAT_MIN, Math.round(window.innerWidth * 0.6));
 
 /**
  * Google Ads agent workspace: agent chat on the left, a full Google Ads-style
@@ -100,7 +100,6 @@ export function GoogleAdsShell() {
 
 function Workspace() {
   const view = useGoogleAds((s) => s.view);
-  const chatOpen = useGoogleAds((s) => s.chatOpen);
   const customerId = useGoogleAds((s) => s.customerId);
   const scope = useGoogleAds((s) => s.scope);
   const activeTab = useAccountState()?.activeTab ?? "account";
@@ -117,7 +116,7 @@ function Workspace() {
   );
   const onMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
-    setWidth(Math.min(CHAT_MAX, Math.max(CHAT_MIN, drag.current.w + e.clientX - drag.current.x)));
+    setWidth(Math.min(chatMax(), Math.max(CHAT_MIN, drag.current.w + e.clientX - drag.current.x)));
   }, []);
   const onUp = useCallback(() => {
     drag.current = null;
@@ -128,20 +127,19 @@ function Workspace() {
 
   return (
     <div className="autommerce-dashboard flex h-full min-h-0 w-full bg-background [font-family:var(--brand-font)]">
-      {chatOpen && (
-        <>
-          <GaChat width={width} />
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            onPointerDown={onDown}
-            onPointerMove={onMove}
-            onPointerUp={onUp}
-            className="-ml-px w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-[#400095]/30"
-          />
-        </>
-      )}
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* Agent panel: the lighter surface. The ads panel on the right is the recessed canvas (tinted in light, darkest in dark), so the two read as different places. */}
+      <GaChat width={width} />
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        title="Drag to resize · double-click to reset"
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onDoubleClick={() => setWidth(CHAT_DEFAULT)}
+        className="w-1 shrink-0 cursor-col-resize border-s bg-border/40 transition-colors hover:bg-[#6B358D]/40 dark:hover:bg-[#F76D01]/40"
+      />
+      <div className="flex min-w-0 flex-1 flex-col bg-[#F6F4FA] dark:bg-background">
         <DocTabs />
         {activeTab === "account" ? (
           <>

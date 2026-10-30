@@ -1,26 +1,18 @@
 "use client";
 
-import { LayoutDashboard, Plus, X } from "lucide-react";
+import { LayoutDashboard, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { runAgentTurn } from "@/lib/google-ads/agent-runner";
-import { DOC_TYPES, type DocType } from "@/lib/google-ads/docs";
+import { DOC_TYPES } from "@/lib/google-ads/docs";
 import { useAccountState, useGoogleAds } from "@/lib/google-ads/store";
 
-/** Browser-style tabs: the account, then every document the agent opened. */
+/**
+ * Browser-style tabs: the account, then every document the agent opened.
+ * Documents are only created by the agent (no manual "+"); the user can open and close them.
+ */
 export function DocTabs() {
   const acc = useAccountState();
   const setActiveTab = useGoogleAds((s) => s.setActiveTab);
   const closeDocTab = useGoogleAds((s) => s.closeDocTab);
-  const setView = useGoogleAds((s) => s.setView);
-  const agentBusy = useGoogleAds((s) => s.agentBusy);
   if (!acc) return null;
   const tabs = acc.openDocIds.map((id) => acc.docs.find((d) => d.id === id)).filter((d): d is NonNullable<typeof d> => !!d);
 
@@ -57,25 +49,6 @@ export function DocTabs() {
           </div>
         );
       })}
-      <DropdownMenu>
-        <DropdownMenuTrigger className="mb-1 ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background" aria-label="New document" disabled={agentBusy}>
-          <Plus className="h-4 w-4" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-72">
-          <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Ask the agent to write</DropdownMenuLabel>
-          {(Object.keys(DOC_TYPES) as DocType[]).map((t) => (
-            <DropdownMenuItem key={t} onSelect={() => runAgentTurn(DOC_TYPES[t].prompt)} className="items-start gap-2">
-              <span className="text-base leading-none">{DOC_TYPES[t].emoji}</span>
-              <span>
-                <span className="block text-xs font-semibold">{DOC_TYPES[t].label}</span>
-                <span className="block text-[10px] text-muted-foreground">{DOC_TYPES[t].blurb}</span>
-              </span>
-            </DropdownMenuItem>
-          ))}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => { setActiveTab("account"); setView("documents"); }} className="text-xs">All documents…</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
   );
 }

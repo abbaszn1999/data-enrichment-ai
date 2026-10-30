@@ -16,6 +16,7 @@ import type {
   AgentMessage,
   CampaignBundle,
   ChangeEvent,
+  ChatThread,
   ChangeSource,
   DateRangePreset,
   DateRange,
@@ -58,7 +59,11 @@ type AccountState = {
   data: AccountData;
   changes: ProposedChange[];
   history: ChangeEvent[];
-  messages: AgentMessage[];
+  /** Every conversation with the agent for this account. */
+  chats: ChatThread[];
+  /** Chats open as tabs, in order. */
+  openChatIds: string[];
+  activeChatId: string;
   docs: AgentDoc[];
   /** Document tabs open beside the Account tab, in order. */
   openDocIds: string[];
@@ -82,8 +87,9 @@ type GaStore = {
   scope: GaScope;
   range: DateRange;
   autoApprove: boolean;
-  chatOpen: boolean;
   agentBusy: boolean;
+  /** The chat the running agent turn belongs to. */
+  busyChatId: string | null;
   editor: { open: boolean; draft?: CampaignBundle; changeId?: string };
   dialog: GaDialog | null;
 
@@ -111,8 +117,7 @@ type GaStore = {
   setScope: (scope: GaScope, view?: GaView) => void;
   setRange: (preset: DateRangePreset) => void;
   setAutoApprove: (on: boolean) => void;
-  setChatOpen: (open: boolean) => void;
-  setAgentBusy: (busy: boolean) => void;
+  setAgentBusy: (busy: boolean, chatId?: string) => void;
   openEditor: (draft?: CampaignBundle, changeId?: string) => void;
   closeEditor: () => void;
   openDialog: (dialog: GaDialog) => void;
@@ -138,16 +143,27 @@ type GaStore = {
   removeMemory: (id: string) => void;
   /** Alerts are notifications, not account changes: no history entry. */
   markAlertsRead: (ids?: string[]) => void;
-  addMessage: (message: AgentMessage) => void;
+  /** Add to a chat (the open one unless `chatId` says otherwise). The first user message names the chat. */
+  addMessage: (message: AgentMessage, chatId?: string) => void;
+  /** Update a message wherever it lives. */
   patchMessage: (id: string, patch: Partial<AgentMessage>) => void;
-  clearChat: () => void;
+  /** Start a new chat tab (reuses an empty one that is already open). */
+  newChat: () => void;
+  selectChat: (chatId: string) => void;
+  /** Open a chat from History as a tab and show it. */
+  openChat: (chatId: string) => void;
+  closeChat: (chatId: string) => void;
+  renameChat: (chatId: string, title: string) => void;
+  pinChat: (chatId: string) => void;
+  deleteChat: (chatId: string) => void;
+  setChatMode: (mode: ChatThread["mode"]) => void;
 };
 
 const ACTOR = "You";
 
 /** Views that make no sense at a scope fall back to the closest one that does. */
 function viewForScope(view: GaView, scope: GaScope, isPmax: boolean): GaView {
-  const accountOnly: GaView[] = ["campaigns", "conversions", "library", "products", "rules", "keywordPlanner", "experiments", "links", "accountSettings", "allAccounts", "documents", "profile", "connections"];
+  const accountOnly: GaView[] = ["campaigns", "conversions", "library", "products", "rules", "keywordPlanner", "experiments", "links", "accountSettings", "documents", "profile", "connections"];
   if (scope.adGroupId && (accountOnly.includes(view) || view === "adGroups" || view === "recommendations" || view === "locations" || view === "settings" || view === "planner" || view === "productGroups" || view === "content" || view === "demographics"))
     return "keywords";
   if (scope.campaignId && accountOnly.includes(view)) return "adGroups";
@@ -167,6 +183,36 @@ function withAccount(state: GaStore, update: (a: AccountState) => AccountState):
   return { accounts: { ...state.accounts, [state.customerId]: update(acc) } };
 }
 
+export const NEW_CHAT_TITLE = "New chat";
+
+function newThread(): ChatThread {
+  const now = new Date().toISOString();
+  return { id: gid("chat"), title: NEW_CHAT_TITLE, messages: [], mode: "agent", pinned: false, createdAt: now, updatedAt: now };
+}
+
+function chatTitleFrom(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > 42 ? `${clean.slice(0, 41).trimEnd()}…` : clean || NEW_CHAT_TITLE;
+}
+
+/** The chat shown in the agent panel. */
+export function activeChatOf(acc: Pick<AccountState, "chats" | "activeChatId">): ChatThread {
+  return acc.chats.find((c) => c.id === acc.activeChatId) ?? acc.chats[0]!;
+}
+
+/** The chat that holds a message. */
+export function chatOfMessage(acc: Pick<AccountState, "chats">, messageId: string): ChatThread | undefined {
+  return acc.chats.find((c) => c.messages.some((m) => m.id === messageId));
+}
+
+/** Always keeps at least one chat open: closing or deleting the last one starts a fresh chat. */
+function ensureChat(a: AccountState): AccountState {
+  if (a.openChatIds.length && a.chats.some((c) => c.id === a.activeChatId && a.openChatIds.includes(c.id))) return a;
+  if (a.openChatIds.length) return { ...a, activeChatId: a.openChatIds[a.openChatIds.length - 1]! };
+  const fresh = newThread();
+  return { ...a, chats: [fresh, ...a.chats], openChatIds: [fresh.id], activeChatId: fresh.id };
+}
+
 export const useGoogleAds = create<GaStore>((set, get) => ({
   status: "disconnected",
   googleEmail: null,
@@ -180,8 +226,8 @@ export const useGoogleAds = create<GaStore>((set, get) => ({
   scope: {},
   range: rangeFor("LAST_30_DAYS"),
   autoApprove: false,
-  chatOpen: true,
   agentBusy: false,
+  busyChatId: null,
   editor: { open: false },
   dialog: null,
 
@@ -191,17 +237,22 @@ export const useGoogleAds = create<GaStore>((set, get) => ({
     const demo = buildDemoAccount();
     const second = buildSecondAccount();
     const empty = buildEmptyAccount();
-    const fresh = (data: AccountData, docs: AgentDoc[] = []): AccountState => ({
-      data,
-      changes: [],
-      history: [],
-      messages: [],
-      docs,
-      openDocIds: [],
-      activeTab: "account",
-      profile: { ...DEFAULT_PROFILE, businessName: data.account.name },
-      memories: data.campaigns.length ? seedMemories() : [],
-    });
+    const fresh = (data: AccountData, docs: AgentDoc[] = []): AccountState => {
+      const first = newThread();
+      return {
+        data,
+        changes: [],
+        history: [],
+        chats: [first],
+        openChatIds: [first.id],
+        activeChatId: first.id,
+        docs,
+        openDocIds: [],
+        activeTab: "account",
+        profile: { ...DEFAULT_PROFILE, businessName: data.account.name },
+        memories: data.campaigns.length ? seedMemories() : [],
+      };
+    };
     set({
       status: "selecting",
       googleEmail: DEMO_GOOGLE_EMAIL,
@@ -253,8 +304,11 @@ export const useGoogleAds = create<GaStore>((set, get) => ({
 
   setRange: (preset) => set({ range: rangeFor(preset) }),
   setAutoApprove: (on) => set({ autoApprove: on }),
-  setChatOpen: (open) => set({ chatOpen: open }),
-  setAgentBusy: (busy) => set({ agentBusy: busy }),
+  setAgentBusy: (busy, chatId) =>
+    set((s) => {
+      const acc = current(s);
+      return { agentBusy: busy, busyChatId: busy ? chatId ?? (acc ? acc.activeChatId : null) : null };
+    }),
   openEditor: (draft, changeId) => set({ editor: { open: true, draft, changeId } }),
   closeEditor: () => set({ editor: { open: false } }),
   openDialog: (dialog) => set({ dialog }),
@@ -428,12 +482,77 @@ export const useGoogleAds = create<GaStore>((set, get) => ({
       }))
     ),
 
-  addMessage: (message) => set((s) => withAccount(s, (a) => ({ ...a, messages: [...a.messages, message] }))),
+  addMessage: (message, chatId) =>
+    set((s) =>
+      withAccount(s, (a) => {
+        const id = chatId ?? a.activeChatId;
+        const now = new Date().toISOString();
+        return {
+          ...a,
+          chats: a.chats.map((c) => {
+            if (c.id !== id) return c;
+            const name = c.title === NEW_CHAT_TITLE && message.role === "user" ? chatTitleFrom(message.text) : c.title;
+            return { ...c, title: name, messages: [...c.messages, message], updatedAt: now };
+          }),
+        };
+      })
+    ),
 
   patchMessage: (id, patch) =>
-    set((s) => withAccount(s, (a) => ({ ...a, messages: a.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)) }))),
+    set((s) =>
+      withAccount(s, (a) => ({
+        ...a,
+        chats: a.chats.map((c) => (c.messages.some((m) => m.id === id) ? { ...c, messages: c.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)) } : c)),
+      }))
+    ),
 
-  clearChat: () => set((s) => withAccount(s, (a) => ({ ...a, messages: [] }))),
+  newChat: () =>
+    set((s) =>
+      withAccount(s, (a) => {
+        // An empty chat that is already open is the new chat.
+        const empty = a.openChatIds.map((id) => a.chats.find((c) => c.id === id)).find((c) => c && c.messages.length === 0);
+        if (empty) return { ...a, activeChatId: empty.id };
+        const fresh = newThread();
+        return { ...a, chats: [fresh, ...a.chats], openChatIds: [...a.openChatIds, fresh.id], activeChatId: fresh.id };
+      })
+    ),
+
+  selectChat: (chatId) => set((s) => withAccount(s, (a) => (a.openChatIds.includes(chatId) ? { ...a, activeChatId: chatId } : a))),
+
+  openChat: (chatId) =>
+    set((s) =>
+      withAccount(s, (a) =>
+        a.chats.some((c) => c.id === chatId) ? { ...a, openChatIds: a.openChatIds.includes(chatId) ? a.openChatIds : [...a.openChatIds, chatId], activeChatId: chatId } : a
+      )
+    ),
+
+  closeChat: (chatId) =>
+    set((s) =>
+      withAccount(s, (a) => {
+        const idx = a.openChatIds.indexOf(chatId);
+        if (idx < 0) return a;
+        const openChatIds = a.openChatIds.filter((id) => id !== chatId);
+        const activeChatId = a.activeChatId !== chatId ? a.activeChatId : (openChatIds[Math.max(0, idx - 1)] ?? "");
+        return ensureChat({ ...a, openChatIds, activeChatId });
+      })
+    ),
+
+  renameChat: (chatId, title) =>
+    set((s) => withAccount(s, (a) => ({ ...a, chats: a.chats.map((c) => (c.id === chatId ? { ...c, title: title.trim() || c.title } : c)) }))),
+
+  pinChat: (chatId) => set((s) => withAccount(s, (a) => ({ ...a, chats: a.chats.map((c) => (c.id === chatId ? { ...c, pinned: !c.pinned } : c)) }))),
+
+  deleteChat: (chatId) =>
+    set((s) =>
+      withAccount(s, (a) => {
+        const idx = a.openChatIds.indexOf(chatId);
+        const openChatIds = a.openChatIds.filter((id) => id !== chatId);
+        const activeChatId = a.activeChatId !== chatId ? a.activeChatId : (openChatIds[Math.max(0, idx - 1)] ?? "");
+        return ensureChat({ ...a, chats: a.chats.filter((c) => c.id !== chatId), openChatIds, activeChatId });
+      })
+    ),
+
+  setChatMode: (mode) => set((s) => withAccount(s, (a) => ({ ...a, chats: a.chats.map((c) => (c.id === a.activeChatId ? { ...c, mode } : c)) }))),
 }));
 
 /** The selected account's state; null until an account is picked. */

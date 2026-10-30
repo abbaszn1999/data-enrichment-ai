@@ -1,14 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { BarChart3, Building2, Link2, Megaphone, MonitorPlay, Search, ShieldCheck, ShoppingBag, Store, X, type LucideIcon } from "lucide-react";
+import { BarChart3, Link2, MonitorPlay, Search, ShieldCheck, ShoppingBag, Store, X, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { accountBase, derive, formatCustomerId, money } from "@/lib/google-ads/metrics";
+import { formatCustomerId } from "@/lib/google-ads/metrics";
 import { useGoogleAds } from "@/lib/google-ads/store";
 import type { LinkedAccount, MutateOp } from "@/lib/google-ads/types";
 import { Input } from "@/components/ui/input";
-import { GaTable, type GaColumn } from "../ga-table";
 import { Card, Pill, Toggle, ViewHeader } from "../ga-ui";
 import { useGa } from "../use-ga";
 
@@ -165,70 +164,6 @@ export function AccountSettingsView() {
           </form>
         </Card>
       </div>
-    </div>
-  );
-}
-
-// ─── Manager view ──────────────────────────────────────────────────────────
-
-type AccountRow = { id: string; name: string; currency: string; campaigns: number; cost: number; conversions: number; value: number; roas: number; score: number; pending: number; alerts: number };
-
-export function AllAccountsView() {
-  const accounts = useGoogleAds((s) => s.accounts);
-  const range = useGoogleAds((s) => s.range);
-  const selectAccount = useGoogleAds((s) => s.selectAccount);
-  const current = useGoogleAds((s) => s.customerId);
-
-  const rows: AccountRow[] = Object.values(accounts).map((a) => {
-    const m = derive(accountBase(a.data, range));
-    return {
-      id: a.data.account.customerId,
-      name: a.data.account.name,
-      currency: a.data.account.currency,
-      campaigns: a.data.campaigns.filter((c) => c.status !== "REMOVED").length,
-      cost: m.cost,
-      conversions: m.conversions,
-      value: m.conversionsValue,
-      roas: m.roas,
-      score: a.data.account.optimizationScore,
-      pending: a.changes.filter((c) => c.status === "PENDING").length,
-      alerts: a.data.alerts.filter((x) => !x.read).length,
-    };
-  });
-
-  const columns: GaColumn<AccountRow>[] = [
-    {
-      id: "name",
-      header: "Account",
-      label: "Account",
-      sortValue: (r) => r.name,
-      render: (r) => (
-        <button type="button" onClick={() => selectAccount(r.id)} className="flex items-center gap-2 text-left">
-          <Megaphone className="h-3.5 w-3.5 text-muted-foreground" />
-          <span>
-            <span className="block font-semibold text-[#400095] hover:underline dark:text-violet-300">{r.name}</span>
-            <span className="text-[10px] text-muted-foreground">{formatCustomerId(r.id)}{r.id === current ? " · open now" : ""}</span>
-          </span>
-        </button>
-      ),
-    },
-    { id: "campaigns", header: "Campaigns", label: "Campaigns", align: "right", sortValue: (r) => r.campaigns, render: (r) => r.campaigns },
-    { id: "cost", header: "Cost", label: "Cost", align: "right", sortValue: (r) => r.cost, render: (r) => money(r.cost, r.currency) },
-    { id: "conv", header: "Conv.", label: "Conversions", align: "right", sortValue: (r) => r.conversions, render: (r) => r.conversions.toFixed(0) },
-    { id: "value", header: "Conv. value", label: "Conv. value", align: "right", sortValue: (r) => r.value, render: (r) => money(r.value, r.currency) },
-    { id: "roas", header: "ROAS", label: "ROAS", align: "right", sortValue: (r) => r.roas, render: (r) => (r.cost ? <span className={cn("font-semibold", r.roas >= 3 ? "text-emerald-600" : r.roas < 1.5 ? "text-red-600" : "")}>{r.roas.toFixed(2)}x</span> : "—") },
-    { id: "score", header: "Opt. score", label: "Optimization score", align: "right", sortValue: (r) => r.score, render: (r) => (r.score ? `${(r.score * 100).toFixed(0)}%` : "—") },
-    { id: "attention", header: "Needs attention", label: "Needs attention", render: (r) => <span className="flex gap-1">{r.alerts > 0 && <Pill tone="warn">{r.alerts} alerts</Pill>}{r.pending > 0 && <Pill tone="brand">{r.pending} pending</Pill>}{!r.alerts && !r.pending && <span className="text-muted-foreground">—</span>}</span> },
-  ];
-
-  return (
-    <div>
-      <ViewHeader title="All accounts" subtitle="Every account under your manager (MCC), side by side. Open one to work on it with the agent." />
-      <Card className="mb-4 flex items-center gap-3 p-4">
-        <Building2 className="h-5 w-5 text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">Totals across {rows.length} accounts: <span className="font-semibold text-foreground">{money(rows.reduce((s, r) => s + r.cost, 0), "USD")}</span> spend, <span className="font-semibold text-foreground">{money(rows.reduce((s, r) => s + r.value, 0), "USD")}</span> conversion value.</p>
-      </Card>
-      <GaTable rows={rows} columns={columns} rowKey={(r) => r.id} exportName="accounts" defaultSort={{ id: "cost", dir: "desc" }} />
     </div>
   );
 }

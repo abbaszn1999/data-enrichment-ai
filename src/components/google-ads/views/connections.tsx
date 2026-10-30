@@ -21,7 +21,6 @@ const BTN_PRIMARY = "inline-flex items-center gap-1.5 rounded-lg bg-[#400095] px
 export function ConnectionsView() {
   const { data } = useGa();
   const email = useGoogleAds((s) => s.googleEmail);
-  const accessible = useGoogleAds((s) => s.accessible);
   const merchant = useGoogleAds((s) => s.merchant);
   const setView = useGoogleAds((s) => s.setView);
   const setScope = useGoogleAds((s) => s.setScope);
@@ -31,7 +30,6 @@ export function ConnectionsView() {
   const changeMerchantAccount = useGoogleAds((s) => s.changeMerchantAccount);
   const disconnectMerchant = useGoogleAds((s) => s.disconnectMerchant);
 
-  const clients = accessible.filter((a) => !a.isManager);
   const mc = merchant.accounts.find((a) => a.merchantId === merchant.merchantId);
   const link = mc ? merchantLinkState(data.account.merchantCenterId, mc.merchantId) : null;
 
@@ -42,7 +40,7 @@ export function ConnectionsView() {
 
   return (
     <div className="space-y-4">
-      <ViewHeader title="Connections" subtitle="Review what the agent can reach. Google Ads and Merchant Center are connected separately, so you can change either one at any time." />
+      <ViewHeader title="Connections" subtitle="Review what the agent can reach. This workspace uses one ad account. Google Ads and Merchant Center are connected separately, so you can change or reconnect either one at any time." />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="space-y-4 p-4">
@@ -58,14 +56,10 @@ export function ConnectionsView() {
           </div>
           <dl className="space-y-2 text-xs">
             <Row k="Signed in as" v={email ?? "-"} />
-            <Row k="Open account" v={`${data.account.name} · ${formatCustomerId(data.account.customerId)}`} />
-            <Row k="Accounts you can reach" v={`${clients.length}`} />
+            <Row k="Ad account" v={`${data.account.name} · ${formatCustomerId(data.account.customerId)}`} />
             <Row k="Access" v={<code className="rounded bg-muted px-1 text-[10px]">{ADS_SCOPE}</code>} />
           </dl>
           <div className="flex flex-wrap gap-2 border-t border-border/60 pt-3">
-            <button type="button" onClick={() => { setScope({}); setView("allAccounts"); }} className={BTN}>
-              Switch account
-            </button>
             <button type="button" onClick={reconnectAds} className={BTN}>
               <RefreshCw className="h-3 w-3" /> Reconnect
             </button>

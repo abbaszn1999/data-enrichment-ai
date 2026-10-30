@@ -700,6 +700,18 @@ export type AgentToolStep = {
   detail?: string;
 };
 
+/** One conversation with the agent. An account can have many, shown as tabs. */
+export type ChatThread = {
+  id: string;
+  title: string;
+  messages: AgentMessage[];
+  /** "plan": the agent only describes what it would do and proposes nothing. */
+  mode: "agent" | "plan";
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AgentMessage = {
   id: string;
   role: "user" | "agent";
@@ -755,7 +767,6 @@ export type GaView =
   | "demographics"
   | "links"
   | "accountSettings"
-  | "allAccounts"
   | "documents"
   | "profile"
   | "connections";
