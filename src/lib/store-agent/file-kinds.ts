@@ -24,6 +24,43 @@ export const cellImages = (value: string) =>
     .map((v) => v.replace(/^[,;]+|[,;]+$/g, ""))
     .filter(Boolean);
 
+/**
+ * The panel's folders: fixed names in a fixed order, the same in every chat.
+ * The agent writes where it likes; the platform files each result here.
+ */
+export const FILE_SECTIONS = [
+  { id: "reports", title: "Reports" },
+  { id: "tables", title: "Tables" },
+  { id: "excel", title: "Excel" },
+  { id: "images", title: "Images" },
+  { id: "plans", title: "Plans" },
+  { id: "uploads", title: "Uploads" },
+  { id: "working", title: "Working files" },
+] as const;
+
+export type FileSectionId = (typeof FILE_SECTIONS)[number]["id"];
+
+export type ClassifiedFile = { path: string; name: string; created_by: string; shown?: boolean };
+
+/** Before results were recorded: everything but raw store data, JSON lines, previews and backups. */
+const legacyShown = (path: string) => !/^(shopify-results|woo-results|previews|backups)\//.test(path) && !/\.jsonl$/i.test(path);
+
+/**
+ * Where a chat file goes in the panel, or null when it is not listed on its
+ * own: backups, and what was made from an upload (its tables and pictures
+ * open from the upload itself).
+ */
+export function fileSection(file: ClassifiedFile): Exclude<FileSectionId, "plans"> | null {
+  if (file.path.startsWith("backups/")) return null;
+  if (file.created_by === "user") return "uploads";
+  if (file.path.startsWith("attachments/")) return null;
+  if (!(file.shown ?? legacyShown(file.path))) return "working";
+  if (isWorkbook(file.name)) return "excel";
+  if (IMAGE_NAME.test(file.name)) return "images";
+  if (/\.(csv|tsv|json|jsonl)$/i.test(file.name)) return "tables";
+  return "reports";
+}
+
 /** A table cell that holds pictures: links to images, or image files in the chat. */
 export const looksLikeImage = (value: string) => {
   const first = cellImages(value)[0] ?? "";

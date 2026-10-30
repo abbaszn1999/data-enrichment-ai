@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { modelParamSchema } from "@/lib/store-agent/protocol";
+import { requestLabel } from "@/lib/store-agent/mentions";
 import { authorizeStoreAgent, callStoreAgentService, loadOwnedChat } from "@/lib/store-agent/server";
 import { decodeStoragePath } from "@/lib/store-agent/storage-key";
 
@@ -33,7 +34,7 @@ export async function GET(request: NextRequest, { params }: Params) {
     messageQuery,
     access.admin
       .from("store_agent_files")
-      .select("id, name, kind, mime, size, created_by, created_at, storage_path")
+      .select("id, name, kind, mime, size, created_by, created_at, storage_path, shown, run_id")
       .eq("chat_id", chatId)
       .order("created_at", { ascending: true }),
     callStoreAgentService({ path: `/store-agent/chats/${chatId}/live`, userId: access.userId, method: "GET" })
@@ -60,6 +61,13 @@ export async function GET(request: NextRequest, { params }: Params) {
     .eq("chat_id", chatId);
   const runById = new Map((runs ?? []).map((r) => [r.id as string, r]));
 
+  // The request each file came from, shown under its name in the panel.
+  const fileRuns = [...new Set((files.data ?? []).flatMap((f) => (f.run_id ? [String(f.run_id)] : [])))];
+  const { data: asks } = fileRuns.length
+    ? await access.admin.from("store_agent_messages").select("run_id, content").eq("chat_id", chatId).eq("role", "user").in("run_id", fileRuns)
+    : { data: [] as Array<{ run_id: string; content: string }> };
+  const requestByRun = new Map((asks ?? []).map((m) => [String(m.run_id), requestLabel(String(m.content ?? ""))]));
+
   return NextResponse.json({
     chat,
     hasMore,
@@ -75,6 +83,7 @@ export async function GET(request: NextRequest, { params }: Params) {
       // Path within the chat folder, for display.
       path: decodeStoragePath(String(f.storage_path).split("/").slice(2).join("/")),
       storage_path: undefined,
+      request: f.run_id ? (requestByRun.get(String(f.run_id)) ?? null) : null,
     })),
     plans: plans.data ?? [],
     live: (live as { run: unknown }).run ?? null,

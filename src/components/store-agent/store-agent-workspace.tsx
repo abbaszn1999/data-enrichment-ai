@@ -18,6 +18,8 @@ import {
   Loader2,
   Megaphone,
   PackageSearch,
+  ClipboardList,
+  FileText,
   Paperclip,
   Pencil,
   RotateCcw,
@@ -27,6 +29,7 @@ import {
   Tags,
   Unplug,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PageLoader } from "@/components/brand/page-loader";
@@ -35,7 +38,8 @@ import type { TodoItem } from "@/lib/store-agent/protocol";
 import type { ApprovalState, ChatMessage, Insight, Plan } from "./api";
 import { ReplyBlocks } from "./blocks";
 import { ChatTabs } from "./chat-tabs";
-import { Composer, splitMentions } from "./composer";
+import { Composer } from "./composer";
+import { mentionKind, refId, splitMentions } from "@/lib/store-agent/mentions";
 import { ChangeHistoryDialog, IconAction, LiveStatus, StoreNotesDialog } from "./extras";
 import { FilePanel } from "./file-panel";
 import { PlanView } from "./plan-view";
@@ -80,27 +84,47 @@ const SUGGESTIONS = [
   { icon: PackageSearch, title: "Price research", prompt: "Pick my 5 most important products and research how competitors price similar items online. Summarize in a table." },
 ] as const;
 
-function MessageText({ text }: { text: string }) {
+/** Open what a mention points to: a file or plan of this chat (store records stay as labels). */
+type OpenMention = (kind: "file" | "plan", id: string) => void;
+
+function MessageText({ text, onOpenMention }: { text: string; onOpenMention?: OpenMention }) {
   return (
     <>
-      {splitMentions(text).map((part, i) =>
-        part.kind === "text" ? (
-          <span key={i}>{part.text}</span>
-        ) : (
-          <span
-            key={i}
-            title={part.id}
-            className="mx-0.5 inline-flex items-center rounded-md bg-[#400095]/10 px-1.5 py-px text-[13px] font-medium text-[#400095] dark:bg-[#F76D01]/15 dark:text-[#F76D01]"
-          >
-            @{part.title}
+      {splitMentions(text).map((part, i) => {
+        if (part.kind === "text") return <span key={i}>{part.text}</span>;
+        const kind = mentionKind(part.id);
+        const Icon = kind === "file" ? FileText : kind === "plan" ? ClipboardList : null;
+        const chip = "mx-0.5 inline-flex items-center gap-1 rounded-md bg-[#400095]/10 px-1.5 py-px text-[13px] font-medium text-[#400095] dark:bg-[#F76D01]/15 dark:text-[#F76D01]";
+        if (kind !== "store" && onOpenMention) {
+          return (
+            <button key={i} type="button" onClick={() => onOpenMention(kind, refId(part.id))} className={cn(chip, "align-baseline hover:underline")}>
+              {Icon && <Icon className="h-3 w-3" />}
+              {part.title}
+            </button>
+          );
+        }
+        return (
+          <span key={i} title={kind === "store" ? part.id : undefined} className={chip}>
+            {Icon && <Icon className="h-3 w-3" />}
+            {kind === "store" ? `@${part.title}` : part.title}
           </span>
-        )
-      )}
+        );
+      })}
     </>
   );
 }
 
-function UserBubble({ message, workspaceId, onEdit }: { message: ChatMessage; workspaceId: string; onEdit?: (text: string) => void }) {
+function UserBubble({
+  message,
+  workspaceId,
+  onEdit,
+  onOpenMention,
+}: {
+  message: ChatMessage;
+  workspaceId: string;
+  onEdit?: (text: string) => void;
+  onOpenMention?: OpenMention;
+}) {
   return (
     <div className="group flex justify-end">
       <div className="max-w-[88%] space-y-1.5">
@@ -108,25 +132,27 @@ function UserBubble({ message, workspaceId, onEdit }: { message: ChatMessage; wo
           <div className="flex flex-wrap justify-end gap-1.5">
             {message.attachments.map((a) =>
               a.mime.startsWith("image/") ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={a.fileId}
-                  src={`/api/store-agent/files/${a.fileId}?workspaceId=${workspaceId}`}
-                  alt={a.name}
-                  className="h-20 w-20 rounded-lg border object-cover"
-                />
+                <button key={a.fileId} type="button" onClick={() => onOpenMention?.("file", a.fileId)} aria-label={`Open ${a.name}`} className="rounded-lg">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={`/api/store-agent/files/${a.fileId}?workspaceId=${workspaceId}`} alt={a.name} className="h-20 w-20 rounded-lg border object-cover" />
+                </button>
               ) : (
-                <span key={a.fileId} className="inline-flex items-center gap-1 rounded-lg bg-muted px-2 py-1 text-[11.5px] font-medium">
+                <button
+                  key={a.fileId}
+                  type="button"
+                  onClick={() => onOpenMention?.("file", a.fileId)}
+                  className="inline-flex items-center gap-1 rounded-lg bg-muted px-2 py-1 text-[11.5px] font-medium transition-colors hover:bg-muted/70"
+                >
                   <Paperclip className="h-3 w-3" />
                   {a.name}
-                </span>
+                </button>
               )
             )}
           </div>
         )}
         {message.content && (
           <div dir="auto" className="whitespace-pre-wrap break-words rounded-2xl rounded-ee-md bg-[#400095]/[0.07] px-3.5 py-2.5 text-[14px] leading-relaxed dark:bg-[#F76D01]/10">
-            <MessageText text={message.content} />
+            <MessageText text={message.content} onOpenMention={onOpenMention} />
           </div>
         )}
         {onEdit && message.content && (
@@ -433,6 +459,11 @@ export function StoreAgentWorkspace({
     : { used: summary?.context_used ?? 0, window: summary?.context_window ?? 0 };
   const empty = messages.length === 0 && !live;
   const pick = (prompt: string) => setSeed({ text: prompt, nonce: Date.now() });
+  const openMention: OpenMention = (kind, id) => {
+    if (!chatId) return;
+    if (kind === "plan") openPlan(chatId, id);
+    else openFile(chatId, id);
+  };
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
 
   const composer = chatId && (
@@ -448,6 +479,8 @@ export function StoreAgentWorkspace({
       autoRun={state.autoRun}
       context={context}
       storeName={storeName}
+      files={files}
+      plans={plans}
       seed={seed}
       autoFocus
       onSend={async (text, attachments) => {
@@ -515,7 +548,7 @@ export function StoreAgentWorkspace({
                 )}
                 {messages.map((m) =>
                   m.role === "user" ? (
-                    <UserBubble key={m.id} message={m} workspaceId={workspaceId} onEdit={!running && canEdit ? pick : undefined} />
+                    <UserBubble key={m.id} message={m} workspaceId={workspaceId} onEdit={!running && canEdit ? pick : undefined} onOpenMention={openMention} />
                   ) : (
                     <AssistantTurn
                       key={m.id}
@@ -532,7 +565,7 @@ export function StoreAgentWorkspace({
                     />
                   )
                 )}
-                {live?.userMessage && <UserBubble message={live.userMessage} workspaceId={workspaceId} />}
+                {live?.userMessage && <UserBubble message={live.userMessage} workspaceId={workspaceId} onOpenMention={openMention} />}
                 {live && (
                   <AssistantTurn
                     message={{

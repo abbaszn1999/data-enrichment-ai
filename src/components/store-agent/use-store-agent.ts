@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { emptyReply, reduceReply, type ReplyState } from "@/lib/store-agent/blocks";
+import { requestLabel } from "@/lib/store-agent/mentions";
 import type { ModelParam, StoreAgentEvent } from "@/lib/store-agent/protocol";
 import { toast } from "sonner";
 import {
@@ -352,6 +353,27 @@ export async function uploadAttachment(chatId: string, file: File): Promise<{ ch
   const { workspaceId } = get();
   const realId = await materialize(chatId);
   const { file: uploaded } = await storeAgentApi.upload(workspaceId!, realId, file);
+  // In the Files panel and the @ menu right away, not after the next reload.
+  patchChat(realId, (s) =>
+    s.files.some((f) => f.id === uploaded.id)
+      ? {}
+      : {
+          files: [
+            ...s.files,
+            {
+              id: uploaded.id,
+              name: uploaded.name,
+              kind: "upload",
+              mime: uploaded.mime,
+              size: uploaded.size,
+              created_by: "user",
+              created_at: new Date().toISOString(),
+              path: `uploads/${uploaded.name}`,
+              shown: true,
+            },
+          ],
+        }
+  );
   return { chatId: realId, file: uploaded };
 }
 
@@ -385,17 +407,21 @@ function applyEvent(chatId: string, event: StoreAgentEvent) {
     if (event.type === "run") live.runId = event.runId;
     const next: Partial<ChatState> = { live };
     if (event.type === "file") {
+      const prev = s.files.find((f) => f.id === event.fileId);
       const file: ChatFile = {
         id: event.fileId,
         name: event.name.split("/").pop() ?? event.name,
         kind: event.kind,
         mime: event.mime,
-        size: 0,
-        created_by: "agent",
-        created_at: new Date().toISOString(),
+        size: prev?.size ?? 0,
+        created_by: prev?.created_by ?? "agent",
+        created_at: prev?.created_at ?? new Date().toISOString(),
         path: event.name,
+        // Once a result, always one.
+        shown: !!prev?.shown || event.shown === true,
+        request: prev?.request ?? (s.live.userMessage ? requestLabel(s.live.userMessage.content) : null),
       };
-      next.files = s.files.some((f) => f.id === file.id) ? s.files.map((f) => (f.id === file.id ? { ...f, ...file, size: f.size } : f)) : [...s.files, file];
+      next.files = prev ? s.files.map((f) => (f.id === file.id ? file : f)) : [...s.files, file];
       if (event.open) {
         next.panel = {
           openFileIds: s.panel.openFileIds.includes(event.fileId) ? s.panel.openFileIds : [...s.panel.openFileIds, event.fileId],

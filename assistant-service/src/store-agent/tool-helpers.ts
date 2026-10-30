@@ -101,7 +101,7 @@ export async function approveWrite(
   if (records.length > 3) {
     try {
       previewFileId = await ctx.files.store(`previews/changes-${stamp()}.csv`, Buffer.from(previewCsv(records)), "agent", ctx.run.id);
-      ctx.run.emit({ type: "file", fileId: previewFileId, name: "previews/changes.csv", kind: "csv", mime: "text/csv", open: true });
+      ctx.run.emit({ type: "file", fileId: previewFileId, name: "previews/changes.csv", kind: "csv", mime: "text/csv", open: true, shown: false });
     } catch (error) {
       ctx.log?.("full preview failed", error);
     }

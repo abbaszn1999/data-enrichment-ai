@@ -36,6 +36,10 @@ export type ChatFile = {
   created_by: "agent" | "user";
   created_at: string;
   path: string;
+  /** A result Vera put in front of the user; otherwise one of her working files. */
+  shown?: boolean;
+  /** The request it came from, in one line. */
+  request?: string | null;
 };
 
 export type ApprovalState = { status: string; kind: string; undoable: boolean; undone: boolean; applied: boolean };

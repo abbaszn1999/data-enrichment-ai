@@ -64,21 +64,30 @@ export function resolveInChat(cwd: string, relative: string): string {
   return target;
 }
 
-type Known = { id: string; size: number; mtimeMs: number };
+type Known = { id: string; size: number; mtimeMs: number; shown: boolean };
 
 /**
  * A chat's working folder on disk, mirrored to Storage. The agent reads and
  * writes plain files there; whatever it creates becomes a chat file the user
- * can open on the right.
+ * can open on the right. Files the agent puts in front of the user (opens, or
+ * makes for them) are marked `shown`: they are results; the rest are its
+ * working files, which the panel keeps out of the way.
  */
 export class ChatFiles {
   private readonly known = new Map<string, Known>();
   /** Files the agent asked to show whose upload has not gone through yet. */
   private readonly pendingOpen = new Set<string>();
+  /** Files made for the user (not opened) to mark as results at the next sync. */
+  private readonly pendingShown = new Set<string>();
 
   /** Show this file once a later sync manages to upload it. */
   openWhenSynced(relative: string) {
     this.pendingOpen.add(relative);
+  }
+
+  /** A result for the user, listed with the results but not opened (an Excel file to download). */
+  markShown(relative: string) {
+    this.pendingShown.add(relative);
   }
 
   constructor(
@@ -97,7 +106,7 @@ export class ChatFiles {
     await fs.mkdir(this.cwd, { recursive: true });
     const { data, error } = await this.db
       .from("store_agent_files")
-      .select("id, storage_path, size")
+      .select("id, storage_path, size, shown")
       .eq("chat_id", this.chatId);
     if (error) throw new Error(`Could not load chat files: ${error.message}`);
     const prefix = this.storagePath("");
@@ -107,7 +116,7 @@ export class ChatFiles {
       const local = path.join(this.cwd, ...relative.split("/"));
       try {
         const stat = await fs.stat(local);
-        this.known.set(relative, { id: row.id, size: stat.size, mtimeMs: stat.mtimeMs });
+        this.known.set(relative, { id: row.id, size: stat.size, mtimeMs: stat.mtimeMs, shown: !!row.shown });
         continue;
       } catch {
         // not on this machine yet
@@ -117,7 +126,7 @@ export class ChatFiles {
       await fs.mkdir(path.dirname(local), { recursive: true });
       await fs.writeFile(local, Buffer.from(await blob.arrayBuffer()));
       const stat = await fs.stat(local);
-      this.known.set(relative, { id: row.id, size: stat.size, mtimeMs: stat.mtimeMs });
+      this.known.set(relative, { id: row.id, size: stat.size, mtimeMs: stat.mtimeMs, shown: !!row.shown });
     }
   }
 
@@ -132,24 +141,38 @@ export class ChatFiles {
       const relative = path.relative(this.cwd, local).split(path.sep).join("/");
       const stat = await fs.stat(local);
       const prev = this.known.get(relative);
-      if (prev && prev.size === stat.size && prev.mtimeMs === stat.mtimeMs && !open.has(relative)) continue;
+      const unchanged = !!prev && prev.size === stat.size && prev.mtimeMs === stat.mtimeMs;
+      // Opened or made for the user: a result from now on.
+      const showNow = open.has(relative) || this.pendingShown.has(relative);
+      if (unchanged && !showNow) continue;
       if (stat.size > MAX_SYNC_BYTES) continue;
-      if (prev && prev.size === stat.size && prev.mtimeMs === stat.mtimeMs) {
-        run.emit({ type: "file", fileId: prev.id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: true });
+      if (unchanged && prev) {
+        if (!prev.shown) {
+          const { error } = await this.db.from("store_agent_files").update({ shown: true }).eq("id", prev.id);
+          if (error) throw new Error(`Could not record ${relative}: ${error.message}`);
+          prev.shown = true;
+        }
+        run.emit({ type: "file", fileId: prev.id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: open.has(relative), shown: true });
         this.pendingOpen.delete(relative);
+        this.pendingShown.delete(relative);
         continue;
       }
-      const id = await this.store(relative, await fs.readFile(local), "agent", run.id);
-      this.known.set(relative, { id, size: stat.size, mtimeMs: stat.mtimeMs });
-      run.emit({ type: "file", fileId: id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: open.has(relative) });
+      const shown = showNow || !!prev?.shown;
+      const id = await this.store(relative, await fs.readFile(local), "agent", run.id, showNow);
+      this.known.set(relative, { id, size: stat.size, mtimeMs: stat.mtimeMs, shown });
+      run.emit({ type: "file", fileId: id, name: relative, kind: kindFor(relative), mime: mimeFor(relative), open: open.has(relative), shown });
       this.pendingOpen.delete(relative);
+      this.pendingShown.delete(relative);
       changed.push({ id, relative });
     }
     return changed;
   }
 
-  /** Upload bytes as a chat file and upsert its row. Returns the file id. */
-  async store(relative: string, bytes: Buffer, createdBy: "agent" | "user", runId: string | null): Promise<string> {
+  /**
+   * Upload bytes as a chat file and upsert its row. Returns the file id.
+   * `shown` marks it a result; a later upload of the same file never unmarks it.
+   */
+  async store(relative: string, bytes: Buffer, createdBy: "agent" | "user", runId: string | null, shown = false): Promise<string> {
     const storagePath = this.storagePath(relative);
     const mime = mimeFor(relative);
     const { error: upErr } = await this.db.storage
@@ -169,6 +192,8 @@ export class ChatFiles {
           mime,
           size: bytes.length,
           created_by: createdBy,
+          // Left out when false, so re-uploading a result keeps it one.
+          ...(shown ? { shown: true } : {}),
         },
         { onConflict: "storage_path" }
       )
@@ -189,7 +214,7 @@ export class ChatFiles {
     await fs.writeFile(local, bytes);
     const stat = await fs.stat(local);
     // Already stored by the gateway: remember it so sync does not upload it again.
-    this.known.set(relative, { id: fileId, size: stat.size, mtimeMs: stat.mtimeMs });
+    this.known.set(relative, { id: fileId, size: stat.size, mtimeMs: stat.mtimeMs, shown: true });
     return relative;
   }
 }

@@ -627,8 +627,9 @@ function groupActivity(blocks: MessageBlock[], live: boolean): RenderItem[] {
 const MAX_FILE_CHIPS = 8;
 
 export function ReplyBlocks({ blocks, ...handlers }: { blocks: MessageBlock[] } & Handlers) {
-  // Pictures pulled out of an Excel attachment show in its table, not as chips.
-  const shown = blocks.filter((b) => !(b.type === "file" && isExtractedImage(b.name)));
+  // Under a reply: its results only. Working files and pictures pulled out of
+  // an attachment are in the Files panel (older replies carry no flag: listed).
+  const shown = blocks.filter((b) => !(b.type === "file" && (b.shown === false || isExtractedImage(b.name))));
   const fileIds = shown.flatMap((b) => (b.type === "file" ? [b.fileId] : []));
   const chipped = new Set(fileIds.slice(0, MAX_FILE_CHIPS));
   const lastChip = fileIds.slice(0, MAX_FILE_CHIPS).at(-1);

@@ -5,11 +5,12 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
 import { ClipboardList, Download, FolderOpen, Loader2, Search, X } from "lucide-react";
 import { parseCsv } from "@/lib/store-agent/csv";
-import { attachmentPath, cellImages, isExtractedImage, isTextFile, isWorkbook, looksLikeImage } from "@/lib/store-agent/file-kinds";
+import { attachmentPath, cellImages, fileSection, isTextFile, isWorkbook, looksLikeImage } from "@/lib/store-agent/file-kinds";
 import { themedReport } from "@/lib/store-agent/report-theme";
 import { cn } from "@/lib/utils";
 import { PLAN_TAB_PREFIX, storeAgentApi, type ChatFile, type Plan } from "./api";
 import { FileKindIcon } from "./blocks";
+import { FileBrowser } from "./file-browser";
 import { Markdown } from "./markdown";
 
 function toTable(file: ChatFile, text: string): { columns: string[]; rows: string[][] } | null {
@@ -439,12 +440,8 @@ export function FilePanel({
     setShowList(false);
   }
   const listing = showList || !activeTab;
-  const isStoreData = (f: ChatFile) => /^(shopify-results|woo-results|exports|previews|backups|results)\//.test(f.path);
-  // Tables made from an attachment sit with it; the pictures pulled out of it show inside those tables.
-  const fromAttachment = (f: ChatFile) => f.path.startsWith("attachments/");
-  const agentFiles = files.filter((f) => f.created_by === "agent" && !isStoreData(f) && !fromAttachment(f));
-  const uploads = files.filter((f) => (f.created_by === "user" || fromAttachment(f)) && !isExtractedImage(f.path));
-  const results = files.filter((f) => f.created_by === "agent" && isStoreData(f) && !f.path.startsWith("backups/"));
+  // The Files button counts results (and plans), not Vera's working files.
+  const resultCount = files.filter((f) => { const section = fileSection(f); return section && section !== "working"; }).length + plans.length;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/10">
@@ -458,7 +455,7 @@ export function FilePanel({
           )}
         >
           <FolderOpen className="h-3.5 w-3.5" />
-          Files {files.length > 0 && <span className="text-muted-foreground">{files.length}</span>}
+          Files {resultCount > 0 && <span className="text-muted-foreground">{resultCount}</span>}
         </button>
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {open.map((tab) => {
@@ -531,69 +528,15 @@ export function FilePanel({
                 </p>
               </div>
             ) : (
-              <div className="space-y-5">
-                {plans.length > 0 && (
-                  <div>
-                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Plans</div>
-                    <div className="grid gap-1.5 sm:grid-cols-2">
-                      {plans.map((plan) => (
-                        <button
-                          key={plan.id}
-                          type="button"
-                          onClick={() => {
-                            setShowList(false);
-                            onOpen(PLAN_TAB_PREFIX + plan.id);
-                          }}
-                          className="flex min-w-0 items-center gap-2.5 rounded-lg border bg-background px-3 py-2 text-start transition-colors hover:border-[#6B358D]/40 hover:bg-[#400095]/[0.03] dark:hover:border-[#F76D01]/40"
-                        >
-                          <ClipboardList className="h-4 w-4 shrink-0 text-[#6B358D] dark:text-[#F76D01]" />
-                          <div className="min-w-0">
-                            <div dir="auto" className="truncate text-[12.5px] font-medium">
-                              {plan.title}
-                            </div>
-                            <div className="truncate text-[11px] capitalize text-muted-foreground">
-                              {plan.status}
-                              {plan.version > 1 ? ` · version ${plan.version}` : ""}
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {[
-                  { title: "Created by the agent", list: agentFiles },
-                  { title: "Your attachments", list: uploads },
-                  { title: "Store data", list: results },
-                ]
-                  .filter((g) => g.list.length)
-                  .map((group) => (
-                    <div key={group.title}>
-                      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group.title}</div>
-                      <div className="grid gap-1.5 sm:grid-cols-2">
-                        {group.list.map((file) => {
-                          return (
-                            <button
-                              key={file.id}
-                              type="button"
-                              onClick={() => {
-                                setShowList(false);
-                                onOpen(file.id);
-                              }}
-                              className="flex min-w-0 items-center gap-2.5 rounded-lg border bg-background px-3 py-2 text-start transition-colors hover:border-[#6B358D]/40 hover:bg-[#400095]/[0.03] dark:hover:border-[#F76D01]/40"
-                            >
-                              <FileKindIcon kind={file.kind} mime={file.mime} className="h-4 w-4 shrink-0 text-[#6B358D] dark:text-[#F76D01]" />
-                              <div className="min-w-0">
-                                <div className="truncate text-[12.5px] font-medium">{file.name}</div>
-                                <div className="truncate text-[11px] text-muted-foreground">{file.path}</div>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-              </div>
+              <FileBrowser
+                workspaceId={workspaceId}
+                files={files}
+                plans={plans}
+                onOpen={(id) => {
+                  setShowList(false);
+                  onOpen(id);
+                }}
+              />
             )}
           </div>
         ) : activeTab?.plan ? (

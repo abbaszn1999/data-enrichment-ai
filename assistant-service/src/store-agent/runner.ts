@@ -14,6 +14,8 @@ import { oncePerToolCall } from "./call-once";
 import { guidanceText, withGuidance } from "./guidance";
 import { buildMessage, finishBuild, savePlan, startBuild } from "./plans";
 import { convertAttachment } from "./attachments";
+import { plainMentions } from "../../../src/lib/store-agent/mentions";
+import { mentionContext, type MentionContext } from "./mentions";
 import { createExcelTool } from "./excel-tool";
 import { createFileTools } from "./file-tools";
 import { ChatFiles } from "./files";
@@ -54,7 +56,8 @@ export type StoreAgentDeps = {
 export const interruptedRuns = new WeakSet<StoreAgentRun>();
 
 function titleFrom(message: string): string {
-  const line = message.replace(/\s+/g, " ").trim();
+  // Mentions read as "@Title", as the user typed them.
+  const line = plainMentions(message).replace(/\s+/g, " ").trim();
   return line.length > 60 ? `${line.slice(0, 59)}…` : line || "New chat";
 }
 
@@ -498,6 +501,12 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
       const conversion = await convertAttachment(cwd, relative);
       if (conversion) converted.push(conversion.note);
     }
+    // Files and plans of this chat the user @-mentioned.
+    const mentioned = await mentionContext(db, req.chatId, cwd, req.message).catch((error) => {
+      log("reading mentioned files failed", error);
+      return { notes: [], images: [] } as MentionContext;
+    });
+    images.push(...mentioned.images);
     const undone = await undoneSinceLastRun(db, req.chatId, req.runId).catch((error) => {
       log("reading undone changes failed", error);
       return [] as string[];
@@ -516,6 +525,7 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
     const notes = [
       placed.length ? `[Attached files, in your folder: ${placed.join(", ")}]` : "",
       ...converted.map((note) => `[${note}]`),
+      ...mentioned.notes.map((note) => `[${note}]`),
       undone.length
         ? `[Since your last reply the user undid these changes from their cards, so the store has the earlier values again: ${undone.map((s) => `"${s}"`).join("; ")}. Read the store again before relying on those values.]`
         : "",
@@ -548,7 +558,11 @@ export async function executeStoreRun(deps: StoreAgentDeps, run: StoreAgentRun):
       }),
       ...createFileTools(cwd, (relative) => written.add(relative)),
       ...createScriptTool(cwd, (relative) => written.add(relative)),
-      ...createExcelTool(cwd, (relative) => written.add(relative)),
+      // An Excel file is made for the user to download: a result, though the panel cannot open it.
+      ...createExcelTool(cwd, (relative) => {
+        written.add(relative);
+        files.markShown(relative);
+      }),
     }, run));
     const emitProgress = (force = false) => {
       const now = Date.now();

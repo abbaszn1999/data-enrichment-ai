@@ -149,7 +149,8 @@ export type StoreAgentEvent =
   | { type: "question_resolved"; questionId: string; answers: string[][]; inChat?: boolean; seq: number }
   /** A plan written in Plan mode, or a new version of it, or its build status changing. */
   | { type: "plan"; planId: string; title: string; content: string; version: number; status: PlanStatus; seq: number }
-  | { type: "file"; fileId: string; name: string; kind: string; mime: string; open: boolean; seq: number }
+  /** `shown`: a result for the user (opened, or made for them), not one of the agent's working files. */
+  | { type: "file"; fileId: string; name: string; kind: string; mime: string; open: boolean; shown?: boolean; seq: number }
   | { type: "summary"; status: "started" | "completed"; seq: number }
   | { type: "context"; usedTokens: number; windowTokens: number; seq: number }
   | { type: "usage"; credits: number; usd: number; seq: number }

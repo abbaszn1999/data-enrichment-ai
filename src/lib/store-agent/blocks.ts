@@ -37,7 +37,8 @@ export type MessageBlock =
   | { type: "question"; questionId: string; questions: QuestionItem[]; answers?: string[][]; inChat?: boolean }
   /** The plan this reply wrote or revised; its text lives with the plan, shown in the panel. */
   | { type: "plan"; planId: string; title: string; version: number }
-  | { type: "file"; fileId: string; name: string; kind: string; mime: string }
+  /** `shown` false: one of the agent's working files, not listed under the reply. */
+  | { type: "file"; fileId: string; name: string; kind: string; mime: string; shown?: boolean }
   | { type: "summary"; status: "started" | "completed" }
   | { type: "error"; message: string };
 
@@ -163,11 +164,14 @@ export function reduceReply(state: ReplyState, event: StoreAgentEvent): ReplySta
       else blocks.push(block);
       break;
     }
-    case "file":
-      if (!blocks.some((b) => b.type === "file" && b.fileId === event.fileId)) {
-        blocks.push({ type: "file", fileId: event.fileId, name: event.name, kind: event.kind, mime: event.mime });
-      }
+    case "file": {
+      const i = blocks.findIndex((b) => b.type === "file" && b.fileId === event.fileId);
+      const shown = event.shown === undefined ? {} : { shown: event.shown };
+      if (i < 0) blocks.push({ type: "file", fileId: event.fileId, name: event.name, kind: event.kind, mime: event.mime, ...shown });
+      // A working file the agent then opens for the user becomes a result.
+      else if (event.shown) blocks[i] = { ...(blocks[i] as Extract<MessageBlock, { type: "file" }>), shown: true };
       break;
+    }
     case "summary":
       if (event.status === "started") blocks.push({ type: "summary", status: "started" });
       else {

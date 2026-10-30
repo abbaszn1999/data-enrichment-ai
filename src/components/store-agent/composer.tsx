@@ -1,31 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, FileText, Image as ImageIcon, ListChecks, Loader2, Paperclip, ShieldCheck, ShieldOff, Square, X, Bot } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, ClipboardList, FileText, Image as ImageIcon, ListChecks, Loader2, Paperclip, ShieldCheck, ShieldOff, Square, X, Bot } from "lucide-react";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ModelParam } from "@/lib/store-agent/protocol";
 import { STORE_AGENT_LIMITS } from "@/lib/store-agent/protocol";
 import { cn } from "@/lib/utils";
-import { storeAgentApi, type Mention, type ModelOption } from "./api";
+import { FILE_SECTIONS, fileSection } from "@/lib/store-agent/file-kinds";
+import { fileRef, planRef, splitMentions } from "@/lib/store-agent/mentions";
+import { storeAgentApi, type ChatFile, type Mention, type ModelOption, type Plan } from "./api";
+import { FileKindIcon } from "./blocks";
 import { ModelPicker } from "./model-picker";
 
-export type MessagePart = { kind: "text"; text: string } | { kind: "mention"; title: string; id: string };
+/** One choice in the @ menu: a file or plan of this chat, or a store record. */
+type PickItem = { key: string; ref: string; title: string; group: "Files" | "Plans" | "Store"; detail: string; thumb?: string; file?: ChatFile; storeType?: string };
 
-const MENTION = /@\[([^\]\n]{1,120})\]\((gid:\/\/shopify\/[A-Za-z]+\/\d+|woo:\/\/[a-z_]+\/\d+)\)/g;
-
-/** Split a message into text and @[Title](gid) mentions. */
-export function splitMentions(text: string): MessagePart[] {
-  const parts: MessagePart[] = [];
-  let last = 0;
-  for (const match of text.matchAll(MENTION)) {
-    if (match.index! > last) parts.push({ kind: "text", text: text.slice(last, match.index) });
-    parts.push({ kind: "mention", title: match[1]!, id: match[2]! });
-    last = match.index! + match[0].length;
-  }
-  if (last < text.length) parts.push({ kind: "text", text: text.slice(last) });
-  return parts;
-}
+const SECTION_TITLE = Object.fromEntries(FILE_SECTIONS.map((s) => [s.id, s.title])) as Record<string, string>;
 
 export type PendingAttachment = { key: string; name: string; mime: string; size: number; status: "uploading" | "ready" | "error"; id?: string };
 
@@ -89,8 +80,13 @@ export function Composer({
   autoFocus,
   seed,
   workspaceId,
+  files = [],
+  plans = [],
 }: {
   workspaceId: string;
+  /** This chat's files and plans, offered in the @ menu. */
+  files?: ChatFile[];
+  plans?: Plan[];
   running: boolean;
   disabled?: boolean;
   models: ModelOption[];
@@ -116,7 +112,7 @@ export function Composer({
   const [dragging, setDragging] = useState(false);
   const [steering, setSteering] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // @-mentions: the box shows "@Title"; the message carries "@[Title](gid)".
   const [mentions, setMentions] = useState<Array<{ title: string; id: string }>>([]);
   const [picker, setPicker] = useState<{ query: string; start: number; index: number } | null>(null);
@@ -150,6 +146,35 @@ export function Composer({
     };
   }, [picker?.query, workspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The @ menu: this chat's results and plans right away, store records as you type.
+  const items = useMemo((): PickItem[] => {
+    if (!picker) return [];
+    const q = picker.query.trim().toLowerCase();
+    const fileItems = files
+      .map((f) => ({ f, section: fileSection(f) }))
+      .filter(({ f, section }) => section && section !== "working" && (!q || f.name.toLowerCase().includes(q)))
+      .sort((a, b) => Date.parse(b.f.created_at) - Date.parse(a.f.created_at))
+      .slice(0, 8)
+      .map(({ f, section }): PickItem => ({
+        key: f.id,
+        ref: fileRef(f.id),
+        title: f.name,
+        group: "Files",
+        detail: SECTION_TITLE[section!] ?? "File",
+        thumb: f.mime.startsWith("image/") ? storeAgentApi.fileUrl(workspaceId, f.id) : undefined,
+        file: f,
+      }));
+    const planItems = plans
+      .filter((p) => !q || p.title.toLowerCase().includes(q))
+      .slice(0, 5)
+      .map((p): PickItem => ({ key: p.id, ref: planRef(p.id), title: p.title, group: "Plans", detail: p.version > 1 ? `Plan · version ${p.version}` : "Plan" }));
+    const storeItems =
+      picker.query.length >= 2
+        ? results.map((r): PickItem => ({ key: r.id, ref: r.id, title: r.title, group: "Store", detail: `${r.type} · ${r.detail}`, thumb: r.image ?? undefined, storeType: r.type }))
+        : [];
+    return [...fileItems, ...planItems, ...storeItems];
+  }, [picker, files, plans, results, workspaceId]);
+
   const updatePicker = (value: string, caret: number) => {
     const before = value.slice(0, caret);
     const match = /(^|\s)@([^\s@][^@\n]{0,40})?$/.exec(before);
@@ -159,13 +184,13 @@ export function Composer({
     if (query.length < 2) setResults([]);
   };
 
-  const choose = (item: Mention) => {
+  const choose = (item: PickItem) => {
     if (!picker) return;
     const end = picker.start + 1 + picker.query.length;
     const insert = `@${item.title} `;
     const next = text.slice(0, picker.start) + insert + text.slice(end);
     setText(next);
-    setMentions((m) => (m.some((x) => x.id === item.id) ? m : [...m, { title: item.title, id: item.id }]));
+    setMentions((m) => (m.some((x) => x.id === item.ref) ? m : [...m, { title: item.title, id: item.ref }]));
     setPicker(null);
     setResults([]);
     requestAnimationFrame(() => {
@@ -284,42 +309,57 @@ export function Composer({
 
       {picker && (
         <div className="absolute inset-x-2 bottom-full z-30 mb-2 overflow-hidden rounded-xl border bg-popover shadow-xl">
-          <div className="border-b px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            {picker.query.length < 2 ? "Type a product, collection or category name" : searching && !results.length ? "Searching your store…" : "Mention from your store"}
-          </div>
-          {picker.query.length >= 2 && !searching && results.length === 0 && (
-            <div className="px-3 py-3 text-[12.5px] text-muted-foreground">Nothing matches “{picker.query}”.</div>
-          )}
-          <div className="max-h-64 overflow-y-auto py-1">
-            {results.map((item, i) => (
-              <button
-                key={item.id}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  choose(item);
-                }}
-                onMouseEnter={() => setPicker((p) => (p ? { ...p, index: i } : p))}
-                className={cn("flex w-full items-center gap-2.5 px-3 py-1.5 text-start", i === picker.index && "bg-muted")}
-              >
-                {item.image ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={item.image} alt="" className="h-7 w-7 shrink-0 rounded-md border object-cover" />
-                ) : (
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-bold text-muted-foreground">
-                    {item.type === "Product" ? "P" : "C"}
-                  </span>
+          <div className="max-h-72 overflow-y-auto py-1">
+            {items.map((item, i) => (
+              <div key={`${item.group}-${item.key}`}>
+                {item.group !== items[i - 1]?.group && (
+                  <div className="px-3 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {item.group === "Files" ? "Files in this chat" : item.group === "Plans" ? "Plans" : "Your store"}
+                  </div>
                 )}
-                <span className="min-w-0 flex-1">
-                  <span dir="auto" className="block truncate text-[12.5px] font-medium">
-                    {item.title}
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    choose(item);
+                  }}
+                  onMouseEnter={() => setPicker((p) => (p ? { ...p, index: i } : p))}
+                  className={cn("flex w-full items-center gap-2.5 px-3 py-1.5 text-start", i === picker.index && "bg-muted")}
+                >
+                  {item.thumb ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={item.thumb} alt="" className="h-7 w-7 shrink-0 rounded-md border object-cover" />
+                  ) : (
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                      {item.file ? (
+                        <FileKindIcon kind={item.file.kind} mime={item.file.mime} className="h-3.5 w-3.5" />
+                      ) : item.group === "Plans" ? (
+                        <ClipboardList className="h-3.5 w-3.5" />
+                      ) : (
+                        <span className="text-[10px] font-bold">{item.storeType === "Product" ? "P" : "C"}</span>
+                      )}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span dir="auto" className="block truncate text-[12.5px] font-medium">
+                      {item.title}
+                    </span>
+                    <span className="block truncate text-[10.5px] text-muted-foreground">{item.detail}</span>
                   </span>
-                  <span className="text-[10.5px] text-muted-foreground">
-                    {item.type} · {item.detail}
-                  </span>
-                </span>
-              </button>
+                </button>
+              </div>
             ))}
+          </div>
+          <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
+            {picker.query.length < 2
+              ? items.length
+                ? "Type to search products and collections too"
+                : "Type a file, plan, product or collection name"
+              : searching
+                ? "Searching your store…"
+                : items.length === 0
+                  ? `Nothing matches “${picker.query}”.`
+                  : "↑↓ to choose · Enter to mention"}
           </div>
         </div>
       )}
@@ -343,16 +383,16 @@ export function Composer({
           }
         }}
         onKeyDown={(e) => {
-          if (picker && results.length) {
+          if (picker && items.length) {
             if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault();
               const step = e.key === "ArrowDown" ? 1 : -1;
-              setPicker({ ...picker, index: (picker.index + step + results.length) % results.length });
+              setPicker({ ...picker, index: (picker.index + step + items.length) % items.length });
               return;
             }
             if ((e.key === "Enter" || e.key === "Tab") && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              choose(results[picker.index] ?? results[0]!);
+              choose(items[picker.index] ?? items[0]!);
               return;
             }
           }
@@ -378,7 +418,7 @@ export function Composer({
 
       <div className="flex items-center gap-1 px-2 pb-2 pt-1">
         <input
-          ref={fileRef}
+          ref={fileInputRef}
           type="file"
           multiple
           accept={ACCEPT}
@@ -392,7 +432,7 @@ export function Composer({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={() => fileRef.current?.click()}
+              onClick={() => fileInputRef.current?.click()}
               disabled={disabled}
               aria-label="Attach files"
               className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
