@@ -14,8 +14,10 @@ without reshaping the UI.
 1. **Connect.** The customer signs in with Google (OAuth, `adwords` scope). We
    store an encrypted refresh token for the workspace and list every account it
    can reach, including accounts under a manager (MCC).
-2. **Choose an account.** The workspace works on one Google Ads customer at a
-   time and can switch.
+2. **Choose an account.** One Google Ads account per workspace, picked once
+   after sign-in (accounts under a manager (MCC) are listed there). There is no
+   in-workspace account switcher; the account name in the top bar opens
+   Connections and Account settings. To use another account, reconnect.
 2b. **Merchant Center (optional, separate connection).** Its own Google consent
    (`content` scope) and its own account picker. The connect screen has two
    buttons, **Connect Google Ads** and **Connect Merchant Center**; **Go to agent**
@@ -70,7 +72,7 @@ exclusions, audience manager) · Demographics · Placements & content · Locatio
 schedule · Keyword Planner · Performance Planner · Experiments · Conversions (value
 rules, offline imports, enhanced conversions) · Shared library · Linked accounts ·
 Account settings (content suitability, brand exclusions) · Campaign settings ·
-Rules & alerts · Pending changes · Change history · All accounts (MCC view).
+ Rules & alerts · Pending changes · Change history · Connections.
 
 **Agent documents** (`src/lib/google-ads/docs.ts`, `agent-docs.ts`, `src/components/google-ads/docs/`):
 plans, reports, audits, budget plans, keyword research, ad copy, feed reviews,

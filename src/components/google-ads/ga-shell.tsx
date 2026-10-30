@@ -24,7 +24,7 @@ import { OverviewView } from "./views/overview";
 import { RecommendationsView } from "./views/recommendations";
 import { SearchTermsView } from "./views/search-terms";
 import { SettingsView } from "./views/settings";
-import { AccountSettingsView, AllAccountsView, LinksView } from "./views/account";
+import { AccountSettingsView, LinksView } from "./views/account";
 import { ProductGroupsView, ProductsView } from "./views/products";
 import { ConnectionsView } from "./views/connections";
 import { MerchantConnectDialog } from "./ga-merchant";
@@ -65,7 +65,6 @@ const VIEWS: Record<GaView, () => React.ReactNode> = {
   demographics: DemographicsView,
   links: LinksView,
   accountSettings: AccountSettingsView,
-  allAccounts: AllAccountsView,
   documents: DocumentsView,
   profile: ProfileView,
   connections: ConnectionsView,

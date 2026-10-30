@@ -147,7 +147,7 @@ const ACTOR = "You";
 
 /** Views that make no sense at a scope fall back to the closest one that does. */
 function viewForScope(view: GaView, scope: GaScope, isPmax: boolean): GaView {
-  const accountOnly: GaView[] = ["campaigns", "conversions", "library", "products", "rules", "keywordPlanner", "experiments", "links", "accountSettings", "allAccounts", "documents", "profile", "connections"];
+  const accountOnly: GaView[] = ["campaigns", "conversions", "library", "products", "rules", "keywordPlanner", "experiments", "links", "accountSettings", "documents", "profile", "connections"];
   if (scope.adGroupId && (accountOnly.includes(view) || view === "adGroups" || view === "recommendations" || view === "locations" || view === "settings" || view === "planner" || view === "productGroups" || view === "content" || view === "demographics"))
     return "keywords";
   if (scope.campaignId && accountOnly.includes(view)) return "adGroups";

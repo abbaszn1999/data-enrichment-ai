@@ -755,7 +755,6 @@ export type GaView =
   | "demographics"
   | "links"
   | "accountSettings"
-  | "allAccounts"
   | "documents"
   | "profile"
   | "connections";
